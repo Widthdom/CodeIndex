@@ -16,6 +16,7 @@ internal sealed class LspServer : IDisposable
 {
     private const int DefaultLimit = 50;
     internal const int MaxWorkspaceSymbols = 1000;
+    private const int MaxReferencePositionCandidates = 256;
     private const int MaxWorkspaceFolders = 32;
     internal const int MaxLspFrameBytes = LspProtocol.MaxFrameBytes;
     internal const int MaxLspResponseFrameBytes = LspProtocol.MaxResponseFrameBytes;
@@ -124,7 +125,7 @@ internal sealed class LspServer : IDisposable
     private readonly LspLiveDocumentStore _liveDocumentStore;
     private long _contentChangeEntriesDropped;
 
-    private readonly record struct PositionTokenContext(string Token, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
+    private readonly record struct PositionTokenContext(string Token, string ResolvedPath, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
     private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
     private readonly record struct IndexedDocumentContext(string DocumentPath, string ResolvedPath, string IndexedPath, string? WorkspaceRoot);
     internal readonly record struct MessageReadResult(bool Success, string Payload);
@@ -532,20 +533,32 @@ internal sealed class LspServer : IDisposable
             ?? GetLimit(root, DefaultLimit, MaxWorkspaceSymbols, "params", "maxResults")
             ?? DefaultLimit;
         IReadOnlyList<SymbolResult> symbols = limit == 0 ? [] : _reader.SearchSymbols(query, limit);
+        var identifiers = new (int Line, int StartColumn, int EndColumn)[symbols.Count];
+        var pathComparer = _pathStringComparison == StringComparison.OrdinalIgnoreCase
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        foreach (var pathGroup in symbols
+            .Select((symbol, index) => (Symbol: symbol, Index: index))
+            .GroupBy(item => item.Symbol.Path, pathComparer))
+        {
+            var resolvedPath = TryResolveIndexedFilePath(pathGroup.Key, out var path) ? path : null;
+            var lineCache = new Dictionary<int, string?>();
+            foreach (var item in pathGroup)
+                identifiers[item.Index] = GetSymbolIdentifierPosition(item.Symbol, resolvedPath, lineCache);
+        }
+
         var array = new JsonArray();
-        foreach (var symbol in symbols)
-            array.Add((JsonNode)ToWorkspaceSymbol(symbol));
+        for (var index = 0; index < symbols.Count; index++)
+            array.Add((JsonNode)ToWorkspaceSymbol(symbols[index], identifiers[index]));
         return array;
     }
 
     private JsonArray DocumentSymbol(JsonElement root)
     {
-        var path = GetDocumentPath(root);
-        var indexedPath = ResolveIndexedPath(path);
-        if (indexedPath == null)
+        if (!TryResolveIndexedDocument(root, out var document))
             return [];
 
-        var candidates = _reader.SearchSymbols((string?)null, MaxDocumentSymbolMaterialization + 1, pathPatterns: [indexedPath]);
+        var candidates = _reader.SearchSymbols((string?)null, MaxDocumentSymbolMaterialization + 1, pathPatterns: [document.IndexedPath]);
         var materializationTruncated = candidates.Count > MaxDocumentSymbolMaterialization;
         var materializedCount = Math.Min(candidates.Count, MaxDocumentSymbolMaterialization);
         Activity.Current?.SetTag("lsp.document_symbols.materialized_count", materializedCount);
@@ -558,18 +571,19 @@ internal sealed class LspServer : IDisposable
             .ThenBy(s => s.ContainerName == null ? 0 : 1)
             .ThenBy(s => s.Name, StringComparer.Ordinal)
             .ToList();
-        var roots = BuildDocumentSymbolTree(symbols);
+        var roots = BuildDocumentSymbolTree(document, symbols);
         Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", roots.Count);
         return roots;
     }
 
-    private JsonArray BuildDocumentSymbolTree(IReadOnlyList<SymbolResult> symbols)
+    private JsonArray BuildDocumentSymbolTree(IndexedDocumentContext document, IReadOnlyList<SymbolResult> symbols)
     {
         var roots = new JsonArray();
         var nodes = new List<DocumentSymbolNode>(symbols.Count);
+        var lineCache = new Dictionary<int, string?>();
         foreach (var symbol in symbols)
         {
-            var item = ToDocumentSymbol(symbol);
+            var item = ToDocumentSymbol(document, symbol, lineCache);
             var node = new DocumentSymbolNode(symbol, item);
             var parent = FindDocumentSymbolParent(nodes, symbol);
             if (parent == null)
@@ -607,7 +621,7 @@ internal sealed class LspServer : IDisposable
         }
 
         var includeDeclaration = GetBool(root, "params", "context", "includeDeclaration") == true;
-        var analysis = ResolveLspReferences(context);
+        var references = ResolveLspReferences(context);
         var array = new JsonArray();
         var seenLocations = new HashSet<string>(StringComparer.Ordinal);
         if (includeDeclaration)
@@ -616,7 +630,7 @@ internal sealed class LspServer : IDisposable
                 AddSymbolLocation(array, seenLocations, definition, context);
         }
 
-        foreach (var reference in analysis.References)
+        foreach (var reference in references)
             AddLocation(
                 array,
                 seenLocations,
@@ -683,12 +697,11 @@ internal sealed class LspServer : IDisposable
         var seenRanges = new HashSet<string>(StringComparer.Ordinal);
         foreach (var definition in ResolveLspDefinitions(context).Where(definition => string.Equals(definition.Path, context.IndexedPath, StringComparison.Ordinal)))
         {
-            var line = definition.Line > 0 ? definition.Line : definition.StartLine;
-            var column = definition.StartColumn.HasValue ? definition.StartColumn.Value + 1 : 1;
-            AddDocumentHighlight(array, seenRanges, line, column, line, column + Math.Max(definition.Name.Length, 1));
+            var identifier = GetSymbolIdentifierPosition(definition, context.ResolvedPath);
+            AddDocumentHighlight(array, seenRanges, identifier.Line, identifier.StartColumn, identifier.Line, identifier.EndColumn);
         }
 
-        foreach (var reference in ResolveLspReferences(context).References.Where(reference => string.Equals(reference.Path, context.IndexedPath, StringComparison.Ordinal)))
+        foreach (var reference in ResolveLspReferences(context).Where(reference => string.Equals(reference.Path, context.IndexedPath, StringComparison.Ordinal)))
         {
             var startColumn = Math.Max(reference.Column, 1);
             AddDocumentHighlight(array, seenRanges, reference.Line, startColumn, reference.Line, startColumn + Math.Max(context.Token.Length, 1));
@@ -773,7 +786,7 @@ internal sealed class LspServer : IDisposable
             return true;
 
         var line = Math.Max(symbol.Line, 1) - 1;
-        var character = FindSymbolStartCharacter(document, symbol, lineCache) + symbol.Name.Length;
+        var character = FindSymbolStartCharacter(document.ResolvedPath, symbol, lineCache) + symbol.Name.Length;
         return IsPositionInRange(line, character, startLine, startCharacter, endLine, endCharacter);
     }
 
@@ -790,7 +803,7 @@ internal sealed class LspServer : IDisposable
             return false;
         }
 
-        var symbolStart = FindSymbolStartCharacter(document, symbol, lineCache);
+        var symbolStart = FindSymbolStartCharacter(document.ResolvedPath, symbol, lineCache);
         if (symbolStart <= 0 || sourceLine.Length == 0)
             return false;
 
@@ -937,7 +950,7 @@ internal sealed class LspServer : IDisposable
 
     private JsonObject ToInlayHint(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?> lineCache)
     {
-        var startCharacter = FindSymbolStartCharacter(document, symbol, lineCache);
+        var startCharacter = FindSymbolStartCharacter(document.ResolvedPath, symbol, lineCache);
         return new JsonObject
         {
             ["position"] = ToPosition(symbol.Line, startCharacter + symbol.Name.Length + 1),
@@ -1158,7 +1171,7 @@ internal sealed class LspServer : IDisposable
         if (line <= 0)
             return null;
 
-        var startCharacter = FindSymbolStartCharacter(document, symbol, lineCache);
+        var startCharacter = FindSymbolStartCharacter(document.ResolvedPath, symbol, lineCache);
         var length = Math.Max(symbol.Name.Length, 1);
         return new SemanticToken(
             line - 1,
@@ -1168,17 +1181,123 @@ internal sealed class LspServer : IDisposable
             1 << 0);
     }
 
-    private int FindSymbolStartCharacter(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?>? lineCache = null)
+    private int FindSymbolStartCharacter(string resolvedPath, SymbolResult symbol, Dictionary<int, string?>? lineCache = null)
     {
-        if (symbol.StartColumn.HasValue)
-            return Math.Max(0, symbol.StartColumn.Value);
+        var indexedStart = Math.Max(0, symbol.StartColumn ?? 0);
         var line = Math.Max(symbol.Line, symbol.StartLine);
         if (line <= 0 || string.IsNullOrWhiteSpace(symbol.Name))
-            return 0;
+            return indexedStart;
 
-        return TryReadPositionLineCached(document.ResolvedPath, line - 1, lineCache, out var sourceLine)
-            ? Math.Max(0, sourceLine.IndexOf(symbol.Name, StringComparison.Ordinal))
-            : 0;
+        if (!TryReadPositionLineCached(resolvedPath, line - 1, lineCache, out var sourceLine))
+            return indexedStart;
+
+        var searchStart = Math.Min(
+            ResolveDeclarationIdentifierAnchor(sourceLine, symbol, indexedStart),
+            sourceLine.Length);
+        var sourceStart = FindIdentifierOccurrence(sourceLine, symbol.Name, searchStart);
+        if (sourceStart >= 0)
+            return sourceStart;
+
+        sourceStart = FindIdentifierOccurrence(sourceLine, symbol.Name, 0);
+        return sourceStart >= 0 ? sourceStart : indexedStart;
+    }
+
+    private static int ResolveDeclarationIdentifierAnchor(string sourceLine, SymbolResult symbol, int indexedStart)
+    {
+        if (string.IsNullOrWhiteSpace(symbol.Signature))
+            return indexedStart;
+
+        var firstLineEnd = symbol.Signature.IndexOfAny(['\r', '\n']);
+        var signatureLine = firstLineEnd >= 0 ? symbol.Signature[..firstLineEnd] : symbol.Signature;
+        var firstName = signatureLine.IndexOf(symbol.Name, StringComparison.Ordinal);
+        var declarationName = FindDeclarationIdentifierOffset(signatureLine, symbol.Kind, symbol.Name);
+        if (firstName < 0 || declarationName < firstName)
+            return indexedStart;
+
+        var adjusted = (long)indexedStart + declarationName - firstName;
+        if (adjusted < 0 || adjusted > sourceLine.Length)
+            return indexedStart;
+
+        var candidate = (int)adjusted;
+        return IsIdentifierOccurrenceAt(sourceLine, symbol.Name, candidate) ? candidate : indexedStart;
+    }
+
+    private static int FindDeclarationIdentifierOffset(string signatureLine, string kind, string name)
+    {
+        var headerEnd = FindDeclarationHeaderEnd(signatureLine, kind);
+        var result = -1;
+        var searchStart = 0;
+        while (searchStart <= headerEnd)
+        {
+            var candidate = FindIdentifierOccurrence(signatureLine, name, searchStart);
+            if (candidate < 0 || candidate + name.Length > headerEnd)
+                break;
+            result = candidate;
+            searchStart = candidate + 1;
+        }
+
+        return result;
+    }
+
+    private static int FindDeclarationHeaderEnd(string signatureLine, string kind)
+    {
+        ReadOnlySpan<char> delimiters = kind switch
+        {
+            "function" or "test.method" => "(",
+            "class" or "struct" or "interface" or "enum" or "namespace" => ":{(;",
+            _ => "{=;",
+        };
+        var end = signatureLine.Length;
+        foreach (var delimiter in delimiters)
+        {
+            var candidate = signatureLine.IndexOf(delimiter);
+            if (candidate >= 0)
+                end = Math.Min(end, candidate);
+        }
+
+        return end;
+    }
+
+    private static int FindIdentifierOccurrence(string sourceLine, string name, int startIndex)
+    {
+        var candidate = sourceLine.IndexOf(name, startIndex, StringComparison.Ordinal);
+        while (candidate >= 0)
+        {
+            var hasStartBoundary = candidate == 0 || !IsIdentifierContinuation(sourceLine[candidate - 1]);
+            var end = candidate + name.Length;
+            var hasEndBoundary = end == sourceLine.Length || !IsIdentifierContinuation(sourceLine[end]);
+            if (hasStartBoundary && hasEndBoundary)
+                return candidate;
+
+            candidate = sourceLine.IndexOf(name, candidate + 1, StringComparison.Ordinal);
+        }
+
+        return -1;
+    }
+
+    private static bool IsIdentifierOccurrenceAt(string sourceLine, string name, int start)
+    {
+        if (start < 0 || start + name.Length > sourceLine.Length ||
+            !sourceLine.AsSpan(start, name.Length).SequenceEqual(name.AsSpan()))
+        {
+            return false;
+        }
+
+        var hasStartBoundary = start == 0 || !IsIdentifierContinuation(sourceLine[start - 1]);
+        var end = start + name.Length;
+        var hasEndBoundary = end == sourceLine.Length || !IsIdentifierContinuation(sourceLine[end]);
+        return hasStartBoundary && hasEndBoundary;
+    }
+
+    private static bool IsIdentifierContinuation(char value)
+    {
+        var category = char.GetUnicodeCategory(value);
+        return char.IsLetterOrDigit(value) ||
+            value is '_' or '$' ||
+            category is UnicodeCategory.NonSpacingMark or
+                UnicodeCategory.SpacingCombiningMark or
+                UnicodeCategory.ConnectorPunctuation or
+                UnicodeCategory.Format;
     }
 
     private static int SemanticTokenType(string kind) => kind switch
@@ -1196,22 +1315,20 @@ internal sealed class LspServer : IDisposable
 
     private JsonObject ToSymbolLocation(SymbolResult symbol, PositionTokenContext context)
     {
-        var line = symbol.Line > 0 ? symbol.Line : Math.Max(1, symbol.StartLine);
-        var column = symbol.StartColumn.HasValue ? symbol.StartColumn.Value + 1 : 1;
+        var identifier = GetSymbolIdentifierPosition(symbol, context);
         return ToLocation(
             symbol.Path,
-            line,
-            column,
-            line,
-            column + Math.Max(symbol.Name.Length, 1),
+            identifier.Line,
+            identifier.StartColumn,
+            identifier.Line,
+            identifier.EndColumn,
             GetLocationWorkspaceRoot(symbol.Path, context));
     }
 
     private void AddSymbolLocation(JsonArray array, HashSet<string> seenLocations, SymbolResult symbol, PositionTokenContext context)
     {
-        var line = symbol.Line > 0 ? symbol.Line : Math.Max(1, symbol.StartLine);
-        var column = symbol.StartColumn.HasValue ? symbol.StartColumn.Value + 1 : 1;
-        AddLocation(array, seenLocations, symbol.Path, line, column, line, column + Math.Max(symbol.Name.Length, 1), context);
+        var identifier = GetSymbolIdentifierPosition(symbol, context);
+        AddLocation(array, seenLocations, symbol.Path, identifier.Line, identifier.StartColumn, identifier.Line, identifier.EndColumn, context);
     }
 
     private void AddLocation(
@@ -1395,46 +1512,218 @@ internal sealed class LspServer : IDisposable
     {
         var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
         if (localDefinitions.Count > 0)
-            return PreferDefinitionAtPosition(localDefinitions, context);
+        {
+            var positionDefinitions = FindDefinitionsAtPosition(localDefinitions, context);
+            if (positionDefinitions.Count > 0)
+                return positionDefinitions;
+
+            var localReferenceTarget = ResolveReferenceTargetAtPosition(context);
+            return localReferenceTarget == null ? localDefinitions : [localReferenceTarget];
+        }
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
+        if (workspaceDefinitions.Count > 1)
+        {
+            var referenceTarget = ResolveReferenceTargetAtPosition(context);
+            if (referenceTarget != null)
+                return [referenceTarget];
+        }
         return workspaceDefinitions;
     }
 
-    private SymbolAnalysisResult ResolveLspReferences(PositionTokenContext context)
+    private IReadOnlyList<ReferenceResult> ResolveLspReferences(PositionTokenContext context)
     {
         var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
         if (localDefinitions.Count > 0)
         {
-            var positionDefinitions = PreferDefinitionAtPosition(localDefinitions, context);
-            var anchoredKind = positionDefinitions.Count == 1 ? positionDefinitions[0].Kind : null;
-            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true, kind: anchoredKind);
+            var positionDefinitions = FindDefinitionsAtPosition(localDefinitions, context);
+            if (positionDefinitions.Count == 1)
+                return _reader.GetReferencesForDefinition(positionDefinitions[0], DefaultLimit);
+
+            var localReferenceTarget = ResolveReferenceTargetAtPosition(context);
+            if (localReferenceTarget != null)
+                return _reader.GetReferencesForDefinition(localReferenceTarget, DefaultLimit);
+
+            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true).References;
         }
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
-        if (workspaceDefinitions.Count == 0 || !HasSingleLspDefinitionTarget(workspaceDefinitions))
-            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true);
+        if (workspaceDefinitions.Count > 1)
+        {
+            var referenceTarget = ResolveReferenceTargetAtPosition(context);
+            if (referenceTarget != null)
+                return _reader.GetReferencesForDefinition(referenceTarget, DefaultLimit);
+        }
 
-        return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true);
+        if (workspaceDefinitions.Count == 0 || !HasSingleLspDefinitionTarget(workspaceDefinitions))
+            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true).References;
+
+        return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true).References;
     }
 
-    private static List<DefinitionResult> PreferDefinitionAtPosition(
+    private DefinitionResult? ResolveReferenceTargetAtPosition(PositionTokenContext context)
+    {
+        var resolution = _reader.GetReferencePositionResolution(
+            context.IndexedPath,
+            context.Token,
+            context.Line + 1,
+            context.StartCharacter + 1,
+            MaxReferencePositionCandidates);
+        if (!resolution.IdentityAvailable || resolution.CandidatesTruncated)
+            return null;
+
+        var selected = resolution.Candidates
+            .Where(candidate => candidate.Authoritative)
+            .Take(2)
+            .ToList();
+        if (selected.Count == 1)
+            return _reader.GetDefinitionForSymbol(selected[0].Definition);
+
+        if (TryGetCSharpInvocationArgumentCount(context, out var argumentCount))
+        {
+            selected = resolution.Candidates
+                .Where(candidate => TryGetCSharpDefinitionParameterCount(candidate.Definition, out var parameterCount) &&
+                    parameterCount == argumentCount)
+                .Take(2)
+                .ToList();
+            if (selected.Count == 1)
+                return _reader.GetDefinitionForSymbol(selected[0].Definition);
+        }
+
+        return resolution.Candidates.Count == 1
+            ? _reader.GetDefinitionForSymbol(resolution.Candidates[0].Definition)
+            : null;
+    }
+
+    private bool TryGetCSharpInvocationArgumentCount(PositionTokenContext context, out int argumentCount)
+    {
+        argumentCount = 0;
+        if (!TryReadPositionLine(context.ResolvedPath, context.Line, out var sourceLine, out _))
+            return false;
+
+        var openParenthesis = context.EndCharacter;
+        while (openParenthesis < sourceLine.Length && char.IsWhiteSpace(sourceLine[openParenthesis]))
+            openParenthesis++;
+        return openParenthesis < sourceLine.Length &&
+            sourceLine[openParenthesis] == '(' &&
+            TryCountCommaSeparatedItems(sourceLine, openParenthesis, allowAngleBrackets: false, out argumentCount);
+    }
+
+    private static bool TryGetCSharpDefinitionParameterCount(SymbolResult definition, out int parameterCount)
+    {
+        parameterCount = 0;
+        if (!string.Equals(definition.Lang, "csharp", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(definition.Signature))
+        {
+            return false;
+        }
+
+        var nameStart = FindIdentifierOccurrence(definition.Signature, definition.Name, 0);
+        if (nameStart < 0)
+            return false;
+        var openParenthesis = definition.Signature.IndexOf('(', nameStart + definition.Name.Length);
+        return openParenthesis >= 0 &&
+            TryCountCommaSeparatedItems(definition.Signature, openParenthesis, allowAngleBrackets: true, out parameterCount);
+    }
+
+    private static bool TryCountCommaSeparatedItems(
+        string text,
+        int openParenthesis,
+        bool allowAngleBrackets,
+        out int itemCount)
+    {
+        itemCount = 0;
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+        var hasItemContent = false;
+        for (var index = openParenthesis + 1; index < text.Length; index++)
+        {
+            var value = text[index];
+            if (value is '\'' or '"' ||
+                (value == '/' && index + 1 < text.Length && text[index + 1] is '/' or '*'))
+            {
+                return false;
+            }
+
+            switch (value)
+            {
+                case '(':
+                    parenthesisDepth++;
+                    hasItemContent = true;
+                    break;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    hasItemContent = true;
+                    break;
+                case ')' when bracketDepth == 0 && braceDepth == 0 && angleDepth == 0:
+                    itemCount = hasItemContent ? itemCount + 1 : 0;
+                    return true;
+                case '[':
+                    bracketDepth++;
+                    hasItemContent = true;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    hasItemContent = true;
+                    break;
+                case '{':
+                    braceDepth++;
+                    hasItemContent = true;
+                    break;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    hasItemContent = true;
+                    break;
+                case '<' when allowAngleBrackets:
+                    angleDepth++;
+                    hasItemContent = true;
+                    break;
+                case '>' when allowAngleBrackets && angleDepth > 0:
+                    angleDepth--;
+                    hasItemContent = true;
+                    break;
+                case '<' or '>':
+                    return false;
+                case ',' when parenthesisDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0:
+                    if (!hasItemContent)
+                        return false;
+                    itemCount++;
+                    hasItemContent = false;
+                    break;
+                default:
+                    hasItemContent |= !char.IsWhiteSpace(value);
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    private List<DefinitionResult> PreferDefinitionAtPosition(
+        List<DefinitionResult> definitions,
+        PositionTokenContext context)
+    {
+        var positioned = FindDefinitionsAtPosition(definitions, context);
+        return positioned.Count > 0 ? positioned : definitions;
+    }
+
+    private List<DefinitionResult> FindDefinitionsAtPosition(
         List<DefinitionResult> definitions,
         PositionTokenContext context)
     {
         var sourceLine = context.Line + 1;
-        var positioned = definitions.Where(definition =>
+        return definitions.Where(definition =>
         {
-            var definitionLine = definition.Line > 0 ? definition.Line : definition.StartLine;
-            if (definitionLine != sourceLine || definition.StartColumn == null)
+            var identifier = GetSymbolIdentifierPosition(definition, context.ResolvedPath);
+            if (identifier.Line != sourceLine)
                 return false;
 
-            var definitionStart = definition.StartColumn.Value;
-            var definitionEnd = definitionStart + Math.Max(definition.Name.Length, 1);
+            var definitionStart = identifier.StartColumn - 1;
+            var definitionEnd = identifier.EndColumn - 1;
             return context.StartCharacter < definitionEnd && context.EndCharacter > definitionStart;
         }).ToList();
-
-        return positioned.Count > 0 ? positioned : definitions;
     }
 
     private static bool HasSingleLspDefinitionTarget(IReadOnlyList<DefinitionResult> definitions)
@@ -1496,7 +1785,7 @@ internal sealed class LspServer : IDisposable
         }
 
         var (startCharacter, endCharacter) = FindTokenRangeAtUtf16Position(sourceLine, character);
-        context = new PositionTokenContext(token, indexedPath, workspaceRoot, line, startCharacter, endCharacter);
+        context = new PositionTokenContext(token, indexedFullPath, indexedPath, workspaceRoot, line, startCharacter, endCharacter);
         return true;
     }
 
@@ -1544,16 +1833,88 @@ internal sealed class LspServer : IDisposable
         Dictionary<int, string?>? lineCache,
         out string sourceLine)
     {
+        if (targetLine < 0)
+        {
+            sourceLine = string.Empty;
+            return false;
+        }
+
         if (lineCache != null && lineCache.TryGetValue(targetLine, out var cachedLine))
         {
             sourceLine = cachedLine ?? string.Empty;
             return cachedLine != null;
         }
 
+        if (lineCache is { Count: 0 } && TryReadAllPositionLines(path, out var sourceLines))
+        {
+            for (var line = 0; line < sourceLines.Count; line++)
+                lineCache[line] = sourceLines[line];
+
+            if (lineCache.TryGetValue(targetLine, out cachedLine))
+            {
+                sourceLine = cachedLine ?? string.Empty;
+                return cachedLine != null;
+            }
+
+            sourceLine = string.Empty;
+            return false;
+        }
+
         var found = TryReadPositionLine(path, targetLine, out sourceLine, out _);
         if (lineCache != null)
             lineCache[targetLine] = found ? sourceLine : null;
         return found;
+    }
+
+    private bool TryReadAllPositionLines(string path, out IReadOnlyList<string?> sourceLines)
+    {
+        sourceLines = [];
+        try
+        {
+            string text;
+            if (_liveDocumentStore.TryGetText(Path.GetFullPath(path), out var liveText))
+            {
+                if (Encoding.UTF8.GetByteCount(liveText) > MaxPositionDocumentBytes)
+                    return false;
+                text = liveText;
+            }
+            else
+            {
+                using var stream = BoundedFile.OpenReadForLengthCheckedText(path);
+                if (stream.Length > MaxPositionDocumentBytes)
+                    return false;
+
+                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                text = reader.ReadToEnd();
+                if (stream.Position > MaxPositionDocumentBytes)
+                    return false;
+            }
+
+            var lines = new List<string?>();
+            var lineStart = 0;
+            for (var index = 0; index <= text.Length; index++)
+            {
+                var atEnd = index == text.Length;
+                if (!atEnd && text[index] is not ('\r' or '\n'))
+                    continue;
+
+                var length = index - lineStart;
+                lines.Add(length <= MaxPositionLineChars ? text.Substring(lineStart, length) : null);
+                if (atEnd)
+                    break;
+
+                if (text[index] == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
+                    index++;
+                lineStart = index + 1;
+            }
+
+            sourceLines = lines;
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static bool TryReadPositionLineFromText(string text, int targetLine, out string sourceLine, out string? failureReason)
@@ -1897,22 +2258,64 @@ internal sealed class LspServer : IDisposable
         }
     }
 
-    private JsonObject ToWorkspaceSymbol(SymbolResult symbol) => new()
+    private JsonObject ToWorkspaceSymbol(
+        SymbolResult symbol,
+        (int Line, int StartColumn, int EndColumn) identifier)
     {
-        ["name"] = symbol.Name,
-        ["kind"] = SymbolKind(symbol.Kind),
-        ["location"] = ToLocation(symbol.Path, symbol.StartLine, 1, symbol.EndLine, 1),
-        ["containerName"] = symbol.ContainerName,
-    };
+        return new JsonObject
+        {
+            ["name"] = symbol.Name,
+            ["kind"] = SymbolKind(symbol.Kind),
+            ["location"] = ToLocation(symbol.Path, identifier.Line, identifier.StartColumn, identifier.Line, identifier.EndColumn),
+            ["containerName"] = symbol.ContainerName,
+        };
+    }
 
-    private static JsonObject ToDocumentSymbol(SymbolResult symbol) => new()
+    private JsonObject ToDocumentSymbol(
+        IndexedDocumentContext document,
+        SymbolResult symbol,
+        Dictionary<int, string?> lineCache)
     {
-        ["name"] = symbol.Name,
-        ["kind"] = SymbolKind(symbol.Kind),
-        ["range"] = ToRange(symbol.StartLine, 1, symbol.EndLine, 1),
-        ["selectionRange"] = ToRange(symbol.Line, 1, symbol.Line, 1),
-        ["detail"] = TruncateDocumentSymbolDetail(symbol.Signature),
-    };
+        var identifier = GetSymbolIdentifierPosition(symbol, document.ResolvedPath, lineCache);
+        var rangeStartLine = symbol.StartLine > 0 ? Math.Min(symbol.StartLine, identifier.Line) : identifier.Line;
+        var rangeEndLine = symbol.EndLine > 0 ? Math.Max(symbol.EndLine, identifier.Line) : identifier.Line;
+        var rangeEndColumn = rangeEndLine == identifier.Line ? identifier.EndColumn : 1;
+        return new JsonObject
+        {
+            ["name"] = symbol.Name,
+            ["kind"] = SymbolKind(symbol.Kind),
+            ["range"] = ToRange(rangeStartLine, 1, rangeEndLine, rangeEndColumn),
+            ["selectionRange"] = ToRange(identifier.Line, identifier.StartColumn, identifier.Line, identifier.EndColumn),
+            ["detail"] = TruncateDocumentSymbolDetail(symbol.Signature),
+        };
+    }
+
+    private (int Line, int StartColumn, int EndColumn) GetSymbolIdentifierPosition(SymbolResult symbol)
+    {
+        var resolvedPath = TryResolveIndexedFilePath(symbol.Path, out var path) ? path : null;
+        return GetSymbolIdentifierPosition(symbol, resolvedPath);
+    }
+
+    private (int Line, int StartColumn, int EndColumn) GetSymbolIdentifierPosition(
+        SymbolResult symbol,
+        PositionTokenContext context)
+    {
+        var indexedPathRoot = _projectRoot == null ? context.WorkspaceRoot : null;
+        var resolvedPath = TryResolveIndexedFilePath(symbol.Path, indexedPathRoot, out var path) ? path : null;
+        return GetSymbolIdentifierPosition(symbol, resolvedPath);
+    }
+
+    private (int Line, int StartColumn, int EndColumn) GetSymbolIdentifierPosition(
+        SymbolResult symbol,
+        string? resolvedPath,
+        Dictionary<int, string?>? lineCache = null)
+    {
+        var line = symbol.Line > 0 ? symbol.Line : Math.Max(1, symbol.StartLine);
+        var startCharacter = resolvedPath == null
+            ? Math.Max(0, symbol.StartColumn ?? 0)
+            : FindSymbolStartCharacter(resolvedPath, symbol, lineCache);
+        return (line, startCharacter + 1, startCharacter + Math.Max(symbol.Name.Length, 1) + 1);
+    }
 
     private static string? TruncateDocumentSymbolDetail(string? detail)
     {

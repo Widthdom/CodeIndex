@@ -376,6 +376,37 @@ public partial class DbReader
         return result;
     }
 
+    /// <summary>
+    /// Resolve references for one already-selected definition through the same
+    /// identity-scoped candidate path used by <see cref="AnalyzeSymbol"/>.
+    /// 選択済みの単一定義について、<see cref="AnalyzeSymbol"/> と同じ identity-scoped
+    /// candidate 経路で参照を解決する。
+    /// </summary>
+    internal IReadOnlyList<ReferenceResult> GetReferencesForDefinition(DefinitionResult definition, int limit)
+    {
+        using var txn = _conn.BeginTransaction(deferred: true);
+        var references = CanScopeCandidateByIdentity(definition)
+            ? SearchReferencesForCandidate(
+                definition,
+                limit,
+                pathPatterns: null,
+                excludePathPatterns: null,
+                excludeTests: false,
+                LineWidthFormatter.DefaultMaxLineWidth)
+            : SearchReferences(
+                definition.Name,
+                limit,
+                definition.Lang,
+                referenceKind: null,
+                pathPatterns: null,
+                excludePathPatterns: null,
+                excludeTests: false,
+                exact: true,
+                LineWidthFormatter.DefaultMaxLineWidth);
+        txn.Commit();
+        return references;
+    }
+
     private SymbolCandidateBundle BuildSymbolCandidateBundle(
         DefinitionResult definition,
         int limit,
@@ -385,12 +416,7 @@ public partial class DbReader
         bool excludeTests,
         int maxLineWidth)
     {
-        var identityScoped = _hasReferencesTable
-                             && _referenceIdentityContractCurrent
-                             && definition.SymbolId != null
-                             && !string.Equals(definition.Lang, "sql", StringComparison.Ordinal)
-                             && _referenceColumns.Contains("source_symbol_id")
-                             && HasTable("symbol_reference_candidates");
+        var identityScoped = CanScopeCandidateByIdentity(definition);
         var references = identityScoped
             ? SearchReferencesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, maxLineWidth)
             : includeNameFallback
@@ -436,6 +462,14 @@ public partial class DbReader
             Callees = callees,
         };
     }
+
+    private bool CanScopeCandidateByIdentity(DefinitionResult definition) =>
+        _hasReferencesTable
+        && _referenceIdentityContractCurrent
+        && definition.SymbolId != null
+        && !string.Equals(definition.Lang, "sql", StringComparison.Ordinal)
+        && _referenceColumns.Contains("source_symbol_id")
+        && HasTable("symbol_reference_candidates");
 
     private static SymbolCandidateSelector BuildSymbolCandidateSelector(DefinitionResult definition)
     {

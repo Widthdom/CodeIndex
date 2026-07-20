@@ -398,6 +398,17 @@ requested token, but provider results remain conservative and index-backed:
 return empty arrays or null when the database cannot answer safely instead of
 inventing language-server analysis.
 
+LSP references resolve an indexed definition or call-site target through the same
+identity-scoped candidate path as CLI symbol analysis; `includeDeclaration` adds
+only that selected declaration. Document-symbol selections and workspace-symbol
+locations cover the identifier. The stored column is the lookup anchor; when the
+indexed source line is readable, the server confirms the identifier on that line
+to tolerate older imprecise columns. If source text is unavailable, it falls back
+to the stored column, then to character zero when no column was indexed. Type
+inlay hints are emitted only when the indexed return type is not already written
+before the declaration identifier, so explicit method return, local, and field
+types remain suppressed.
+
 ### Extractor performance contract
 
 Symbol and reference extractors run during `cdidx index`, so language-specific
@@ -473,7 +484,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `environment` | Dockerfile `ENV` variable names | Variable/search symbol; participates in Dockerfile variable references |
 | `event` | Event declarations | Search/filter symbol |
 | `expose` | Dockerfile `EXPOSE` ports | Container runtime search symbol |
-| `field` | Field declarations where distinct from properties | Search/filter symbol |
+| `field` | Field declarations where distinct from properties; C# const and static readonly fields share the tuple-aware type grammar used by ordinary fields | Search/filter symbol |
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
 | `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
@@ -1176,7 +1187,7 @@ Supported symbol kinds by language:
 | Swift | functions, classes, actors, structs, protocols, enums, stored properties | imports and trailing-closure calls | yes |
 | Ruby | `def`, Rails DSL, block calls, classes, modules, attributes | `require` | yes |
 | Perl | packages, subroutines, constants | `use`, `require`, `parent` / `base`, arrow method calls | yes |
-| C / C++ | functions, macros, structs, C++ classes, enums, enum classes | `#include`, type-position references | yes |
+| C / C++ | functions, macros, structs, C++ classes, enums, enum classes; balanced C++ callable declarators including constructors, destructors, operators, and trailing-return functions | `#include`, type-position references | yes |
 | PHP | functions, constants, enum cases, classes, interfaces, traits, enums | `use`, `require`, `include` | yes |
 | Scala | `def`, `implicit` declarations, `given`, classes, objects, traits, enums | imports, type aliases, block calls, `for` generators, implicit conversion types, `given` / `using` evidence types | yes |
 | Elixir | `def`, `defp`, modules, protocols | `import`, `alias`, `use`, `require` | yes |
@@ -1632,6 +1643,8 @@ Different graph entry points walk different `reference_kind` subsets by design. 
 | `impact` file-hint fallback | reverse (definition file → dependent files) | all kinds; metadata-only rows gated by `IsMetadataTargetUnambiguous` + structured-type evidence | `DbReader.GetFileDependencyHintsToResolvedType` |
 | `deps` (default = forward) | source file → target file | all kinds; metadata rows require class-like + metadata-eligible targets (`has_metadata_target_kind`) and a unique resolution (`target_ambiguity`); MSBuild imports/project references resolve paths relative to the declaring project instead of matching shared package names | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | same as forward `deps` (same SQL) | `DbReader.GetFileDependencies` |
+
+`deps --symbol`, `--symbol-family`, and `--suppress-noise` are pushed into the logical-reference and target-candidate SQL scopes before candidate ranking and `--limit`; cycle and cross-workspace reads apply the same filters before their candidate limits. Consequently, `reference_count`, ranking, and the `symbol_filter` before/after counters describe the SQL-filtered scope rather than the whole pre-filter workspace. Long SQLite dependency reads also register command cancellation with the query token.
 
 Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas default `callers <ClassName>` returns only executable edges. Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`), or pass an explicitly supported non-default kind to `callers` / `callees`, to surface edges that the default call graph intentionally drops.
 
@@ -3259,6 +3272,15 @@ request token を特定できるよう disk より先に live cache を読む必
 保守的かつ index-backed のままにする。database が安全に答えられない場合は、language-server
 analysis を作り上げず、空配列または null を返す。
 
+LSP reference は、indexed definition または call site の target を CLI の symbol analysis と
+同じ identity-scoped candidate 経路で解決する。`includeDeclaration` が追加するのは、その選択済み
+declaration だけである。document symbol の selection と workspace symbol の location は identifier
+範囲を返す。保存済み column を lookup の起点とし、indexed source line を読める場合はその行の
+identifier を確認して、古い不正確な column にも対応する。source text を利用できない場合は
+保存済み column に fallback し、column も無い場合だけ character 0 を使う。type inlay hint は
+indexed return type が declaration identifier の前に明示されていない場合だけ返すため、method の
+明示 return type、local、field の明示型は表示しない。
+
 ### 抽出器の性能契約
 
 symbol / reference extractor は `cdidx index` 中に実行されるため、言語別 helper は
@@ -3330,7 +3352,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `environment` | Dockerfile `ENV` variable name | variable/search symbol。Dockerfile variable reference に参加 |
 | `event` | event declaration | Search/filter symbol |
 | `expose` | Dockerfile `EXPOSE` port | container runtime search symbol |
-| `field` | property と区別される field declaration | Search/filter symbol |
+| `field` | property と区別される field declaration。C# の const / static readonly field は通常 field と tuple-aware な型文法を共有する | Search/filter symbol |
 | `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
 | `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
 | `generator` | JavaScript / TypeScript generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
@@ -4068,7 +4090,7 @@ SQL 固有の symbol extraction:
 | Swift | function、class、actor、struct、protocol、enum、stored property | import、trailing-closure call | yes |
 | Ruby | `def`、Rails DSL、block call、class、module、attribute | `require` | yes |
 | Perl | package、subroutine、constant | `use`、`require`、`parent` / `base`、arrow method call | yes |
-| C / C++ | function、macro、struct、C++ class、enum、enum class | `#include`、type-position reference | yes |
+| C / C++ | function、macro、struct、C++ class、enum、enum class。constructor、destructor、operator、後置戻り値 function を含む、括弧の対応を考慮した C++ callable declarator | `#include`、type-position reference | yes |
 | PHP | function、constant、enum case、class、interface、trait、enum | `use`、`require`、`include` | yes |
 | Scala | `def`、class、object、trait、enum | import、type alias、block call | yes |
 | Elixir | `def`、`defp`、module、protocol | `import`、`alias`、`use`、`require` | yes |
@@ -4526,6 +4548,8 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 | `impact` file-hint fallback | reverse (定義ファイル → 依存先) | 全 kind。metadata 専用行は `IsMetadataTargetUnambiguous` と structured-type evidence で gating | `DbReader.GetFileDependencyHintsToResolvedType` |
 | `deps` (デフォルト = forward) | source file → target file | 全 kind。metadata 行は class-like かつ metadata-eligible な target (`has_metadata_target_kind`) と一意解決 (`target_ambiguity`) を要求。MSBuild の import / project reference は共有 package 名との一致ではなく、宣言元 project 相対の path として解決 | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | forward `deps` と同じ SQL を共有 | `DbReader.GetFileDependencies` |
+
+`deps --symbol`、`--symbol-family`、`--suppress-noise` は、候補の ranking と `--limit` より前に logical-reference と target-candidate の SQL scope へ push down される。cycle と cross-workspace の read も、各候補上限より前に同じ filter を適用する。そのため `reference_count`、ranking、`symbol_filter` の before/after counter は、絞り込み前の workspace 全体ではなく SQL で絞り込まれた scope を表す。長時間の SQLite dependency read では query token による command cancellation も登録する。
 
 実運用上の帰結: クラスのようなシンボルに対する `impact <ClassName>` は、member-level の caller が存在しない場合 heuristic file-dependency-hint fallback (metadata エッジを含む) を返し、一方の既定 `callers <ClassName>` は実行可能 edge だけを返す。両方とも個々の契約上は正しいが、件数は一致しない。差分を埋めるには `references <ClassName> --kind attribute`（または `annotation`）を使うか、`callers` / `callees` に明示的に対応する非既定 kind を渡し、既定 call graph が意図的に落としている edge を確認する。
 

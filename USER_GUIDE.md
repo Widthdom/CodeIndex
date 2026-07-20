@@ -1825,6 +1825,7 @@ same source location.
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
 | `--no-dedup` | `search` | Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
+| `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | Restrict dependency edges by an exact symbol, a symbol-name prefix, or the built-in noise profile. These filters run in SQLite before candidate ranking and `--limit`, including cycle and cross-workspace queries. `reference_count`, ranking, and JSON `symbol_filter` counters therefore describe the filtered scope. |
 | `--cycles` | `deps` | Return dependency cycles from a bounded approximate candidate-edge scan. `--limit` controls displayed cycles and the candidate budget (`max(--limit, 50)`). When `truncated_reason` is `candidate_edge_limit`, returned cycles are a bounded sample, not a complete or ranked cycle set. JSON includes `truncated`, `termination_reason`, `truncated_reason`, `candidate_edge_count`, `candidate_edge_limit`, `cycle_detection_mode`, `cycle_result_scope`, `cycle_result_note`, and `next_step_flags`; use suggested flags such as `--limit`, `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path` to expand or narrow the scan. |
 | `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
 | `--top <n>` | Query commands | Alias for `--limit` |
@@ -1872,6 +1873,9 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E012_INTERRUPTED` | The user interrupted the command with Ctrl-C / signal cancellation |
 | `E013_INDEX_EXTRACTION_STALLED` | Index extraction made no forward progress within the bounded stall timeout |
 | `E014_REGEX_MATCH_TIMEOUT` | A user-supplied regular expression exceeded the bounded match timeout while executing |
+| `E015_FS_CASE_PROBE_FAILED` | Filesystem case-sensitivity probing failed before cdidx could select a safe path-casing policy |
+| `E016_CHECKPOINT_NOT_FOUND` | The requested database checkpoint name does not exist |
+| `E017_WORKSPACE_MANIFEST_INVALID` | A workspace manifest was found but failed JSON schema or safety validation |
 | `E018_QUERY_NOT_FOUND` | A lookup that requires a result did not match an indexed entity |
 | `E019_FILE_NOT_FOUND` | An exact indexed file path requested by a query command does not exist |
 | `E020_LINE_OUT_OF_RANGE` | A requested source line falls outside the indexed file's 1-based line range |
@@ -2288,6 +2292,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 **Symbol notes**
 
 - C/C++ headers: `.h` stays on the C path unless lexical code (after comments, strings, and macro payloads are masked) has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time. Detection scores the full header up to 48 KiB, then uses head/middle/tail ranges for larger files while retaining lexical state across skipped bytes, so long license blocks do not impose a fixed line cutoff. `index --dry-run --json` reports ambiguous-header decisions in `language_detections` with stable `source` and `confidence` values.
+- C++ callables: balanced declarators preserve constructors, destructors, conversion operators, ordinary functions, and trailing-return functions as navigable function symbols. Trailing return types populate `return_type` metadata.
 - Cython and CUDA: Cython `cdef` / `cpdef` declarations, `cimport` entries, and extern declarations are indexed as symbols. CUDA files reuse C++ symbols and classify `__global__`, `__device__`, and `__host__` functions with CUDA-specific sub-kinds.
 - Shaders: GLSL, HLSL, Metal, and WGSL entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, and uniform/input/output declarations are indexed as symbols.
 - HDL: Verilog, SystemVerilog, and VHDL module/package/type/function/resource declarations are indexed as symbols. References and graph queries are not advertised for HDL yet.
@@ -4873,6 +4878,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
 | `--no-dedup` | `search` | overlap chunk の重複排除を無効化し、全 raw chunk hit を返す。chunk 境界の debug や raw match density 計測向け |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
+| `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | 完全一致のシンボル、シンボル名の接頭辞、または組み込み noise profile で依存 edge を絞り込む。cycle と cross-workspace query を含め、これらの filter は候補の ranking と `--limit` より前に SQLite 内で適用される。そのため `reference_count`、ranking、JSON の `symbol_filter` counter は絞り込み後の scope を表す。 |
 | `--cycles` | `deps` | 上限付きの近似候補 edge scan から依存 cycle を返す。`--limit` は表示する cycle 数と候補 budget（`max(--limit, 50)`）を制御する。`truncated_reason` が `candidate_edge_limit` の場合、返される cycle は上限内のサンプルであり、完全な cycle 集合やランキング済み集合ではない。JSON は `truncated`、`termination_reason`、`truncated_reason`、`candidate_edge_count`、`candidate_edge_limit`、`cycle_detection_mode`、`cycle_result_scope`、`cycle_result_note`、`next_step_flags` を返す。`--limit`、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` などの候補フラグで scan を広げるか絞り込む。 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。最大 7 個の distinct な追加 DB（`--db` を含め合計 8 個）まで繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
@@ -4920,6 +4926,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E012_INTERRUPTED` | Ctrl-C / signal cancellation でユーザーがコマンドを中断した |
 | `E013_INDEX_EXTRACTION_STALLED` | 制限付きの停止判定時間内に index 抽出が前進しなかった |
 | `E014_REGEX_MATCH_TIMEOUT` | ユーザー指定の正規表現が実行中に制限付き match timeout を超えた |
+| `E015_FS_CASE_PROBE_FAILED` | ファイルシステムの大文字小文字区別 probe に失敗し、安全な path casing policy を選択できなかった |
+| `E016_CHECKPOINT_NOT_FOUND` | 指定されたデータベース checkpoint 名が存在しない |
+| `E017_WORKSPACE_MANIFEST_INVALID` | workspace manifest JSON が見つかったが、schema または安全性の検証に失敗した |
 | `E018_QUERY_NOT_FOUND` | 結果必須の lookup が indexed entity に一致しなかった |
 | `E019_FILE_NOT_FOUND` | query command が要求した indexed file の完全一致 path が存在しない |
 | `E020_LINE_OUT_OF_RANGE` | 要求した source line が indexed file の 1-based 行範囲外だった |
@@ -5331,6 +5340,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 **シンボル抽出メモ**
 
 - C/C++ ヘッダー: `.h` は既定では C として扱います。コメント、文字列、マクロのペイロードをマスクした後の字句コードに `namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。48 KiB まではヘッダー全体、それを超える場合は評価対象外の byte をまたいで字句状態を保持しながら先頭・中央・末尾 range を評価するため、長いライセンスブロックが固定行数の打ち切りを引き起こしません。`index --dry-run --json` は曖昧なヘッダー判定を、安定した `source` と `confidence` を持つ `language_detections` として報告します。
+- C++ callable: 括弧の対応を考慮した declarator 解析により、constructor、destructor、conversion operator、通常関数、後置戻り値関数を移動可能な function シンボルとして保持します。後置戻り値は `return_type` メタデータへ格納します。
 - Cython と CUDA: Cython の `cdef` / `cpdef` 宣言、`cimport`、extern 宣言をシンボルとして索引します。CUDA ファイルは C++ のシンボル抽出を再利用し、`__global__`、`__device__`、`__host__` 関数に CUDA 固有の sub-kind を付けます。
 - Shaders: GLSL、HLSL、Metal、WGSL の entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output 宣言をシンボルとして索引します。
 - HDL: Verilog、SystemVerilog、VHDL の module / package / type / function / resource 宣言をシンボルとして索引します。HDL の references と graph queries はまだ対応として広告しません。

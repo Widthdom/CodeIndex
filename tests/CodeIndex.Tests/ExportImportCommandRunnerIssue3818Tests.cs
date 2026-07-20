@@ -82,6 +82,7 @@ public class ExportImportCommandRunnerIssue3818Tests
 
 }
 
+[Collection("Console sensitive")]
 public class ExportImportCommandRunnerCancellationTests
 {
     [Fact]
@@ -103,6 +104,10 @@ public class ExportImportCommandRunnerCancellationTests
         Assert.Equal(CommandErrorCodes.Interrupted, root.GetProperty("error_code").GetString());
     }
 
+}
+
+public class ExportImportCommandRunnerCopyCancellationTests
+{
     [Fact]
     public void CopyToWithLimit_CancellationBeforeReadThrowsWithoutWriting_Issue3818()
     {
