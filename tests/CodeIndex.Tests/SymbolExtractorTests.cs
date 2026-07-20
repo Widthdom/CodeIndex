@@ -7593,17 +7593,221 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Cpp_DetectsClassBodyMembers()
+    public void Extract_Cpp_DetectsBalancedCallableDeclarators()
     {
-        // C++: constructors, destructors, operator overloads / C++: コンストラクタ、デストラクタ、演算子オーバーロード
-        var content = "class Handler { Handler(); ~Handler(); Handler operator+(const Handler& other) const; };";
+        var content = """
+            template <typename T>
+            class Handler {
+            public:
+                explicit(false) Handler(T value) noexcept;
+                ~Handler() noexcept;
+                explicit(true) operator bool() const noexcept;
+                [[nodiscard]] auto transform(
+                    T value,
+                    int (*predicate)(T)
+                ) const & noexcept -> std::vector<T>;
+            };
+
+            template <typename T>
+            Handler<T>::Handler(T value) noexcept {}
+
+            template <typename T>
+            Handler<T>::~Handler() noexcept {}
+
+            template <typename T>
+            Handler<T>::operator bool() const noexcept { return true; }
+
+            template <typename T>
+            auto Handler<T>::transform(
+                T value,
+                int (*predicate)(T)
+            ) const & noexcept -> std::vector<T> {
+                Handler<T> local
+                (
+                    value
+                );
+                return { value };
+            }
+
+            int helper(int value) { return value; }
+
+            int caller() {
+                Handler<int> handler(1);
+                helper(1);
+                static_assert(sizeof(Handler<int>) > 0);
+                return helper(1);
+            }
+            """;
 
         var symbols = SymbolExtractor.Extract(1, "cpp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Handler" && s.ContainerName == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "~Handler" && s.ContainerName == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator+" && s.ContainerName == "Handler");
+        var callables = symbols.Where(s => s.Kind == "function").ToList();
+        Assert.DoesNotContain(callables, s => s.Name == "int");
+        Assert.Equal(
+            ["Handler", "caller", "helper", "operator bool", "transform", "~Handler"],
+            callables.Select(s => s.Name).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        Assert.All(callables, s =>
+        {
+            Assert.InRange(s.Line, 1, content.Count(ch => ch == '\n') + 1);
+            Assert.True(s.StartLine <= s.Line);
+            Assert.True(s.EndLine >= s.Line);
+        });
+
+        Assert.Equal(2, callables.Count(s => s.Name == "Handler"));
+        Assert.All(callables.Where(s => s.Name == "Handler"), s => Assert.Null(s.ReturnType));
+        Assert.Contains(callables, s => s.Name == "Handler" && s.BodyStartLine.HasValue);
+        Assert.Equal(2, callables.Count(s => s.Name == "~Handler"));
+        Assert.All(callables.Where(s => s.Name == "~Handler"), s => Assert.Null(s.ReturnType));
+        Assert.Contains(callables, s => s.Name == "~Handler" && s.BodyStartLine.HasValue);
+
+        var conversionOperators = callables.Where(s => s.Name == "operator bool").ToList();
+        Assert.Equal(2, conversionOperators.Count);
+        Assert.All(conversionOperators, s => Assert.Equal("bool", s.ReturnType));
+        Assert.Contains(conversionOperators, s => s.BodyStartLine.HasValue);
+
+        var transforms = callables.Where(s => s.Name == "transform").ToList();
+        Assert.Equal(2, transforms.Count);
+        Assert.All(transforms, s => Assert.Equal("std::vector<T>", s.ReturnType));
+        Assert.Contains(transforms, s => s.Signature?.Contains("int (*predicate)(T)", StringComparison.Ordinal) == true);
+        Assert.Contains(transforms, s => s.BodyStartLine.HasValue);
+
+        Assert.Single(callables, s => s.Name == "helper" && s.ReturnType == "int");
+        Assert.Single(callables, s => s.Name == "caller" && s.ReturnType == "int");
+        Assert.All(callables.Where(s => s.Name is "Handler" or "~Handler" or "operator bool" or "transform"),
+            s => Assert.Equal("Handler", s.ContainerName));
+        Assert.DoesNotContain(callables, s => s.Name is "handler" or "local" or "static_assert" or "sizeof" or "predicate");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsBalancedNamedAndPunctuationOperators()
+    {
+        var content = """
+            struct Stream {
+                bool operator <
+                (const Stream& other) const;
+                Stream& operator <<
+                (int value);
+                static void* operator new
+                (std::size_t size);
+                Stream operator co_await
+                () const;
+            };
+            """;
+
+        var callables = SymbolExtractor.Extract(1, "cpp", content)
+            .Where(s => s.Kind == "function")
+            .ToList();
+
+        Assert.Equal(
+            ["operator co_await", "operator new", "operator<", "operator<<"],
+            callables.Select(s => s.Name).Order(StringComparer.Ordinal));
+        Assert.Contains(callables, s => s.Name == "operator<" && s.ReturnType == "bool");
+        Assert.Contains(callables, s => s.Name == "operator<<" && s.ReturnType == "Stream&");
+        Assert.Contains(callables, s => s.Name == "operator new" && s.ReturnType == "void*");
+        Assert.Contains(callables, s => s.Name == "operator co_await" && s.ReturnType == "Stream");
+        Assert.All(callables, s => Assert.Equal("Stream", s.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_Cpp_StandaloneMacrosDoNotPrefixOrCreateCallables()
+    {
+        var content = """
+            struct Widget {
+                Q_OBJECT
+                Q_PROPERTY(int ignored READ ignored)
+                int value() const;
+            };
+            """;
+
+        var callables = SymbolExtractor.Extract(1, "cpp", content)
+            .Where(s => s.Kind == "function")
+            .ToList();
+
+        var value = Assert.Single(callables, s => s.Name == "value");
+        Assert.Equal("int", value.ReturnType);
+        Assert.Equal("int value() const;", value.Signature);
+        Assert.DoesNotContain(callables, s => s.Name is "Q_OBJECT" or "Q_PROPERTY");
+    }
+
+    [Fact]
+    public void Extract_Cpp_HandlesConstrainedAndSpecializedBalancedDeclarators()
+    {
+        var content = """
+            template <typename T>
+            void constrained(T value) requires requires(T item) {
+                item.run();
+            } {
+                value.run();
+            }
+
+            template <int N>
+            struct Box;
+
+            template <>
+            struct Box<1> {
+                Box() noexcept(1 < 2);
+                ~Box();
+                operator bool() requires (1 < 2);
+                operator decltype(make_value())() const;
+            };
+
+            template <typename T>
+            auto save(T value) -> T;
+
+            template <>
+            auto save<int>
+            (int value) -> int;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var callables = symbols
+            .Where(s => s.Kind is "function" or "specialization")
+            .ToList();
+
+        var constrained = Assert.Single(callables, s => s.Name == "constrained");
+        Assert.NotNull(constrained.BodyStartLine);
+        Assert.Equal(6, constrained.BodyEndLine);
+        Assert.DoesNotContain(callables, s => s.Name == "run");
+
+        Assert.Contains(callables, s => s.Kind == "function" && s.Name == "Box" && s.ContainerName == "Box");
+        Assert.Contains(callables, s => s.Kind == "function" && s.Name == "~Box" && s.ContainerName == "Box");
+        Assert.Contains(callables, s => s.Kind == "function" && s.Name == "operator bool" && s.ReturnType == "bool");
+        Assert.Contains(
+            callables,
+            s => s.Kind == "function"
+                && s.Name == "operator decltype(make_value())"
+                && s.ReturnType == "decltype(make_value())");
+
+        var specialization = Assert.Single(callables, s => s.Name == "save" && s.Line == 23);
+        Assert.Equal("specialization", specialization.Kind);
+        Assert.Equal("save", specialization.FamilyKey);
+        Assert.Equal("int", specialization.ReturnType);
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_Cpp_LongNonDeclaratorInput_UsesBoundedAllocations()
+    {
+        const int lineCount = 5_000;
+        var token = new string('A', 500);
+        var content = string.Join('\n', Enumerable.Range(0, lineCount).Select(i => $"{token}{i}"));
+        _ = SymbolExtractor.Extract(1, "cpp", "int warmup();");
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        stopwatch.Stop();
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.Empty(symbols);
+        Assert.InRange(allocatedBytes, 0, 64L * 1024 * 1024);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"Long non-declarator C++ extraction took {stopwatch.Elapsed.TotalSeconds:F2}s and allocated {allocatedBytes:N0} bytes.");
     }
 
     [Fact]

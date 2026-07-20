@@ -1176,7 +1176,7 @@ Supported symbol kinds by language:
 | Swift | functions, classes, actors, structs, protocols, enums, stored properties | imports and trailing-closure calls | yes |
 | Ruby | `def`, Rails DSL, block calls, classes, modules, attributes | `require` | yes |
 | Perl | packages, subroutines, constants | `use`, `require`, `parent` / `base`, arrow method calls | yes |
-| C / C++ | functions, macros, structs, C++ classes, enums, enum classes | `#include`, type-position references | yes |
+| C / C++ | functions, macros, structs, C++ classes, enums, enum classes; balanced C++ callable declarators including constructors, destructors, operators, and trailing-return functions | `#include`, type-position references | yes |
 | PHP | functions, constants, enum cases, classes, interfaces, traits, enums | `use`, `require`, `include` | yes |
 | Scala | `def`, `implicit` declarations, `given`, classes, objects, traits, enums | imports, type aliases, block calls, `for` generators, implicit conversion types, `given` / `using` evidence types | yes |
 | Elixir | `def`, `defp`, modules, protocols | `import`, `alias`, `use`, `require` | yes |
@@ -4068,7 +4068,7 @@ SQL 固有の symbol extraction:
 | Swift | function、class、actor、struct、protocol、enum、stored property | import、trailing-closure call | yes |
 | Ruby | `def`、Rails DSL、block call、class、module、attribute | `require` | yes |
 | Perl | package、subroutine、constant | `use`、`require`、`parent` / `base`、arrow method call | yes |
-| C / C++ | function、macro、struct、C++ class、enum、enum class | `#include`、type-position reference | yes |
+| C / C++ | function、macro、struct、C++ class、enum、enum class。constructor、destructor、operator、後置戻り値 function を含む、括弧の対応を考慮した C++ callable declarator | `#include`、type-position reference | yes |
 | PHP | function、constant、enum case、class、interface、trait、enum | `use`、`require`、`include` | yes |
 | Scala | `def`、class、object、trait、enum | import、type alias、block call | yes |
 | Elixir | `def`、`defp`、module、protocol | `import`、`alias`、`use`、`require` | yes |
