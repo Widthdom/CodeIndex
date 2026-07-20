@@ -21,7 +21,7 @@ public partial class ReleaseWorkflowTests
     }
 
     [Fact]
-    public void ReleaseWorkflow_ReusesLockedRestoreForTests()
+    public void ReleaseWorkflow_ScopesNativeValidationToNet8TestProject()
     {
         var workflow = ReadReleaseWorkflow();
 
@@ -30,9 +30,14 @@ public partial class ReleaseWorkflowTests
             "- name: Set up .NET SDKs\n        if: ${{ !matrix.cross_compile }}",
             "- name: Set up cross-compile .NET SDK\n        if: matrix.cross_compile",
             "dotnet-version: 9.0.301",
-            "- name: Restore dependencies\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet restore CodeIndex.sln --locked-mode",
+            "- name: Restore test dependencies\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode",
             "- name: Restore publish dependencies\n        if: matrix.cross_compile\n        run: dotnet restore src/CodeIndex/CodeIndex.csproj --locked-mode",
-            "- name: Build\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet build CodeIndex.sln --configuration Release --no-restore",
+            "- name: Build tests\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-restore",
+            "- name: Test net8\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-build --no-restore --nologo");
+        AssertDoesNotContainAny(
+            workflow,
+            "dotnet restore CodeIndex.sln --locked-mode",
+            "dotnet build CodeIndex.sln --configuration Release --no-restore",
             "dotnet test CodeIndex.sln --configuration Release --no-build --no-restore --nologo");
     }
 

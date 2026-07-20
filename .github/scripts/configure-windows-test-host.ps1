@@ -9,9 +9,14 @@ $ErrorActionPreference = "Stop"
 if (-not $env:USERPROFILE) {
   throw "USERPROFILE is required to configure the Windows test host."
 }
+if (-not $env:RUNNER_TEMP) {
+  throw "RUNNER_TEMP is required to configure the Windows test host."
+}
 
-$tempRoot = Join-Path $env:USERPROFILE "cdidx-test-temp"
+$tempRoot = Join-Path $env:RUNNER_TEMP "cdidx-temp"
+$trustedTempRoot = Join-Path $env:USERPROFILE "cdidx-trusted-test-temp"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $trustedTempRoot | Out-Null
 
 $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 try {
@@ -20,20 +25,20 @@ try {
     throw "The current Windows user SID is unavailable."
   }
 
-  $tempAcl = [System.Security.AccessControl.DirectorySecurity]::new()
-  $tempAcl.SetOwner($currentUser)
-  $tempAcl.SetAccessRuleProtection($true, $false)
+  $trustedTempAcl = [System.Security.AccessControl.DirectorySecurity]::new()
+  $trustedTempAcl.SetOwner($currentUser)
+  $trustedTempAcl.SetAccessRuleProtection($true, $false)
   $inheritanceFlags =
     [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
     [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-  $tempAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+  $trustedTempAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
     $currentUser,
     [System.Security.AccessControl.FileSystemRights]::FullControl,
     $inheritanceFlags,
     [System.Security.AccessControl.PropagationFlags]::None,
     [System.Security.AccessControl.AccessControlType]::Allow))
-  Set-Acl -LiteralPath $tempRoot -AclObject $tempAcl
-  Write-Host "Protected Windows test temp ACL for current user: $currentUser"
+  Set-Acl -LiteralPath $trustedTempRoot -AclObject $trustedTempAcl
+  Write-Host "Protected Windows executable-extension test temp ACL for current user: $currentUser"
 }
 finally {
   $currentIdentity.Dispose()
@@ -42,11 +47,14 @@ finally {
 if ($env:GITHUB_ENV) {
   "TMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
   "TEMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+  "CDIDX_TEST_TRUSTED_TEMP_ROOT=$trustedTempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 }
 
 $env:TMP = $tempRoot
 $env:TEMP = $tempRoot
-Write-Host "Pinned Windows TMP/TEMP to: $tempRoot"
+$env:CDIDX_TEST_TRUSTED_TEMP_ROOT = $trustedTempRoot
+Write-Host "Pinned Windows TMP/TEMP to fast runner storage: $tempRoot"
+Write-Host "Pinned executable-extension fixtures to protected storage: $trustedTempRoot"
 Write-Host ".NET Path.GetTempPath() now resolves to: $([System.IO.Path]::GetTempPath())"
 
 $candidates = @(
@@ -57,6 +65,10 @@ $candidates = @(
   [pscustomobject]@{
     Path = $env:RUNNER_TEMP
     Reason = "GitHub-hosted runner temp root used by actions."
+  },
+  [pscustomobject]@{
+    Path = $trustedTempRoot
+    Reason = "Protected current-user root for executable plugin, hook, and Git fixtures."
   },
   [pscustomobject]@{
     Path = $env:TEMP
@@ -122,8 +134,9 @@ if ($env:GITHUB_STEP_SUMMARY) {
   }
 }
 
-foreach ($entry in $exclusions) {
-  Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop
+[string[]]$exclusionPaths = @($exclusions | ForEach-Object { $_.Path })
+if ($exclusionPaths.Count -gt 0) {
+  Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop
 }
 
 $prefs = Get-MpPreference

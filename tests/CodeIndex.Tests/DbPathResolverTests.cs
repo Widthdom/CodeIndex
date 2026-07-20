@@ -6,26 +6,8 @@ using System.Globalization;
 
 namespace CodeIndex.Tests;
 
-/// <summary>
-/// Tests for default DB path resolution.
-/// 既定DBパス解決のテスト。
-/// </summary>
-[Collection("SQLite pool sensitive")]
-public class DbPathResolverTests
+public class DbPathResolverPureTests
 {
-    [Fact]
-    public void ResolveForIndex_UsesProjectLocalCdidxByDefault()
-    {
-        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
-        var expectedProjectPath = Path.GetFullPath(projectPath);
-
-        var dbPath = DbPathResolver.ResolveForIndex(projectPath, null);
-
-        Assert.Equal(
-            Path.Combine(expectedProjectPath, ".cdidx", "codeindex.db"),
-            dbPath);
-    }
-
     [Fact]
     public void ResolveForIndex_PrefersExplicitPath()
     {
@@ -48,19 +30,6 @@ public class DbPathResolverTests
         Assert.Equal(uri, parsed.DataSource);
         Assert.Equal(SqliteOpenMode.ReadOnly, parsed.Mode);
         Assert.NotEqual(SqliteOpenMode.ReadWriteCreate, parsed.Mode);
-    }
-
-    [Fact]
-    public void ResolveForIndex_PrefersExplicitDataDirWhenDbPathMissing()
-    {
-        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
-        var dataDir = Path.Combine(Path.GetTempPath(), $"cdidx_data_dir_{Guid.NewGuid():N}");
-
-        var resolved = DbPathResolver.ResolveForIndex(projectPath, explicitDbPath: null, explicitDataDir: dataDir);
-
-        Assert.Equal(Path.Combine(Path.GetFullPath(dataDir), "codeindex.db"), resolved.DbPath);
-        Assert.Equal(Path.GetFullPath(dataDir), resolved.DataDir);
-        Assert.Equal(DbPathResolver.DataDirSourceFlag, resolved.DataDirSource);
     }
 
     [Fact]
@@ -92,60 +61,6 @@ public class DbPathResolverTests
     }
 
     [Fact]
-    public void ResolveDataDirForQuery_WithXdgPrefersAncestorWorkspaceDataDir()
-    {
-        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_xdg_root_db");
-        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_xdg_config");
-        using var xdg = TestProjectHelper.CreateTempProjectScope("cdidx_xdg_dir");
-        var projectRoot = project.Root;
-        var configHome = config.Root;
-        var xdgDir = xdg.Root;
-        using var env = IsolateActiveWorkspace(configHome);
-        var child = Path.Combine(projectRoot, "src", "App");
-        Directory.CreateDirectory(child);
-        var indexedRootResolution = DbPathResolver.ResolveDataDir(projectRoot, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
-        Directory.CreateDirectory(indexedRootResolution.DataDir!);
-
-        var resolved = DbPathResolver.ResolveDataDirForQuery(
-            child,
-            explicitDataDir: null,
-            environmentDataDir: null,
-            xdgDataHome: xdgDir,
-            activeWorkspaceLoader: () => null);
-
-        Assert.Equal(indexedRootResolution.DbPath, resolved.DbPath);
-        Assert.Equal(indexedRootResolution.DataDir, resolved.DataDir);
-        Assert.Equal(DbPathResolver.DataDirSourceXdg, resolved.DataDirSource);
-    }
-
-    [Fact]
-    public void ResolveDataDirForQuery_PrefersOutermostAncestorCdidx()
-    {
-        using var fixture = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_db");
-        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_config");
-        var fixtureRoot = fixture.Root;
-        var projectRoot = Path.Combine(fixtureRoot, "workspace");
-        var configHome = config.Root;
-        using var env = IsolateActiveWorkspace(configHome);
-        var child = Path.Combine(projectRoot, "src", "App");
-        Directory.CreateDirectory(child);
-        Directory.CreateDirectory(Path.Combine(fixtureRoot, ".cdidx"));
-        Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
-        Directory.CreateDirectory(Path.Combine(projectRoot, "src", ".cdidx"));
-
-        var resolved = DbPathResolver.ResolveDataDirForQuery(
-            child,
-            explicitDataDir: null,
-            environmentDataDir: null,
-            xdgDataHome: null,
-            activeWorkspaceLoader: () => null,
-            ancestorSearchRoot: projectRoot);
-
-        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), resolved.DbPath);
-        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
-    }
-
-    [Fact]
     public void ResolveDataDirForQuery_UsesInjectedActiveWorkspaceBeforeAncestorCdidx()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_active_workspace_project");
@@ -167,42 +82,6 @@ public class DbPathResolverTests
         Assert.Equal(Path.GetFullPath(activeDb), resolved.DbPath);
         Assert.Equal(Path.GetDirectoryName(Path.GetFullPath(activeDb)), resolved.DataDir);
         Assert.Equal(DbPathResolver.DataDirSourceActiveWorkspace, resolved.DataDirSource);
-    }
-
-    [Fact]
-    public void ResolveDataDirForQuery_FallsBackToCurrentDirectoryWhenNoAncestorCdidxExists()
-    {
-        using var fixture = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_db");
-        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_config");
-        var fixtureRoot = fixture.Root;
-        var projectRoot = Path.Combine(fixtureRoot, "workspace");
-        var configHome = config.Root;
-        using var env = IsolateActiveWorkspace(configHome);
-        var child = Path.Combine(projectRoot, "src", "App");
-        Directory.CreateDirectory(child);
-        Directory.CreateDirectory(Path.Combine(fixtureRoot, ".cdidx"));
-
-        var resolved = DbPathResolver.ResolveDataDirForQuery(
-            child,
-            explicitDataDir: null,
-            environmentDataDir: null,
-            xdgDataHome: null,
-            activeWorkspaceLoader: () => null,
-            ancestorSearchRoot: projectRoot);
-
-        Assert.Equal(Path.Combine(child, ".cdidx", "codeindex.db"), resolved.DbPath);
-        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
-    }
-
-    [Fact]
-    public void ResolveProjectRootForQuery_UsesParentOfCdidxDirectory()
-    {
-        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
-        var dbPath = Path.Combine(projectPath, ".cdidx", "codeindex.db");
-
-        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
-
-        Assert.Equal(Path.GetFullPath(projectPath), resolved);
     }
 
     [Fact]
@@ -244,18 +123,6 @@ public class DbPathResolverTests
             "&immutable=1";
 
         Assert.False(DbPathResolver.UriRequestsReadOnly(readOnlyUri));
-    }
-
-    [Fact]
-    public void TryResolveWritableMutationDbPath_RelativeReadOnlyUri_ReturnsWorkingDirectoryPath()
-    {
-        var fileName = $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db";
-        var readOnlyUri = $"file:{fileName}?mode=ro";
-
-        var resolved = DbPathResolver.TryResolveWritableMutationDbPath(readOnlyUri, out var writableDbPath);
-
-        Assert.True(resolved);
-        Assert.Equal(Path.GetFullPath(fileName), writableDbPath);
     }
 
     [Fact]
@@ -350,17 +217,6 @@ public class DbPathResolverTests
     }
 
     [Fact]
-    public void DbContext_OversizedFileUriQuery_ThrowsBeforeOpeningSqlite()
-    {
-        var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
-
-        var ex = Assert.Throws<FormatException>(() => new DbContext(DbOpenIntent.WriteIndex, oversizedQueryUri));
-
-        Assert.Contains(SqliteFileUri.MaxQueryLength.ToString(CultureInfo.InvariantCulture), ex.Message);
-        Assert.DoesNotContain(new string('a', 32), ex.Message);
-    }
-
-    [Fact]
     public void ToReadOnlyUri_OversizedFileUriQuery_ThrowsBeforeAppendingReadOnlyFlags()
     {
         var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
@@ -383,6 +239,153 @@ public class DbPathResolverTests
         Assert.Contains("truncated", diagnostic, StringComparison.Ordinal);
         Assert.Contains(oversizedUri.Length.ToString(CultureInfo.InvariantCulture), diagnostic, StringComparison.Ordinal);
         Assert.DoesNotContain(new string('x', SqliteFileUri.MaxDiagnosticValueLength), diagnostic);
+    }
+}
+
+/// <summary>
+/// Tests for default DB path resolution.
+/// 既定DBパス解決のテスト。
+/// </summary>
+[Collection("SQLite pool sensitive")]
+public class DbPathResolverTests
+{
+    [Fact]
+    public void ResolveForIndex_UsesProjectLocalCdidxByDefault()
+    {
+        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
+        var expectedProjectPath = Path.GetFullPath(projectPath);
+
+        var dbPath = DbPathResolver.ResolveForIndex(projectPath, null);
+
+        Assert.Equal(
+            Path.Combine(expectedProjectPath, ".cdidx", "codeindex.db"),
+            dbPath);
+    }
+
+    [Fact]
+    public void ResolveForIndex_PrefersExplicitDataDirWhenDbPathMissing()
+    {
+        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
+        var dataDir = Path.Combine(Path.GetTempPath(), $"cdidx_data_dir_{Guid.NewGuid():N}");
+
+        var resolved = DbPathResolver.ResolveForIndex(projectPath, explicitDbPath: null, explicitDataDir: dataDir);
+
+        Assert.Equal(Path.Combine(Path.GetFullPath(dataDir), "codeindex.db"), resolved.DbPath);
+        Assert.Equal(Path.GetFullPath(dataDir), resolved.DataDir);
+        Assert.Equal(DbPathResolver.DataDirSourceFlag, resolved.DataDirSource);
+    }
+
+    [Fact]
+    public void ResolveDataDirForQuery_WithXdgPrefersAncestorWorkspaceDataDir()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_xdg_root_db");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_xdg_config");
+        using var xdg = TestProjectHelper.CreateTempProjectScope("cdidx_xdg_dir");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        var xdgDir = xdg.Root;
+        using var env = IsolateActiveWorkspace(configHome);
+        var child = Path.Combine(projectRoot, "src", "App");
+        Directory.CreateDirectory(child);
+        var indexedRootResolution = DbPathResolver.ResolveDataDir(projectRoot, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
+        Directory.CreateDirectory(indexedRootResolution.DataDir!);
+
+        var resolved = DbPathResolver.ResolveDataDirForQuery(
+            child,
+            explicitDataDir: null,
+            environmentDataDir: null,
+            xdgDataHome: xdgDir,
+            activeWorkspaceLoader: () => null);
+
+        Assert.Equal(indexedRootResolution.DbPath, resolved.DbPath);
+        Assert.Equal(indexedRootResolution.DataDir, resolved.DataDir);
+        Assert.Equal(DbPathResolver.DataDirSourceXdg, resolved.DataDirSource);
+    }
+
+    [Fact]
+    public void ResolveDataDirForQuery_PrefersOutermostAncestorCdidx()
+    {
+        using var fixture = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_db");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_config");
+        var fixtureRoot = fixture.Root;
+        var projectRoot = Path.Combine(fixtureRoot, "workspace");
+        var configHome = config.Root;
+        using var env = IsolateActiveWorkspace(configHome);
+        var child = Path.Combine(projectRoot, "src", "App");
+        Directory.CreateDirectory(child);
+        Directory.CreateDirectory(Path.Combine(fixtureRoot, ".cdidx"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "src", ".cdidx"));
+
+        var resolved = DbPathResolver.ResolveDataDirForQuery(
+            child,
+            explicitDataDir: null,
+            environmentDataDir: null,
+            xdgDataHome: null,
+            activeWorkspaceLoader: () => null,
+            ancestorSearchRoot: projectRoot);
+
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), resolved.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
+    }
+
+    [Fact]
+    public void ResolveDataDirForQuery_FallsBackToCurrentDirectoryWhenNoAncestorCdidxExists()
+    {
+        using var fixture = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_db");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_config");
+        var fixtureRoot = fixture.Root;
+        var projectRoot = Path.Combine(fixtureRoot, "workspace");
+        var configHome = config.Root;
+        using var env = IsolateActiveWorkspace(configHome);
+        var child = Path.Combine(projectRoot, "src", "App");
+        Directory.CreateDirectory(child);
+        Directory.CreateDirectory(Path.Combine(fixtureRoot, ".cdidx"));
+
+        var resolved = DbPathResolver.ResolveDataDirForQuery(
+            child,
+            explicitDataDir: null,
+            environmentDataDir: null,
+            xdgDataHome: null,
+            activeWorkspaceLoader: () => null,
+            ancestorSearchRoot: projectRoot);
+
+        Assert.Equal(Path.Combine(child, ".cdidx", "codeindex.db"), resolved.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
+    }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_UsesParentOfCdidxDirectory()
+    {
+        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
+        var dbPath = Path.Combine(projectPath, ".cdidx", "codeindex.db");
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+
+        Assert.Equal(Path.GetFullPath(projectPath), resolved);
+    }
+
+    [Fact]
+    public void TryResolveWritableMutationDbPath_RelativeReadOnlyUri_ReturnsWorkingDirectoryPath()
+    {
+        var fileName = $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db";
+        var readOnlyUri = $"file:{fileName}?mode=ro";
+
+        var resolved = DbPathResolver.TryResolveWritableMutationDbPath(readOnlyUri, out var writableDbPath);
+
+        Assert.True(resolved);
+        Assert.Equal(Path.GetFullPath(fileName), writableDbPath);
+    }
+
+    [Fact]
+    public void DbContext_OversizedFileUriQuery_ThrowsBeforeOpeningSqlite()
+    {
+        var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+
+        var ex = Assert.Throws<FormatException>(() => new DbContext(DbOpenIntent.WriteIndex, oversizedQueryUri));
+
+        Assert.Contains(SqliteFileUri.MaxQueryLength.ToString(CultureInfo.InvariantCulture), ex.Message);
+        Assert.DoesNotContain(new string('a', 32), ex.Message);
     }
 
     [Fact]

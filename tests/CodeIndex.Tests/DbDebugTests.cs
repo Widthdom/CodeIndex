@@ -1,6 +1,7 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace CodeIndex.Tests;
@@ -22,12 +23,14 @@ public class DbDebugTests
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_SLOW_QUERY_MS");
         env.Set("CDIDX_SLOW_QUERY_MS", "0");
-        var stopped = new List<Activity>();
+        var stopped = new ConcurrentQueue<Activity>();
+        using var parentActivity = new Activity("db-debug-test-query").Start();
+        var expectedTraceId = parentActivity.TraceId;
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == CodeIndex.CodeIndexTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity => stopped.Add(activity),
+            ActivityStopped = stopped.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
 
@@ -44,7 +47,8 @@ public class DbDebugTests
         });
 
         Assert.Contains("slow_query", stderr);
-        var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "db.query"));
+        var activity = Assert.Single(stopped.Where(activity =>
+            activity.OperationName == "db.query" && activity.TraceId == expectedTraceId));
         Assert.Equal("sqlite", activity.GetTagItem("db.system"));
         Assert.Equal("SELECT", activity.GetTagItem("db.operation"));
     }

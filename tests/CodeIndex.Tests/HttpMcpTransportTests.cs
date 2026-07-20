@@ -30,16 +30,18 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class HttpMcpTransportTests : IDisposable
 {
-    private readonly string _dbDir;
-    private readonly string _dbPath;
-    private readonly DbContext _db;
+    private readonly Lazy<HttpDatabaseFixture> _fixture = new(
+        static () => new HttpDatabaseFixture(),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+    private HttpDatabaseFixture Fixture => _fixture.Value;
+    private string _dbDir => Fixture.DbDir;
+    private string _dbPath => Fixture.DbPath;
+    private DbContext _db => Fixture.Db;
 
-    public HttpMcpTransportTests()
+    [Fact]
+    public void Constructor_DoesNotInitializeDatabase()
     {
-        _dbDir = TestProjectHelper.CreateTempProject("cdidx_mcp_http");
-        _dbPath = Path.Combine(_dbDir, "codeindex.db");
-        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
-        _db.InitializeSchema();
+        Assert.False(_fixture.IsValueCreated);
     }
 
     private long InsertIndexedFile(string path, string content, bool splitIntoProductionChunks = false)
@@ -4451,10 +4453,29 @@ public class HttpMcpTransportTests : IDisposable
 
     public void Dispose()
     {
-        _db.Dispose();
+        if (!_fixture.IsValueCreated)
+            return;
+
+        var fixture = _fixture.Value;
+        fixture.Db.Dispose();
         SqliteConnection.ClearAllPools();
-        TestProjectHelper.DeleteDirectory(_dbDir);
+        TestProjectHelper.DeleteDirectory(fixture.DbDir);
         GC.SuppressFinalize(this);
+    }
+
+    private sealed class HttpDatabaseFixture
+    {
+        public HttpDatabaseFixture()
+        {
+            DbDir = TestProjectHelper.CreateTempProject("cdidx_mcp_http");
+            DbPath = Path.Combine(DbDir, "codeindex.db");
+            Db = new DbContext(DbOpenIntent.WriteIndex, DbPath);
+            Db.InitializeSchema();
+        }
+
+        public string DbDir { get; }
+        public string DbPath { get; }
+        public DbContext Db { get; }
     }
 
     private static HttpClient CreateHttpClient(TimeSpan? timeout = null)

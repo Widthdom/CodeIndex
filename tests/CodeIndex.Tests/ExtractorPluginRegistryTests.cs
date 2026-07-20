@@ -75,7 +75,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void EnumeratePluginAssemblyPaths_CapsCandidatesPerDirectory()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_cap");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_plugin_cap");
         lock (TestConsoleLock.Gate)
         {
             try
@@ -109,7 +109,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void EnumeratePluginAssemblyPaths_CapsTotalCandidates()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_total_cap");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_plugin_total_cap");
         lock (TestConsoleLock.Gate)
         {
             try
@@ -153,7 +153,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void LoadPluginAssemblies_RetainsCapDiagnosticWhenCandidatesAlsoFailToLoad()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_cap_visible");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_plugin_cap_visible");
         lock (TestConsoleLock.Gate)
         {
             try
@@ -359,7 +359,7 @@ public class ExtractorPluginRegistryTests
         if (!OperatingSystem.IsWindows())
             return;
 
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_windows_acl_4596");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_windows_acl_4596");
         var pluginDirectory = Path.Combine(projectRoot, "plugins");
         Directory.CreateDirectory(pluginDirectory);
         var pluginPath = Path.Combine(pluginDirectory, "plugin.dll");
@@ -424,7 +424,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void LoadPlugin_MetadataRejectsMissingMarkerWithoutStartingWorker_Issue4598()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_metadata_4598");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_metadata_4598");
         lock (TestConsoleLock.Gate)
         {
             var pluginPath = Path.Combine(projectRoot, "no-marker.dll");
@@ -470,7 +470,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void LoadPlugin_RetriesFailedFingerprintAfterPartialCopyIsRepaired_Issue4598()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_retry_4598");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_retry_4598");
         lock (TestConsoleLock.Gate)
         {
             var pluginPath = Path.Combine(projectRoot, "plugin.dll");
@@ -502,7 +502,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void DefaultPluginDiscovery_RepairsAndReplacesFingerprintWithoutLeakingWorker_Issue4598()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_production_retry_4598");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_production_retry_4598");
         lock (TestConsoleLock.Gate)
         {
             var pluginDirectory = Path.Combine(projectRoot, "plugins");
@@ -632,7 +632,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void LoadPlugin_ReportsSanitizedMetadataCategoryBeforeAssemblyLoad_Issue4598()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_load_category");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_plugin_load_category");
         lock (TestConsoleLock.Gate)
         {
             try
@@ -809,7 +809,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void ReloadPatternConfigsForProjectRoot_ReloadsDeletedPluginAndPreservesRegisteredFallback_Issue4592()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_refresh_4592");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_refresh_4592");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
@@ -1370,8 +1370,8 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void WorkspacePluginWorkers_AreOwnedByTheirImmutableSnapshots_Issue4602()
     {
-        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_plugin_snapshot_a_4602");
-        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_plugin_snapshot_b_4602");
+        var workspaceA = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_plugin_snapshot_a_4602");
+        var workspaceB = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_plugin_snapshot_b_4602");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
@@ -1400,7 +1400,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void WorkspaceSnapshots_EvictLeastRecentlyUsedPluginWorkersAtBound_Issue4602()
     {
-        var root = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_lru_4602");
+        var root = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_snapshot_lru_4602");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
@@ -1425,7 +1425,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void WorkspacePluginLoad_CannotCommitAfterSnapshotReplacement_Issue4602()
     {
-        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_reload_race_4602");
+        var workspace = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_snapshot_reload_race_4602");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
@@ -1468,7 +1468,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void WorkspaceReload_CannotCommitAfterSnapshotRelease_Issue4602()
     {
-        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_release_race_4602");
+        var workspace = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_snapshot_release_race_4602");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
@@ -1518,7 +1518,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void WorkspaceReload_OlderGenerationCannotOverwriteNewerReload_Issue4602()
     {
-        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_reload_generation_4602");
+        var workspace = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_snapshot_reload_generation_4602");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);

@@ -141,7 +141,42 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void WindowsTestHostSetup_IsSharedAcrossDotnetAndReleaseWorkflows()
+    public void DotnetWorkflow_UsesBoundedFocusedRetryWithSafeFullSuiteFallback()
+    {
+        var workflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
+        var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
+
+        AssertContainsAll(
+            testScript,
+            "[string]$TestFilter = \"\"",
+            "$runArgs += @(\"--filter\", $TestFilter)",
+            "function Get-RetryFilterDecision",
+            "\"--project\", \"tools/CodeIndex.TestTelemetry\"",
+            "\"--no-build\"",
+            "\"--no-restore\"",
+            "\"retry-filter\"",
+            "\"--trx-file\", $TrxPath",
+            "ConvertFrom-Json -ErrorAction Stop",
+            "reason = \"telemetry_tool_failed\"",
+            "reason = \"telemetry_output_invalid\"",
+            "$firstTrxPath = Join-Path $resultsDirectory \"test_results_first.trx\"",
+            "$retryFilterDecision.useFocusedRetry -eq $true",
+            "Using a bounded focused retry",
+            "using the full-suite retry fallback",
+            "-TestFilter $retryFilter",
+            "Retry scope: $retryScope");
+        AssertContainsAll(
+            workflow,
+            "dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release",
+            "dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize");
+        AssertDoesNotContainAny(
+            testScript,
+            "dotnet build tools/CodeIndex.TestTelemetry",
+            "dotnet restore tools/CodeIndex.TestTelemetry");
+    }
+
+    [Fact]
+    public void WindowsTestHostSetup_SplitsFastAndTrustedTempAndBatchesDefenderExclusions()
     {
         var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
@@ -159,19 +194,40 @@ public class CiWorkflowTests
         AssertContainsAll(
             setupScript,
             "if (-not $env:USERPROFILE)",
-            "$tempRoot = Join-Path $env:USERPROFILE \"cdidx-test-temp\"",
+            "if (-not $env:RUNNER_TEMP)",
+            "$tempRoot = Join-Path $env:RUNNER_TEMP \"cdidx-temp\"",
+            "$trustedTempRoot = Join-Path $env:USERPROFILE \"cdidx-trusted-test-temp\"",
             "\"TMP=$tempRoot\"",
             "\"TEMP=$tempRoot\"",
-            "$tempAcl.SetAccessRuleProtection($true, $false)",
+            "\"CDIDX_TEST_TRUSTED_TEMP_ROOT=$trustedTempRoot\"",
+            "$env:TMP = $tempRoot",
+            "$env:TEMP = $tempRoot",
+            "$env:CDIDX_TEST_TRUSTED_TEMP_ROOT = $trustedTempRoot",
+            "Pinned Windows TMP/TEMP to fast runner storage: $tempRoot",
+            "$trustedTempAcl.SetAccessRuleProtection($true, $false)",
             "[System.Security.AccessControl.FileSystemRights]::FullControl",
-            "Set-Acl -LiteralPath $tempRoot -AclObject $tempAcl",
-            "Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop",
+            "Set-Acl -LiteralPath $trustedTempRoot -AclObject $trustedTempAcl",
+            "Path = $trustedTempRoot",
+            "Protected current-user root for executable plugin, hook, and Git fixtures.",
+            "$path = $_.Path.TrimEnd('\\','/')",
+            "Group-Object -Property Path",
+            "[string[]]$exclusionPaths = @($exclusions | ForEach-Object { $_.Path })",
+            "if ($exclusionPaths.Count -gt 0)",
+            "Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop",
             "Get-MpPreference",
+            "if ($prefs.ExclusionPath -notcontains $entry.Path)",
+            "Windows Defender exclusion was not applied: $($entry.Path)",
             "Windows Defender exclusion audit:",
+            "### Windows Defender exclusion audit",
             "GitHub-hosted runner temp root used by actions.");
+        Assert.Equal(1, CountOccurrences(setupScript, "Add-MpPreference"));
         AssertDoesNotContainAny(
             setupScript,
-            "$tempRoot = Join-Path $env:RUNNER_TEMP \"cdidx-temp\"");
+            "Add-MpPreference -ExclusionPath $entry.Path",
+            "$tempRoot = Join-Path $env:USERPROFILE \"cdidx-test-temp\"",
+            "Set-Acl -LiteralPath $tempRoot",
+            "$env:TMP = $trustedTempRoot",
+            "$env:TEMP = $trustedTempRoot");
     }
 
     [Fact]
@@ -305,7 +361,7 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void Runsettings_DefinesSessionTimeoutAndXunitLongRunningDiagnostics()
+    public void Runsettings_DefinesSessionTimeoutNoTestsFailureAndXunitDiagnostics()
     {
         var path = RepositoryTestPaths.Combine("tests", "CodeIndex.Tests", "CodeIndex.Tests.runsettings");
         var document = XDocument.Load(path);
@@ -319,6 +375,9 @@ public class CiWorkflowTests
         Assert.Equal(
             "./TestResults",
             document.Root?.Element("RunConfiguration")?.Element("ResultsDirectory")?.Value);
+        Assert.Equal(
+            "true",
+            document.Root?.Element("RunConfiguration")?.Element("TreatNoTestsAsError")?.Value);
     }
 
     [Fact]
@@ -390,6 +449,9 @@ public class CiWorkflowTests
             "EnvironmentVariableScope.Capture",
             "TestConsoleLock.Gate",
             "TestProjectHelper",
+            "CreateExecutableExtensionTestProject",
+            "CDIDX_TEST_TRUSTED_TEMP_ROOT",
+            "RUNNER_TEMP",
             ".github/scripts/run-dotnet-tests.ps1",
             ".github/scripts/configure-windows-test-host.ps1",
             "共有状態と並列実行の監査");

@@ -14,7 +14,7 @@ public partial class SymbolExtractorTests
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
-            var projectRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_plugins_project");
+            var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("cdidx_workspace_plugins_project");
             var cwdRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_plugins_cwd");
             var originalDirectory = Environment.CurrentDirectory;
             try

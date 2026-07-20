@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
@@ -45,70 +46,19 @@ public partial class McpServerTests : IDisposable
         .Select(field => (OpCode)field.GetValue(null)!)
         .ToDictionary(opCode => (short)(opCode.Value & 0xff));
 
-    private readonly string _dbPath;
-    private readonly string _projectRoot;
-    private readonly DbContext _db;
-    private readonly McpServer _server;
+    private readonly Lazy<SeededMcpFixture> _fixture = new(
+        static () => new SeededMcpFixture(),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+    private SeededMcpFixture Fixture => _fixture.Value;
+    private string _dbPath => Fixture.DbPath;
+    private string _projectRoot => Fixture.ProjectRoot;
+    private DbContext _db => Fixture.Db;
+    private McpServer _server => Fixture.Server;
 
-    public McpServerTests()
+    [Fact]
+    public void Constructor_DoesNotInitializeSeededDatabase()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_test_{Guid.NewGuid():N}.db");
-        _projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_workspace");
-        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
-        _db.InitializeSchema();
-
-        // Seed test data / テストデータを投入
-        var writer = new DbWriter(_db.Connection);
-        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, _projectRoot);
-        // Stamp graph + issues ready so reads trust the seeded references like a completed index run.
-        // seed したデータを完了 index と同等に扱うため readiness を stamp しておく。
-        writer.MarkGraphReady();
-        writer.MarkIssuesReady();
-        writer.MarkCSharpSymbolNameContractReady();
-        var appContent = "public class App { public void Run() { } }" +
-            string.Concat(Enumerable.Repeat("\n ", 9));
-        var fileId = writer.UpsertFile(new FileRecord
-        {
-            Path = "src/app.cs",
-            Lang = "csharp",
-            Size = Encoding.UTF8.GetByteCount(appContent),
-            Lines = 10,
-            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
-            Checksum = "abc123",
-        });
-        writer.InsertChunks([new ChunkRecord
-        {
-            FileId = fileId,
-            ChunkIndex = 0,
-            StartLine = 1,
-            EndLine = 10,
-            Content = appContent,
-        }]);
-        writer.InsertSymbols([new SymbolRecord
-        {
-            FileId = fileId,
-            Kind = "class",
-            Name = "App",
-            Line = 1,
-            StartLine = 1,
-            EndLine = 1,
-            Signature = "public class App { public void Run() { } }",
-        },
-        new SymbolRecord
-        {
-            FileId = fileId,
-            Kind = "function",
-            Name = "Run",
-            Line = 1,
-            StartLine = 1,
-            EndLine = 1,
-            Signature = "public void Run() { }",
-            ContainerKind = "class",
-            ContainerName = "App",
-            ContainerQualifiedName = "App",
-        }]);
-
-        _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        Assert.False(_fixture.IsValueCreated);
     }
 
 
@@ -286,12 +236,12 @@ public partial class McpServerTests : IDisposable
         var parentTraceId = ActivityTraceId.CreateRandom();
         var parentSpanId = ActivitySpanId.CreateRandom();
         var traceParent = $"00-{parentTraceId}-{parentSpanId}-01";
-        var stopped = new List<Activity>();
+        var stopped = new ConcurrentQueue<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == CodeIndex.CodeIndexTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity => stopped.Add(activity),
+            ActivityStopped = stopped.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
 
@@ -314,7 +264,8 @@ public partial class McpServerTests : IDisposable
         Assert.NotNull(response);
         using var responseDocument = JsonDocument.Parse(response);
         Assert.Equal(requestId, responseDocument.RootElement.GetProperty("id").GetString());
-        var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "mcp.request"));
+        var activity = Assert.Single(stopped.Where(activity =>
+            activity.OperationName == "mcp.request" && activity.TraceId == parentTraceId));
         Assert.Equal(parentTraceId, activity.TraceId);
         Assert.Equal(parentSpanId, activity.ParentSpanId);
         Assert.Equal("tools/list", activity.GetTagItem("rpc.method"));
@@ -331,18 +282,21 @@ public partial class McpServerTests : IDisposable
     [InlineData("42")]
     public void ProcessFrame_WithoutSingleValidRequestId_OmitsActivityRequestIdTags_Issue4551(string frame)
     {
-        var stopped = new List<Activity>();
+        var stopped = new ConcurrentQueue<Activity>();
+        using var parentActivity = new Activity("mcp-test-request").Start();
+        var expectedTraceId = parentActivity.TraceId;
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == CodeIndex.CodeIndexTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity => stopped.Add(activity),
+            ActivityStopped = stopped.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
 
         _ = _server.ProcessFrame(frame);
 
-        var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "mcp.request"));
+        var activity = Assert.Single(stopped.Where(activity =>
+            activity.OperationName == "mcp.request" && activity.TraceId == expectedTraceId));
         Assert.Null(activity.GetTagItem("rpc.request_id"));
         Assert.Null(activity.GetTagItem("rpc.request_id_type"));
         Assert.Null(activity.GetTagItem("rpc.request_id_length"));
@@ -10370,11 +10324,86 @@ public sealed class Caller
 
     public void Dispose()
     {
-        _server.Dispose();
-        _db.Dispose();
+        if (!_fixture.IsValueCreated)
+            return;
+
+        var fixture = _fixture.Value;
+        fixture.Server.Dispose();
+        fixture.Db.Dispose();
         DeleteSuggestionStore();
         DeleteDbPath();
-        TestProjectHelper.DeleteDirectory(_projectRoot);
+        TestProjectHelper.DeleteDirectory(fixture.ProjectRoot);
+    }
+
+    private sealed class SeededMcpFixture
+    {
+        public SeededMcpFixture()
+        {
+            DbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_test_{Guid.NewGuid():N}.db");
+            ProjectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_workspace");
+            Db = new DbContext(DbOpenIntent.WriteIndex, DbPath);
+            Db.InitializeSchema();
+
+            // Seed test data / テストデータを投入
+            var writer = new DbWriter(Db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, ProjectRoot);
+            // Stamp graph + issues ready so reads trust the seeded references like a completed index run.
+            // seed したデータを完了 index と同等に扱うため readiness を stamp しておく。
+            writer.MarkGraphReady();
+            writer.MarkIssuesReady();
+            writer.MarkCSharpSymbolNameContractReady();
+            var appContent = "public class App { public void Run() { } }" +
+                string.Concat(Enumerable.Repeat("\n ", 9));
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/app.cs",
+                Lang = "csharp",
+                Size = Encoding.UTF8.GetByteCount(appContent),
+                Lines = 10,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = "abc123",
+            });
+            writer.InsertChunks([new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = appContent,
+            }]);
+            writer.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = "App",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = "public class App { public void Run() { } }",
+                },
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = "Run",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = "public void Run() { }",
+                    ContainerKind = "class",
+                    ContainerName = "App",
+                    ContainerQualifiedName = "App",
+                },
+            ]);
+
+            Server = new McpServer(DbPath, ConsoleUi.LoadVersion());
+        }
+
+        public string DbPath { get; }
+        public string ProjectRoot { get; }
+        public DbContext Db { get; }
+        public McpServer Server { get; }
     }
 
     private void DeleteSuggestionStore()

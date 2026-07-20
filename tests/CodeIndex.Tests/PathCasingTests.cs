@@ -83,6 +83,34 @@ public class PathCasingTests
     });
 
     [Fact]
+    public void IgnoreCaseProbeForTesting_IsScopedAndDoesNotPopulateSharedCache()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_probe_scope");
+        var tempDir = project.Root;
+        var liveIgnoreCase = ProbeDirectoryIgnoreCaseLikeProduction(tempDir);
+        var independentContext = ExecutionContext.Capture();
+        Assert.NotNull(independentContext);
+        bool? independentIgnoreCase = null;
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.IgnoreCaseProbeForTesting = _ => !liveIgnoreCase;
+        try
+        {
+            var overridden = PathCasing.IsIgnoreCase(tempDir);
+            ExecutionContext.Run(
+                independentContext,
+                _ => independentIgnoreCase = PathCasing.IsIgnoreCase(tempDir),
+                state: null);
+
+            Assert.Equal(!liveIgnoreCase, overridden);
+            Assert.Equal(liveIgnoreCase, independentIgnoreCase);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+        }
+    }
+
+    [Fact]
     public void PathsEqual_UsesSeededIgnoreCase()
         => RunWithPathCasingLock(() =>
     {

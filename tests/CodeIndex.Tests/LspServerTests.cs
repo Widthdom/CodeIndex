@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -8,11 +9,9 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Lsp;
 using CodeIndex.Models;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class LspServerTests
 {
     [Fact]
@@ -901,7 +900,6 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            SqliteConnection.ClearAllPools();
             var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
             using var server = new LspServer(queryDb, dbPath, "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
@@ -951,7 +949,6 @@ public class LspServerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -1493,7 +1490,7 @@ public class LspServerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var sourcePath = Path.Combine(projectRoot, "materialization.cs");
             var source = new StringBuilder("class MaterializationBudget\n{\n");
-            for (var i = 0; i < LspServer.MaxDocumentSymbolMaterialization + 25; i++)
+            for (var i = 0; i < LspServer.MaxDocumentSymbolMaterialization + 1; i++)
                 source.Append("    void Method").Append(i.ToString("D4", CultureInfo.InvariantCulture)).Append("() { }\n");
             source.Append("}\n");
 
@@ -2269,14 +2266,17 @@ public class LspServerTests
                 3428,
                 0,
                 unindexedSource.IndexOf("Needle();", StringComparison.Ordinal));
-            var activities = new List<Activity>();
+            var activities = new ConcurrentQueue<Activity>();
+            using var parentActivity = new Activity("lsp-test-request").Start();
+            var expectedTraceId = parentActivity.TraceId;
             using var listener = CaptureCodeIndexActivities(activities);
 
             var response = server.HandleMessage(request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
-            var requestActivity = Assert.Single(activities.Where(activity => activity.OperationName == "lsp.request"));
+            var requestActivity = Assert.Single(activities.Where(activity =>
+                activity.OperationName == "lsp.request" && activity.TraceId == expectedTraceId));
             var failureEvent = Assert.Single(requestActivity.Events.Where(activityEvent => activityEvent.Name == "lsp.lookup_failed"));
             var tags = failureEvent.Tags.ToDictionary(tag => tag.Key, tag => tag.Value?.ToString(), StringComparer.Ordinal);
             Assert.Equal("textDocument/definition", tags["lsp.method"]);
@@ -2389,32 +2389,35 @@ public class LspServerTests
     public void HandleMessage_Definition_HonorsCaseInsensitiveWorkspaceCasing()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_case_insensitive");
-        try
+        lock (PathCasingTestLock.Gate)
         {
-            PathCasing.SeedFromWorkspace(projectRoot, ignoreCase: true);
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var sourcePath = Path.Combine(projectRoot, "src", "Foo.cs");
-            var requestPath = Path.Combine(projectRoot, "src", "foo.cs");
-            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
-            var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
-            File.WriteAllText(sourcePath, source);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp", source);
-            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
-            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-            var request = CreateDefinitionRequest(
-                requestPath,
-                8,
-                0,
-                source.IndexOf("Needle();", StringComparison.Ordinal));
+            try
+            {
+                PathCasing.SeedFromWorkspace(projectRoot, ignoreCase: true);
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                var sourcePath = Path.Combine(projectRoot, "src", "Foo.cs");
+                var requestPath = Path.Combine(projectRoot, "src", "foo.cs");
+                Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+                var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
+                File.WriteAllText(sourcePath, source);
+                TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp", source);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+                var request = CreateDefinitionRequest(
+                    requestPath,
+                    8,
+                    0,
+                    source.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+                var response = server.HandleMessage(request);
 
-            Assert.NotNull(response);
-            Assert.NotEmpty(response!["result"]!.AsArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
+                Assert.NotNull(response);
+                Assert.NotEmpty(response!["result"]!.AsArray());
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
         }
     }
 
@@ -2422,32 +2425,35 @@ public class LspServerTests
     public void HandleMessage_Definition_RejectsCaseVariantWhenWorkspaceCaseSensitive()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_case_sensitive");
-        try
+        lock (PathCasingTestLock.Gate)
         {
-            PathCasing.SeedFromWorkspace(projectRoot, ignoreCase: false);
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var sourcePath = Path.Combine(projectRoot, "src", "Foo.cs");
-            var requestPath = Path.Combine(projectRoot, "src", "foo.cs");
-            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
-            var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
-            File.WriteAllText(sourcePath, source);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp", source);
-            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
-            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-            var request = CreateDefinitionRequest(
-                requestPath,
-                9,
-                0,
-                source.IndexOf("Needle();", StringComparison.Ordinal));
+            try
+            {
+                PathCasing.SeedFromWorkspace(projectRoot, ignoreCase: false);
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                var sourcePath = Path.Combine(projectRoot, "src", "Foo.cs");
+                var requestPath = Path.Combine(projectRoot, "src", "foo.cs");
+                Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+                var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
+                File.WriteAllText(sourcePath, source);
+                TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp", source);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+                var request = CreateDefinitionRequest(
+                    requestPath,
+                    9,
+                    0,
+                    source.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+                var response = server.HandleMessage(request);
 
-            Assert.NotNull(response);
-            Assert.Empty(response!["result"]!.AsArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
+                Assert.NotNull(response);
+                Assert.Empty(response!["result"]!.AsArray());
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
         }
     }
 
@@ -2458,7 +2464,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            for (var i = 0; i < 1001; i++)
+            for (var i = 0; i < LspServer.MaxDocumentPathFallbackCandidates; i++)
             {
                 TestProjectHelper.InsertIndexedFile(
                     dbPath,
@@ -2552,14 +2558,17 @@ public class LspServerTests
                 3426,
                 0,
                 source.IndexOf("Needle();", StringComparison.Ordinal));
-            var activities = new List<Activity>();
+            var activities = new ConcurrentQueue<Activity>();
+            using var parentActivity = new Activity("lsp-test-request").Start();
+            var expectedTraceId = parentActivity.TraceId;
             using var listener = CaptureCodeIndexActivities(activities);
 
             var response = server.HandleMessage(request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
-            var requestActivity = Assert.Single(activities.Where(activity => activity.OperationName == "lsp.request"));
+            var requestActivity = Assert.Single(activities.Where(activity =>
+                activity.OperationName == "lsp.request" && activity.TraceId == expectedTraceId));
             var failureEvent = Assert.Single(requestActivity.Events.Where(activityEvent => activityEvent.Name == "lsp.lookup_failed"));
             var tags = failureEvent.Tags.ToDictionary(tag => tag.Key, tag => tag.Value?.ToString(), StringComparer.Ordinal);
             Assert.Equal("file_not_indexed", tags["lsp.lookup.failure_reason"]);
@@ -2886,13 +2895,13 @@ public class LspServerTests
         Assert.Equal(": int", hint["label"]!.GetValue<string>());
     }
 
-    private static ActivityListener CaptureCodeIndexActivities(List<Activity> activities)
+    private static ActivityListener CaptureCodeIndexActivities(ConcurrentQueue<Activity> activities)
     {
         var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == CodeIndexTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add,
+            ActivityStopped = activities.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
         return listener;

@@ -57,7 +57,9 @@ function Invoke-TestRun {
     [bool]$IncludeCoverage,
 
     [Parameter(Mandatory = $true)]
-    [bool]$IncludeCrashDiagnostics
+    [bool]$IncludeCrashDiagnostics,
+
+    [string]$TestFilter = ""
   )
 
   $runArgs = @($testArgs)
@@ -67,6 +69,9 @@ function Invoke-TestRun {
   }
   if ($IncludeCrashDiagnostics) {
     $runArgs += "--blame-crash"
+  }
+  if (-not [string]::IsNullOrWhiteSpace($TestFilter)) {
+    $runArgs += @("--filter", $TestFilter)
   }
 
   $capturedOutput = [System.Collections.Generic.List[string]]::new()
@@ -84,6 +89,69 @@ function Invoke-TestRun {
   }
 
   return [int]$exitCode
+}
+
+function Get-RetryFilterDecision {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$TrxPath
+  )
+
+  $telemetryArgs = @(
+    "run",
+    "--project", "tools/CodeIndex.TestTelemetry",
+    "--configuration", "Release",
+    "--no-build",
+    "--no-restore",
+    "--",
+    "retry-filter",
+    "--trx-file", $TrxPath
+  )
+  $capturedOutput = [System.Collections.Generic.List[string]]::new()
+  try {
+    dotnet @telemetryArgs 2>&1 | ForEach-Object {
+      $capturedOutput.Add([string]$_)
+    }
+  }
+  catch {
+    return [pscustomobject]@{
+      useFocusedRetry = $false
+      filter = $null
+      failedResultCount = 0
+      testMethodCount = 0
+      reason = "telemetry_tool_failed"
+    }
+  }
+
+  if ($LASTEXITCODE -ne 0) {
+    return [pscustomobject]@{
+      useFocusedRetry = $false
+      filter = $null
+      failedResultCount = 0
+      testMethodCount = 0
+      reason = "telemetry_tool_failed"
+    }
+  }
+
+  try {
+    $decision = ($capturedOutput -join "`n") | ConvertFrom-Json -ErrorAction Stop
+    if ($decision.useFocusedRetry -isnot [bool] -or
+        [string]::IsNullOrWhiteSpace([string]$decision.reason) -or
+        ($decision.useFocusedRetry -eq $true -and [string]::IsNullOrWhiteSpace([string]$decision.filter))) {
+      throw "Retry filter telemetry returned an incomplete decision."
+    }
+
+    return $decision
+  }
+  catch {
+    return [pscustomobject]@{
+      useFocusedRetry = $false
+      filter = $null
+      failedResultCount = 0
+      testMethodCount = 0
+      reason = "telemetry_output_invalid"
+    }
+  }
 }
 
 $firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
@@ -104,10 +172,23 @@ if ($includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage on the flaky-classification retry."
 }
 Write-Host "Reusing initial crash diagnostics; the retry keeps hang collection but skips the crash collector."
+$firstTrxPath = Join-Path $resultsDirectory "test_results_first.trx"
+$retryFilterDecision = Get-RetryFilterDecision -TrxPath $firstTrxPath
+$retryFilter = ""
+$retryScope = "full suite"
+if ($retryFilterDecision.useFocusedRetry -eq $true -and
+    -not [string]::IsNullOrWhiteSpace([string]$retryFilterDecision.filter)) {
+  $retryFilter = [string]$retryFilterDecision.filter
+  $retryScope = "focused: $($retryFilterDecision.failedResultCount) failed result(s) across $($retryFilterDecision.testMethodCount) test method(s)"
+  Write-Host "Using a bounded focused retry for $($retryFilterDecision.testMethodCount) failed test method(s)."
+}
+else {
+  Write-Host "Focused retry is unavailable ($($retryFilterDecision.reason)); using the full-suite retry fallback."
+}
 $retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
-$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false -IncludeCrashDiagnostics $false
+$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false -IncludeCrashDiagnostics $false -TestFilter $retryFilter
 if ($retryExitCode -eq 0) {
-  "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
+  "Initial test run failed, but the single retry passed. Retry scope: $retryScope. Treat this run as flaky and inspect TRX/blame artifacts." |
     Set-Content -Encoding UTF8 -Path (Join-Path $resultsDirectory "flaky-retry.txt")
   Write-Warning "Tests passed on retry; uploaded TestResults include flaky-retry.txt."
   exit 0

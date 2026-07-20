@@ -84,7 +84,10 @@ public class PackagesLockTests
         var dockerfile = RepositoryTestPaths.ReadNormalizedText("Dockerfile");
 
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", dotnetWorkflow, StringComparison.Ordinal);
-        Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", releaseWorkflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode",
+            releaseWorkflow,
+            StringComparison.Ordinal);
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", codeqlWorkflow, StringComparison.Ordinal);
         Assert.Contains("cache-dependency-path: '**/packages.lock.json'", codeqlWorkflow, StringComparison.Ordinal);
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", mutationWorkflow, StringComparison.Ordinal);

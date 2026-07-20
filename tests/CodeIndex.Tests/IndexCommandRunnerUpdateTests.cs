@@ -61,7 +61,7 @@ public partial class IndexCommandRunnerTests
     [Fact]
     public void Run_UpdateMode_PreservesUnchangedWorkspacePluginReferences_Issue4602()
     {
-        var projectRoot = CreateTempProject();
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("cdidx_index_update_plugin_4602");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);

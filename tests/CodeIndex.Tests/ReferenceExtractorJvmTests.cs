@@ -2720,523 +2720,221 @@ public partial class ReferenceExtractorTests
         Assert.Equal("annotation", test.ReferenceKind);
     }
 
-    [Fact]
-    public void Extract_JavaScriptTaggedTemplateLiteral_IsCapturedAsCall()
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScriptTaggedTemplates_CaptureCallsAndRejectPhantoms(string language)
     {
-        // issue #268: bare tagged template literals (`gql`, `sql`, etc.) must emit a `call`
-        // reference so they surface in references / callers / callees / impact.
-        // issue #268: 素のタグ付きテンプレートリテラル (`gql` / `sql` 等) も `call` として記録する。
-        const string content = """
+        // issue #268: keep valid tagged forms and their plain-template/operator negatives in
+        // one shared JS/TS extraction while retaining distinct containers and sentinels.
+        // issue #268: 正当な tag 形式と plain-template / operator 負例を、固有 container と
+        // sentinel を保った1回の JS/TS 共通抽出で検証する。
+        const string nbsp = "\u00A0";
+        const string bom = "\uFEFF";
+        // The tight form is a comparison only in JavaScript; TypeScript legitimately parses it
+        // as a generic tag, so its shared negative keeps the template operand parenthesized.
+        // tight 形は JavaScript では比較だが TypeScript では正当な generic tag になるため、
+        // TypeScript 側の共有負例では template operand を括弧で囲む。
+        var tightComparison = language == "javascript"
+            ? "return fooTight<barTight>`plain`;"
+            : "return fooTight < barTight > (`plain`);";
+        var content = $$"""
+            const of = (strings) => strings.raw[0];
+
             function loadUser(id) {
                 return gql`query { user(id: ${id}) { name } }`;
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        var gql = Assert.Single(references.Where(r => r.SymbolName == "gql"));
-        Assert.Equal("call", gql.ReferenceKind);
-        Assert.Equal("loadUser", gql.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScriptTaggedTemplateInStringLiteral_IsNotMisdetected()
-    {
-        // Regression guard: a backtick appearing inside a single- or double-quoted string must
-        // not be treated as a tagged template opener. The structural masker enters string-skip
-        // mode so the backtick is consumed as string content.
-        // 退行防止: シングル/ダブルクオート文字列内のバッククォートをタグ付きテンプレートと誤認しない。
-        const string content = """
-            function note() {
-                const s = "see gql`docs` for details";
-                return s;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "gql");
-        Assert.DoesNotContain(references, r => r.SymbolName == "docs");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptPlainTemplateLiteral_IsNotCaptured()
-    {
-        // Regression guard: an untagged template literal (preceded by `=`, operator, or
-        // statement-head keyword) must not synthesize a phantom `call` reference.
-        // 退行防止: タグのないテンプレート（`=` や演算子、ステートメント先頭キーワードの直後）を
-        // 誤って `call` として記録しない。
-        const string content = """
-            function greet(name) {
-                const msg = `Hello, ${name}!`;
-                return `Bye, ${name}.`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "return");
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "msg");
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "Hello");
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "Bye");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptDeleteTaggedTemplate_IsNotCaptured()
-    {
-        // Regression guard: `delete \`...\`` is a legal (if pointless) expression form
-        // where `delete` is an operator — not a call — even though the backward-scan
-        // behind the backtick sees the identifier tail `delete`. IsIgnoredCallName must
-        // suppress the phantom `call delete` edge.
-        // 退行防止: `delete \`...\`` は `delete` が演算子の正当な式形であり、
-        // タグ付きテンプレート検出が backward-scan で拾う `delete` を
-        // IsIgnoredCallName で握り潰す必要がある。
-        const string content = """
-            function clean(obj) {
-                delete `placeholder-${obj.id}`;
-                void `side-effect-${obj.id}`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "delete");
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "void");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptComparisonBeforePlainTemplateSpacingVariants_AreNotCaptured()
-    {
-        // Regression guard: `foo < bar > \`plain\`` is a chained comparison expression, not a
-        // generic-tagged template. The backward scan behind the backtick must not strip the
-        // `<bar>` range as generics and emit a phantom `call foo`.
-        // 退行防止: `foo < bar > \`plain\`` は連鎖比較式であり、ジェネリクス付きタグ付き
-        // テンプレートではない。backtick 直前の `<...>` を generic と誤認して
-        // `call foo` を幻発行してはならない。
-        const string content = """
-            function check(fooSpaced, barSpaced, fooTight, barTight) {
-                const spaced = fooSpaced < barSpaced > `plain`;
-                return fooTight<barTight>`plain`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        var comparisonNames = new[] { "fooSpaced", "barSpaced", "fooTight", "barTight" };
-        Assert.DoesNotContain(references, r =>
-            r.ReferenceKind == "call" && comparisonNames.Contains(r.SymbolName));
-    }
-
-    [Fact]
-    public void Extract_JavaScriptInOperatorBeforePlainTemplate_IsNotCaptured()
-    {
-        // Regression guard: `foo in \`plain\`` uses `in` as the membership operator, not as
-        // a tag identifier. The backtick backward-scan picks up the `in` token, so
-        // IsIgnoredCallName must suppress the phantom `call in` edge.
-        // 退行防止: `foo in \`plain\`` の `in` はメンバーシップ演算子であり、タグ識別子ではない。
-        // backward-scan が拾う `in` は IsIgnoredCallName で握り潰す。
-        const string content = """
-            function check(foo) {
-                return foo in `plain`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "in");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForOfLoopVariantsOverPlainTemplates_AreNotCaptured()
-    {
-        // Regression guard: `for (const ch of \`abc\`)` uses `of` as the for-of iterator
-        // keyword, not as a tag identifier. The tag scanner must detect the enclosing
-        // `for (` header and drop the `of` token instead of emitting a phantom `call of`;
-        // the same suppression must tolerate `await` between `for` and `(`.
-        // 退行防止: `for (const ch of \`abc\`)` の `of` は for-of イテレータキーワードで
-        // あり、タグ識別子ではない。タグ検出は外側の `for (` ヘッダを認識して `of` を落とし、
-        // `for` と `(` の間にある `await` も許容する。
-        const string content = """
-            function syncLoop() {
-                for (const ch of `abc`) {
-                    use(ch);
-                }
-            }
-            async function asyncLoop(iter) {
-                for await (const x of `abc`) {
-                    use(x);
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptOfAsTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268: `of` is an unreserved identifier in ECMAScript. `const of = ...;
-        // of\`hello\`` is a legal tagged-template call and must not be silenced by the
-        // for-of loop-header suppression — only the header form should be dropped.
-        // issue #268: `of` は ECMAScript の予約語ではなく、`const of = ...; of\`hello\``
-        // は正当なタグ付きテンプレート呼び出し。for-of ヘッダ抑制が正当なタグ名としての
-        // `of` まで握り潰さないことを保証する。
-        const string content = """
-            const of = (strings) => strings.raw[0];
-            function run() {
+            function plainOfTag() {
                 return of`hello`;
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
-        Assert.Equal("run", hit.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScriptClassicForWithOfAsTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression: classic `for (init; cond; step)` must not silence a
-        // legitimate `of` tag used inside its init clause. The for-header probe classifies
-        // the loop shape by counting top-level `;` inside the `(...)` group — classic form
-        // has `;` and keeps `of` visible.
-        // issue #268 退行防止: 古典形 `for (init; cond; step)` 内の `of` タグは消さない。
-        // 囲む `(...)` 内のトップレベル `;` を数え、`;` 入りの classic `for` では `of` を
-        // タグとして残す。
-        const string content = """
-            const of = (strings) => strings.raw[0];
-            function run() {
+            function classicForTag() {
                 for (of`x`; keepGoing(); step()) {
                     break;
                 }
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
-        Assert.Equal("run", hit.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScriptMultiLineForOfLoopVariantsOverPlainTemplates_AreNotCaptured()
-    {
-        // issue #268 regression: the `for (...)` header may span multiple lines. The
-        // backward-scan from `of` must cross line boundaries to find the enclosing `(` and
-        // then confirm zero top-level `;` to classify this as the for-of form, including
-        // the optional `await` contextual keyword between `for` and `(`.
-        // issue #268 退行防止: `for (...)` ヘッダは複数行に跨ることがある。`of` からの
-        // 後方走査は行境界を越えて `(` を見つけ、トップレベル `;` が 0 のとき for-of 形と
-        // 判定する必要があり、`for` と `(` の間の `await` も跨いで判定する。
-        const string content = "function syncLoop() {\n" +
-            "    for (\n" +
-            "        const ch of `abc`\n" +
-            "    ) {\n" +
-            "        use(ch);\n" +
-            "    }\n" +
-            "}\n" +
-            "async function asyncLoop(iter) {\n" +
-            "    for await (\n" +
-            "        const x of `abc`\n" +
-            "    ) {\n" +
-            "        use(x);\n" +
-            "    }\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptTagFollowedByNbspBeforeTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression: ECMAScript WhiteSpace includes non-ASCII characters such as
-        // U+00A0 (NBSP), so `of\u00A0\`hello\`` is still a tagged-template call. The tag-to-
-        // backtick backward-scan must tolerate any `char.IsWhiteSpace` codepoint, not just
-        // ASCII space and tab.
-        // issue #268 退行防止: ECMAScript の WhiteSpace は U+00A0 (NBSP) のような非 ASCII
-        // も含むため、`of\u00A0\`hello\`` もタグ付きテンプレート呼び出しとして拾う必要があ
-        // る。タグとバッククォート間の後方走査は ASCII スペース/タブだけでなく任意の
-        // `char.IsWhiteSpace` を許容する。
-        const string content = "const of = (strings) => strings.raw[0];\n" +
-            "function run() {\n" +
-            "    return of\u00A0`hello`;\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
-        Assert.Equal("run", hit.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForOfHeadersWithSpecialWhitespace_AreNotCaptured()
-    {
-        // issue #268 regression: the for-of header probe must accept NBSP and BOM, including
-        // NBSP around the optional `await` keyword, without emitting a phantom `call of`.
-        // issue #268 退行防止: for-of ヘッダ判定は NBSP と BOM、および任意の `await` 前後の
-        // NBSP を許容し、phantom `call of` を出さない。
-        const string content = "function nbspSync() {\n" +
-            "    for\u00A0(const ch of `abc`) {\n" +
-            "        use(ch);\n" +
-            "    }\n" +
-            "}\n" +
-            "async function nbspAsync(iter) {\n" +
-            "    for\u00A0await\u00A0(const x of `abc`) {\n" +
-            "        use(x);\n" +
-            "    }\n" +
-            "}\n" +
-            "function bomSync() {\n" +
-            "    for\uFEFF(const ch of `abc`) {\n" +
-            "        use(ch);\n" +
-            "    }\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptTagFollowedByBomBeforeTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression: BOM `U+FEFF` between a tag and the backtick must be treated
-        // as inter-token whitespace. .NET's `char.IsWhiteSpace('\uFEFF')` returns false so the
-        // masker has to add BOM explicitly.
-        // issue #268 退行防止: タグと backtick の間の BOM `U+FEFF` もトークン間空白として
-        // 扱う必要がある。.NET の `char.IsWhiteSpace('\uFEFF')` は false なので明示的に足す。
-        const string content = "function f() {\n" +
-            "    return of\uFEFF`hello`;\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForOfHeaderWithStringParen_IsNotCaptured()
-    {
-        // issue #268 regression: a string literal `)` inside the for-of header (e.g. type
-        // annotation or plain string expression) must not corrupt the paren counter. The
-        // post-pass scan buffer blanks string content before counting.
-        // issue #268 退行防止: for-of ヘッダ内の文字列リテラル `)` が paren カウンタを壊さ
-        // ないよう、post-pass のスキャンバッファで文字列内容を空白化する。
-        const string content = """
-            function f(arr) {
-                for (const x = ")" /* annotation */ && arr[0] of `abc`) {
-                    use(x);
-                }
+            function nbspTag() {
+                return of{{nbsp}}`hello`;
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptMemberCallNamedInOrInstanceof_IsCapturedAsCall()
-    {
-        // issue #268 regression: adding `in`, `instanceof`, `void`, `case`, `delete` to the
-        // shared ignore list would wrongly drop member calls like `api.in(...)` or
-        // `api.instanceof(...)`. The ignore list for those tokens is tagged-template-emit
-        // only, so real member calls must still be captured by CallRegex.
-        // issue #268 退行防止: `in` / `instanceof` / `void` / `case` / `delete` を共通 ignore
-        // に足すと `api.in(...)` のような正当なメンバー呼び出しまで消えてしまう。これらは
-        // tagged-template 発行経路のみで弾き、CallRegex 経路では通常どおり捕捉する。
-        const string content = """
-            function use(api) {
+            function bomTag() {
+                return of{{bom}}`hello`;
+            }
+            function bindingPatternTag(arr) {
+                for (const [x = of`tag`] of arr) { use(x); }
+            }
+            function multiLineTag(tag) {
+                return tag
+            `hello`;
+            }
+            function multiLineCommentTag(tag) {
+                return tag // trailing comment
+            `hello`;
+            }
+            function memberKeywordTags(obj) {
+                obj.default`d`;
+                obj.return`r`;
+                obj.finally`f`;
+            }
+            async function asyncMemberKeywordTag(obj) {
+                return obj.await`a`;
+            }
+            function keywordMemberCalls(api) {
                 api.in("x");
                 api.instanceof("y");
                 api.delete("z");
                 api.case(1);
                 api.void(2);
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "in");
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "instanceof");
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "delete");
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "case");
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "void");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptExportDefaultBeforePlainTemplate_IsNotCaptured()
-    {
-        // issue #268 regression: `export default \`plain\`` is a valid default export of a
-        // template-literal expression; `default` is a statement keyword, not a tag identifier.
-        // The backward-scan from the backtick picks up `default`, so the tagged-template emit
-        // site has to drop it.
-        // issue #268 退行防止: `export default \`plain\`` は template リテラル式の default
-        // export として正当で、`default` はタグ識別子ではない。backward-scan が `default`
-        // を拾うため、タグ付きテンプレート発行側で弾く必要がある。
-        const string content = "export default `plain`;\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "default");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptFinallyBeforePlainTemplate_IsNotCaptured()
-    {
-        // issue #268 regression: `finally` is a clause keyword of `try ... finally { ... }`,
-        // never a tag identifier. Even malformed inputs that place `finally` right before a
-        // backtick must not emit a phantom `call finally` row.
-        // issue #268 退行防止: `finally` は try-finally 節のキーワードであり、タグ識別子には
-        // ならない。backtick の直前に `finally` が来る形（不正入力含む）でも phantom
-        // `call finally` を出さない。
-        const string content = """
-            function f() {
+            function stringLiteralNote() {
+                const s = "see gqlInString`docsInString` for details";
+                return s;
+            }
+            function plainTemplate(name) {
+                const msg = `Hello, ${name}!`;
+                return `Bye, ${name}.`;
+            }
+            function unaryTemplates(obj) {
+                delete `placeholder-${obj.id}`;
+                void `side-effect-${obj.id}`;
+            }
+            function comparisonTemplates(fooSpaced, barSpaced, fooTight, barTight) {
+                const spaced = fooSpaced < barSpaced > `plain`;
+                {{tightComparison}}
+            }
+            function operatorTemplates(foo) {
+                const membership = foo in `plain`;
+                return foo instanceof `plain`;
+            }
+            function singleLineSync() {
+                for (const ch of `abc`) { use(ch); }
+            }
+            async function singleLineAsync(iter) {
+                for await (const x of `abc`) { use(x); }
+            }
+            function multiLineSync() {
+                for (
+                    const ch of `abc`
+                ) { use(ch); }
+            }
+            async function multiLineAsync(iter) {
+                for await (
+                    const x of `abc`
+                ) { use(x); }
+            }
+            function nbspSync() {
+                for{{nbsp}}(const ch of `abc`) { use(ch); }
+            }
+            async function nbspAsync(iter) {
+                for{{nbsp}}await{{nbsp}}(const x of `abc`) { use(x); }
+            }
+            function bomSync() {
+                for{{bom}}(const ch of `abc`) { use(ch); }
+            }
+            function stringParenForOf(arr) {
+                for (const x = ")" /* annotation */ && arr[0] of `abc`) { use(x); }
+            }
+            function finallyTemplate() {
                 try {
                     doWork();
                 } finally `cleanup`;
             }
+            export default `plain`;
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences(language, content);
 
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "finally");
-    }
+        var gql = Assert.Single(references.Where(r => r.SymbolName == "gql"));
+        Assert.Equal("call", gql.ReferenceKind);
+        Assert.Equal("loadUser", gql.ContainerName);
 
-    [Fact]
-    public void Extract_JavaScriptForOfBindingPatternTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: in `for (const [x = of\`tag\`] of arr)`, the inner
-        // `of` is a real tagged-template call inside the binding pattern LHS, while the
-        // outer `of` is the for-of iterator keyword. Only the iterator keyword should be
-        // suppressed; the binding-pattern tag must still be captured.
-        // issue #268 退行防止: `for (const [x = of\`tag\`] of arr)` の内側 `of` は binding
-        // pattern LHS 内の正当なタグ付きテンプレート呼び出しで、外側 `of` だけが for-of
-        // iterator keyword。内側のタグ呼び出しは必ず残す。
-        const string content = """
-            function f(arr) {
-                for (const [x = of`tag`] of arr) { use(x); }
-            }
-            """;
+        foreach (var containerName in new[] { "plainOfTag", "classicForTag", "nbspTag" })
+        {
+            Assert.Single(references.Where(r =>
+                r.SymbolName == "of"
+                && r.ReferenceKind == "call"
+                && r.ContainerName == containerName));
+        }
 
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptMultiLineTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: a tag identifier can sit on a prior line from the
-        // opener backtick (`tag\n\`hello\``). Node 25.2.0 evaluates this as a real
-        // tagged-template call; the backward-scan must cross the line boundary through
-        // inter-token whitespace so `call tag` is emitted.
-        // issue #268 退行防止: タグ識別子は opener の backtick より前の行に置ける
-        // (`tag\n\`hello\``)。Node 25.2.0 は実際のタグ呼び出しとして評価するため、
-        // backward-scan は行境界をまたぐ空白を越えて `call tag` を発行する必要がある。
-        const string content = """
-            function run(tag) {
-                return tag
-            `hello`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "tag");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptObjectKeywordTaggedTemplates_AreCapturedAsCalls()
-    {
-        // issue #268 regression guard: reserved words are valid property names in JS/TS,
-        // so the bare-keyword denylist must not suppress member-access tags.
-        // issue #268 退行防止: JS/TS では予約語も property 名として合法なので、bare-keyword
-        // 除外リストが member-access tag を握り潰してはならない。
-        const string content = """
-            function run(obj) {
-                obj.default`d`;
-                obj.return`r`;
-                obj.finally`f`;
-            }
-            async function runAsync(obj) {
-                return obj.await`a`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        foreach (var name in new[] { "default", "return", "finally", "await" })
-            Assert.Single(references.Where(r => r.ReferenceKind == "call" && r.SymbolName == name));
-    }
-
-    [Fact]
-    public void Extract_JavaScriptMultiLineTaggedTemplateWithLineComment_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: when the multi-line tag line ends with a `//`
-        // comment (`return tag // trailing comment\n\`hello\``), the backward scan
-        // must not pick up `comment` as the tag identifier. The masker must blank the
-        // `//` comment tail so the cross-line scan sees only real code.
-        // issue #268 退行防止: 複数行タグの前行末に `//` コメントがある場合
-        // (`return tag // trailing comment\n\`hello\``)、後方スキャンが
-        // `comment` をタグ識別子と誤認してはならない。masker 側で `//` コメント以降を
-        // 空白化し、行またぎスキャンは実コードのみを見るようにする。
-        const string content = """
-            function run(tag) {
-                return tag // trailing comment
-            `hello`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "tag");
+        Assert.Contains(references, r =>
+            r.ReferenceKind == "call" && r.SymbolName == "of" && r.ContainerName == "bomTag");
+        Assert.Contains(references, r =>
+            r.ReferenceKind == "call" && r.SymbolName == "of" && r.ContainerName == "bindingPatternTag");
+        Assert.Contains(references, r =>
+            r.ReferenceKind == "call" && r.SymbolName == "tag" && r.ContainerName == "multiLineTag");
+        Assert.Contains(references, r =>
+            r.ReferenceKind == "call" && r.SymbolName == "tag" && r.ContainerName == "multiLineCommentTag");
         Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "comment");
-    }
 
-    [Fact]
-    public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
-    {
-        // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check
-        // operator, not as a tag identifier. The backtick backward-scan picks it up, so
-        // IsIgnoredCallName must suppress the phantom `call instanceof` edge.
-        // 退行防止: `foo instanceof \`plain\`` の `instanceof` は型チェック演算子であり、
-        // タグ識別子ではない。backward-scan が拾う `instanceof` は IsIgnoredCallName で握り潰す。
-        const string content = """
-            function check(foo) {
-                return foo instanceof `plain`;
-            }
-            """;
+        foreach (var (symbolName, containerName) in new[]
+        {
+            ("default", "memberKeywordTags"),
+            ("return", "memberKeywordTags"),
+            ("finally", "memberKeywordTags"),
+            ("await", "asyncMemberKeywordTag"),
+        })
+        {
+            Assert.Single(references.Where(r =>
+                r.ReferenceKind == "call"
+                && r.SymbolName == symbolName
+                && r.ContainerName == containerName));
+        }
 
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+        AssertReferencesContain(
+            references,
+            "call",
+            "keywordMemberCalls",
+            "in",
+            "instanceof",
+            "delete",
+            "case",
+            "void");
 
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "instanceof");
+        Assert.DoesNotContain(references, r => r.SymbolName == "gqlInString");
+        Assert.DoesNotContain(references, r => r.SymbolName == "docsInString");
+        AssertReferencesDoNotContain(
+            references,
+            "call",
+            "msg",
+            "Hello",
+            "Bye",
+            "fooSpaced",
+            "barSpaced",
+            "fooTight",
+            "barTight");
+
+        var forOfContainers = new[]
+        {
+            "singleLineSync",
+            "singleLineAsync",
+            "multiLineSync",
+            "multiLineAsync",
+            "nbspSync",
+            "nbspAsync",
+            "bomSync",
+            "stringParenForOf",
+        };
+        Assert.All(forOfContainers, containerName =>
+            Assert.DoesNotContain(references, r =>
+                r.ReferenceKind == "call"
+                && r.SymbolName == "of"
+                && r.ContainerName == containerName));
+
+        foreach (var (symbolName, containerName) in new[]
+        {
+            ("return", "plainTemplate"),
+            ("delete", "unaryTemplates"),
+            ("void", "unaryTemplates"),
+            ("in", "operatorTemplates"),
+            ("instanceof", "operatorTemplates"),
+            ("default", "\u003Cscript\u003E"),
+            ("finally", "finallyTemplate"),
+        })
+        {
+            Assert.DoesNotContain(references, r =>
+                r.ReferenceKind == "call"
+                && r.SymbolName == symbolName
+                && r.ContainerName == containerName);
+        }
     }
 
     [Fact]
