@@ -4,6 +4,17 @@ namespace CodeIndex.Tests;
 public class ConsoleCaptureTests
 {
     [Fact]
+    public void ImportCancellationFixture_UsesConsoleSensitiveCollection_Issue4650()
+    {
+        var attribute = Assert.Single(
+            typeof(ExportImportCommandRunnerCancellationTests).CustomAttributes,
+            static candidate => candidate.AttributeType == typeof(CollectionAttribute));
+        var collectionName = Assert.Single(attribute.ConstructorArguments);
+
+        Assert.Equal("Console sensitive", collectionName.Value);
+    }
+
+    [Fact]
     public void CaptureError_RestoresConsoleError_WhenActionThrows()
     {
         lock (TestConsoleLock.Gate)
