@@ -83,45 +83,31 @@ public class PathCasingTests
     });
 
     [Fact]
-    public async Task IgnoreCaseProbeForTesting_IsScopedAndDoesNotPopulateSharedCache()
+    public void IgnoreCaseProbeForTesting_IsScopedAndDoesNotPopulateSharedCache()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_probe_scope");
         var tempDir = project.Root;
         var liveIgnoreCase = ProbeDirectoryIgnoreCaseLikeProduction(tempDir);
-        var overrideReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseOverride = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var overrideTask = Task.Run(async () =>
-        {
-            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
-            PathCasing.IgnoreCaseProbeForTesting = _ => !liveIgnoreCase;
-            try
-            {
-                var overridden = PathCasing.IsIgnoreCase(tempDir);
-                overrideReady.TrySetResult(true);
-                await releaseOverride.Task.WaitAsync(TestDeterminism.DefaultTimeout);
-                return overridden;
-            }
-            finally
-            {
-                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
-            }
-        });
-
+        var independentContext = ExecutionContext.Capture();
+        Assert.NotNull(independentContext);
+        bool? independentIgnoreCase = null;
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.IgnoreCaseProbeForTesting = _ => !liveIgnoreCase;
         try
         {
-            await overrideReady.Task.WaitAsync(TestDeterminism.DefaultTimeout);
-            var independent = await Task.Run(() => PathCasing.IsIgnoreCase(tempDir))
-                .WaitAsync(TestDeterminism.DefaultTimeout);
-            Assert.Equal(liveIgnoreCase, independent);
+            var overridden = PathCasing.IsIgnoreCase(tempDir);
+            ExecutionContext.Run(
+                independentContext,
+                _ => independentIgnoreCase = PathCasing.IsIgnoreCase(tempDir),
+                state: null);
+
+            Assert.Equal(!liveIgnoreCase, overridden);
+            Assert.Equal(liveIgnoreCase, independentIgnoreCase);
         }
         finally
         {
-            releaseOverride.TrySetResult(true);
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
         }
-
-        var overridden = await overrideTask.WaitAsync(TestDeterminism.DefaultTimeout);
-        Assert.Equal(!liveIgnoreCase, overridden);
     }
 
     [Fact]
