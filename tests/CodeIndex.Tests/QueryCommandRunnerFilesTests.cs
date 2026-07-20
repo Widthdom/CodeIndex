@@ -3671,6 +3671,25 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("--results-only is only supported with symbols NDJSON row output", symbolsArrayFirstStderr);
             Assert.Contains("--results-only is only supported with files NDJSON row output", filesArrayFirstStderr);
             Assert.Contains("--results-only is only supported with files NDJSON row output", filesCompactFirstStderr);
+
+            var (filesCompatibleOverrideExitCode, filesCompatibleOverrideStdout, _) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--format", "compact", "--format", "json", "--results-only"],
+                _jsonOptions));
+            var (filesEscapedQueryExitCode, filesEscapedQueryStdout, filesEscapedQueryStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--query", "--json=array", "--results-only"],
+                _jsonOptions));
+            var (filesSentinelQueryExitCode, filesSentinelQueryStdout, filesSentinelQueryStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--", "--format", "--results-only"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, filesCompatibleOverrideExitCode);
+            Assert.Single(filesCompatibleOverrideStdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+            Assert.Equal(CommandExitCodes.Success, filesEscapedQueryExitCode);
+            Assert.Equal(string.Empty, filesEscapedQueryStdout);
+            Assert.Equal(string.Empty, filesEscapedQueryStderr);
+            Assert.Equal(CommandExitCodes.Success, filesSentinelQueryExitCode);
+            Assert.Equal(string.Empty, filesSentinelQueryStdout);
+            Assert.Equal(string.Empty, filesSentinelQueryStderr);
         }
         finally
         {

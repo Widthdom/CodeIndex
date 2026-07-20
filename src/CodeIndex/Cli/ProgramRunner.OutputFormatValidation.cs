@@ -25,6 +25,7 @@ internal static partial class ProgramRunner
         string? jsonStreamOption = null;
         var jsonRequested = false;
         var prettyRequested = false;
+        var resultsOnlyRequested = false;
         var usesSingleDocumentJsonMode = false;
         var hasExplicitPrettyJsonOutput = HasExplicitPrettyJsonOutputSelection(args);
 
@@ -38,6 +39,7 @@ internal static partial class ProgramRunner
             if (tokenRole != QueryCommandTokenRole.CommandOptionValue
                 && (arg == "--count"
                     || arg == "--summary-only"
+                    || arg == JsonEnvelopeWrapper.EnvelopeFlag
                     || (string.Equals(commandName, "search", StringComparison.Ordinal)
                         && (arg is "--count-by" or "--unique" or "--group-by" or "--named-query" or "--list-recipes" or "--recipe"
                             || arg.StartsWith("--count-by=", StringComparison.Ordinal)
@@ -48,6 +50,9 @@ internal static partial class ProgramRunner
             {
                 usesSingleDocumentJsonMode = true;
             }
+
+            if (tokenRole != QueryCommandTokenRole.CommandOptionValue && arg == "--results-only")
+                resultsOnlyRequested = true;
 
             if (arg == "--json")
             {
@@ -98,12 +103,16 @@ internal static partial class ProgramRunner
             || string.Equals(commandName, "files", StringComparison.Ordinal)
             || string.Equals(commandName, "symbols", StringComparison.Ordinal);
         if (jsonStreamMode == null
-            && (jsonRequested || string.Equals(outputFormat, "json", StringComparison.Ordinal))
+            && (jsonRequested || resultsOnlyRequested || string.Equals(outputFormat, "json", StringComparison.Ordinal))
             && commandUsesImplicitNdjson
             && !usesSingleDocumentJsonMode)
         {
             jsonStreamMode = "ndjson";
-            jsonStreamOption = jsonRequested ? "--json" : "--format json";
+            jsonStreamOption = resultsOnlyRequested
+                ? "--results-only"
+                : jsonRequested
+                    ? "--json"
+                    : "--format json";
         }
 
         if (jsonRequested
@@ -164,6 +173,7 @@ internal static partial class ProgramRunner
 
             if (arg == "--json"
                 || arg.StartsWith("--json=", StringComparison.Ordinal)
+                || arg == "--results-only"
                 || arg == JsonEnvelopeWrapper.EnvelopeFlag
                 || (arg.StartsWith("--format=", StringComparison.Ordinal)
                     && CliOutputFormatCapabilities.TryGet(arg["--format=".Length..], out var inlineCapability)

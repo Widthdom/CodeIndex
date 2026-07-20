@@ -154,6 +154,7 @@ public static partial class QueryCommandRunner
         string? statusExplainField = null;
         bool statusLogPath = false;
         string outputFormat = OutputFormatText;
+        bool outputFormatExplicit = false;
         bool statusConfig = false;
         bool limitExplicit = false;
         bool snippetLinesExplicit = false;
@@ -494,6 +495,7 @@ public static partial class QueryCommandRunner
                         if (TryParseOutputFormat(formatValue!, out var parsedOutputFormat))
                         {
                             outputFormat = parsedOutputFormat;
+                            outputFormatExplicit = true;
                             if (parsedOutputFormat == OutputFormatCompact)
                                 compact = true;
                             if (parsedOutputFormat == OutputFormatCount)
@@ -506,6 +508,7 @@ public static partial class QueryCommandRunner
                         else if (allowIssueDraftsFormat && string.Equals(formatValue, OutputFormatIssueDrafts, StringComparison.OrdinalIgnoreCase))
                         {
                             outputFormat = OutputFormatIssueDrafts;
+                            outputFormatExplicit = true;
                             json = true;
                         }
                         else
@@ -1101,8 +1104,8 @@ public static partial class QueryCommandRunner
                 case "--results-only":
                     resultsOnly = true;
                     json = true;
-                    jsonOutputFormat = JsonOutputFormatNdjson;
-                    outputFormat = OutputFormatJson;
+                    if (!outputFormatExplicit)
+                        outputFormat = OutputFormatJson;
                     break;
                 case "--next-steps":
                     nextSteps = true;

@@ -28,7 +28,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows, `--format compact` for bounded compact rows, `--format count` for symbol totals, or `--format lsp|qf|sarif` for editor/diagnostic locations."))
             return CommandExitCodes.UsageError;
-        if (TryWriteDiscoveryOutputControlUsageError("symbols", options, effectiveCmdArgs))
+        if (TryWriteDiscoveryOutputControlUsageError("symbols", options))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
@@ -414,7 +414,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("files", options, FilesOutputFormats, "Use `--format json` for file rows, `--format compact` for bounded compact rows, or `--format count` for file totals."))
             return CommandExitCodes.UsageError;
-        if (TryWriteDiscoveryOutputControlUsageError("files", options, cmdArgs))
+        if (TryWriteDiscoveryOutputControlUsageError("files", options))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "files"))
             return CommandExitCodes.UsageError;
@@ -709,9 +709,9 @@ public static partial class QueryCommandRunner
             $"Increase --limit or narrow the {commandName} query to retrieve the remaining rows.");
     }
 
-    private static bool TryWriteDiscoveryOutputControlUsageError(string commandName, QueryCommandOptions options, string[] args)
+    private static bool TryWriteDiscoveryOutputControlUsageError(string commandName, QueryCommandOptions options)
     {
-        if (options.ResultsOnly && (HasExplicitIncompatibleDiscoveryResultsOnlyOutput(args) || !IsDiscoveryNdjson(options) || options.CountOnly))
+        if (options.ResultsOnly && (!IsDiscoveryNdjson(options) || options.CountOnly))
         {
             WriteUsageError(
                 $"--results-only is only supported with {commandName} NDJSON row output.",
@@ -730,27 +730,6 @@ public static partial class QueryCommandRunner
             GetUsageLineOrThrow(commandName),
             $"Use `cdidx {commandName} --json {control}` or `cdidx {commandName} --format compact {control}`.");
         return true;
-    }
-
-    private static bool HasExplicitIncompatibleDiscoveryResultsOnlyOutput(string[] args)
-    {
-        for (var i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-            if (string.Equals(arg, "--json=array", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            string? format = null;
-            if (string.Equals(arg, "--format", StringComparison.Ordinal) && i + 1 < args.Length)
-                format = args[++i];
-            else if (arg.StartsWith("--format=", StringComparison.Ordinal))
-                format = arg["--format=".Length..];
-
-            if (format != null && !string.Equals(format, OutputFormatJson, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
     }
 
     private static int WriteBoundedDiscoveryJsonPayload<T>(
