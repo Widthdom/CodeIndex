@@ -545,6 +545,52 @@ public static partial class QueryCommandRunner
             {
                 var zeroSqlGraphSignal = baseSqlGraphSignal;
                 var zeroSymbolFilter = ApplyDependencySymbolFilters([], options).Summary;
+                if (options.DependencyCycles)
+                {
+                    var zeroAnalysis = AnalyzeDependencyCycles(
+                        [],
+                        cycleCandidateLimit,
+                        cycleCandidateRowCount,
+                        options.Limit,
+                        cancellationToken);
+                    if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
+                    {
+                        var writeExitCode = WriteDependencyGraph(
+                            [],
+                            depsFormat,
+                            jsonOptions,
+                            reader,
+                            options,
+                            zeroSqlGraphSignal,
+                            zeroSymbolFilter,
+                            payload =>
+                            {
+                                AddDependencyCycleAnalysisJsonFields(payload, zeroAnalysis);
+                                AddDependencyGraphAvailabilityJsonFields(payload, reader._hasReferencesTable);
+                            });
+                        return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
+                    }
+                    if (options.Json)
+                    {
+                        var payload = new JsonObject { ["count"] = 0 };
+                        if (options.SummaryOnly)
+                            payload["summary_only"] = true;
+                        else
+                            payload["cycles"] = new JsonArray();
+                        AddDependencyCycleAnalysisJsonFields(payload, zeroAnalysis);
+                        AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter);
+                        AddDependencyGraphAvailabilityJsonFields(payload, reader._hasReferencesTable);
+                        AddFreshnessHint(payload, reader);
+                        WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: 0, cycleCount: 0, machineReadable: machineReadable);
+                        var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                        return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
+                    }
+
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No dependency cycles found", options));
+                    WriteSqlGraphContractWarningIfNeeded(json: false, zeroSqlGraphSignal, reader, options);
+                    WriteDegradedGraphZeroResult(reader, "cycles", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                    return ZeroResultExitCode(options);
+                }
                 if (depsFormat is OutputFormatJsonGraph)
                 {
                     var writeExitCode = WriteDependencyGraph([], depsFormat, jsonOptions, reader, options, zeroSqlGraphSignal, zeroSymbolFilter);
@@ -1208,6 +1254,16 @@ public static partial class QueryCommandRunner
         AddDependencySymbolFilterJsonFields(payload, symbolFilter, jsonOptions);
     }
 
+    private static void AddDependencyGraphAvailabilityJsonFields(JsonObject payload, bool graphTableAvailable)
+    {
+        payload["graph_table_available"] = graphTableAvailable;
+        if (graphTableAvailable)
+            return;
+
+        payload["degraded"] = true;
+        payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+    }
+
     private static void AddDependencySymbolFilterJsonFields(JsonObject payload, DependencySymbolFilterSummary symbolFilter, JsonSerializerOptions jsonOptions)
     {
         if (!symbolFilter.Applied)
@@ -1344,7 +1400,17 @@ public static partial class QueryCommandRunner
     private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse, int limit, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var results = primaryReader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse, cancellationToken);
+        var results = primaryReader.GetFileDependencies(
+            limit,
+            options.Lang,
+            options.PathPatterns,
+            options.ExcludePaths,
+            options.ExcludeTests,
+            reverse,
+            cancellationToken,
+            options.DependencySymbols,
+            options.DependencySymbolFamilies,
+            options.DependencySuppressNoise);
         cancellationToken.ThrowIfCancellationRequested();
         if (options.WorkspaceDbPaths.Count == 0)
             return results;
@@ -1357,7 +1423,17 @@ public static partial class QueryCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             using var db = new DbContext(DbOpenIntent.QueryOnly, normalizedDbPath, cancellationToken);
             var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
-            var memberResults = reader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse, cancellationToken);
+            var memberResults = reader.GetFileDependencies(
+                limit,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                reverse,
+                cancellationToken,
+                options.DependencySymbols,
+                options.DependencySymbolFamilies,
+                options.DependencySuppressNoise);
             TagFileDependencyResults(memberResults, normalizedDbPath);
             results.AddRange(memberResults);
         }
@@ -1368,7 +1444,7 @@ public static partial class QueryCommandRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
                     continue;
-                results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit));
+                results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit, cancellationToken));
             }
 
         return results
@@ -1399,7 +1475,10 @@ public static partial class QueryCommandRunner
             options.ExcludePaths,
             options.ExcludeTests,
             reverse,
-            cancellationToken);
+            cancellationToken,
+            options.DependencySymbols,
+            options.DependencySymbolFamilies,
+            options.DependencySuppressNoise);
         candidateRowCount += primaryCandidateRows;
         if (options.WorkspaceDbPaths.Count == 0)
             return results.Take(limit).ToList();
@@ -1422,7 +1501,10 @@ public static partial class QueryCommandRunner
                 options.ExcludePaths,
                 options.ExcludeTests,
                 reverse,
-                cancellationToken);
+                cancellationToken,
+                options.DependencySymbols,
+                options.DependencySymbolFamilies,
+                options.DependencySuppressNoise);
             candidateRowCount += memberCandidateRows;
             TagFileDependencyResults(memberResults, normalizedDbPath);
             results.AddRange(memberResults);
@@ -1436,7 +1518,7 @@ public static partial class QueryCommandRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
                     continue;
-                var crossDbResults = GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit);
+                var crossDbResults = GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit, cancellationToken);
                 candidateRowCount += crossDbResults.Count;
                 results.AddRange(crossDbResults);
                 if (results.Count >= limit)
@@ -1512,14 +1594,21 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
+    private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(
+        string sourceDbPath,
+        string targetDbPath,
+        QueryCommandOptions options,
+        bool reverse,
+        int limit,
+        CancellationToken cancellationToken)
     {
         // Declare the target first so reverse-order disposal closes the source ATTACH handle
         // before the target context attempts to delete its private snapshot on Windows.
         // target を先に宣言し、Windows で private snapshot を削除する前に source の
         // ATTACH handle が reverse-order disposal で閉じられるようにする。
-        using var targetDb = new DbContext(DbOpenIntent.QueryOnly, targetDbPath);
-        using var sourceDb = new DbContext(DbOpenIntent.QueryOnly, sourceDbPath);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var targetDb = new DbContext(DbOpenIntent.QueryOnly, targetDbPath, cancellationToken);
+        using var sourceDb = new DbContext(DbOpenIntent.QueryOnly, sourceDbPath, cancellationToken);
         var connection = sourceDb.Connection;
         // Keep the target context alive for the whole attached query. WAL-backed targets may
         // resolve to a private artifact-preserving snapshot whose cleanup is owned by that
@@ -1555,6 +1644,16 @@ public static partial class QueryCommandRunner
             cmd.CommandText += reverse
                 ? $" AND NOT {BuildCrossDatabaseTestPathCondition("dst")}"
                 : $" AND NOT {BuildCrossDatabaseTestPathCondition("src")}";
+        var crossDatabaseSql = cmd.CommandText;
+        DbReader.AppendDependencySymbolFilter(
+            cmd,
+            ref crossDatabaseSql,
+            "r.symbol_name",
+            options.DependencySymbols,
+            options.DependencySymbolFamilies,
+            options.DependencySuppressNoise,
+            "crossDependency");
+        cmd.CommandText = crossDatabaseSql;
         cmd.CommandText += @"
             ),
             edge_totals AS (
@@ -1590,18 +1689,27 @@ public static partial class QueryCommandRunner
         SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var cancellationRegistration = cancellationToken.Register(static state => ((SqliteCommand)state!).Cancel(), cmd);
+        try
         {
-            results.Add(new FileDependencyResult
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                SourcePath = reader.GetString(0),
-                TargetPath = reader.GetString(1),
-                SourceDb = reverse ? targetDbPath : sourceDbPath,
-                TargetDb = reverse ? sourceDbPath : targetDbPath,
-                ReferenceCount = reader.GetInt32(2),
-                Symbols = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
-            });
+                cancellationToken.ThrowIfCancellationRequested();
+                results.Add(new FileDependencyResult
+                {
+                    SourcePath = reader.GetString(0),
+                    TargetPath = reader.GetString(1),
+                    SourceDb = reverse ? targetDbPath : sourceDbPath,
+                    TargetDb = reverse ? sourceDbPath : targetDbPath,
+                    ReferenceCount = reader.GetInt32(2),
+                    Symbols = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                });
+            }
+        }
+        catch (SqliteException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
         }
         foreach (var result in results)
             result.RankingScore = DependencyNoiseProfile.ComputeRankingScore(result.ReferenceCount, result.Symbols);
