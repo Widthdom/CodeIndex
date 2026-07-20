@@ -656,6 +656,8 @@ Use the smallest change that reduces the expensive part of your run.
 
 `index --dry-run --rebuild` previews a full replacement scan but does not delete the existing index, so it never prompts for `--yes`. Add `--json --memory-trace` to receive a `memory_timeline` with `start`, `snapshot`, `scan`, and `finalize` samples from the preview itself. Dry-run reads its database snapshot and source files without changing the workspace or DB/WAL/SHM set.
 
+On an actual full scan, the same timeline also separates `csharp_prepass`, `extraction`, `reference_graph`, `text_index`, `finalize`, and `commit`; file/commit-scoped updates report the shared extraction, graph, text-index, and finalization boundaries. Sample `elapsed_ms` values are cumulative, so subtract adjacent samples to attribute elapsed time without enabling a profiler.
+
 For very large repos, index from the repository root once, exclude generated
 trees early, then use scoped refreshes for daily work. If a branch switch,
 rebase, reset, or merge makes freshness ambiguous, prefer a full `cdidx index .`
@@ -3726,6 +3728,8 @@ cdidx index . --duration-format seconds
 | `--path`, `--exclude-path`, `--exclude-tests` | off | query / map が noisy | 絞り込みすぎると実 match を隠す |
 
 `index --dry-run --rebuild` は full replacement scan を preview しますが既存 index を削除しないため、`--yes` の確認を要求しません。`--json --memory-trace` を追加すると、preview 自身から取得した `start`、`snapshot`、`scan`、`finalize` sample を含む `memory_timeline` を返します。dry-run は database snapshot と source file を読み取るだけで、workspace や DB/WAL/SHM set を変更しません。
+
+実際の full scan では、同じ timeline が `csharp_prepass`、`extraction`、`reference_graph`、`text_index`、`finalize`、`commit` も分離します。file/commit-scoped update は共通の extraction、graph、text-index、finalize 境界を返します。sample の `elapsed_ms` は累積値なので、隣接 sample の差分から profiler なしで所要時間を帰属できます。
 
 非常に大きい repo では、repo root で一度 index し、generated tree を早めに除外し、
 日々の作業は scoped refresh を使ってください。branch switch、rebase、reset、merge で

@@ -1458,6 +1458,8 @@ public static partial class IndexCommandRunner
                 StopFullScanJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
             }
         }
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("csharp_prepass", stopwatch));
 
         var freshCountFiles = 0L;
         var freshCountChunks = 0L;
@@ -2259,6 +2261,9 @@ public static partial class IndexCommandRunner
 
         PauseIndexSpinnerForConsoleWrite();
 
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("extraction", stopwatch));
+
         ThrowIfFullScanCancelled(processed, files.Count);
         if (mutualRecursionRefreshNeeded)
         {
@@ -2273,6 +2278,8 @@ public static partial class IndexCommandRunner
                 StopFullScanJsonPhaseHeartbeat(referenceGraphHeartbeat);
             }
         }
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfFullScanCancelled(processed, files.Count);
         if (ftsBulkLoad != null)
         {
@@ -2302,6 +2309,8 @@ public static partial class IndexCommandRunner
                 StopFullScanJsonPhaseHeartbeat(optimizeHeartbeat);
             }
         }
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("text_index", stopwatch));
         ThrowIfFullScanCancelled(processed, files.Count);
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
@@ -2504,6 +2513,8 @@ public static partial class IndexCommandRunner
         }
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("commit", stopwatch));
         stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(memorySamples);
         WarnIfMemoryThresholdExceeded(memoryTimeline);

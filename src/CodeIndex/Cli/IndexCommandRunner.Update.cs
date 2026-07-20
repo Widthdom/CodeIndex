@@ -1150,6 +1150,8 @@ public static partial class IndexCommandRunner
         {
             StopIndexJsonPhaseHeartbeat(updateHeartbeat);
         }
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("extraction", stopwatch));
 
         if (options.ChangedBetweenSpecified)
         {
@@ -1181,6 +1183,8 @@ public static partial class IndexCommandRunner
         mutualRecursionRefreshNeeded |= !options.SymbolsOnly && (removed > 0 || purgedRefs > 0);
         if (mutualRecursionRefreshNeeded)
             writer.RefreshMutualRecursionFlags(cancellationToken);
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfUpdateCancelled();
         PauseUpdateSpinnerForConsoleWrite();
 
@@ -1194,6 +1198,8 @@ public static partial class IndexCommandRunner
             ftsOptimizeRan = writer.OptimizeFtsIfIncrementalWriteThresholdReached(
                 cancellationToken: cancellationToken);
         }
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("text_index", stopwatch));
         ThrowIfUpdateCancelled();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
