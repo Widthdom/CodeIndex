@@ -32,6 +32,14 @@ public static class Program
                         return 0;
                     }
 
+                case "retry-filter":
+                    {
+                        var options = ParseRetryFilterOptions(args[1..]);
+                        var decision = TrxRetryFilter.Load(options.TrxFile);
+                        Console.Out.Write(TrxRetryFilterRenderer.Render(decision));
+                        return 0;
+                    }
+
                 default:
                     throw new TelemetryException($"Unknown command '{args[0]}'.");
             }
@@ -50,6 +58,7 @@ public static class Program
         Console.Out.WriteLine("Usage:");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.TestTelemetry -- summarize --results-directory ./TestResults [--top 10]");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.TestTelemetry -- skips --tests-directory tests/CodeIndex.Tests [--top 25]");
+        Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.TestTelemetry -- retry-filter --trx-file ./TestResults/test_results_first.trx");
     }
 
     private static SummarizeOptions ParseSummarizeOptions(string[] args)
@@ -128,9 +137,36 @@ public static class Program
         return new SkipOptions(testsDirectory, top);
     }
 
+    private static RetryFilterOptions ParseRetryFilterOptions(string[] args)
+    {
+        string? trxFile = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--trx-file")
+            {
+                if (i + 1 >= args.Length)
+                    throw new TelemetryException("Missing value for --trx-file.");
+
+                trxFile = args[++i];
+                continue;
+            }
+
+            throw new TelemetryException($"Unknown option '{arg}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(trxFile))
+            throw new TelemetryException("--trx-file is required.");
+
+        return new RetryFilterOptions(trxFile);
+    }
+
     private sealed record SummarizeOptions(string ResultsDirectory, int Top);
 
     private sealed record SkipOptions(string TestsDirectory, int Top);
+
+    private sealed record RetryFilterOptions(string TrxFile);
 }
 
 public sealed class TelemetryException(string message) : Exception(message);

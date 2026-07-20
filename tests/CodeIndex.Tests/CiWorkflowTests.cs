@@ -141,6 +141,41 @@ public class CiWorkflowTests
     }
 
     [Fact]
+    public void DotnetWorkflow_UsesBoundedFocusedRetryWithSafeFullSuiteFallback()
+    {
+        var workflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
+        var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
+
+        AssertContainsAll(
+            testScript,
+            "[string]$TestFilter = \"\"",
+            "$runArgs += @(\"--filter\", $TestFilter)",
+            "function Get-RetryFilterDecision",
+            "\"--project\", \"tools/CodeIndex.TestTelemetry\"",
+            "\"--no-build\"",
+            "\"--no-restore\"",
+            "\"retry-filter\"",
+            "\"--trx-file\", $TrxPath",
+            "ConvertFrom-Json -ErrorAction Stop",
+            "reason = \"telemetry_tool_failed\"",
+            "reason = \"telemetry_output_invalid\"",
+            "$firstTrxPath = Join-Path $resultsDirectory \"test_results_first.trx\"",
+            "$retryFilterDecision.useFocusedRetry -eq $true",
+            "Using a bounded focused retry",
+            "using the full-suite retry fallback",
+            "-TestFilter $retryFilter",
+            "Retry scope: $retryScope");
+        AssertContainsAll(
+            workflow,
+            "dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release",
+            "dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize");
+        AssertDoesNotContainAny(
+            testScript,
+            "dotnet build tools/CodeIndex.TestTelemetry",
+            "dotnet restore tools/CodeIndex.TestTelemetry");
+    }
+
+    [Fact]
     public void WindowsTestHostSetup_IsSharedAcrossDotnetAndReleaseWorkflows()
     {
         var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();

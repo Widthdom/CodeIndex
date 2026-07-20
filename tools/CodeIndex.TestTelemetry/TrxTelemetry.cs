@@ -274,7 +274,7 @@ public static class TrxTelemetry
         }
     }
 
-    private static XmlReaderSettings CreateXmlReaderSettings() => new()
+    internal static XmlReaderSettings CreateXmlReaderSettings() => new()
     {
         DtdProcessing = DtdProcessing.Prohibit,
         IgnoreComments = true,
@@ -366,67 +366,6 @@ public static class TrxTelemetry
         }
     }
 
-    private static class UnixFileStatus
-    {
-        internal const int FileTypeMask = 0xF000;
-        internal const int RegularFile = 0x8000;
-
-        internal static bool TryGetFileMode(string filePath, out int mode)
-        {
-            mode = 0;
-            try
-            {
-                if (NativeMethods.Stat(filePath, out var status) != 0)
-                    return false;
-
-                mode = status.Mode;
-                return true;
-            }
-            catch (DllNotFoundException)
-            {
-                return false;
-            }
-            catch (EntryPointNotFoundException)
-            {
-                return false;
-            }
-        }
-
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-        private struct FileStatus
-        {
-            internal FileStatusFlags Flags;
-            internal int Mode;
-            internal uint Uid;
-            internal uint Gid;
-            internal long Size;
-            internal long ATime;
-            internal long ATimeNsec;
-            internal long MTime;
-            internal long MTimeNsec;
-            internal long CTime;
-            internal long CTimeNsec;
-            internal long BirthTime;
-            internal long BirthTimeNsec;
-            internal long Dev;
-            internal long RDev;
-            internal long Ino;
-            internal uint UserFlags;
-        }
-
-        [System.Flags]
-        private enum FileStatusFlags : uint
-        {
-            None = 0,
-        }
-
-        private static class NativeMethods
-        {
-            [System.Runtime.InteropServices.DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = System.Runtime.InteropServices.CharSet.Ansi)]
-            internal static extern int Stat(string path, out FileStatus output);
-        }
-    }
-
     private static TimeSpan ParseDuration(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -506,3 +445,64 @@ public sealed record TrxTelemetrySummary(
     IReadOnlyList<string> Warnings);
 
 public sealed record TrxTestResult(string TestName, string Outcome, TimeSpan Duration);
+
+internal static class UnixFileStatus
+{
+    internal const int FileTypeMask = 0xF000;
+    internal const int RegularFile = 0x8000;
+
+    internal static bool TryGetFileMode(string filePath, out int mode)
+    {
+        mode = 0;
+        try
+        {
+            if (NativeMethods.Stat(filePath, out var status) != 0)
+                return false;
+
+            mode = status.Mode;
+            return true;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct FileStatus
+    {
+        internal FileStatusFlags Flags;
+        internal int Mode;
+        internal uint Uid;
+        internal uint Gid;
+        internal long Size;
+        internal long ATime;
+        internal long ATimeNsec;
+        internal long MTime;
+        internal long MTimeNsec;
+        internal long CTime;
+        internal long CTimeNsec;
+        internal long BirthTime;
+        internal long BirthTimeNsec;
+        internal long Dev;
+        internal long RDev;
+        internal long Ino;
+        internal uint UserFlags;
+    }
+
+    [System.Flags]
+    private enum FileStatusFlags : uint
+    {
+        None = 0,
+    }
+
+    private static class NativeMethods
+    {
+        [System.Runtime.InteropServices.DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = System.Runtime.InteropServices.CharSet.Ansi)]
+        internal static extern int Stat(string path, out FileStatus output);
+    }
+}
