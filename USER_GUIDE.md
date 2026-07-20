@@ -1872,6 +1872,9 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E012_INTERRUPTED` | The user interrupted the command with Ctrl-C / signal cancellation |
 | `E013_INDEX_EXTRACTION_STALLED` | Index extraction made no forward progress within the bounded stall timeout |
 | `E014_REGEX_MATCH_TIMEOUT` | A user-supplied regular expression exceeded the bounded match timeout while executing |
+| `E015_FS_CASE_PROBE_FAILED` | Filesystem case-sensitivity probing failed before cdidx could select a safe path-casing policy |
+| `E016_CHECKPOINT_NOT_FOUND` | The requested database checkpoint name does not exist |
+| `E017_WORKSPACE_MANIFEST_INVALID` | A workspace manifest was found but failed JSON schema or safety validation |
 | `E018_QUERY_NOT_FOUND` | A lookup that requires a result did not match an indexed entity |
 | `E019_FILE_NOT_FOUND` | An exact indexed file path requested by a query command does not exist |
 | `E020_LINE_OUT_OF_RANGE` | A requested source line falls outside the indexed file's 1-based line range |
@@ -4921,6 +4924,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E012_INTERRUPTED` | Ctrl-C / signal cancellation でユーザーがコマンドを中断した |
 | `E013_INDEX_EXTRACTION_STALLED` | 制限付きの停止判定時間内に index 抽出が前進しなかった |
 | `E014_REGEX_MATCH_TIMEOUT` | ユーザー指定の正規表現が実行中に制限付き match timeout を超えた |
+| `E015_FS_CASE_PROBE_FAILED` | ファイルシステムの大文字小文字区別 probe に失敗し、安全な path casing policy を選択できなかった |
+| `E016_CHECKPOINT_NOT_FOUND` | 指定されたデータベース checkpoint 名が存在しない |
+| `E017_WORKSPACE_MANIFEST_INVALID` | workspace manifest JSON が見つかったが、schema または安全性の検証に失敗した |
 | `E018_QUERY_NOT_FOUND` | 結果必須の lookup が indexed entity に一致しなかった |
 | `E019_FILE_NOT_FOUND` | query command が要求した indexed file の完全一致 path が存在しない |
 | `E020_LINE_OUT_OF_RANGE` | 要求した source line が indexed file の 1-based 行範囲外だった |
