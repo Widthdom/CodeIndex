@@ -17,10 +17,32 @@ public partial class FileIndexer
         Missing,
     }
 
+    internal enum LanguageDetectionConfidence
+    {
+        High,
+        Medium,
+        Low,
+    }
+
+    internal const string HeaderLexicalMarkerDetectionSource = "header_lexical_marker";
+    internal const string HeaderSampledLexicalMarkerDetectionSource = "header_sampled_lexical_marker";
+    internal const string HeaderLexicalFallbackDetectionSource = "header_lexical_fallback";
+    internal const string HeaderSampledLexicalFallbackDetectionSource = "header_sampled_lexical_fallback";
+    internal const string HeaderExtensionFallbackDetectionSource = "header_extension_fallback";
+
     internal readonly record struct LanguageDetectionResult(
         FileProbeStatus Status,
         string? Language,
-        string? DetectionSource = null);
+        string? DetectionSource = null,
+        LanguageDetectionConfidence? Confidence = null);
+
+    internal static string GetLanguageDetectionConfidenceCode(LanguageDetectionConfidence confidence) => confidence switch
+    {
+        LanguageDetectionConfidence.High => "high",
+        LanguageDetectionConfidence.Medium => "medium",
+        LanguageDetectionConfidence.Low => "low",
+        _ => throw new ArgumentOutOfRangeException(nameof(confidence), confidence, null),
+    };
 
     public enum ScanIssueSeverity
     {

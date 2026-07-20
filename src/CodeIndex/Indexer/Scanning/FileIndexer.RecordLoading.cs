@@ -68,12 +68,13 @@ public partial class FileIndexer
             normalizedRelativePath,
             relativePath,
             cancellationToken);
+        var languageDetection = string.IsNullOrEmpty(knownLanguage)
+            ? TryDetectLanguageForIndexing(absolutePath, loaded.Content)
+            : new LanguageDetectionResult(FileProbeStatus.Supported, knownLanguage);
         var record = new FileRecord
         {
             Path = normalizedRelativePath,
-            Lang = string.IsNullOrEmpty(knownLanguage)
-                ? TryDetectLanguageForIndexing(absolutePath, loaded.Content).Language
-                : knownLanguage,
+            Lang = languageDetection.Language,
             Size = loaded.SizeBytes,
             Lines = loaded.LineCount,
             Checksum = loaded.Checksum,
@@ -88,7 +89,8 @@ public partial class FileIndexer
             loaded.HasOversizeLine,
             loaded.ConflictMarkerLine,
             loaded.Warning,
-            loaded.Inspection);
+            loaded.Inspection,
+            languageDetection);
     }
 
     internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
