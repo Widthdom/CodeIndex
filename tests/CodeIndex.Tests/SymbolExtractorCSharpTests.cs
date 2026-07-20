@@ -3088,6 +3088,39 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_FieldPatterns_ShareTupleTypeGrammar_Issue4616()
+    {
+        var content = """
+            namespace TupleFields;
+
+            public class Holder
+            {
+                public static readonly (int Left, int Right) Pair = (1, 2);
+                public static readonly (int Left, int Right)? MaybePair = null;
+                public static readonly Dictionary<string, (int Left, int Right)> PairByName = new();
+                public const (int Left, int Right) ConstPair = (1, 2);
+                public (int Left, int Right) PlainPair = (1, 2);
+
+                public void DeconstructLocals()
+                {
+                    var (left, right) = Pair;
+                    (int nestedLeft, int nestedRight) = Pair;
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "Pair" && s.ReturnType == "(int Left, int Right)");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "MaybePair" && s.ReturnType == "(int Left, int Right)?");
+        var pairByName = Assert.Single(symbols.Where(s => s.Name == "PairByName"));
+        Assert.Equal("field", pairByName.Kind);
+        Assert.Equal("Dictionary<string,(int Left,int Right)>", pairByName.ReturnType);
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "ConstPair" && s.ReturnType == "(int Left, int Right)");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PlainPair" && s.ReturnType == "(int Left, int Right)");
+        Assert.DoesNotContain(symbols, s => s.Name is "left" or "right" or "nestedLeft" or "nestedRight");
+    }
+
+    [Fact]
     public void Extract_CSharp_Method_FreeModifierOrder()
     {
         // Closes #355: C# allows visibility to appear anywhere in the modifier sequence, so

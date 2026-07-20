@@ -16,7 +16,7 @@ public static partial class SymbolExtractor
     public const int DefaultContractVersion = 1;
     public const int ExpandedLanguageContractVersion = 2;
     public const int PythonContractVersion = 2;
-    public const int CSharpContractVersion = 3;
+    public const int CSharpContractVersion = 4;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
@@ -1131,12 +1131,17 @@ public static partial class SymbolExtractor
             // 先頭以外の位置に現れることを許容し、`readonly public static` や `static public readonly`
             // のような旧来の並びでも kind `field` で取り扱う。通常フィールド（kind `property`）の
             // 正規表現に流れ落ちないようにする。Closes #355.
+            // Share CSharpTypePattern with const and plain fields so tuple, nullable-tuple, and
+            // generic-over-tuple types retain stable field kind and complete return-type metadata.
+            // const / 通常フィールドと CSharpTypePattern を共有し、tuple / nullable tuple /
+            // generic-over-tuple 型でも安定した field kind と完全な return-type metadata を保持する。
+            // Closes #4616.
             new("function",  new Regex(
                 $@"^\s*"
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*static\s+)"
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*readonly\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static|readonly)\s+)+"
-              + @"(?<returnType>[\w@?.<>\[\],:\s]+?)\s+(?<name>" + CSharpIdentifierPattern + @")\s*[=;]",
+              + $@"(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*[=;]",
                 RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Plain field (instance, readonly, volatile, plain static, etc.) — kind `property`.
             // Must come AFTER the `const` and `static readonly` patterns (which take priority
