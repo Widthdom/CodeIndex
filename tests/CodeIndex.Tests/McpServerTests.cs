@@ -189,37 +189,46 @@ public partial class McpServerTests : IDisposable
     public async Task DrainInFlightTasksAsync_DiagnosticCountsOnlyUnfinishedRequests_Issue4435()
     {
         var completesOnShutdown = Task.Delay(Timeout.InfiniteTimeSpan, _server.ShutdownTokenForTests);
-        var unfinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var tasks = new List<Task> { completesOnShutdown, unfinished.Task };
+        var firstUnfinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondUnfinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new List<Task> { firstUnfinished.Task, secondUnfinished.Task };
         var previousError = Console.Error;
         using var stderr = new StringWriter();
         Console.SetError(stderr);
 
         try
         {
-            var drain = _server.DrainInFlightTasksAsync(
-                tasks,
-                TimeSpan.Zero,
-                TimeSpan.Zero);
-            await drain.WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                var drain = _server.DrainInFlightTasksAsync(
+                    tasks,
+                    TimeSpan.Zero,
+                    TimeSpan.Zero);
+                await drain.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally
+            {
+                Console.SetError(previousError);
+            }
+
+            Assert.Contains(
+                "Transport teardown has 2 in-flight request(s); cancelling after 0ms grace period.",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "Transport teardown final deadline expired with 2 in-flight request(s) remaining after 0ms post-cancel grace period.",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => completesOnShutdown.WaitAsync(TestDeterminism.DefaultTimeout));
         }
         finally
         {
-            Console.SetError(previousError);
+            firstUnfinished.TrySetResult();
+            secondUnfinished.TrySetResult();
+            await Task.WhenAll(firstUnfinished.Task, secondUnfinished.Task)
+                .WaitAsync(TestDeterminism.DefaultTimeout);
         }
-
-        Assert.Contains(
-            "Transport teardown has 2 in-flight request(s); cancelling after 0ms grace period.",
-            stderr.ToString(),
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Transport teardown final deadline expired with 2 in-flight request(s) remaining after 0ms post-cancel grace period.",
-            stderr.ToString(),
-            StringComparison.Ordinal);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => completesOnShutdown.WaitAsync(TestDeterminism.DefaultTimeout));
-        unfinished.SetResult();
-        await unfinished.Task.WaitAsync(TestDeterminism.DefaultTimeout);
     }
 
     private static bool MethodCallsType(MethodInfo method, Type declaringType)
