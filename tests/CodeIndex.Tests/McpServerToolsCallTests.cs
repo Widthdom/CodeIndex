@@ -3567,9 +3567,11 @@ public partial class McpServerTests
                 PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
                 ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable,
                 GitHelper.GitExecutableEnvironmentVariable);
-            var hooksDir = Path.Combine(_projectRoot, "hooks");
+            using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+                "cdidx_mcp_status_extensions_3735");
             try
             {
+                var hooksDir = Path.Combine(extensionProject.Root, "hooks");
                 windowsGitDirectory = OperatingSystem.IsWindows()
                     ? TestProjectHelper.CreateTrustedWindowsGitDirectory("cdidx_mcp_status_git_3735")
                     : null;

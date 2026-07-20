@@ -15,6 +15,8 @@ namespace CodeIndex.Tests;
 
 internal static class TestProjectHelper
 {
+    internal const string TrustedTestRootEnvironmentVariable = "CDIDX_TEST_TRUSTED_TEMP_ROOT";
+
     internal static string RepeatCsvEntry(string value, int count)
         => RepeatJoinedEntry(value, count, ",");
 
@@ -31,6 +33,14 @@ internal static class TestProjectHelper
     internal static TempProjectScope CreateTempProjectScope(string prefix)
         => new(CreateTempProject(prefix));
 
+    internal static string CreateExecutableExtensionTestProject(string prefix)
+        => OperatingSystem.IsWindows()
+            ? CreateTrustedWindowsTestDirectoryCore(prefix)
+            : CreateTempProject(prefix);
+
+    internal static TempProjectScope CreateExecutableExtensionTestProjectScope(string prefix)
+        => new(CreateExecutableExtensionTestProject(prefix));
+
     internal static DbPathResolution ResolveQueryDataDirWithinWorkspace(string workspacePath)
         => DbPathResolver.ResolveDataDirForQuery(
             workspacePath,
@@ -44,17 +54,26 @@ internal static class TestProjectHelper
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Trusted Windows Git fixtures require Windows.");
 
-        return CreateTrustedWindowsGitDirectoryCore(prefix);
+        return CreateTrustedWindowsTestDirectoryCore(prefix);
     }
 
     [SupportedOSPlatform("windows")]
-    private static string CreateTrustedWindowsGitDirectoryCore(string prefix)
+    private static string CreateTrustedWindowsTestDirectoryCore(string prefix)
     {
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (string.IsNullOrWhiteSpace(userProfile))
-            throw new InvalidOperationException("The current Windows user profile is unavailable.");
+        var trustedRoot = Environment.GetEnvironmentVariable(TrustedTestRootEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(trustedRoot))
+        {
+            trustedRoot = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(trustedRoot))
+                throw new InvalidOperationException("The current Windows user profile is unavailable.");
+        }
+        else if (!Path.IsPathFullyQualified(trustedRoot))
+        {
+            throw new InvalidOperationException(
+                $"{TrustedTestRootEnvironmentVariable} must name an absolute directory.");
+        }
 
-        var directoryPath = Path.Combine(userProfile, $"{prefix}_{Guid.NewGuid():N}");
+        var directoryPath = Path.Combine(Path.GetFullPath(trustedRoot), $"{prefix}_{Guid.NewGuid():N}");
         Directory.CreateDirectory(directoryPath);
 
         using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);

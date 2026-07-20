@@ -786,11 +786,13 @@ public partial class IndexCommandRunnerTests
     public void Run_FullScanAfterHeadChange_WithPostExtractionHooksKeepsSequentialReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_hooks_sequential");
+        using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+            "cdidx_head_changed_hook_extensions_sequential");
         bool? parallelized = null;
         var originalHooksDir = Environment.GetEnvironmentVariable("CDIDX_HOOKS_DIR");
         try
         {
-            var hooksDir = Path.Combine(projectRoot, "hooks");
+            var hooksDir = Path.Combine(extensionProject.Root, "hooks");
             Directory.CreateDirectory(hooksDir);
             File.Copy(typeof(SamplePostExtractionHook).Assembly.Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
             Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", hooksDir);

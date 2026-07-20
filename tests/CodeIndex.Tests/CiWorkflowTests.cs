@@ -176,7 +176,7 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void WindowsTestHostSetup_IsSharedAndBatchesDefenderExclusions()
+    public void WindowsTestHostSetup_SplitsFastAndTrustedTempAndBatchesDefenderExclusions()
     {
         var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
@@ -194,12 +194,21 @@ public class CiWorkflowTests
         AssertContainsAll(
             setupScript,
             "if (-not $env:USERPROFILE)",
-            "$tempRoot = Join-Path $env:USERPROFILE \"cdidx-test-temp\"",
+            "if (-not $env:RUNNER_TEMP)",
+            "$tempRoot = Join-Path $env:RUNNER_TEMP \"cdidx-temp\"",
+            "$trustedTempRoot = Join-Path $env:USERPROFILE \"cdidx-trusted-test-temp\"",
             "\"TMP=$tempRoot\"",
             "\"TEMP=$tempRoot\"",
-            "$tempAcl.SetAccessRuleProtection($true, $false)",
+            "\"CDIDX_TEST_TRUSTED_TEMP_ROOT=$trustedTempRoot\"",
+            "$env:TMP = $tempRoot",
+            "$env:TEMP = $tempRoot",
+            "$env:CDIDX_TEST_TRUSTED_TEMP_ROOT = $trustedTempRoot",
+            "Pinned Windows TMP/TEMP to fast runner storage: $tempRoot",
+            "$trustedTempAcl.SetAccessRuleProtection($true, $false)",
             "[System.Security.AccessControl.FileSystemRights]::FullControl",
-            "Set-Acl -LiteralPath $tempRoot -AclObject $tempAcl",
+            "Set-Acl -LiteralPath $trustedTempRoot -AclObject $trustedTempAcl",
+            "Path = $trustedTempRoot",
+            "Protected current-user root for executable plugin, hook, and Git fixtures.",
             "$path = $_.Path.TrimEnd('\\','/')",
             "Group-Object -Property Path",
             "[string[]]$exclusionPaths = @($exclusions | ForEach-Object { $_.Path })",
@@ -215,7 +224,10 @@ public class CiWorkflowTests
         AssertDoesNotContainAny(
             setupScript,
             "Add-MpPreference -ExclusionPath $entry.Path",
-            "$tempRoot = Join-Path $env:RUNNER_TEMP \"cdidx-temp\"");
+            "$tempRoot = Join-Path $env:USERPROFILE \"cdidx-test-temp\"",
+            "Set-Acl -LiteralPath $tempRoot",
+            "$env:TMP = $trustedTempRoot",
+            "$env:TEMP = $trustedTempRoot");
     }
 
     [Fact]
@@ -434,6 +446,9 @@ public class CiWorkflowTests
             "EnvironmentVariableScope.Capture",
             "TestConsoleLock.Gate",
             "TestProjectHelper",
+            "CreateExecutableExtensionTestProject",
+            "CDIDX_TEST_TRUSTED_TEMP_ROOT",
+            "RUNNER_TEMP",
             ".github/scripts/run-dotnet-tests.ps1",
             ".github/scripts/configure-windows-test-host.ps1",
             "共有状態と並列実行の監査");

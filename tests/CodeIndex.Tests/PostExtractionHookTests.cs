@@ -29,7 +29,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void Discover_LoadsHooksAndAllowsSymbolAndReferenceMutation()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hooks");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hooks");
         try
         {
             var hooksDir = Path.Combine(projectRoot, "hooks");
@@ -65,7 +65,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void Discover_UsesWorkerWithoutParentLoadContext_Issue4600()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-collectible-load");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-collectible-load");
         try
         {
             var hooksDir = Path.Combine(projectRoot, "hooks");
@@ -88,7 +88,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void DiscoveryWorker_TerminatesProcessTreeAfterManifest_Issue4600()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-persistent-discovery-4600");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-persistent-discovery-4600");
         lock (TestConsoleLock.Gate)
         {
             using var persistent = EnvironmentVariableScope.Capture(PersistentDiscoveryWorkerPidPathEnvironmentVariable);
@@ -138,7 +138,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void Discover_IsolatesModuleInitializerAndSeparatesDuplicateHookIds_Issue4600()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-identities-4600");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-identities-4600");
         lock (TestConsoleLock.Gate)
         {
             using var moduleInitializer = EnvironmentVariableScope.Capture(HookIsolationFixtureEnvironment.ModuleInitializerPidPath);
@@ -208,7 +208,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void DiscoveryWorker_EnforcesTimeoutMemoryAndOutputBounds_Issue4600()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-bounds-4600");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-discovery-bounds-4600");
         lock (TestConsoleLock.Gate)
         {
             using var delay = EnvironmentVariableScope.Capture(ModuleInitializerDelayEnvironmentVariable);
@@ -292,7 +292,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void CallbackExceptions_AreDiagnosticsAndDoNotBlockOtherHooks()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-failure");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-failure");
         try
         {
             var hooksDir = Path.Combine(projectRoot, "hooks");
@@ -324,7 +324,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void WorkerConstructionFailure_DisablesHookForCurrentRun()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-ctor-failure");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-ctor-failure");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ThrowingConstructorHookEnvironmentVariable);
@@ -363,7 +363,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void Callbacks_ReuseIsolatedWorkerHookInstance()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-state");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-state");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(StatefulHookEnvironmentVariable);
@@ -397,7 +397,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void CallbackBudgetExceeded_KillsWorkerAndSkipsTimedOutMutation()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-budget");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-budget");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(
@@ -450,7 +450,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void CallbackBudgetExceeded_KillsSlowConstructorAfterLargeRequestIsSent()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-slow-ctor");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-slow-ctor");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(SlowConstructorHookDelayEnvironmentVariable);
@@ -503,7 +503,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void OnSymbolsExtracted_CancellationWhileWaitingForCallback_KillsWorker_Issue3773()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-cancel");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-cancel");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(
@@ -628,7 +628,7 @@ public class PostExtractionHookTests
     [Fact]
     public void DiscoverDefaultMetadata_ReportsAcceptedHooksDirectoryOverride_3415()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-override-accepted");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-override-accepted");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
@@ -736,7 +736,7 @@ public class PostExtractionHookTests
     [Fact]
     public void Discover_CapsHookAssemblyCandidates()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-cap");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-discovery-cap");
         lock (TestConsoleLock.Gate)
         {
             var originalLimit = PostExtractionHookRunner.DiscoveryLimitForTesting;
@@ -882,7 +882,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void Callbacks_TruncateHookMaterializationAndReportDiagnostics_Issue3744()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-materialization-cap");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-materialization-cap");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExpandingHookEnvironmentVariable);
@@ -928,7 +928,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void Discover_SkipsAssembliesAboveTypeInspectionLimit_Issue3790()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-type-cap-3790");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-type-cap-3790");
         lock (TestConsoleLock.Gate)
         {
             var originalLimit = PostExtractionHookRunner.TypeInspectionLimitForTesting;
@@ -959,7 +959,7 @@ public class PostExtractionHookTests
     [ProductionRuntimeFact]
     public void Discover_NoHookAssemblyLeavesNoParentLoadContext_Issue4600()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-no-hook-unload-3790");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-no-hook-unload-3790");
         lock (TestConsoleLock.Gate)
         {
             try

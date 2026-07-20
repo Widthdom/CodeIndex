@@ -55,4 +55,30 @@ public class TestProjectHelperTests
 
         Assert.False(Directory.Exists(projectRoot));
     }
+
+    [Fact]
+    public void CreateExecutableExtensionTestProjectScope_UsesPlatformRootAndDeletesProject()
+    {
+        var configuredRoot = Environment.GetEnvironmentVariable(
+            TestProjectHelper.TrustedTestRootEnvironmentVariable);
+        var expectedParent = OperatingSystem.IsWindows()
+            ? string.IsNullOrWhiteSpace(configuredRoot)
+                ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+                : configuredRoot!
+            : Path.GetTempPath();
+        string projectRoot;
+
+        using (var project = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+                   "cdidx_executable_extension_scope"))
+        {
+            projectRoot = project.Root;
+            Assert.Equal(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(expectedParent)),
+                Directory.GetParent(projectRoot)!.FullName,
+                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+            TestProjectHelper.WriteTextFile(projectRoot, "fixture.dll", "fixture");
+        }
+
+        Assert.False(Directory.Exists(projectRoot));
+    }
 }

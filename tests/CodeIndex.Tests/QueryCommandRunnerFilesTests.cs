@@ -656,10 +656,12 @@ public partial class QueryCommandRunnerTests
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+            using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+                "cdidx_status_hook_metadata_extensions_3142");
             try
             {
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-                var hooksDir = Path.Combine(projectRoot, "hooks");
+                var hooksDir = Path.Combine(extensionProject.Root, "hooks");
                 Directory.CreateDirectory(hooksDir);
                 var hookPath = Path.Combine(hooksDir, "broken.dll");
                 File.WriteAllText(hookPath, "not a real assembly");
@@ -692,10 +694,12 @@ public partial class QueryCommandRunnerTests
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+            using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+                "cdidx_status_hook_identity_extensions_4600");
             try
             {
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-                var hooksDir = Path.Combine(projectRoot, "hooks");
+                var hooksDir = Path.Combine(extensionProject.Root, "hooks");
                 Directory.CreateDirectory(hooksDir);
                 File.Copy(typeof(SamplePostExtractionHook).Assembly.Location, Path.Combine(hooksDir, "status-hook.dll"));
                 env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
@@ -731,10 +735,12 @@ public partial class QueryCommandRunnerTests
             using var env = EnvironmentVariableScope.Capture(
                 PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
                 PostExtractionHookRunner.DiscoveryLimitEnvironmentVariable);
+            using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+                "cdidx_status_hook_cap_extensions_3456");
             try
             {
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-                var hooksDir = Path.Combine(projectRoot, "hooks");
+                var hooksDir = Path.Combine(extensionProject.Root, "hooks");
                 Directory.CreateDirectory(hooksDir);
                 File.WriteAllText(Path.Combine(hooksDir, "a.dll"), "not a real assembly");
                 File.WriteAllText(Path.Combine(hooksDir, "b.dll"), "not a real assembly");
@@ -774,10 +780,12 @@ public partial class QueryCommandRunnerTests
                 PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
                 ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable,
                 GitHelper.GitExecutableEnvironmentVariable);
+            using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+                "cdidx_status_trust_override_extensions_3735");
             try
             {
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-                var hooksDir = Path.Combine(projectRoot, "hooks");
+                var hooksDir = Path.Combine(extensionProject.Root, "hooks");
                 windowsGitDirectory = OperatingSystem.IsWindows()
                     ? TestProjectHelper.CreateTrustedWindowsGitDirectory("cdidx_status_git_3735")
                     : null;
