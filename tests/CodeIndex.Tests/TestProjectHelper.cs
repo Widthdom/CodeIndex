@@ -6,6 +6,7 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -29,6 +30,14 @@ internal static class TestProjectHelper
 
     internal static TempProjectScope CreateTempProjectScope(string prefix)
         => new(CreateTempProject(prefix));
+
+    internal static DbPathResolution ResolveQueryDataDirWithinWorkspace(string workspacePath)
+        => DbPathResolver.ResolveDataDirForQuery(
+            workspacePath,
+            explicitDataDir: null,
+            environmentDataDir: null,
+            xdgDataHome: null,
+            ancestorSearchRoot: workspacePath);
 
     internal static string CreateTrustedWindowsGitDirectory(string prefix)
     {

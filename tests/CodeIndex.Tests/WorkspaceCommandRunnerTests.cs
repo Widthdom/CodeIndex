@@ -774,7 +774,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -803,7 +803,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -839,7 +839,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -873,7 +873,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -905,7 +905,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -937,7 +937,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -972,7 +972,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -998,7 +998,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -1036,7 +1036,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -1058,7 +1058,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
@@ -1110,7 +1110,7 @@ public class WorkspaceCommandRunnerTests
         DbPathResolution? query = null;
         var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            query = TestProjectHelper.ResolveQueryDataDirWithinWorkspace(projectRoot);
             return 0;
         });
 
