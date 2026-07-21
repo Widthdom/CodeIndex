@@ -485,7 +485,8 @@ public partial class McpServer
             ? writer.LoadReusableIndexedFileStats(
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
-                _currentRequestToken.Value)
+                _currentRequestToken.Value,
+                files.Count)
             : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)

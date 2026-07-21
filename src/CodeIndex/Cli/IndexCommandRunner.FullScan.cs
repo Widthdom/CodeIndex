@@ -1401,7 +1401,8 @@ public static partial class IndexCommandRunner
             ? writer.LoadReusableIndexedFileStats(
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                cancellationToken)
+                cancellationToken,
+                initialScanFileCapacity.GetValueOrDefault())
             : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
 

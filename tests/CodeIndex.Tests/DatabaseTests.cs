@@ -3178,32 +3178,39 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void LoadReusableIndexedFileStats_SkipsIncompleteLegacyStats()
+    public void LoadReusableIndexedFileStats_FiltersStaleLanguagesAndMalformedStorageTypes()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        _writer.UpsertFile(new FileRecord
+        var fixtures = new (string Path, string Language)[]
         {
-            Path = "src/null-size.cs",
-            Lang = "csharp",
-            Size = 20,
-            Lines = 2,
-            Modified = modified,
-            Checksum = "null_size_checksum",
-        });
-        _writer.UpsertFile(new FileRecord
+            ("src/valid.cs", "csharp"),
+            ("src/stale.py", "python"),
+            ("src/stale-helper.py", "python"),
+            ("src/null-size.cs", "csharp"),
+            ("src/text-size.cs", "csharp"),
+            ("src/integer-modified.cs", "csharp"),
+            ("src/invalid-modified.cs", "csharp"),
+        };
+        foreach (var fixture in fixtures)
         {
-            Path = "src/invalid-modified.cs",
-            Lang = "csharp",
-            Size = 20,
-            Lines = 2,
-            Modified = modified,
-            Checksum = "invalid_modified_checksum",
-        });
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = fixture.Path,
+                Lang = fixture.Language,
+                Size = 20,
+                Lines = 2,
+                Modified = modified,
+                Checksum = fixture.Path,
+            });
+        }
+        _writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("python"), "0");
 
         using (var command = _db.Connection.CreateCommand())
         {
             command.CommandText = """
                 UPDATE files SET size = NULL WHERE path = 'src/null-size.cs';
+                UPDATE files SET size = 'not-an-integer' WHERE path = 'src/text-size.cs';
+                UPDATE files SET modified = 123 WHERE path = 'src/integer-modified.cs';
                 UPDATE files SET modified = 'not-a-timestamp' WHERE path = 'src/invalid-modified.cs';
                 """;
             command.ExecuteNonQuery();
@@ -3211,10 +3218,14 @@ public class DatabaseTests : IDisposable
 
         var reusableStats = _writer.LoadReusableIndexedFileStats(
             maxSymbolsPerFile: 10,
-            maxReferencesPerFile: 10);
+            maxReferencesPerFile: 10,
+            initialCapacity: fixtures.Length);
 
-        Assert.DoesNotContain("src/null-size.cs", reusableStats.Keys);
-        Assert.DoesNotContain("src/invalid-modified.cs", reusableStats.Keys);
+        var valid = Assert.Single(reusableStats);
+        Assert.Equal("src/valid.cs", valid.Key);
+        Assert.Equal(modified, valid.Value.ModifiedUtc);
+        Assert.Equal(20, valid.Value.Size);
+        Assert.Equal("csharp", valid.Value.Language);
     }
 
     [Fact]

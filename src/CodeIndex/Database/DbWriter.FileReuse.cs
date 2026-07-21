@@ -375,7 +375,8 @@ public partial class DbWriter
     internal IReadOnlyDictionary<string, ReusableIndexedFileStat> LoadReusableIndexedFileStats(
         int maxSymbolsPerFile,
         int maxReferencesPerFile,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int initialCapacity = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ReusableStatSnapshotReadForTesting?.Invoke();
@@ -422,6 +423,8 @@ public partial class DbWriter
                     {generatedSuppressionProjection} AS generated_suppressed
                 FROM files f
                 WHERE f.lang IS NOT NULL
+                  AND typeof(f.modified) = 'text'
+                  AND typeof(f.size) = 'integer'
                   {staleIssuePredicate}
                   AND NOT EXISTS (
                       SELECT 1 FROM symbols
@@ -441,7 +444,8 @@ public partial class DbWriter
                 if (hasIssuesTable)
                     c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
             });
-        var candidates = new List<ReusableIndexedFileStat>();
+        var currentVersionByLanguage = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var reusable = new Dictionary<string, ReusableIndexedFileStat>(initialCapacity, StringComparer.Ordinal);
         try
         {
             cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
@@ -454,20 +458,26 @@ public partial class DbWriter
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (reader.GetValue(2) is not string modified
-                    || !TryParseStoredModifiedUtc(modified, out var modifiedUtc)
-                    || reader.GetValue(3) is not long size)
+                var language = reader.GetString(4);
+                if (!currentVersionByLanguage.TryGetValue(language, out var versionCurrent))
+                {
+                    versionCurrent = SymbolExtractorVersionMatchesCurrent(language);
+                    currentVersionByLanguage.Add(language, versionCurrent);
+                }
+
+                if (!versionCurrent
+                    || !TryParseStoredModifiedUtc(reader.GetString(2), out var modifiedUtc))
                 {
                     continue;
                 }
 
-                candidates.Add(new ReusableIndexedFileStat(
+                var path = reader.GetString(1);
+                reusable[path] = new ReusableIndexedFileStat(
                     reader.GetInt64(0),
-                    reader.GetString(1),
                     modifiedUtc,
-                    size,
-                    reader.GetString(4),
-                    reader.GetInt64(5) != 0));
+                    reader.GetInt64(3),
+                    language,
+                    reader.GetInt64(5) != 0);
             }
             cancellationToken.ThrowIfCancellationRequested();
         }
@@ -478,21 +488,6 @@ public partial class DbWriter
         finally
         {
             ReleaseCommand(cmd);
-        }
-
-        var currentVersionByLanguage = new Dictionary<string, bool>(StringComparer.Ordinal);
-        var reusable = new Dictionary<string, ReusableIndexedFileStat>(candidates.Count, StringComparer.Ordinal);
-        foreach (var candidate in candidates)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!currentVersionByLanguage.TryGetValue(candidate.Language, out var versionCurrent))
-            {
-                versionCurrent = SymbolExtractorVersionMatchesCurrent(candidate.Language);
-                currentVersionByLanguage.Add(candidate.Language, versionCurrent);
-            }
-
-            if (versionCurrent)
-                reusable[candidate.Path] = candidate;
         }
 
         return reusable;
@@ -744,7 +739,6 @@ public partial class DbWriter
 
 internal readonly record struct ReusableIndexedFileStat(
     long FileId,
-    string Path,
     DateTime ModifiedUtc,
     long Size,
     string Language,

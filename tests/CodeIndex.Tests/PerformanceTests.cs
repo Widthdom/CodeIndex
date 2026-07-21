@@ -158,6 +158,49 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void ReusableStatSnapshot_OnePassMaterialization_StaysWithinAllocationBudget()
+    {
+        const int fileCount = 1_024;
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var writer = new DbWriter(_db.Connection);
+        using (var transaction = writer.BeginTransaction())
+        {
+            for (var index = 0; index < fileCount; index++)
+            {
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = $"src/reusable/file{index:D4}.cs",
+                    Lang = "csharp",
+                    Size = index + 1,
+                    Lines = 1,
+                    Modified = modified,
+                    Checksum = $"checksum-{index:D4}",
+                });
+            }
+            transaction.Commit();
+        }
+
+        _ = writer.LoadReusableIndexedFileStats(
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            initialCapacity: fileCount);
+
+        IReadOnlyDictionary<string, ReusableIndexedFileStat>? snapshot = null;
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+            snapshot = writer.LoadReusableIndexedFileStats(
+                maxSymbolsPerFile: 10,
+                maxReferencesPerFile: 10,
+                initialCapacity: fileCount));
+
+        Assert.Equal(fileCount, snapshot!.Count);
+        Assert.True(allocatedBytes < 380_000, $"Reusable stat snapshot allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void SymbolExtraction_CsharpHotPath_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpHotPathFixture(typeCount: 120);
