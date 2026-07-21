@@ -619,6 +619,41 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_GraphNeutralChangeSkipsMutualRecursionRefresh()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_graph_neutral");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            var graphNeutralPath = Path.Combine(projectRoot, "graph-neutral.py");
+            File.WriteAllText(graphNeutralPath, "# text-only source\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+            File.WriteAllText(graphNeutralPath, "# changed text-only source\n");
+            File.SetLastWriteTimeUtc(graphNeutralPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_scanned").GetInt32());
+            Assert.Equal(0, refreshCount);
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_CancelledDuringMutualRecursionRefresh_LeavesReadinessDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_mutual_refresh_cancel");

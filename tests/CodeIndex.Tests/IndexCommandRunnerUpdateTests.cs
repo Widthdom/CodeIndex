@@ -248,6 +248,26 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, deleteJson.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, refreshCount);
             Assert.Equal(0, CountMutualRecursionReferences(dbPath));
+
+            refreshCount = 0;
+            var graphNeutralPath = Path.Combine(projectRoot, "graph-neutral.py");
+            File.WriteAllText(graphNeutralPath, "# text-only source\n");
+
+            var (neutralInsertExitCode, neutralInsertJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "graph-neutral.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, neutralInsertExitCode);
+            Assert.Equal(1, neutralInsertJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, refreshCount);
+
+            File.WriteAllText(graphNeutralPath, "# changed text-only source\n");
+            File.SetLastWriteTimeUtc(graphNeutralPath, DateTime.UtcNow.AddSeconds(2));
+            var (neutralUpdateExitCode, neutralUpdateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "graph-neutral.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, neutralUpdateExitCode);
+            Assert.Equal(1, neutralUpdateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, refreshCount);
         }
         finally
         {

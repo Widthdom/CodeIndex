@@ -2108,8 +2108,9 @@ public class DatabaseTests : IDisposable
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         };
 
-        var id = _writer.UpsertFile(file);
+        var id = _writer.UpsertFile(file, out var referenceIdentityChanged);
         Assert.True(id > 0);
+        Assert.False(referenceIdentityChanged);
     }
 
     [Fact]
@@ -2238,9 +2239,10 @@ public class DatabaseTests : IDisposable
             Lines = 8,
             Checksum = "new",
             Modified = new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
+        }, out var referenceIdentityChanged);
 
         Assert.Equal(fileId, updatedId);
+        Assert.True(referenceIdentityChanged);
         using (var command = _db.Connection.CreateCommand())
         {
             command.Parameters.AddWithValue("@fileId", fileId);

@@ -411,6 +411,7 @@ public partial class McpServer
 
         var indexRunDiagnostics = new List<string>();
         var mcpIndexDiagnostics = new List<McpIndexDiagnostic>();
+        var referenceIdentityContractMatchedBeforeMutation = writer.ReferenceIdentityContractMatchesCurrent();
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
@@ -555,7 +556,7 @@ public partial class McpServer
         HashSet<string>? reusedHotspotFamilyLanguages = null;
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
-        var mutualRecursionRefreshNeeded = !writer.ReferenceIdentityContractMatchesCurrent()
+        var mutualRecursionRefreshNeeded = !referenceIdentityContractMatchedBeforeMutation
             || purged > 0
             || purgedRefs > 0;
         var freshCountFiles = 0L;
@@ -673,9 +674,12 @@ public partial class McpServer
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
                 if (recordRequiresTypeScriptAugmentationRefresh)
                     RequireTypeScriptAugmentationRefresh();
+                var referenceIdentityChanged = false;
                 var fileId = startedWithNoIndexedFiles
                     ? writer.InsertNewFile(record)
-                    : writer.UpsertFile(record);
+                    : writer.UpsertFile(record, out referenceIdentityChanged);
+                if (referenceIdentityChanged)
+                    mutualRecursionRefreshNeeded = true;
                 var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
                 if (generatedSuppressionIssue != null)
                 {
@@ -765,7 +769,8 @@ public partial class McpServer
                         writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, requestToken);
                     else
                         writer.InsertReferences(references, refreshMutualRecursionFlags: false, requestToken);
-                    mutualRecursionRefreshNeeded = true;
+                    if (symbols.Count > 0 || references.Count > 0)
+                        mutualRecursionRefreshNeeded = true;
                     committedChunkCount = chunks.Count;
                     committedSymbolCount = symbols.Count;
                     committedReferenceCount = references.Count;
@@ -812,9 +817,12 @@ public partial class McpServer
                     using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
                     if (skippedRecordRequiresTypeScriptAugmentationRefresh)
                         RequireTypeScriptAugmentationRefresh();
+                    var referenceIdentityChanged = false;
                     var fileId = startedWithNoIndexedFiles
                         ? writer.InsertNewFile(skippedRecord)
-                        : writer.UpsertFile(skippedRecord);
+                        : writer.UpsertFile(skippedRecord, out referenceIdentityChanged);
+                    if (referenceIdentityChanged)
+                        mutualRecursionRefreshNeeded = true;
                     writer.InsertChunks([], requestToken);
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferences([], requestToken);
@@ -845,6 +853,7 @@ public partial class McpServer
                     {
                         using var txn = writer.BeginTransaction(requestToken, "mcp index delete missing file");
                         writer.DeleteFileByPath(relativePath);
+                        mutualRecursionRefreshNeeded = true;
                         csharpMetadataTargetsNeedRefresh = true;
                         RequireTypeScriptAugmentationRefresh();
                         WriteProjectRootOnce();
@@ -917,6 +926,8 @@ public partial class McpServer
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
             writer.MarkIndexReaderContractsReady(symbolsOnlyGraphOmitted: false);
+            if (!mutualRecursionRefreshNeeded && referenceIdentityContractMatchedBeforeMutation)
+                writer.MarkReferenceIdentityContractReady();
             csharpSymbolNameReadyAfter = true;
             if (hasCSharpFilesAfter)
             {

@@ -166,8 +166,9 @@ public static partial class IndexCommandRunner
             && (!projectRootWritten || !typeScriptAugmentationVersionMatchesCurrent);
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
+        var referenceIdentityContractMatchedBeforeMutation = writer.ReferenceIdentityContractMatchesCurrent();
         var mutualRecursionRefreshNeeded = !options.SymbolsOnly
-            && !writer.ReferenceIdentityContractMatchesCurrent();
+            && !referenceIdentityContractMatchedBeforeMutation;
         var purgedRefs = 0;
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages(projectRoot);
@@ -864,9 +865,15 @@ public static partial class IndexCommandRunner
                     if (projectRootWritten)
                         stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
                     if (stalePurged > 0)
+                    {
                         RequireTypeScriptAugmentationRefresh();
+                        if (!options.SymbolsOnly)
+                            mutualRecursionRefreshNeeded = true;
+                    }
                     WriteProjectRootOnce();
-                    var fileId = writer.UpsertFile(record);
+                    var fileId = writer.UpsertFile(record, out var referenceIdentityChanged);
+                    if (!options.SymbolsOnly && referenceIdentityChanged)
+                        mutualRecursionRefreshNeeded = true;
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
                     currentUpdatePhase = "chunking";
                     var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
@@ -888,7 +895,6 @@ public static partial class IndexCommandRunner
                         fileBatchMarked = false;
                         updated++;
                         ftsMutated = true;
-                        mutualRecursionRefreshNeeded = true;
                         WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, generated-code extraction skipped)");
                         continue;
                     }
@@ -923,7 +929,6 @@ public static partial class IndexCommandRunner
                         fileBatchMarked = false;
                         updated++;
                         ftsMutated = true;
-                        mutualRecursionRefreshNeeded = true;
                         WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
                         continue;
                     }
@@ -945,7 +950,6 @@ public static partial class IndexCommandRunner
                         fileBatchMarked = false;
                         updated++;
                         ftsMutated = true;
-                        mutualRecursionRefreshNeeded = true;
                         WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
                         continue;
                     }
@@ -1001,7 +1005,8 @@ public static partial class IndexCommandRunner
 
                     updated++;
                     ftsMutated = true;
-                    mutualRecursionRefreshNeeded = true;
+                    if (!options.SymbolsOnly && (symbols.Count > 0 || references.Count > 0))
+                        mutualRecursionRefreshNeeded = true;
                     UpdateFileCommittedForTesting?.Invoke(updated + removed, targetPaths.Count);
                     ThrowIfUpdateCancelled();
                     WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
@@ -1037,8 +1042,12 @@ public static partial class IndexCommandRunner
                             stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
                         if (skippedRecord.Lang == "typescript" || stalePurged > 0)
                             RequireTypeScriptAugmentationRefresh();
+                        if (!options.SymbolsOnly && stalePurged > 0)
+                            mutualRecursionRefreshNeeded = true;
                         WriteProjectRootOnce();
-                        var fileId = writer.UpsertFile(skippedRecord);
+                        var fileId = writer.UpsertFile(skippedRecord, out var referenceIdentityChanged);
+                        if (!options.SymbolsOnly && referenceIdentityChanged)
+                            mutualRecursionRefreshNeeded = true;
                         writer.InsertChunks([], cancellationToken);
                         writer.InsertSymbols([], cancellationToken);
                         writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
@@ -1048,7 +1057,6 @@ public static partial class IndexCommandRunner
 
                         updated++;
                         ftsMutated = true;
-                        mutualRecursionRefreshNeeded = true;
                         continue;
                     }
 
@@ -1067,8 +1075,12 @@ public static partial class IndexCommandRunner
                             stalePurged += writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
                         if (skippedRecord.Lang == "typescript" || stalePurged > 0)
                             RequireTypeScriptAugmentationRefresh();
+                        if (!options.SymbolsOnly && stalePurged > 0)
+                            mutualRecursionRefreshNeeded = true;
                         WriteProjectRootOnce();
-                        var fileId = writer.UpsertFile(skippedRecord);
+                        var fileId = writer.UpsertFile(skippedRecord, out var referenceIdentityChanged);
+                        if (!options.SymbolsOnly && referenceIdentityChanged)
+                            mutualRecursionRefreshNeeded = true;
                         writer.InsertChunks([], cancellationToken);
                         writer.InsertSymbols([], cancellationToken);
                         writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
@@ -1087,7 +1099,6 @@ public static partial class IndexCommandRunner
 
                         updated++;
                         ftsMutated = true;
-                        mutualRecursionRefreshNeeded = true;
                         continue;
                     }
 
@@ -1275,6 +1286,12 @@ public static partial class IndexCommandRunner
             {
                 writer.MarkGraphReady();
                 graphTableAvailableAfter = true;
+            }
+            if (!options.SymbolsOnly
+                && !mutualRecursionRefreshNeeded
+                && referenceIdentityContractMatchedBeforeMutation)
+            {
+                writer.MarkReferenceIdentityContractReady();
             }
             if ((priorReadiness & DbContext.IssuesReadyFlag) != 0)
             {

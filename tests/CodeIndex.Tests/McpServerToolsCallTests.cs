@@ -8212,6 +8212,19 @@ public partial class McpServerTests
             using var candidateCommand = verification.Connection.CreateCommand();
             candidateCommand.CommandText = "SELECT COUNT(*) FROM symbol_reference_candidates";
             Assert.True((long)candidateCommand.ExecuteScalar()! > 0);
+
+            refreshCount = 0;
+            var graphNeutralPath = Path.Combine(fixtureDir, "graph-neutral.py");
+            File.WriteAllText(graphNeutralPath, "# text-only source\n");
+            var neutralInsertResponse = CallIndex(server, fixtureDir);
+            Assert.False(neutralInsertResponse["result"]?["isError"]?.GetValue<bool>() ?? false, neutralInsertResponse.ToJsonString());
+            Assert.Equal(0, refreshCount);
+
+            File.WriteAllText(graphNeutralPath, "# changed text-only source\n");
+            File.SetLastWriteTimeUtc(graphNeutralPath, DateTime.UtcNow.AddSeconds(2));
+            var neutralUpdateResponse = CallIndex(server, fixtureDir);
+            Assert.False(neutralUpdateResponse["result"]?["isError"]?.GetValue<bool>() ?? false, neutralUpdateResponse.ToJsonString());
+            Assert.Equal(0, refreshCount);
         }
         finally
         {

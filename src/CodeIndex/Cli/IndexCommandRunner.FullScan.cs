@@ -1962,6 +1962,8 @@ public static partial class IndexCommandRunner
                                 ftsMutated = true;
                                 csharpMetadataTargetsNeedRefresh = true;
                                 RequireTypeScriptAugmentationRefresh();
+                                if (!options.SymbolsOnly)
+                                    mutualRecursionRefreshNeeded = true;
                             }
                             skipped++;
                             processed++;
@@ -2006,11 +2008,16 @@ public static partial class IndexCommandRunner
                             {
                                 ftsMutated = true;
                                 csharpMetadataTargetsNeedRefresh = true;
+                                if (!options.SymbolsOnly)
+                                    mutualRecursionRefreshNeeded = true;
                             }
                         }
+                        var referenceIdentityChanged = false;
                         var fileId = startedWithNoIndexedFiles
                             ? writer.InsertNewFile(record)
-                            : writer.UpsertFile(record);
+                            : writer.UpsertFile(record, out referenceIdentityChanged);
+                        if (!options.SymbolsOnly && referenceIdentityChanged)
+                            mutualRecursionRefreshNeeded = true;
                         ftsMutated = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                         indexFilePhase = "chunking";
@@ -2194,7 +2201,7 @@ public static partial class IndexCommandRunner
                             writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, cancellationToken);
                         else
                             writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
-                        if (!options.SymbolsOnly)
+                        if (!options.SymbolsOnly && (symbols.Count > 0 || references.Count > 0))
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
                         indexFilePhase = "validating";

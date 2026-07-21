@@ -69,6 +69,16 @@ public partial class DbWriter
     /// 再インデックス前に古いチャンク/シンボルをクリーンアップする。
     /// </summary>
     public long UpsertFile(FileRecord file, bool cleanExistingData = true)
+        => UpsertFile(file, out _, cleanExistingData);
+
+    /// <summary>
+    /// Upsert a file record and report whether cleanup changed reference-identity rows.
+    /// ファイルレコードをUPSERTし、cleanupでreference identity行が変化したかも返す。
+    /// </summary>
+    public long UpsertFile(
+        FileRecord file,
+        out bool referenceIdentityChanged,
+        bool cleanExistingData = true)
     {
         // ON CONFLICT DO UPDATE preserves the existing row ID
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
@@ -120,8 +130,7 @@ public partial class DbWriter
         // harmless no-op delete. Fresh bulk loads use InsertNewFile and skip this path.
         // RETURNING reader と prepared command を解放してから cleanup command を借りる。
         // 既存行は同じIDを保ち、新規行のDELETEはno-op。fresh bulk loadはInsertNewFileを使う。
-        if (cleanExistingData)
-            DeleteFileData(fileId);
+        referenceIdentityChanged = cleanExistingData && DeleteFileData(fileId);
 
         return fileId;
     }
@@ -175,12 +184,13 @@ public partial class DbWriter
     /// Delete old chunks and symbols for a file before re-indexing.
     /// 再インデックス前にファイルの古いチャンクとシンボルを削除する。
     /// </summary>
-    public void DeleteFileData(long fileId)
+    public bool DeleteFileData(long fileId)
     {
         using var transaction = !IsInTransaction() ? BeginTransaction() : null;
         var dependentReferenceFileIds = GetReferenceFilesDependingOnLinesOwnedBy(fileId);
         var hasIdentityRows = HasReferenceIdentityRowsForFile(fileId);
-        if (hasIdentityRows || dependentReferenceFileIds.Count > 0)
+        var referenceIdentityChanged = hasIdentityRows || dependentReferenceFileIds.Count > 0;
+        if (referenceIdentityChanged)
             InvalidateReferenceIdentityContractForMutation();
 
         // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
@@ -211,6 +221,7 @@ public partial class DbWriter
         RefreshHotspotReferenceCounts(dependentReferenceFileIds, CancellationToken.None);
         RestoreHotspotReferenceAggregateReady(aggregateWasReady);
         transaction?.Commit();
+        return referenceIdentityChanged;
     }
 
     private HashSet<long> GetReferenceFilesDependingOnLinesOwnedBy(long fileId)
