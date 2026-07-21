@@ -48,6 +48,7 @@ public partial class DbReader : IDisposable
     private static readonly Regex CSharpUsingAliasImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>[^\s=;]+)\s*=\s*(?<target>[^;]+)", RegexOptions.Compiled);
     private static readonly Regex CSharpUsingNamespaceImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)", RegexOptions.Compiled);
     private static readonly IReadOnlyDictionary<string, string> QueryLanguageAliases = BuildQueryLanguageAliases();
+    private static readonly AsyncLocal<Action<IReadOnlyList<string>>?> ScopedHotspotFamilyReadinessBatchForTesting = new();
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
     private readonly bool _isReadOnly;
@@ -104,6 +105,11 @@ public partial class DbReader : IDisposable
     public bool IncludeGenerated { get; set; }
     private static readonly AsyncLocal<bool> IncludeGeneratedScope = new();
     private static readonly AsyncLocal<bool> GeneratedColumnAvailableScope = new();
+    internal static Action<IReadOnlyList<string>>? HotspotFamilyReadinessBatchForTesting
+    {
+        get => ScopedHotspotFamilyReadinessBatchForTesting.Value;
+        set => ScopedHotspotFamilyReadinessBatchForTesting.Value = value;
+    }
 
     public T RunWithGeneratedScope<T>(Func<T> action)
     {
@@ -185,6 +191,7 @@ public partial class DbReader : IDisposable
     // globally disabling families for unrelated marker types.
     // authoritative な hotspot family semantics を保持する言語集合。
     internal readonly HashSet<string> _hotspotFamilyReadyLanguages;
+    private readonly HashSet<string> _incompleteHotspotFamilyLanguages;
     // Issue #1515: forward-compat sentinel. `_indexWriterVersion` is the cdidx version
     // string the writer last stamped (null on legacy DBs). `_indexNewerThanReader` is
     // true when any persisted numeric contract version exceeds this binary's compiled
@@ -621,7 +628,8 @@ public partial class DbReader : IDisposable
                 TryGetMetaString(_conn, DbContext.ReferenceIdentityContractVersionMetaKey),
                 DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal);
-        _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
+        (_hotspotFamilyReadyLanguages, _incompleteHotspotFamilyLanguages) =
+            LoadHotspotFamilyReadiness(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
         // repo is untouched, which would flip trust on prematurely. Only an explicit
@@ -820,39 +828,9 @@ public partial class DbReader : IDisposable
 
         return string.IsNullOrWhiteSpace(fingerprint)
             ? DegradationReasonCodes.HotspotFamilyDisabledAtIndexTime
-            : HasIncompleteHotspotFamilyRows(lang)
+            : _incompleteHotspotFamilyLanguages.Contains(lang)
                 ? DegradationReasonCodes.HotspotFamilyRowsIncomplete
                 : DegradationReasonCodes.HotspotFamilyMetadataStale;
-    }
-
-    private bool HasIncompleteHotspotFamilyRows(string lang)
-    {
-        if (!_symbolColumns.Contains("family_key"))
-            return true;
-
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT EXISTS(
-                SELECT 1
-                FROM symbols s
-                JOIN files f ON f.id = s.file_id
-                WHERE f.lang = @lang
-                  AND s.name IS NOT NULL
-                  AND s.family_key IS NULL
-                  AND EXISTS (
-                      SELECT 1
-                      FROM symbols s2
-                      JOIN files f2 ON f2.id = s2.file_id
-                      WHERE f2.lang = f.lang
-                        AND s2.name = s.name
-                        AND s2.kind = s.kind
-                        AND COALESCE(s2.container_qualified_name, '') = COALESCE(s.container_qualified_name, '')
-                        AND s2.family_key IS NOT NULL
-                  )
-                LIMIT 1)";
-        SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        var raw = cmd.ExecuteScalar();
-        return raw is long l ? l != 0 : raw is int i && i != 0;
     }
 
     public Dictionary<string, Dictionary<string, LanguageReadinessSignal>> GetLanguageReadiness()
@@ -997,12 +975,14 @@ public partial class DbReader : IDisposable
         return langs;
     }
 
-    private HashSet<string> LoadHotspotFamilyReadyLanguages(SqliteConnection conn)
+    private (HashSet<string> Ready, HashSet<string> Incomplete) LoadHotspotFamilyReadiness(SqliteConnection conn)
     {
         var readyLangs = new HashSet<string>(StringComparer.Ordinal);
+        var incompleteLangs = new HashSet<string>(StringComparer.Ordinal);
         if (!_symbolColumns.Contains("family_key") || !_symbolColumns.Contains("container_qualified_name"))
-            return readyLangs;
+            return (readyLangs, incompleteLangs);
 
+        var candidateLangs = new List<string>();
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
             var raw = TryGetMetaString(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang));
@@ -1011,14 +991,70 @@ public partial class DbReader : IDisposable
                 && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
                 && version == DbContext.HotspotFamilyVersion
                 && !string.IsNullOrWhiteSpace(fingerprint)
-                && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint)
-                && !HasIncompleteHotspotFamilyRows(lang))
+                && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint))
             {
-                readyLangs.Add(lang);
+                // Preserve the long-lived-reader contract: a current stamp for a language
+                // absent at construction remains ready if rows appear later on the same
+                // connection. Physical completeness only needs validation for languages
+                // that already have indexed files.
+                // reader 構築後に同一 connection へ追加される言語向けの readiness は保持し、
+                // 物理 completeness scan は構築時に file が存在する言語だけへ限定する。
+                if (_indexedHotspotFamilyLanguages.Contains(lang))
+                    candidateLangs.Add(lang);
+                else
+                    readyLangs.Add(lang);
             }
         }
 
-        return readyLangs;
+        if (candidateLangs.Count == 0)
+            return (readyLangs, incompleteLangs);
+
+        HotspotFamilyReadinessBatchForTesting?.Invoke(candidateLangs);
+
+        // Detect every mixed NULL/non-NULL family in one grouped scan. The previous
+        // correlated EXISTS probe rescanned symbols for every stamped language (including
+        // languages absent from the workspace), making reader construction grow toward
+        // O(language-count * symbol-count^2) on large indexes.
+        // NULL/non-NULL が混在する family を全言語まとめて一度の group scan で検出する。
+        // 旧 correlated EXISTS は未使用言語まで symbols を反復走査していた。
+        using (var cmd = conn.CreateCommand())
+        {
+            var parameterNames = new string[candidateLangs.Count];
+            for (var index = 0; index < candidateLangs.Count; index++)
+            {
+                var parameterName = $"@hotspotReadyLang{index}";
+                parameterNames[index] = parameterName;
+                SqliteCommandPolicy.Add(cmd, parameterName, candidateLangs[index]);
+            }
+            cmd.CommandText = $"""
+                SELECT DISTINCT grouped.lang
+                FROM (
+                    SELECT f.lang
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
+                    WHERE f.lang IN ({string.Join(", ", parameterNames)})
+                      AND s.name IS NOT NULL
+                    GROUP BY
+                        f.lang,
+                        s.name,
+                        s.kind,
+                        COALESCE(s.container_qualified_name, '')
+                    HAVING COUNT(s.family_key) > 0
+                       AND COUNT(s.family_key) < COUNT(*)
+                ) grouped
+                """;
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                incompleteLangs.Add(reader.GetString(0));
+        }
+
+        foreach (var lang in candidateLangs)
+        {
+            if (!incompleteLangs.Contains(lang))
+                readyLangs.Add(lang);
+        }
+
+        return (readyLangs, incompleteLangs);
     }
 
     /// <summary>

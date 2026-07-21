@@ -1391,7 +1391,7 @@ public static partial class IndexCommandRunner
                 removed,
                 memoryTimelineForStamp,
                 indexRunDiagnostics,
-                new DbReader(writer.Connection).GetReferenceExtractionCapHits());
+                writer.GetReferenceExtractionCapHits());
         }
         stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(memorySamples);

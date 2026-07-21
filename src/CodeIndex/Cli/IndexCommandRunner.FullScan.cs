@@ -2521,7 +2521,7 @@ public static partial class IndexCommandRunner
                 purged,
                 memoryTimelineForStamp,
                 indexRunDiagnostics,
-                new DbReader(writer.Connection).GetReferenceExtractionCapHits());
+                writer.GetReferenceExtractionCapHits());
         }
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();

@@ -3081,6 +3081,44 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetReferenceExtractionCapHits_ReadsInsideActiveWriterTransaction()
+    {
+        var file = new FileRecord
+        {
+            Path = "src/reference-cap.py",
+            Lang = "python",
+            Size = 20,
+            Lines = 2,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "reference_cap_checksum",
+        };
+        var fileId = _writer.UpsertFile(file);
+
+        using (var transaction = _writer.BeginTransaction())
+        {
+            _writer.InsertIssues(fileId,
+            [
+                new FileIssue
+                {
+                    Path = file.Path,
+                    Kind = ReferenceExtractor.ReferenceSafetyCapDiagnosticKinds[0],
+                    Line = 1,
+                    Message = "reference extraction safety cap reached",
+                },
+            ]);
+
+            var summary = _writer.GetReferenceExtractionCapHits();
+
+            Assert.Equal(1, summary.HitCount);
+            Assert.Equal(1, summary.AffectedFileCount);
+            Assert.Equal(file.Path, Assert.Single(summary.Files).File);
+            transaction.Commit();
+        }
+
+        Assert.Equal(1, _writer.GetReferenceExtractionCapHits().HitCount);
+    }
+
+    [Fact]
     public void LoadReusableIndexedFileStats_SkipsIncompleteLegacyStats()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);

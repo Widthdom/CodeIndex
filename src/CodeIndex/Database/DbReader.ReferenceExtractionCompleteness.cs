@@ -1,5 +1,6 @@
 using CodeIndex.Indexer;
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
 
@@ -11,11 +12,17 @@ public partial class DbReader
     private ReferenceExtractionCapHitSummary? _referenceExtractionCapHits;
 
     public ReferenceExtractionCapHitSummary GetReferenceExtractionCapHits()
-        => _referenceExtractionCapHits ??= ReadReferenceExtractionCapHits();
+        => _referenceExtractionCapHits ??= ReadReferenceExtractionCapHits(
+            _conn,
+            _hasIssuesTable,
+            transaction: null);
 
-    private ReferenceExtractionCapHitSummary ReadReferenceExtractionCapHits()
+    internal static ReferenceExtractionCapHitSummary ReadReferenceExtractionCapHits(
+        SqliteConnection connection,
+        bool hasIssuesTable,
+        SqliteTransaction? transaction)
     {
-        if (!_hasIssuesTable)
+        if (!hasIssuesTable)
         {
             return new ReferenceExtractionCapHitSummary
             {
@@ -25,7 +32,7 @@ public partial class DbReader
             };
         }
 
-        using var totalsCommand = CreateReferenceExtractionCapHitCommand("""
+        using var totalsCommand = CreateReferenceExtractionCapHitCommand(connection, transaction, """
             SELECT COUNT(*), COUNT(DISTINCT fi.file_id)
             FROM file_issues fi
             WHERE fi.kind IN ({0})
@@ -44,7 +51,7 @@ public partial class DbReader
             return EmptyReferenceExtractionCapHitSummary();
 
         var reasons = new List<string>();
-        using (var reasonCommand = CreateReferenceExtractionCapHitCommand("""
+        using (var reasonCommand = CreateReferenceExtractionCapHitCommand(connection, transaction, """
             SELECT fi.kind
             FROM file_issues fi
             WHERE fi.kind IN ({0})
@@ -58,7 +65,7 @@ public partial class DbReader
         }
 
         var files = new List<ReferenceExtractionFileCapHits>();
-        using (var fileCommand = CreateReferenceExtractionCapHitCommand("""
+        using (var fileCommand = CreateReferenceExtractionCapHitCommand(connection, transaction, """
             WITH affected_files AS (
                 SELECT fi.file_id, MIN(fi.id) AS first_issue_id
                 FROM file_issues fi
@@ -129,9 +136,14 @@ public partial class DbReader
         FileLimit = ReferenceExtractionCapHitFileLimit,
     };
 
-    private Microsoft.Data.Sqlite.SqliteCommand CreateReferenceExtractionCapHitCommand(string sqlTemplate)
+    private static SqliteCommand CreateReferenceExtractionCapHitCommand(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string sqlTemplate)
     {
-        var command = _conn.CreateCommand();
+        var command = connection.CreateCommand();
+        if (transaction != null)
+            command.Transaction = transaction;
         var parameterNames = new string[ReferenceExtractor.ReferenceSafetyCapDiagnosticKinds.Count];
         for (var index = 0; index < parameterNames.Length; index++)
         {

@@ -2019,6 +2019,61 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetHotspotFamilySignal_GroupedReadinessDetectsPartialRowsAcrossLanguages()
+    {
+        InsertIndexedFile("src/csharp/Api.Part1.cs", "csharp",
+            "public partial class Api { public void Run() { } }",
+            familyScopeKey: "csharp-fixture");
+        InsertIndexedFile("src/csharp/Api.Part2.cs", "csharp",
+            "public partial class Api { public void Run(int value) { } }",
+            familyScopeKey: "csharp-fixture");
+        InsertIndexedFile("src/vb/Api.Part1.vb", "vb",
+            "Partial Public Class Api\nPublic Sub Run()\nEnd Sub\nEnd Class",
+            familyScopeKey: "vb-fixture");
+        InsertIndexedFile("src/vb/Api.Part2.vb", "vb",
+            "Partial Public Class Api\nPublic Sub Run(value As Integer)\nEnd Sub\nEnd Class",
+            familyScopeKey: "vb-fixture");
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE symbols
+                SET family_key = NULL
+                WHERE file_id IN (
+                    SELECT id
+                    FROM files
+                    WHERE path IN ('src/csharp/Api.Part2.cs', 'src/vb/Api.Part2.vb')
+                )
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var readinessBatches = new List<string[]>();
+        var previousReadinessBatchHook = DbReader.HotspotFamilyReadinessBatchForTesting;
+        try
+        {
+            DbReader.HotspotFamilyReadinessBatchForTesting = languages =>
+                readinessBatches.Add(languages.OrderBy(value => value, StringComparer.Ordinal).ToArray());
+            using var reader = new DbReader(_db.Connection);
+            var csharpSignal = reader.GetHotspotFamilySignal("csharp");
+            var vbSignal = reader.GetHotspotFamilySignal("vb");
+
+            Assert.True(csharpSignal.Relevant);
+            Assert.False(csharpSignal.Ready);
+            Assert.Contains("partial_family_key_population=csharp", csharpSignal.DegradedReason);
+            Assert.True(vbSignal.Relevant);
+            Assert.False(vbSignal.Ready);
+            Assert.Contains("partial_family_key_population=vb", vbSignal.DegradedReason);
+        }
+        finally
+        {
+            DbReader.HotspotFamilyReadinessBatchForTesting = previousReadinessBatchHook;
+        }
+
+        Assert.Equal(["csharp", "vb"], Assert.Single(readinessBatches));
+    }
+
+    [Fact]
     public void GetStatus_ExposesPerLanguageReadinessMap()
     {
         InsertIndexedFile("src/Api.Part1.cs", "csharp",

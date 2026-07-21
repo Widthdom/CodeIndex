@@ -1019,8 +1019,7 @@ public partial class McpServer
                         mcpIndexDiagnostics,
                         authorizedRoot.EnsureAuthorizedEntry,
                         knownReadableFileSizes);
-            using var referenceExtractionReader = new DbReader(writer.Connection);
-            var referenceExtractionCapHits = referenceExtractionReader.GetReferenceExtractionCapHits();
+            var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits();
             writer.SetMetaValues(
                 (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),
                 (DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
