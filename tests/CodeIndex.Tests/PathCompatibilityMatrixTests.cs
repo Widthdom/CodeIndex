@@ -131,6 +131,21 @@ public sealed class PathCompatibilityMatrixTests
         Assert.False(CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(target));
     }
 
+    [Fact]
+    public void CaseProbeMatrix_SnapshotOverloadMatchesLegacyEnumeration()
+    {
+        using var workspace = MatrixWorkspace.Create("cdidx_case_probe_snapshot");
+        var target = workspace.FullPath("target");
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "dockerfile"), "FROM scratch\n");
+        var entries = Directory.EnumerateFileSystemEntries(target).ToArray();
+
+        var legacyResult = CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(target);
+        var snapshotResult = CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(target, entries);
+
+        Assert.Equal(legacyResult, snapshotResult);
+    }
+
     public static TheoryData<string, string, string, string> LongPathCases()
     {
         var data = new TheoryData<string, string, string, string>();

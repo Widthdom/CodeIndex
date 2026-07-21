@@ -58,6 +58,7 @@ public partial class FileIndexer
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
     private readonly Func<string, bool?> _directoryIgnoreCaseProbe;
+    private readonly bool _usesDefaultDirectoryIgnoreCaseProbe;
     private readonly Func<string, IEnumerable<string>>? _enumerateFilesForTesting;
     private readonly Func<string, IEnumerable<string>> _enumerateFileSystemEntries;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
@@ -202,6 +203,7 @@ public partial class FileIndexer
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
+        _usesDefaultDirectoryIgnoreCaseProbe = directoryIgnoreCaseProbe is null;
         _directoryIgnoreCaseProbe = directoryIgnoreCaseProbe ?? ProbeExistingDirectoryIgnoreCase;
         _enumerateFilesForTesting = enumerateFiles;
         _enumerateFileSystemEntries = enumerateFileSystemEntries ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)));

@@ -247,6 +247,172 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_DefaultCaseProbeSharesOneEntrySnapshotPerDirectory()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-entry-snapshot");
+        var tempDir = project.Root;
+        var childDir = Directory.CreateDirectory(Path.Combine(tempDir, "src")).FullName;
+        TestProjectHelper.WriteTextFile(tempDir, "root.cs", "class RootSnapshotFixture { }\n");
+        TestProjectHelper.WriteTextFile(tempDir, "src/child.cs", "class ChildSnapshotFixture { }\n");
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        IEnumerable<string> EnumerateEntries(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            enumerationCounts[fullPath] = enumerationCounts.GetValueOrDefault(fullPath) + 1;
+            return Directory.EnumerateFileSystemEntries(directory);
+        }
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            enumerateFileSystemEntries: EnumerateEntries).ScanFilesDetailed();
+
+        Assert.Equal(["root.cs", "src/child.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        Assert.Equal(2, enumerationCounts.Count);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(childDir)]);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DefaultCaseProbeUsesTheInjectedEntrySnapshot()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-case-entry-snapshot");
+        var tempDir = project.Root;
+        var existingVariant = TestProjectHelper.WriteTextFile(tempDir, "probeA", "probe\n");
+        var sourceFile = TestProjectHelper.WriteTextFile(tempDir, "source.cs", "class SnapshotCaseProbeFixture { }\n");
+        var snapshotSpelling = Path.Combine(tempDir, "probea");
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: true,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            enumerateFileSystemEntries: _ => [snapshotSpelling, sourceFile]).ScanFilesDetailed();
+
+        Assert.Equal(["source.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        Assert.DoesNotContain(result.Errors, error =>
+            error.Path == string.Empty
+            && error.Message.Contains("case-sensitivity differs", StringComparison.OrdinalIgnoreCase));
+        Assert.True(File.Exists(existingVariant));
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_CustomDirectoryCaseProbeRemainsAuthoritativeAndRunsOncePerDirectory()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-custom-case-probe");
+        var tempDir = project.Root;
+        var childDir = Directory.CreateDirectory(Path.Combine(tempDir, "src")).FullName;
+        TestProjectHelper.WriteTextFile(tempDir, "root.cs", "class RootCustomProbeFixture { }\n");
+        TestProjectHelper.WriteTextFile(tempDir, "src/child.cs", "class ChildCustomProbeFixture { }\n");
+        var probeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        bool? ProbeDirectory(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            probeCounts[fullPath] = probeCounts.GetValueOrDefault(fullPath) + 1;
+            return false;
+        }
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: ProbeDirectory).ScanFilesDetailed();
+
+        Assert.Equal(["root.cs", "src/child.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        Assert.Equal(2, probeCounts.Count);
+        Assert.Equal(1, probeCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, probeCounts[Path.GetFullPath(childDir)]);
+        Assert.DoesNotContain(result.Errors, error =>
+            error.Message.Contains("case-sensitivity differs", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_EntrySnapshotEnumerationFailureReportsOneErrorWithoutCaseWarning()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-entry-snapshot-failure");
+        var tempDir = project.Root;
+        var blockedDir = Directory.CreateDirectory(Path.Combine(tempDir, "blocked")).FullName;
+        TestProjectHelper.WriteTextFile(tempDir, "root.cs", "class SnapshotFailureFixture { }\n");
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var probeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        IEnumerable<string> EnumerateEntries(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            enumerationCounts[fullPath] = enumerationCounts.GetValueOrDefault(fullPath) + 1;
+            if (fullPath == Path.GetFullPath(blockedDir))
+                throw new UnauthorizedAccessException("blocked snapshot");
+            return Directory.EnumerateFileSystemEntries(directory);
+        }
+
+        bool? ProbeDirectory(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            probeCounts[fullPath] = probeCounts.GetValueOrDefault(fullPath) + 1;
+            return false;
+        }
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: ProbeDirectory,
+            enumerateFileSystemEntries: EnumerateEntries).ScanFilesDetailed();
+
+        Assert.Equal(["root.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        var error = Assert.Single(result.Errors);
+        Assert.Equal("blocked", error.Path);
+        Assert.Equal("Could not scan directory due to permissions.", error.Message);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(blockedDir)]);
+        Assert.Equal(1, probeCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, probeCounts[Path.GetFullPath(blockedDir)]);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DefaultCaseProbeEnumerationFailureReportsOneErrorWithoutCaseWarning()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-default-entry-snapshot-failure");
+        var tempDir = project.Root;
+        var blockedDir = Directory.CreateDirectory(Path.Combine(tempDir, "blocked")).FullName;
+        TestProjectHelper.WriteTextFile(tempDir, "root.cs", "class DefaultSnapshotFailureFixture { }\n");
+        var rootIgnoreCase = CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(tempDir) ?? false;
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        IEnumerable<string> EnumerateEntries(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            enumerationCounts[fullPath] = enumerationCounts.GetValueOrDefault(fullPath) + 1;
+            if (fullPath == Path.GetFullPath(blockedDir))
+                throw new UnauthorizedAccessException("blocked default snapshot");
+            return Directory.EnumerateFileSystemEntries(directory);
+        }
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: rootIgnoreCase,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            enumerateFileSystemEntries: EnumerateEntries).ScanFilesDetailed();
+
+        Assert.Equal(["root.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        var error = Assert.Single(result.Errors);
+        Assert.Equal("blocked", error.Path);
+        Assert.Equal("Could not scan directory due to permissions.", error.Message);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(blockedDir)]);
+    }
+
+    [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_RemovesProbeAfterSuccess_Issue3689()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx-write-probe-success");

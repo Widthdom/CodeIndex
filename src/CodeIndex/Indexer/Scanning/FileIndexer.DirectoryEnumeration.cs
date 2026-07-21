@@ -40,19 +40,33 @@ public partial class FileIndexer
             // 当該ディレクトリの直下ファイルおよび submodule と無関係なサブディレクトリには
             // SkipDirs を適用しつつ、submodule 方向にだけ降りる。
             var passthrough = IsSubmoduleAncestorPassthrough(relativeDir);
-            var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
-            if (directoryIgnoreCase != _ignoreCase)
-            {
-                scanState.Errors.Add(new ScanError(
-                    relativeDir,
-                    "Filesystem case-sensitivity differs from the project root; deduplicating file paths for this directory.",
-                    ScanIssueSeverity.Warning));
-            }
 
             if (_enumerateFilesForTesting is null)
             {
+                // Materialize one scan-local snapshot after configuration, ignore, and submodule
+                // decisions. The default case probe and the actual directory walk share this exact
+                // ordered entry set; do not cache it across scans because filesystem races must stay
+                // visible on the next scan.
+                // config / ignore / submodule 判定後に scan-local snapshot を1回だけ作る。既定の
+                // case probe と本走査で同じ順序の entry 集合を共有し、次回 scan へは cache しない。
+                IReadOnlyList<string> entries;
+                bool directoryIgnoreCase;
+                if (_usesDefaultDirectoryIgnoreCaseProbe)
+                {
+                    entries = MaterializeDirectoryEntries(dir, cancellationToken);
+                    directoryIgnoreCase = DirectoryUsesIgnoreCase(dir, entries);
+                }
+                else
+                {
+                    // Preserve the custom-probe contract, including one invocation for a directory
+                    // whose subsequent entry enumeration fails.
+                    // custom probe は後続の entry 列挙が失敗する directory でも従来どおり1回呼ぶ。
+                    directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
+                    entries = MaterializeDirectoryEntries(dir, cancellationToken);
+                }
+                RecordDirectoryCaseSensitivityWarning(relativeDir, directoryIgnoreCase, scanState);
                 fullyScanned &= EnumerateDirectoryEntries(
-                    dir,
+                    entries,
                     relativeDir,
                     scanState,
                     activeIgnoreRules,
@@ -64,6 +78,8 @@ public partial class FileIndexer
             }
             else
             {
+                var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
+                RecordDirectoryCaseSensitivityWarning(relativeDir, directoryIgnoreCase, scanState);
                 if (!passthrough)
                     EnumerateIndexableFilesInDirectory(dir, scanState, activeIgnoreRules, directoryIgnoreCase, cancellationToken);
 
@@ -90,8 +106,34 @@ public partial class FileIndexer
         return fullyScanned;
     }
 
+    private IReadOnlyList<string> MaterializeDirectoryEntries(string dir, CancellationToken cancellationToken)
+    {
+        var entries = new List<string>();
+        foreach (var enumeratedEntry in _enumerateFileSystemEntries(dir))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            entries.Add(LongPath.RemoveWindowsPrefix(enumeratedEntry));
+        }
+
+        return entries;
+    }
+
+    private void RecordDirectoryCaseSensitivityWarning(
+        string relativeDir,
+        bool directoryIgnoreCase,
+        DirectoryScanState scanState)
+    {
+        if (directoryIgnoreCase == _ignoreCase)
+            return;
+
+        scanState.Errors.Add(new ScanError(
+            relativeDir,
+            "Filesystem case-sensitivity differs from the project root; deduplicating file paths for this directory.",
+            ScanIssueSeverity.Warning));
+    }
+
     private bool EnumerateDirectoryEntries(
-        string dir,
+        IReadOnlyList<string> entries,
         string relativeDir,
         DirectoryScanState scanState,
         IgnoreRuleSet activeIgnoreRules,
@@ -109,10 +151,9 @@ public partial class FileIndexer
         var danglingCandidateCount = 0;
         var danglingScanTruncated = false;
 
-        foreach (var enumeratedEntry in _enumerateFileSystemEntries(dir))
+        foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
             CountDanglingCandidate(relativeDir, scanState, danglingCandidateLimit, ref danglingCandidateCount, ref danglingScanTruncated);
 
             var probeStatus = FileSystemBoundary.TryGetAttributes(entry, out var attributes);

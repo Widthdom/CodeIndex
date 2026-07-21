@@ -64,6 +64,12 @@ internal static class CaseSensitivityProbeDirectory
         var entries = Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(normalizedDirectory))
             .Select(LongPath.RemoveWindowsPrefix)
             .ToArray();
+        return ProbeExistingChildIgnoreCase(normalizedDirectory, entries);
+    }
+
+    internal static bool? ProbeExistingChildIgnoreCase(string directory, IReadOnlyList<string> entries)
+    {
+        _ = Path.GetFullPath(directory);
         var exactNames = entries
             .Select(Path.GetFileName)
             .ToHashSet(StringComparer.Ordinal);
