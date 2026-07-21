@@ -21,6 +21,7 @@ internal sealed record SymbolExtractionWorkerResult(
 
 internal sealed class SymbolExtractionWorkerClient : IDisposable
 {
+    private static readonly byte[] ProtocolLineTerminator = [(byte)'\n'];
     private readonly int maxProtocolLineBytes;
     private readonly object gate = new();
     private Process? process;
@@ -83,7 +84,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 contentIsNormalized,
                 hasOversizeLine,
                 conflictMarkerLine);
-            var requestJson = JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions);
+            var requestUtf8 = JsonSerializer.SerializeToUtf8Bytes(request, SymbolExtractionWorker.JsonOptions);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
             {
@@ -99,7 +100,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                     maxProtocolLineBytes,
                     maxProtocolLineBytes,
                     cancellationToken);
-                sendTask = SendRequestAsync(process.StandardInput, requestJson);
+                sendTask = SendRequestAsync(process.StandardInput.BaseStream, requestUtf8);
             }
             catch (Exception ex)
             {
@@ -310,9 +311,10 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             DurationMs: Math.Max(0, durationMs),
             Symbols: null);
 
-    private static async Task SendRequestAsync(TextWriter input, string requestJson)
+    private static async Task SendRequestAsync(Stream input, ReadOnlyMemory<byte> requestUtf8)
     {
-        await input.WriteLineAsync(requestJson).ConfigureAwait(false);
+        await input.WriteAsync(requestUtf8).ConfigureAwait(false);
+        await input.WriteAsync(ProtocolLineTerminator).ConfigureAwait(false);
         await input.FlushAsync().ConfigureAwait(false);
     }
 

@@ -419,6 +419,45 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_Utf8RequestsPreserveUnicodeAcrossLanguages()
+    {
+        var projectRoot = CreateTempProject();
+        var sourceDirectory = Path.Combine(projectRoot, "ソース");
+        Directory.CreateDirectory(sourceDirectory);
+        try
+        {
+            var cases = new[]
+            {
+                (Lang: "csharp", Extension: ".cs", Content: "// 顧客\npublic class Customer { }\n"),
+                (Lang: "java", Extension: ".java", Content: "// 顧客\npublic class Customer { }\n"),
+                (Lang: "typescript", Extension: ".ts", Content: "// 顧客\nexport class Customer { }\n"),
+                (Lang: "python", Extension: ".py", Content: "# 顧客\nclass Customer:\n    pass\n"),
+                (Lang: "go", Extension: ".go", Content: "// 顧客\ntype Customer struct {}\n"),
+                (Lang: "rust", Extension: ".rs", Content: "// 顧客\npub struct Customer {}\n"),
+            };
+            using var worker = new SymbolExtractionWorkerClient();
+
+            foreach (var testCase in cases)
+            {
+                var result = worker.Invoke(
+                    0,
+                    testCase.Lang,
+                    testCase.Content,
+                    Path.Combine(sourceDirectory, "顧客" + testCase.Extension),
+                    projectRoot,
+                    TimeSpan.FromSeconds(5));
+
+                Assert.True(result.Success, $"{testCase.Lang}: {result.WorkerError}");
+                Assert.Contains(result.Symbols!, symbol => symbol.Name == "Customer");
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_CapturesStdoutAndForwardsStderrDiagnostics()
     {
         var projectRoot = CreateTempProject();
