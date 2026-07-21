@@ -4320,6 +4320,82 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RebuildTypeScriptAugmentationReferences_MaterializesOnlyMergedGroups()
+    {
+        const int singletonInterfaceCount = 5_000;
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/augmentation-groups.ts",
+            Lang = "typescript",
+            Size = singletonInterfaceCount * 32,
+            Lines = singletonInterfaceCount + 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var symbols = new List<SymbolRecord>(singletonInterfaceCount + 2);
+        for (var index = 0; index < singletonInterfaceCount; index++)
+        {
+            var name = $"UniqueInterface{index:D4}";
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "interface",
+                Name = name,
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                Signature = $"interface {name} {{ value: number }}",
+            });
+        }
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = "MergedInterface",
+            Line = singletonInterfaceCount + 1,
+            StartLine = singletonInterfaceCount + 1,
+            EndLine = singletonInterfaceCount + 1,
+            Signature = "interface MergedInterface { first: number }",
+        });
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = "MergedInterface",
+            Line = singletonInterfaceCount + 2,
+            StartLine = singletonInterfaceCount + 2,
+            EndLine = singletonInterfaceCount + 2,
+            Signature = "interface MergedInterface { second: string }",
+        });
+        _writer.InsertSymbols(symbols);
+
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences());
+
+            Assert.NotNull(groupingStats);
+            Assert.Equal(singletonInterfaceCount + 2, groupingStats!.DeclarationCount);
+            Assert.Equal(singletonInterfaceCount + 1, groupingStats.GroupCount);
+            Assert.Equal(1, groupingStats.MergedGroupCount);
+            Assert.Equal(2, groupingStats.MaterializedDeclarationIndexCount);
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(2L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+        }
+    }
+
+    [Fact]
     public void TypeScriptFileHasModuleSyntaxForTests_UsesBoundedFallbackRead_Issue3179()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_module_fallback");

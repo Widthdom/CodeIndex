@@ -5,6 +5,30 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    internal sealed record TypeScriptAugmentationGroupingStats(
+        int DeclarationCount,
+        int GroupCount,
+        int MergedGroupCount,
+        int MaterializedDeclarationIndexCount);
+
+    private static readonly AsyncLocal<Action<TypeScriptAugmentationGroupingStats>?> ScopedTypeScriptAugmentationGroupingForTesting = new();
+    internal static Action<TypeScriptAugmentationGroupingStats>? TypeScriptAugmentationGroupingForTesting
+    {
+        get => ScopedTypeScriptAugmentationGroupingForTesting.Value;
+        set => ScopedTypeScriptAugmentationGroupingForTesting.Value = value;
+    }
+
+    private readonly record struct TypeScriptInterfaceDeclaration(
+        long FileId,
+        string Path,
+        string Name,
+        int Line,
+        int Column,
+        string Signature,
+        string Kind,
+        string ContainerName,
+        string? Visibility);
+
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null)
     {
         using var ownedDeferredRefresh = _deferredHotspotReferenceRefresh == null
@@ -51,10 +75,10 @@ public partial class DbWriter
         try
         {
             using var reader = cmd.ExecuteReader();
-            var declarations = new List<(long FileId, string Path, string Name, int Line, int Column, string Signature, string Kind, string ContainerName, string? Visibility)>();
+            var declarations = new List<TypeScriptInterfaceDeclaration>();
             while (reader.Read())
             {
-                declarations.Add((
+                declarations.Add(new TypeScriptInterfaceDeclaration(
                     reader.GetInt64(0),
                     reader.GetString(1),
                     reader.GetString(2),
@@ -67,13 +91,45 @@ public partial class DbWriter
             }
 
             var moduleFileIds = FindTypeScriptModuleFileIds(projectRoot, declarations);
-            foreach (var group in declarations.GroupBy(d => (d.Name, ScopeKey: BuildTypeScriptScopeKey(d.FileId, d.Path, d.Signature, d.ContainerName, moduleFileIds))))
+            var groupIndexes = new Dictionary<(string Name, string ScopeKey), int>(declarations.Count);
+            var groups = new List<(int FirstDeclarationIndex, List<int>? DeclarationIndexes)>(declarations.Count);
+            for (var declarationIndex = 0; declarationIndex < declarations.Count; declarationIndex++)
             {
-                if (group.Count() < 2)
+                var declaration = declarations[declarationIndex];
+                var key = (
+                    declaration.Name,
+                    BuildTypeScriptScopeKey(
+                        declaration.FileId,
+                        declaration.Path,
+                        declaration.Signature,
+                        declaration.ContainerName,
+                        moduleFileIds));
+                if (!groupIndexes.TryGetValue(key, out var groupIndex))
+                {
+                    groupIndexes.Add(key, groups.Count);
+                    groups.Add((declarationIndex, null));
+                    continue;
+                }
+
+                var group = groups[groupIndex];
+                if (group.DeclarationIndexes == null)
+                    group.DeclarationIndexes = new List<int>(2) { group.FirstDeclarationIndex };
+                group.DeclarationIndexes.Add(declarationIndex);
+                groups[groupIndex] = group;
+            }
+
+            var mergedGroupCount = 0;
+            var materializedDeclarationIndexCount = 0;
+            foreach (var group in groups)
+            {
+                if (group.DeclarationIndexes == null)
                     continue;
 
-                foreach (var declaration in group)
+                mergedGroupCount++;
+                materializedDeclarationIndexCount += group.DeclarationIndexes.Count;
+                foreach (var declarationIndex in group.DeclarationIndexes)
                 {
+                    var declaration = declarations[declarationIndex];
                     references.Add(new ReferenceRecord
                     {
                         FileId = declaration.FileId,
@@ -87,6 +143,11 @@ public partial class DbWriter
                     });
                 }
             }
+            TypeScriptAugmentationGroupingForTesting?.Invoke(new TypeScriptAugmentationGroupingStats(
+                declarations.Count,
+                groups.Count,
+                mergedGroupCount,
+                materializedDeclarationIndexCount));
         }
         finally
         {
@@ -115,11 +176,15 @@ public partial class DbWriter
 
     private static HashSet<long> FindTypeScriptModuleFileIds(
         string? projectRoot,
-        IReadOnlyList<(long FileId, string Path, string Name, int Line, int Column, string Signature, string Kind, string ContainerName, string? Visibility)> declarations)
+        IReadOnlyList<TypeScriptInterfaceDeclaration> declarations)
     {
         var moduleFileIds = new HashSet<long>();
+        var pathsByFileId = string.IsNullOrWhiteSpace(projectRoot)
+            ? null
+            : new Dictionary<long, string>(Math.Min(declarations.Count, 4_096));
         foreach (var declaration in declarations)
         {
+            pathsByFileId?.TryAdd(declaration.FileId, declaration.Path);
             if (declaration.Visibility == "export"
                 || declaration.Signature.StartsWith("export ", StringComparison.Ordinal)
                 || declaration.Signature.StartsWith("import ", StringComparison.Ordinal))
@@ -128,17 +193,17 @@ public partial class DbWriter
             }
         }
 
-        if (string.IsNullOrWhiteSpace(projectRoot))
+        if (pathsByFileId == null)
             return moduleFileIds;
 
-        foreach (var file in declarations.GroupBy(static d => (d.FileId, d.Path)))
+        foreach (var file in pathsByFileId)
         {
-            if (moduleFileIds.Contains(file.Key.FileId))
+            if (moduleFileIds.Contains(file.Key))
                 continue;
 
-            var absolutePath = Path.Combine(projectRoot, file.Key.Path.Replace('/', Path.DirectorySeparatorChar));
+            var absolutePath = Path.Combine(projectRoot!, file.Value.Replace('/', Path.DirectorySeparatorChar));
             if (TypeScriptFileHasModuleSyntax(absolutePath))
-                moduleFileIds.Add(file.Key.FileId);
+                moduleFileIds.Add(file.Key);
         }
 
         return moduleFileIds;
