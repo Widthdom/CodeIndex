@@ -1141,7 +1141,7 @@ public static partial class IndexCommandRunner
                     DemoteReadinessOnce();
                     if (fileBatchMarked)
                         writer.ClearBatchInProgress();
-                    LogIndexFileFailure("index_update_file_failed", relPath, ex);
+                    LogIndexFileFailure("index_update_file_failed", relPath, currentUpdatePhase, ex);
 
                     errors++;
                     var errorMessage = FormatIndexFileException(ex);

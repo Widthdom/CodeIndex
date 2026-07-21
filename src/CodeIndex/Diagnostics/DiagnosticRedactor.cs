@@ -137,8 +137,40 @@ internal static class DiagnosticRedactor
             : $"{type}: {message}";
     }
 
-    internal static string FormatExceptionStackLine(string line, int maxChars = 512) =>
-        BoundDiagnosticText(RedactSensitiveText(line, AngleRedacted, redactPaths: true), maxChars);
+    internal static string FormatExceptionStackLine(string line, int maxChars = 512)
+    {
+        var sourceLineIndex = line.LastIndexOf(":line ", StringComparison.Ordinal);
+        var sourcePathIndex = sourceLineIndex < 0
+            ? -1
+            : line.LastIndexOf(" in ", sourceLineIndex, StringComparison.Ordinal);
+        var lineNumberStart = sourceLineIndex < 0 ? -1 : sourceLineIndex + ":line ".Length;
+        var lineNumberEnd = lineNumberStart;
+        while (lineNumberEnd >= 0 && lineNumberEnd < line.Length && char.IsAsciiDigit(line[lineNumberEnd]))
+            lineNumberEnd++;
+
+        var hasSourceLocation = sourcePathIndex >= 0 && lineNumberEnd > lineNumberStart;
+        var redactedPrefix = FlattenDiagnosticControlChars(RedactSensitiveText(
+            hasSourceLocation ? line[..sourcePathIndex] : line,
+            AngleRedacted,
+            redactPaths: true));
+        var sourceSuffix = hasSourceLocation
+            ? $" in {AngleRedacted}:line {line[lineNumberStart..lineNumberEnd]}"
+            : string.Empty;
+        var redacted = redactedPrefix + sourceSuffix;
+        if (maxChars <= 0)
+            return BoundDiagnosticText(redacted, maxChars);
+        if (redacted.Length <= maxChars)
+            return redacted;
+
+        if (!hasSourceLocation)
+            return BoundDiagnosticText(redacted, maxChars);
+
+        var marker = string.Create(CultureInfo.InvariantCulture, $"... <truncated; original length {redacted.Length} chars> ");
+        var prefixLength = maxChars - marker.Length - sourceSuffix.Length;
+        if (prefixLength < 0)
+            return BoundDiagnosticText(redacted, maxChars);
+        return redactedPrefix[..Math.Min(prefixLength, redactedPrefix.Length)] + marker + sourceSuffix;
+    }
 
     internal static string FormatEnvironmentValue(string? raw, int maxChars = DefaultDiagnosticValueCharLimit) =>
         FormatEnvironmentValue(envVarName: null, raw, maxChars);

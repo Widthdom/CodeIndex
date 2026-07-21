@@ -1788,7 +1788,12 @@ package smoke tests or launcher diagnostics even when the executable path looks
 like a development build; `CDIDX_DISABLE_PERSISTENT_LOG` still wins when both
 are set.
 Unhandled exceptions keep stderr concise but write the full exception chain and
-stack trace to the lifecycle log for post-mortem diagnostics. Logged command
+stack trace to the lifecycle log for post-mortem diagnostics. Per-file index
+failures also record the active extraction phase and a bounded safe detail;
+isolated symbol-worker failures include the exception category and a redacted
+origin frame, exceptions retain their original extraction stack when crossing
+the parallel full-scan boundary, and oversized stack frames retain their
+redacted source-line suffix instead of truncating it after a long method signature. Logged command
 arguments are minimally redacted by default: secret-looking `--flag=value`
 pairs, values following secret-looking flags, URI passwords, and long token-like
 hex/base64 strings are replaced with `<redacted>`. `CDIDX_LOG_REDACT=none`
@@ -4621,7 +4626,12 @@ development build に見える場合でも lifecycle logging を強制するに�
 `CDIDX_FORCE_GLOBAL_TOOL_LOG=1` を設定します。両方が設定された場合でも
 `CDIDX_DISABLE_PERSISTENT_LOG` が優先されます。
 未処理例外は stderr を簡潔に保ちつつ、post-mortem diagnostics 用に完全な
-exception chain と stack trace を lifecycle log へ書きます。記録される
+exception chain と stack trace を lifecycle log へ書きます。ファイル単位の
+index failure には active extraction phase と上限付きの安全な detail も記録し、
+隔離 symbol worker の failure には exception category と redaction 済み origin
+frame を含めます。parallel full-scan boundary をまたぐ exception も元の
+extraction stack を保持します。また長い method signature があっても、
+oversized stack frame は redaction 済み source-line suffix を失わずに保持します。記録される
 command argument は既定で最小限 redaction されます。secret らしい
 `--flag=value` pair、secret らしい flag の直後の値、URI password、長い
 token 風の hex/base64 文字列は `<redacted>` に置換されます。

@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
@@ -24,13 +26,26 @@ public static partial class IndexCommandRunner
         $"  [{label}] {CollapseLineBreaks(path)}: {CollapseLineBreaks(message)}";
 
     internal static void LogIndexFileFailure(string eventName, string path, Exception ex) =>
-        GlobalToolLog.Error($"{eventName} path={CollapseLineBreaks(path)}", ex);
+        LogIndexFileFailure(eventName, path, phase: null, ex);
+
+    internal static void LogIndexFileFailure(string eventName, string path, string? phase, Exception ex)
+    {
+        var phaseSuffix = string.IsNullOrWhiteSpace(phase) ? string.Empty : $" phase={CollapseLineBreaks(phase)}";
+        var detail = CollapseLineBreaks(FormatIndexFileException(ex));
+        GlobalToolLog.Error($"{eventName} path={CollapseLineBreaks(path)}{phaseSuffix} detail={detail}", ex);
+    }
+
+    [DoesNotReturn]
+    internal static void RethrowPreservingStackTrace(Exception ex) =>
+        ExceptionDispatchInfo.Capture(ex).Throw();
 
     internal static string FormatIndexFileException(Exception ex) =>
         ex switch
         {
             RegexMatchTimeoutException timeoutException => RuntimeSafety.FormatRegexTimeout(timeoutException),
             IndexExtractionStalledException stalledException => FormatExtractionStalledMessage(stalledException),
+            SymbolExtractionWorkerFailureException workerException =>
+                $"Symbol extraction worker failed. Worker diagnostic: {CollapseLineBreaks(workerException.WorkerError)}",
             _ => CommandErrorWriter.FormatSanitizedException(ex),
         };
 
@@ -55,7 +70,9 @@ public static partial class IndexCommandRunner
             File = FileIndexer.NormalizePathSeparators(path),
             Category = category,
             Phase = stablePhase,
-            Detail = CommandErrorWriter.FormatSanitizedExceptionDetail(ex),
+            Detail = ex is SymbolExtractionWorkerFailureException
+                ? DiagnosticRedactor.BoundDiagnosticText(FormatIndexFileException(ex), maxChars: 512)
+                : CommandErrorWriter.FormatSanitizedExceptionDetail(ex),
             Line = line,
             Column = column,
         };
@@ -328,7 +345,7 @@ public static partial class IndexCommandRunner
         if (result.TimedOut)
             throw new IndexExtractionStalledException(0, null, timeout, phasePath, result.WorkerError);
         if (!result.Success)
-            throw new InvalidOperationException(result.WorkerError ?? "isolated symbol extraction worker failed.");
+            throw new SymbolExtractionWorkerFailureException(result.WorkerError ?? "isolated symbol extraction worker failed.");
 
         var regexTimeoutIssue = BuildRegexTimeoutIssue(
             issuePath,
@@ -1872,12 +1889,12 @@ public static partial class IndexCommandRunner
                     var itemReferencesExtracted = item.References?.Count ?? 0L;
                     EnsureIndexingActivityVisible();
                     if (item.Exception is IndexExtractionStalledException stalledException)
-                        throw stalledException;
+                        RethrowPreservingStackTrace(stalledException);
 
                     try
                     {
                         if (item.Exception != null)
-                            throw item.Exception;
+                            RethrowPreservingStackTrace(item.Exception);
 
                         if (item.Record == null)
                         {
@@ -2223,7 +2240,7 @@ public static partial class IndexCommandRunner
                     }
                     catch (Exception ex)
                     {
-                        LogIndexFileFailure("index_file_failed", item.FilePath, ex);
+                        LogIndexFileFailure("index_file_failed", item.FilePath, indexFilePhase, ex);
                         errors++;
                         var errorMessage = FormatIndexFileException(ex);
                         errorList.Add(new CliJsonMessage(item.FilePath, errorMessage));

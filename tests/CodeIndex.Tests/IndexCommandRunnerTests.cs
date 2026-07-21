@@ -214,6 +214,21 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void FormatIndexFileException_SymbolWorkerFailurePreservesSafeDiagnostic()
+    {
+        const string workerDiagnostic = "worker_execution_failed: InvalidOperationException; origin=at CodeIndex.Indexer.SymbolExtractor.Extract in <redacted>:line 42";
+        var ex = new SymbolExtractionWorkerFailureException(workerDiagnostic);
+
+        var message = IndexCommandRunner.FormatIndexFileException(ex);
+        var fileError = IndexCommandRunner.BuildIndexFileError("src/App.cs", "symbols", ex);
+
+        Assert.Equal($"Symbol extraction worker failed. Worker diagnostic: {workerDiagnostic}", message);
+        Assert.Equal("extraction_error", fileError.Category);
+        Assert.Equal("symbols", fileError.Phase);
+        Assert.Equal(message, fileError.Detail);
+    }
+
+    [Fact]
     public void FormatIndexPhasePath_AppendsPhaseSuffixForJsonLiveness()
     {
         var message = IndexCommandRunner.FormatIndexPhasePath("src/App.cs", "references");
@@ -314,6 +329,32 @@ public partial class IndexCommandRunnerTests
                 DeleteDirectory(projectRoot);
             }
         }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_ExecutionFailureIncludesRedactedOrigin()
+    {
+        Exception exception;
+        try
+        {
+            ThrowForSymbolWorkerDiagnosticTest();
+            throw new UnreachableException();
+        }
+        catch (InvalidOperationException ex)
+        {
+            exception = ex;
+        }
+
+        var diagnostic = SymbolExtractionWorker.FormatExecutionFailure(exception);
+
+        Assert.StartsWith("worker_execution_failed: InvalidOperationException; origin=", diagnostic, StringComparison.Ordinal);
+        Assert.Contains(nameof(ThrowForSymbolWorkerDiagnosticTest), diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-token", diagnostic, StringComparison.Ordinal);
+    }
+
+    private static void ThrowForSymbolWorkerDiagnosticTest()
+    {
+        throw new InvalidOperationException("secret-token");
     }
 
     [Fact]
