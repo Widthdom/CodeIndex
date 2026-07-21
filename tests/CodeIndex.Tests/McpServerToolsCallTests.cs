@@ -8391,6 +8391,7 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_mutual_recursion_{Guid.NewGuid():N}");
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_mutual_recursion");
         var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
         var previousAggregateRefreshHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var previousFtsOptimizeHook = McpServer.McpIndexFtsOptimizeForTesting;
@@ -8398,6 +8399,7 @@ public partial class McpServerTests
         var aggregateRefreshStatements = 0;
         var ftsOptimizeCount = 0;
         var atomicCalls = new List<bool>();
+        DbWriter.ReferenceGraphRefreshScopeStats? scopeStats = null;
         try
         {
             Directory.CreateDirectory(fixtureDir);
@@ -8469,6 +8471,25 @@ public partial class McpServerTests
             Assert.True((long)candidateCommand.ExecuteScalar()! > 0);
 
             refreshCount = 0;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats =>
+            {
+                scopeStats = stats;
+                previousScopeHook?.Invoke(stats);
+            };
+            File.AppendAllText(Path.Combine(fixtureDir, "MutualRecursionA.cs"), "// changed A\n");
+            File.SetLastWriteTimeUtc(
+                Path.Combine(fixtureDir, "MutualRecursionA.cs"),
+                DateTime.UtcNow.AddSeconds(2));
+            var scopedResponse = CallIndex(server, fixtureDir);
+            Assert.False(scopedResponse["result"]?["isError"]?.GetValue<bool>() ?? false, scopedResponse.ToJsonString());
+            Assert.Equal(1, refreshCount);
+            Assert.NotNull(scopeStats);
+            Assert.False(scopeStats!.UsedFullRefresh);
+            Assert.Equal(2, scopeStats.DirtyReferenceCount);
+            verificationWriter.SetMeta(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "0");
+
+            refreshCount = 0;
+            scopeStats = null;
             McpServer.McpIndexFtsOptimizeForTesting = () =>
             {
                 ftsOptimizeCount++;
@@ -8479,6 +8500,7 @@ public partial class McpServerTests
             var neutralInsertResponse = CallIndex(server, fixtureDir);
             Assert.False(neutralInsertResponse["result"]?["isError"]?.GetValue<bool>() ?? false, neutralInsertResponse.ToJsonString());
             Assert.Equal(0, refreshCount);
+            Assert.Null(scopeStats);
             Assert.Equal(0, ftsOptimizeCount);
             Assert.Equal(1, verificationWriter.GetFtsIncrementalWritesSinceOptimize());
 
@@ -8490,12 +8512,14 @@ public partial class McpServerTests
             var neutralUpdateResponse = CallIndex(server, fixtureDir);
             Assert.False(neutralUpdateResponse["result"]?["isError"]?.GetValue<bool>() ?? false, neutralUpdateResponse.ToJsonString());
             Assert.Equal(0, refreshCount);
+            Assert.Null(scopeStats);
             Assert.Equal(1, ftsOptimizeCount);
             Assert.Equal(0, verificationWriter.GetFtsIncrementalWritesSinceOptimize());
         }
         finally
         {
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousAggregateRefreshHook;
             McpServer.McpIndexFtsOptimizeForTesting = previousFtsOptimizeHook;

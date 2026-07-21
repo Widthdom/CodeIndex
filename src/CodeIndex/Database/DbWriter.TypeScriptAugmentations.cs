@@ -233,10 +233,26 @@ public partial class DbWriter
             }
 
             var affectedFileIds = new HashSet<long>();
+            var deletedReferences = new List<(
+                long Id,
+                long FileId,
+                long? SourceId,
+                long? TargetId,
+                string? ContainerNameFolded,
+                string? SymbolNameFolded)>();
             if (scopedNames == null)
             {
                 var deleteCmd = RentCommand(
-                    "DELETE FROM symbol_references WHERE reference_kind = 'augmentation' RETURNING file_id",
+                    """
+                    DELETE FROM symbol_references
+                    WHERE reference_kind = 'augmentation'
+                    RETURNING id,
+                              file_id,
+                              source_symbol_id,
+                              target_symbol_id,
+                              container_name_folded,
+                              symbol_name_folded
+                    """,
                     static _ => { });
                 try
                 {
@@ -244,7 +260,15 @@ public partial class DbWriter
                     var deletedRowCount = 0;
                     while (reader.Read())
                     {
-                        affectedFileIds.Add(reader.GetInt64(0));
+                        var fileId = reader.GetInt64(1);
+                        affectedFileIds.Add(fileId);
+                        deletedReferences.Add((
+                            reader.GetInt64(0),
+                            fileId,
+                            ReadNullableInt64(reader, 2),
+                            ReadNullableInt64(reader, 3),
+                            ReadNullableString(reader, 4),
+                            ReadNullableString(reader, 5)));
                         if ((++deletedRowCount & 255) == 0)
                             cancellationToken.ThrowIfCancellationRequested();
                     }
@@ -263,17 +287,36 @@ public partial class DbWriter
                         names,
                         offset,
                         count,
-                        "DELETE FROM symbol_references WHERE reference_kind = 'augmentation' AND symbol_name IN ({0}) RETURNING file_id");
+                        """
+                        DELETE FROM symbol_references
+                        WHERE reference_kind = 'augmentation'
+                          AND symbol_name IN ({0})
+                        RETURNING id,
+                                  file_id,
+                                  source_symbol_id,
+                                  target_symbol_id,
+                                  container_name_folded,
+                                  symbol_name_folded
+                        """);
                     using var reader = deleteCmd.ExecuteReader();
                     var deletedRowCount = 0;
                     while (reader.Read())
                     {
-                        affectedFileIds.Add(reader.GetInt64(0));
+                        var fileId = reader.GetInt64(1);
+                        affectedFileIds.Add(fileId);
+                        deletedReferences.Add((
+                            reader.GetInt64(0),
+                            fileId,
+                            ReadNullableInt64(reader, 2),
+                            ReadNullableInt64(reader, 3),
+                            ReadNullableString(reader, 4),
+                            ReadNullableString(reader, 5)));
                         if ((++deletedRowCount & 255) == 0)
                             cancellationToken.ThrowIfCancellationRequested();
                     }
                 });
             }
+            TrackReferenceGraphDeletedReferences(deletedReferences);
 
             var references = new List<ReferenceRecord>();
             var declarations = new List<TypeScriptInterfaceDeclaration>();

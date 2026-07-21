@@ -146,6 +146,7 @@ public static partial class IndexCommandRunner
 
         if (!options.Json && !options.Quiet)
             CommandOutputWriter.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
+        using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope();
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
         CancellationTokenSource? updateCts = null;
         var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();

@@ -1060,6 +1060,8 @@ public static partial class IndexCommandRunner
         // full-scan の書き込み全体を outer transaction に入れ、中断時に batch marker /
         // readiness clear / purge / per-file write をまとめて rollback する。
         ThrowIfFullScanCancelled(0, files.Count);
+        using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(
+            options.Rebuild || !writer.HasAnyIndexedFiles());
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
         using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");
         writer.MarkBatchInProgress();

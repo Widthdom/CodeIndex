@@ -35,6 +35,7 @@ public partial class DbWriter
             return false;
         }
         _typeScriptAugmentationDirtyNameScope?.TrackDeletedFiles([existingFileId]);
+        TrackReferenceGraphFilesBeforeMutation([existingFileId]);
         if (HasReferenceIdentityRowsForFile(existingFileId))
             InvalidateReferenceIdentityContractForMutation();
         if (_deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
@@ -174,6 +175,7 @@ public partial class DbWriter
         // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically.
         // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する。
         using var txn = BeginTransaction();
+        TrackReferenceGraphFilesBeforeMutation(fileIds);
         InvalidateReferenceIdentityContractForMutation();
         if (_deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
         {

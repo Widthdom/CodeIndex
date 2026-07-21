@@ -202,7 +202,9 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var refreshCount = 0;
+        var scopeStats = new List<DbWriter.ReferenceGraphRefreshScopeStats>();
         try
         {
             var firstPath = Path.Combine(projectRoot, "MutualRecursionA.cs");
@@ -224,6 +226,11 @@ public partial class IndexCommandRunnerTests
                 refreshCount++;
                 previousRefreshHook?.Invoke();
             };
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats =>
+            {
+                scopeStats.Add(stats);
+                previousScopeHook?.Invoke(stats);
+            };
 
             File.AppendAllText(firstPath, "// changed A\n");
             File.AppendAllText(secondPath, "// changed B\n");
@@ -236,9 +243,13 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal(2, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(1, refreshCount);
+            var updateScope = Assert.Single(scopeStats);
+            Assert.False(updateScope.UsedFullRefresh);
+            Assert.Equal(2, updateScope.DirtyReferenceCount);
             Assert.Equal(2, CountMutualRecursionReferences(dbPath));
 
             refreshCount = 0;
+            scopeStats.Clear();
             File.Delete(secondPath);
 
             var (deleteExitCode, deleteJson) = RunAndCaptureJson(
@@ -247,9 +258,11 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, deleteExitCode);
             Assert.Equal(1, deleteJson.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, refreshCount);
+            Assert.False(Assert.Single(scopeStats).UsedFullRefresh);
             Assert.Equal(0, CountMutualRecursionReferences(dbPath));
 
             refreshCount = 0;
+            scopeStats.Clear();
             var graphNeutralPath = Path.Combine(projectRoot, "graph-neutral.py");
             File.WriteAllText(graphNeutralPath, "# text-only source\n");
 
@@ -259,6 +272,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, neutralInsertExitCode);
             Assert.Equal(1, neutralInsertJson.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, refreshCount);
+            Assert.Empty(scopeStats);
 
             File.WriteAllText(graphNeutralPath, "# changed text-only source\n");
             File.SetLastWriteTimeUtc(graphNeutralPath, DateTime.UtcNow.AddSeconds(2));
@@ -268,10 +282,12 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, neutralUpdateExitCode);
             Assert.Equal(1, neutralUpdateJson.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, refreshCount);
+            Assert.Empty(scopeStats);
         }
         finally
         {
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

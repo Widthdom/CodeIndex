@@ -402,6 +402,377 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraphDirtyScope_GeneratedSqlUsesDirtyPrimaryKeySeeks()
+    {
+        using var scope = _writer.BeginReferenceGraphRefreshScope();
+        _writer.RefreshMutualRecursionFlags();
+
+        var candidateSql = DbWriter.RefreshScopedReferenceCandidatesSqlForTesting;
+        Assert.DoesNotContain("AND s.name_folded IS NOT NULL", candidateSql, StringComparison.Ordinal);
+        Assert.Contains(
+            "FROM temp.reference_graph_lookup_names AS lookup_name",
+            candidateSql,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CROSS JOIN symbols AS s INDEXED BY idx_symbols_name_folded",
+            candidateSql,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AND s.name_folded = lookup_name.name_folded",
+            candidateSql,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            10,
+            candidateSql.Split(
+                "FROM temp.reference_graph_dirty_references AS dirty_reference",
+                StringSplitOptions.None).Length - 1);
+
+        var candidateInserts = candidateSql
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static statement => statement.StartsWith(
+                "INSERT INTO symbol_reference_candidates",
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(10, candidateInserts.Length);
+        foreach (var statement in candidateInserts)
+        {
+            var plan = ReadQueryPlanDetails(_db.Connection, statement);
+            Assert.Contains(plan, static detail => detail.Contains(
+                "SEARCH r USING INTEGER PRIMARY KEY",
+                StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(plan, static detail =>
+                detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
+                || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
+        }
+
+        var instantiateStatement = Assert.Single(candidateInserts.Where(static statement =>
+            statement.Contains("AS unique_target", StringComparison.Ordinal)));
+        var instantiatePlan = ReadQueryPlanDetails(_db.Connection, instantiateStatement);
+        Assert.Contains(instantiatePlan, static detail => detail.Contains(
+            "idx_symbols_name_folded",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(instantiatePlan, static detail => detail.Contains(
+            "SEARCH lookup_name USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+
+        foreach (var statement in DbWriter.ScopedReferenceGraphUpdateStatementsForTesting)
+        {
+            var plan = ReadQueryPlanDetails(_db.Connection, statement);
+            Assert.Contains(plan, static detail => detail.Contains(
+                "SEARCH r USING INTEGER PRIMARY KEY",
+                StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(plan, static detail =>
+                detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
+                || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_TinySetSkipsGlobalReferenceCountWithoutDiagnostics()
+    {
+        var fileId = UpsertTestFileWithLanguage("src/tiny-dirty.cs", "csharp", "tiny-dirty-initial");
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = fileId, SymbolName = "Missing", ReferenceKind = "call", Line = 1, Column = 1, Context = "Missing();" },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        var countedTables = new List<string>();
+        var previousCountHook = DbWriter.ReferenceGraphRowCountForTesting;
+        var previousStatsHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = null;
+            DbWriter.ReferenceGraphRowCountForTesting = countedTables.Add;
+            using var scope = _writer.BeginReferenceGraphRefreshScope();
+            using (var transaction = _writer.BeginTransaction())
+            {
+                fileId = _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/tiny-dirty.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "tiny-dirty-updated",
+                });
+                _writer.InsertReferences([
+                    new ReferenceRecord { FileId = fileId, SymbolName = "Missing", ReferenceKind = "call", Line = 1, Column = 1, Context = "Missing();" },
+                ], refreshMutualRecursionFlags: false);
+                transaction.Commit();
+            }
+
+            _writer.RefreshMutualRecursionFlags();
+
+            Assert.Contains("temp.reference_graph_dirty_references", countedTables);
+            Assert.DoesNotContain("symbol_references", countedTables);
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRowCountForTesting = previousCountHook;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousStatsHook;
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_TracksLanguageTransitionsAndMatchesFullRefresh()
+    {
+        var csharpCallerId = UpsertTestFileWithLanguage("src/caller.cs", "csharp", "dirty-csharp-caller");
+        var pythonCallerId = UpsertTestFileWithLanguage("src/caller.py", "python", "dirty-python-caller");
+        var targetId = UpsertTestFileWithLanguage("src/target.cs", "csharp", "dirty-target-csharp");
+        var stableTargetId = UpsertTestFileWithLanguage("src/stable-target.cs", "csharp", "dirty-stable-target");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = targetId, Kind = "function", Name = "Pivot", Line = 1 },
+            new SymbolRecord { FileId = stableTargetId, Kind = "function", Name = "StableTarget", Line = 1 },
+            new SymbolRecord { FileId = stableTargetId, Kind = "class", Name = "StableType", Line = 2 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = csharpCallerId, SymbolName = "Pivot", ReferenceKind = "call", Line = 1, Column = 1, Context = "Pivot();" },
+            new ReferenceRecord { FileId = pythonCallerId, SymbolName = "Pivot", ReferenceKind = "call", Line = 1, Column = 1, Context = "Pivot()" },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal("resolved", ReadReferenceResolutionState(csharpCallerId));
+        Assert.Equal("unresolved", ReadReferenceResolutionState(pythonCallerId));
+
+        DbWriter.ReferenceGraphRefreshScopeStats? observed = null;
+        var previousHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => observed = stats;
+            using (var scope = _writer.BeginReferenceGraphRefreshScope())
+            {
+                using var transaction = _writer.BeginTransaction();
+                targetId = _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/target.cs",
+                    Lang = "python",
+                    Size = 100,
+                    Lines = 4,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "dirty-target-python",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord { FileId = targetId, Kind = "function", Name = "Pivot", Line = 1 },
+                ]);
+                var newCallerId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "src/new-caller.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "dirty-new-caller",
+                });
+                _writer.InsertReferences([
+                    new ReferenceRecord { FileId = newCallerId, SymbolName = "StableTarget", ReferenceKind = "call", Line = 1, Column = 1, Context = "StableTarget();" },
+                    new ReferenceRecord { FileId = newCallerId, SymbolName = "StableType", ReferenceKind = "instantiate", Line = 2, Column = 1, Context = "new StableType();" },
+                ], refreshMutualRecursionFlags: false);
+                transaction.Commit();
+
+                _writer.RefreshMutualRecursionFlags();
+            }
+
+            Assert.NotNull(observed);
+            Assert.False(observed!.UsedFullRefresh);
+            Assert.Equal(4, observed.DirtyReferenceCount);
+            Assert.Equal(4, observed.TotalReferenceCount);
+            Assert.Equal("unresolved", ReadReferenceResolutionState(csharpCallerId));
+            Assert.Equal("resolved", ReadReferenceResolutionState(pythonCallerId));
+            Assert.Equal(2, ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_references AS r
+                JOIN files AS f ON f.id = r.file_id
+                WHERE f.path = 'src/new-caller.cs'
+                  AND r.resolution_state = 'resolved'
+                """));
+
+            var scopedSnapshot = ReadReferenceIdentitySnapshot();
+            _writer.RefreshMutualRecursionFlags();
+            Assert.Equal(scopedSnapshot, ReadReferenceIdentitySnapshot());
+
+            observed = null;
+            using (var renameScope = _writer.BeginReferenceGraphRefreshScope())
+            {
+                using var renameTransaction = _writer.BeginTransaction();
+                Assert.True(_writer.DeleteFileByPath("src/target.cs"));
+                var renamedTargetId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "src/renamed-target.py",
+                    Lang = "python",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "dirty-target-renamed",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord { FileId = renamedTargetId, Kind = "function", Name = "Pivot", Line = 1 },
+                ]);
+                renameTransaction.Commit();
+                _writer.RefreshMutualRecursionFlags();
+            }
+
+            Assert.NotNull(observed);
+            Assert.False(observed!.UsedFullRefresh);
+            Assert.Equal("unresolved", ReadReferenceResolutionState(csharpCallerId));
+            Assert.Equal("resolved", ReadReferenceResolutionState(pythonCallerId));
+            Assert.Contains("src/renamed-target.py", ExecuteScalarString($"""
+                SELECT target_symbol_key
+                FROM symbol_references
+                WHERE file_id = {pythonCallerId.ToString(CultureInfo.InvariantCulture)}
+                """), StringComparison.Ordinal);
+            var renamedSnapshot = ReadReferenceIdentitySnapshot();
+            _writer.RefreshMutualRecursionFlags();
+            Assert.Equal(renamedSnapshot, ReadReferenceIdentitySnapshot());
+            Assert.Equal(0, ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_reference_candidates AS candidate
+                LEFT JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+                LEFT JOIN symbols AS symbol ON symbol.id = candidate.symbol_id
+                WHERE reference.id IS NULL OR symbol.id IS NULL
+                """));
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousHook;
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
+    {
+        var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");
+        var originalTargetId = UpsertTestFileWithLanguage("src/retry-target.cs", "csharp", "retry-target");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = originalTargetId, Kind = "function", Name = "RetryTarget", Line = 1 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = callerId, SymbolName = "RetryTarget", ReferenceKind = "call", Line = 1, Column = 1, Context = "RetryTarget();" },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+
+        var previousHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        using var scope = _writer.BeginReferenceGraphRefreshScope();
+        try
+        {
+            using (var rolledBack = _writer.BeginTransaction())
+            {
+                var rolledBackTargetId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "src/retry-rolled-back.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "retry-rolled-back",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord { FileId = rolledBackTargetId, Kind = "function", Name = "RetryTarget", Line = 1 },
+                ]);
+            }
+
+            DbWriter.ReferenceGraphRefreshScopeStats? rollbackStats = null;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => rollbackStats = stats;
+            _writer.RefreshMutualRecursionFlags();
+            Assert.NotNull(rollbackStats);
+            Assert.False(rollbackStats!.UsedFullRefresh);
+            Assert.Equal(0, rollbackStats.DirtyReferenceCount);
+            Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+
+            using (var committed = _writer.BeginTransaction())
+            {
+                var secondTargetId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "src/retry-second.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "retry-second",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord { FileId = secondTargetId, Kind = "function", Name = "RetryTarget", Line = 1 },
+                ]);
+                committed.Commit();
+            }
+
+            using var cancellation = new CancellationTokenSource();
+            DbWriter.ReferenceGraphRefreshScopeForTesting = _ => cancellation.Cancel();
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.RefreshMutualRecursionFlags(cancellation.Token));
+            Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+            Assert.False(_writer.ReferenceIdentityContractMatchesCurrent());
+
+            DbWriter.ReferenceGraphRefreshScopeStats? retryStats = null;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => retryStats = stats;
+            _writer.RefreshMutualRecursionFlags();
+            Assert.NotNull(retryStats);
+            Assert.False(retryStats!.UsedFullRefresh);
+            Assert.Equal(1, retryStats.DirtyReferenceCount);
+            Assert.Equal("unresolved", ReadReferenceResolutionState(callerId));
+            Assert.True(_writer.ReferenceIdentityContractMatchesCurrent());
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousHook;
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_BroadSetFallsBackToFullRefresh()
+    {
+        const int referenceCount = 4_100;
+        var fileId = UpsertTestFileWithLanguage("src/broad-dirty.cs", "csharp", "broad-dirty-initial");
+        var references = Enumerable.Range(1, referenceCount)
+            .Select(line => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"Missing{line}",
+                ReferenceKind = "call",
+                Line = line,
+                Column = 1,
+                Context = $"Missing{line}();",
+            })
+            .ToArray();
+        _writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        DbWriter.ReferenceGraphRefreshScopeStats? observed = null;
+        var previousHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => observed = stats;
+            using var scope = _writer.BeginReferenceGraphRefreshScope();
+            using (var transaction = _writer.BeginTransaction())
+            {
+                fileId = _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/broad-dirty.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = referenceCount,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "broad-dirty-updated",
+                });
+                foreach (var reference in references)
+                    reference.FileId = fileId;
+                _writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+                transaction.Commit();
+            }
+            _writer.RefreshMutualRecursionFlags();
+
+            Assert.NotNull(observed);
+            Assert.True(observed!.UsedFullRefresh);
+            Assert.Equal(referenceCount, observed.DirtyReferenceCount);
+            Assert.Equal(referenceCount, observed.TotalReferenceCount);
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousHook;
+        }
+    }
+
+    [Fact]
     public void RefreshMutualRecursionFlags_CancellationInterruptsRunningSqlAndRollsBack()
     {
         var writer = new DbWriter(_db);
@@ -1370,15 +1741,45 @@ public class DatabaseTests : IDisposable
     }
 
     private long UpsertTestFile(string path, string checksum)
+        => UpsertTestFileWithLanguage(path, "csharp", checksum);
+
+    private long UpsertTestFileWithLanguage(string path, string language, string checksum)
         => _writer.UpsertFile(new FileRecord
         {
             Path = path,
-            Lang = "csharp",
+            Lang = language,
             Size = 100,
             Lines = 4,
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             Checksum = checksum,
         });
+
+    private string ReadReferenceResolutionState(long fileId)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = "SELECT resolution_state FROM symbol_references WHERE file_id = @file_id";
+        command.Parameters.AddWithValue("@file_id", fileId);
+        return Assert.IsType<string>(command.ExecuteScalar());
+    }
+
+    private string ReadReferenceIdentitySnapshot()
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT group_concat(
+                       id || ':' ||
+                       COALESCE(source_symbol_id, -1) || ':' ||
+                       COALESCE(target_symbol_id, -1) || ':' ||
+                       COALESCE(target_symbol_key, '') || ':' ||
+                       resolution_candidate_count || ':' ||
+                       COALESCE(resolution_state, '') || ':' ||
+                       is_self_reference || ':' ||
+                       is_mutual_recursion,
+                       '|')
+            FROM (SELECT * FROM symbol_references ORDER BY id)
+            """;
+        return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture) ?? string.Empty;
+    }
 
     [Fact]
     public void OptimizeFtsIfIncrementalWriteThresholdReached_RunsOnlyAtThreshold()

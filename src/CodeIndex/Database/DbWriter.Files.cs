@@ -83,7 +83,7 @@ public partial class DbWriter
         var typeScriptDirtyNameScope = _typeScriptAugmentationDirtyNameScope;
         var wasExistingTypeScript = cleanExistingData
             && typeScriptDirtyNameScope?.TrackExistingFile(file.Path) == true;
-
+        TrackReferenceGraphFileAtPathBeforeMutation(file.Path);
         // ON CONFLICT DO UPDATE preserves the existing row ID
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
         var cmd = RentCommand(
@@ -128,6 +128,8 @@ public partial class DbWriter
         {
             ReleaseCommand(cmd);
         }
+
+        TrackReferenceGraphFileIds([fileId]);
 
         // Release the RETURNING reader and its prepared command before leasing the
         // cleanup command. Existing rows keep the same ID, while new rows pay only a
@@ -184,8 +186,8 @@ public partial class DbWriter
         {
             ReleaseCommand(cmd);
         }
-
         _typeScriptAugmentationDirtyNameScope?.TrackCurrentFile(fileId, file.Lang);
+        TrackReferenceGraphFileIds([fileId]);
         return fileId;
     }
 
@@ -201,7 +203,7 @@ public partial class DbWriter
         using var transaction = !IsInTransaction() ? BeginTransaction() : null;
         if (trackTypeScriptInterfaceNames)
             _typeScriptAugmentationDirtyNameScope?.TrackDeletedFiles([fileId]);
-
+        TrackReferenceGraphFilesBeforeMutation([fileId]);
         var dependentReferenceFileIds = GetReferenceFilesDependingOnLinesOwnedBy(fileId);
         var hasIdentityRows = HasReferenceIdentityRowsForFile(fileId);
         var referenceIdentityChanged = hasIdentityRows || dependentReferenceFileIds.Count > 0;

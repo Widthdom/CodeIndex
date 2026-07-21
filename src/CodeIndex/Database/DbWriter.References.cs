@@ -533,6 +533,7 @@ public partial class DbWriter
         bool batchesAreAtomicInCaller)
     {
         if (references.Count == 0) return;
+        TrackReferenceGraphInsertedReferences(references);
         InvalidateReferenceIdentityContractForMutation();
 
         // If a chunk commits but aggregate refresh is cancelled, readers must fall back to
@@ -1015,7 +1016,10 @@ public partial class DbWriter
         cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
         cancellationToken.ThrowIfCancellationRequested();
+        var graphScope = _referenceGraphRefreshScope;
         using var transaction = BeginTransaction(cancellationToken, "refresh reference identities");
+        if (graphScope != null)
+            graphScope.IsCompleting = true;
         SqliteCommand? createUniqueFamiliesCommand = null;
         SqliteCommand? refreshCommand = null;
         try
@@ -1025,22 +1029,47 @@ public partial class DbWriter
             createUniqueFamiliesCommand = RentCommand(CreateReferenceUniqueFamiliesSql, static _ => { });
             createUniqueFamiliesCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
+            var refreshPlan = graphScope == null
+                ? new ReferenceGraphRefreshPlan(true, 0, 0, 0, 0)
+                : BuildReferenceGraphRefreshPlan(graphScope, cancellationToken);
+            ReferenceGraphRefreshScopeForTesting?.Invoke(new ReferenceGraphRefreshScopeStats(
+                refreshPlan.UseFullRefresh,
+                refreshPlan.DirtyFileCount,
+                refreshPlan.DirtyNameCount,
+                refreshPlan.DirtyReferenceCount,
+                refreshPlan.TotalReferenceCount));
+            cancellationToken.ThrowIfCancellationRequested();
             // A fresh graph evaluates each correlated identity expression once. Once any
             // persisted resolution exists, differential SQL avoids rewriting the stable
             // majority while newly inserted or invalidated rows still repair normally.
             // fresh graphでは相関identity式を1回だけ評価し、既存resolutionがあれば
             // differential SQLで安定多数の再書込みを避けつつ新規/無効rowを修復する。
-            var refreshIdentitySql = HasPersistedReferenceResolutionState(cancellationToken)
-                ? RefreshReferenceSourceSymbolsDifferentialSql + ";\n" +
-                  RefreshReferenceUniqueFamiliesSql + "\n" +
-                  RefreshReferenceCandidatesSql + "\n" +
-                  RefreshReferenceResolutionDifferentialSql + "\n"
-                : RefreshReferenceSourceSymbolsFullSql + ";\n" +
-                  RefreshReferenceUniqueFamiliesSql + "\n" +
-                  RefreshReferenceCandidatesSql + "\n" +
-                  RefreshReferenceResolutionFullSql + "\n";
+            string refreshIdentitySql;
+            if (refreshPlan.UseFullRefresh)
+            {
+                refreshIdentitySql = HasPersistedReferenceResolutionState(cancellationToken)
+                    ? RefreshReferenceSourceSymbolsDifferentialSql + ";\n" +
+                      RefreshReferenceUniqueFamiliesSql + "\n" +
+                      RefreshReferenceCandidatesSql + "\n" +
+                      RefreshReferenceResolutionDifferentialSql + "\n"
+                    : RefreshReferenceSourceSymbolsFullSql + ";\n" +
+                      RefreshReferenceUniqueFamiliesSql + "\n" +
+                      RefreshReferenceCandidatesSql + "\n" +
+                      RefreshReferenceResolutionFullSql + "\n";
+            }
+            else
+            {
+                DeleteRemovedReferenceCandidates(cancellationToken);
+                refreshIdentitySql = RefreshScopedReferenceSourceSymbolsSql + "\n" +
+                                     RefreshScopedReferenceUniqueFamiliesSql + "\n" +
+                                     RefreshScopedReferenceCandidatesSql + "\n" +
+                                     RefreshScopedReferenceResolutionSql + "\n" +
+                                     ExpandReferenceGraphNewMutualScopeSql + "\n";
+            }
             refreshCommand = RentCommand(
-                refreshIdentitySql + RefreshMutualRecursionFlagsSql,
+                refreshIdentitySql + (refreshPlan.UseFullRefresh
+                    ? RefreshMutualRecursionFlagsSql
+                    : RefreshScopedMutualRecursionFlagsSql),
                 static _ => { });
             // Stamp inside the same transaction, but before the graph refresh so the
             // public SQLite changes() result continues to describe recursion updates.
@@ -1049,7 +1078,10 @@ public partial class DbWriter
             cancellationToken.ThrowIfCancellationRequested();
             refreshCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
+            if (graphScope != null)
+                ExecuteReferenceGraphScopeSql(ClearReferenceGraphDirtyScopeSql, cancellationToken);
             transaction.Commit();
+            graphScope?.MarkRefreshCompleted();
         }
         catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
         {
@@ -1061,6 +1093,8 @@ public partial class DbWriter
                 ReleaseCommand(refreshCommand);
             if (createUniqueFamiliesCommand != null)
                 ReleaseCommand(createUniqueFamiliesCommand);
+            if (graphScope != null)
+                graphScope.IsCompleting = false;
         }
     }
 

@@ -862,6 +862,49 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ChangedReferenceUsesDirtyGraphScope()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_dirty_graph_scope");
+        var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        DbWriter.ReferenceGraphRefreshScopeStats? observed = null;
+        try
+        {
+            var firstPath = Path.Combine(projectRoot, "MutualRecursionA.cs");
+            File.WriteAllText(
+                firstPath,
+                "public static class MutualRecursionA { public static void CrossCycleA() { CrossCycleB(); } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "MutualRecursionB.cs"),
+                "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats =>
+            {
+                observed = stats;
+                previousScopeHook?.Invoke(stats);
+            };
+            File.AppendAllText(firstPath, "// changed A\n");
+            File.SetLastWriteTimeUtc(firstPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.InRange(json.GetProperty("summary").GetProperty("files_scanned").GetInt32(), 1, 2);
+            Assert.NotNull(observed);
+            Assert.False(observed!.UsedFullRefresh);
+            Assert.Equal(2, observed.DirtyReferenceCount);
+            Assert.Equal(2, observed.TotalReferenceCount);
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_CancelledDuringMutualRecursionRefresh_LeavesReadinessDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_mutual_refresh_cancel");

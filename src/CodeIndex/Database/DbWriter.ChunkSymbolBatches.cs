@@ -55,6 +55,7 @@ public partial class DbWriter
         if (symbols.Count == 0) return;
         cancellationToken.ThrowIfCancellationRequested();
         _typeScriptAugmentationDirtyNameScope?.TrackInsertedSymbols(symbols, cancellationToken);
+        TrackReferenceGraphInsertedSymbols(symbols);
         InvalidateReferenceIdentityContractForMutation();
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 20);

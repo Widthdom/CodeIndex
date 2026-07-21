@@ -252,6 +252,8 @@ public partial class McpServer
         db.InitializeSchema();
 
         var writer = new DbWriter(db);
+        using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(
+            rebuild || !writer.HasAnyIndexedFiles());
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(requestToken);
         var repositoryRoot = GitHelper.TryGetRepositoryRoot(projectPath, requestToken);

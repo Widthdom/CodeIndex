@@ -175,6 +175,7 @@ public partial class DbWriter
         // same transaction, before any direct deletion becomes visible.
         // definition / cross-file reference の削除は retained reference の candidate
         // cardinality を変え得るため、削除前に同一 transaction 内で contract を降格する。
+        TrackReferenceGraphFilesBeforeMutation(fileIds);
         InvalidateReferenceIdentityContractForMutation();
         if (_deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
         {
@@ -208,13 +209,30 @@ public partial class DbWriter
                   WHERE retained_symbols.file_id NOT IN ({idList})
                     AND retained_symbols.name = symbol_references.symbol_name
               )
-            RETURNING file_id";
+            RETURNING id,
+                      file_id,
+                      source_symbol_id,
+                      target_symbol_id,
+                      container_name_folded,
+                      symbol_name_folded";
         var affectedFileIds = new HashSet<long>();
+        var deletedReferences = new List<(long Id, long FileId, long? SourceId, long? TargetId, string? ContainerNameFolded, string? SymbolNameFolded)>();
         using (var reader = deleteCmd.ExecuteReader())
         {
             while (reader.Read())
-                affectedFileIds.Add(reader.GetInt64(0));
+            {
+                var fileId = reader.GetInt64(1);
+                affectedFileIds.Add(fileId);
+                deletedReferences.Add((
+                    reader.GetInt64(0),
+                    fileId,
+                    ReadNullableInt64(reader, 2),
+                    ReadNullableInt64(reader, 3),
+                    ReadNullableString(reader, 4),
+                    ReadNullableString(reader, 5)));
+            }
         }
+        TrackReferenceGraphDeletedReferences(deletedReferences);
         RefreshHotspotReferenceCounts(affectedFileIds, CancellationToken.None);
     }
 

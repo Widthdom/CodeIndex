@@ -36,6 +36,26 @@ public partial class DbWriter
             BindSupportedLanguageParameterValues(countCmd, values);
             deleted = checked((int)(long)countCmd.ExecuteScalar()!);
         }
+        if (deleted > 0 && IsTrackingReferenceGraphRefresh)
+        {
+            using var affectedCmd = _conn.CreateCommand();
+            affectedCmd.Transaction = _activeTransaction;
+            affectedCmd.CommandText = $@"
+                SELECT DISTINCT sr.file_id
+                FROM symbol_references sr
+                JOIN files f ON f.id = sr.file_id
+                WHERE f.lang IS NOT NULL
+                  AND f.lang NOT IN ({string.Join(", ", inParams)})";
+            AddSupportedLanguageParameters(affectedCmd, values.Count);
+            BindSupportedLanguageParameterValues(affectedCmd, values);
+            var affectedFileIds = new HashSet<long>();
+            using (var reader = affectedCmd.ExecuteReader())
+            {
+                while (reader.Read())
+                    affectedFileIds.Add(reader.GetInt64(0));
+            }
+            TrackReferenceGraphFilesBeforeMutation(affectedFileIds);
+        }
         if (deleted > 0 && _deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
         {
             using var affectedCmd = _conn.CreateCommand();
@@ -102,6 +122,7 @@ public partial class DbWriter
     public int PurgeAllReferences()
     {
         using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        RequireFullReferenceGraphRefresh();
         int deletedReferences;
         using (var countCmd = _conn.CreateCommand())
         {
