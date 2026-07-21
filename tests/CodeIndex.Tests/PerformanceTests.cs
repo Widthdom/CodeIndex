@@ -242,6 +242,36 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void CSharpStaticInterfacePrepass_LargeSemanticProbeStaysWithinAllocationBudget()
+    {
+        const int repeats = 12;
+        var filler = new string('x', 576 * 1024);
+        var semanticNegative = $"class C {{ const string S = \"interface I {{ static abstract int M(); }}\"; {filler} }}";
+        var contract = $"interface I {{ {filler} static abstract int M(); }}";
+        Assert.False(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(semanticNegative));
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(contract));
+
+        var negativeResult = false;
+        var contractResult = false;
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var iteration = 0; iteration < repeats; iteration++)
+            {
+                negativeResult |= CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(semanticNegative);
+                contractResult |= CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(contract);
+            }
+        });
+
+        Assert.False(negativeResult);
+        Assert.True(contractResult);
+        Assert.True(allocatedBytes < 4_096, $"C# static-interface semantic probes allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void SymbolExtraction_JavaScriptTypeScriptDenseIdentifiers_StaysWithinAllocationBudget()
     {
         var content = BuildJavaScriptTypeScriptDenseIdentifierFixture(functionCount: 180);

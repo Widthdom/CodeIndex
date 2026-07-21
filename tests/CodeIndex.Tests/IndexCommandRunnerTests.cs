@@ -3236,6 +3236,46 @@ public sealed class Caller
         Assert.False(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
     }
 
+    [Theory]
+    [InlineData("class C { const string Value = \"interface I { static abstract int M(); }\"; }")]
+    [InlineData("class C { const string Value = @\"interface I { static abstract int M(); }\"; }")]
+    [InlineData("class C { const string Value = \"\"\"interface I { static abstract int M(); }\"\"\"; }")]
+    [InlineData("class C { const string Value = $\"\"\"interface I { static abstract int M(); }\"\"\"; }")]
+    [InlineData("class C { const string Value = $@\"interface I { static abstract int M(); }\"; }")]
+    [InlineData("class C { const string Value = @$\"interface I { static abstract int M(); }\"; }")]
+    [InlineData("class C { // interface I { static abstract int M(); }\n }")]
+    [InlineData("class C { /* interface I { static abstract int M(); } */ }")]
+    [InlineData("interfaceFactory I { static abstract int M(); }")]
+    [InlineData("interface I { staticValue abstract int M(); }")]
+    [InlineData("interface I { static abstractValue int M(); }")]
+    public void MayContainCSharpStaticInterfaceContract_LexicalDecoysAndTokenPrefixes_ReturnFalse(string content)
+    {
+        Assert.False(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
+    }
+
+    [Theory]
+    [InlineData("/* } ; */ public interface I { static abstract int M(); }")]
+    [InlineData("public interface I { string Text => \"} ;\"; static virtual int M() => 0; }")]
+    [InlineData("public interface I { string Text => \"\"\"} ; interface Fake { static abstract int X(); }\"\"\"; static abstract int M(); }")]
+    [InlineData("public interface I { string Text => \"\"\"\"embedded \"\"\" quote\"\"\"\"; static abstract int M(); }")]
+    [InlineData("public interface Outer { interface Inner { static virtual int M() => 0; } }")]
+    [InlineData("public interface I { char Quote => '\\''; static abstract int M(); }")]
+    public void MayContainCSharpStaticInterfaceContract_LexicalBoundariesPreserveRealContracts(string content)
+    {
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
+    }
+
+    [Fact]
+    public void MayContainCSharpStaticInterfaceContract_DeeplyNestedInterfacesPreserveContract()
+    {
+        var content = string.Concat(
+                          Enumerable.Range(0, 40).Select(index => $"interface I{index} {{ "))
+                      + "static abstract int M();"
+                      + new string('}', 40);
+
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
+    }
+
     [Fact]
     public void CSharpPrepassFileTargetCreate_TrailingRootSeparatorKeepsRelativePaths()
     {

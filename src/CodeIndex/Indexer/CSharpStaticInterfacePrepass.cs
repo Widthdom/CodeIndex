@@ -1,3 +1,4 @@
+using System.Buffers;
 using CodeIndex.Database;
 using CodeIndex.Models;
 
@@ -74,17 +75,11 @@ internal static class CSharpStaticInterfacePrepass
                 reportCandidateFile?.Invoke(candidateIndex, target.DisplayRelativePath);
                 try
                 {
-                    if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
-                        target.FilePath,
-                        target.RelativePath,
-                        cancellationToken))
-                        return;
-
-                    var content = indexer.LoadNormalizedContentForPrepass(
+                    var content = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(
                         target.FilePath,
                         target.RelativePath,
                         cancellationToken);
-                    if (MayContainCSharpStaticInterfaceContract(content))
+                    if (content is not null && MayContainCSharpStaticInterfaceContract(content))
                         extractedByCandidate[candidateIndex] = SymbolExtractor.Extract(
                             0,
                             "csharp",
@@ -180,21 +175,7 @@ internal static class CSharpStaticInterfacePrepass
             return false;
         }
 
-        var masked = MaskCSharpCommentsAndStrings(content);
-        var index = 0;
-        while ((index = IndexOfCSharpWord(masked, "interface", index)) >= 0)
-        {
-            var bodyStart = masked.IndexOf('{', index + "interface".Length);
-            if (bodyStart < 0)
-                return false;
-
-            if (CSharpInterfaceBodyMayContainStaticContract(masked, bodyStart))
-                return true;
-
-            index = bodyStart + 1;
-        }
-
-        return false;
+        return CSharpCodeMayContainStaticInterfaceContract(contentSpan);
     }
 
     internal static bool RawBytesMayContainCSharpStaticInterfaceContract(byte[] bytes)
@@ -359,264 +340,250 @@ internal static class CSharpStaticInterfacePrepass
         return false;
     }
 
-    private static bool CSharpInterfaceBodyMayContainStaticContract(string masked, int bodyStart)
+    private static bool CSharpCodeMayContainStaticInterfaceContract(ReadOnlySpan<char> content)
     {
-        var depth = 1;
-        var memberStart = bodyStart + 1;
-        for (var index = bodyStart + 1; index < masked.Length; index++)
-        {
-            var ch = masked[index];
-            if (ch == '{')
-            {
-                if (depth == 1 && CSharpMemberHeaderHasStaticContract(masked, memberStart, index))
-                    return true;
-
-                depth++;
-            }
-            else if (ch == '}')
-            {
-                depth--;
-                if (depth == 0)
-                    return false;
-
-                if (depth == 1)
-                    memberStart = index + 1;
-            }
-            else if (ch == ';' && depth == 1)
-            {
-                if (CSharpMemberHeaderHasStaticContract(masked, memberStart, index))
-                    return true;
-
-                memberStart = index + 1;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool CSharpMemberHeaderHasStaticContract(string masked, int start, int endExclusive)
-    {
-        if (start < 0 || endExclusive <= start || endExclusive > masked.Length)
-            return false;
-
-        var header = masked.AsSpan(start, endExclusive - start);
-        return ContainsCSharpWord(header, "static")
-               && (ContainsCSharpWord(header, "abstract")
-                   || ContainsCSharpWord(header, "virtual"));
-    }
-
-    private static int IndexOfCSharpWord(string text, string word, int startIndex)
-    {
-        var index = Math.Max(0, startIndex);
-        while (index < text.Length)
-        {
-            index = text.IndexOf(word, index, StringComparison.Ordinal);
-            if (index < 0)
-                return -1;
-
-            var before = index == 0 ? '\0' : text[index - 1];
-            var afterIndex = index + word.Length;
-            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
-            if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
-                return index;
-
-            index += word.Length;
-        }
-
-        return -1;
-    }
-
-    private static string MaskCSharpCommentsAndStrings(string content)
-    {
-        var chars = content.ToCharArray();
-        var inLineComment = false;
-        var inBlockComment = false;
-        var inString = false;
-        var inChar = false;
-        var inVerbatimString = false;
-        var inRawString = false;
+        const int StackFrameCount = 32;
+        Span<CSharpInterfaceScanFrame> frames = stackalloc CSharpInterfaceScanFrame[StackFrameCount];
+        CSharpInterfaceScanFrame[]? rentedFrames = null;
+        var frameCount = 0;
+        var braceDepth = 0;
+        var pendingInterfaceBody = false;
+        var mode = CSharpLexMode.Code;
         var rawQuoteCount = 0;
 
-        for (var index = 0; index < chars.Length; index++)
+        try
         {
-            var ch = chars[index];
-            var next = index + 1 < chars.Length ? chars[index + 1] : '\0';
-
-            if (inLineComment)
+            var index = 0;
+            while (index < content.Length)
             {
-                if (ch is '\r' or '\n')
+                var ch = content[index];
+                var next = index + 1 < content.Length ? content[index + 1] : '\0';
+                switch (mode)
                 {
-                    inLineComment = false;
-                }
-                else
-                {
-                    chars[index] = ' ';
+                    case CSharpLexMode.LineComment:
+                        if (ch is '\r' or '\n')
+                            mode = CSharpLexMode.Code;
+                        index++;
+                        continue;
+                    case CSharpLexMode.BlockComment:
+                        if (ch == '*' && next == '/')
+                        {
+                            mode = CSharpLexMode.Code;
+                            index += 2;
+                        }
+                        else
+                        {
+                            index++;
+                        }
+                        continue;
+                    case CSharpLexMode.String:
+                        if (ch == '\\' && next != '\0')
+                            index += 2;
+                        else
+                        {
+                            if (ch == '"')
+                                mode = CSharpLexMode.Code;
+                            index++;
+                        }
+                        continue;
+                    case CSharpLexMode.Character:
+                        if (ch == '\\' && next != '\0')
+                            index += 2;
+                        else
+                        {
+                            if (ch == '\'')
+                                mode = CSharpLexMode.Code;
+                            index++;
+                        }
+                        continue;
+                    case CSharpLexMode.VerbatimString:
+                        if (ch == '"' && next == '"')
+                            index += 2;
+                        else
+                        {
+                            if (ch == '"')
+                                mode = CSharpLexMode.Code;
+                            index++;
+                        }
+                        continue;
+                    case CSharpLexMode.RawString:
+                        if (ch != '"')
+                        {
+                            index++;
+                            continue;
+                        }
+
+                        var closingQuoteCount = CountConsecutiveQuotes(content, index);
+                        if (closingQuoteCount < rawQuoteCount)
+                        {
+                            index += closingQuoteCount;
+                            continue;
+                        }
+
+                        index += rawQuoteCount;
+                        mode = CSharpLexMode.Code;
+                        continue;
                 }
 
-                continue;
-            }
-
-            if (inBlockComment)
-            {
-                if (ch == '*' && next == '/')
+                if (ch == '/' && next == '/')
                 {
-                    chars[index] = ' ';
-                    chars[index + 1] = ' ';
+                    mode = CSharpLexMode.LineComment;
+                    index += 2;
+                    continue;
+                }
+                if (ch == '/' && next == '*')
+                {
+                    mode = CSharpLexMode.BlockComment;
+                    index += 2;
+                    continue;
+                }
+                if ((ch == '@' && next == '"')
+                    || (index + 2 < content.Length
+                        && ((ch == '$' && next == '@') || (ch == '@' && next == '$'))
+                        && content[index + 2] == '"'))
+                {
+                    mode = CSharpLexMode.VerbatimString;
+                    index += next == '"' ? 2 : 3;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    var quoteCount = CountConsecutiveQuotes(content, index);
+                    if (quoteCount >= 3)
+                    {
+                        rawQuoteCount = quoteCount;
+                        mode = CSharpLexMode.RawString;
+                        index += quoteCount;
+                    }
+                    else
+                    {
+                        mode = CSharpLexMode.String;
+                        index++;
+                    }
+                    continue;
+                }
+                if (ch == '\'')
+                {
+                    mode = CSharpLexMode.Character;
                     index++;
-                    inBlockComment = false;
+                    continue;
                 }
-                else if (ch is not ('\r' or '\n'))
+                if (IsCSharpIdentifierPart(ch))
                 {
-                    chars[index] = ' ';
+                    var wordStart = index++;
+                    while (index < content.Length && IsCSharpIdentifierPart(content[index]))
+                        index++;
+
+                    var word = content[wordStart..index];
+                    if (word.SequenceEqual("interface"))
+                        pendingInterfaceBody = true;
+                    if (frameCount > 0 && braceDepth == frames[frameCount - 1].BodyDepth)
+                    {
+                        ref var frame = ref frames[frameCount - 1];
+                        if (word.SequenceEqual("static"))
+                            frame.HasStatic = true;
+                        else if (word.SequenceEqual("abstract"))
+                            frame.HasAbstract = true;
+                        else if (word.SequenceEqual("virtual"))
+                            frame.HasVirtual = true;
+                    }
+                    continue;
                 }
 
-                continue;
-            }
-
-            if (inRawString)
-            {
-                if (ch == '"' && HasConsecutiveQuotes(chars, index, rawQuoteCount))
+                if (ch == '{')
                 {
-                    for (var quote = 0; quote < rawQuoteCount && index + quote < chars.Length; quote++)
-                        chars[index + quote] = ' ';
-                    index += rawQuoteCount - 1;
-                    inRawString = false;
-                }
-                else if (ch is not ('\r' or '\n'))
-                {
-                    chars[index] = ' ';
-                }
+                    if (frameCount > 0
+                        && braceDepth == frames[frameCount - 1].BodyDepth
+                        && frames[frameCount - 1].HasStaticContract)
+                    {
+                        return true;
+                    }
 
-                continue;
-            }
-
-            if (inVerbatimString)
-            {
-                if (ch == '"' && next == '"')
-                {
-                    chars[index] = ' ';
-                    chars[index + 1] = ' ';
+                    braceDepth++;
+                    if (pendingInterfaceBody)
+                    {
+                        if (frameCount == frames.Length)
+                        {
+                            var expandedFrames = ArrayPool<CSharpInterfaceScanFrame>.Shared.Rent(frames.Length * 2);
+                            frames.CopyTo(expandedFrames);
+                            if (rentedFrames is not null)
+                                ArrayPool<CSharpInterfaceScanFrame>.Shared.Return(rentedFrames);
+                            rentedFrames = expandedFrames;
+                            frames = rentedFrames;
+                        }
+                        frames[frameCount++] = new CSharpInterfaceScanFrame(braceDepth);
+                        pendingInterfaceBody = false;
+                    }
                     index++;
-                }
-                else if (ch == '"')
-                {
-                    chars[index] = ' ';
-                    inVerbatimString = false;
-                }
-                else if (ch is not ('\r' or '\n'))
-                {
-                    chars[index] = ' ';
+                    continue;
                 }
 
-                continue;
-            }
-
-            if (inString)
-            {
-                if (ch == '\\' && next != '\0')
+                if (ch == '}')
                 {
-                    chars[index] = ' ';
-                    chars[index + 1] = ' ';
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    while (frameCount > 0 && frames[frameCount - 1].BodyDepth > braceDepth)
+                        frameCount--;
+                    if (frameCount > 0 && frames[frameCount - 1].BodyDepth == braceDepth)
+                        frames[frameCount - 1].ResetMemberHeader();
                     index++;
-                }
-                else if (ch == '"')
-                {
-                    chars[index] = ' ';
-                    inString = false;
-                }
-                else if (ch is not ('\r' or '\n'))
-                {
-                    chars[index] = ' ';
+                    continue;
                 }
 
-                continue;
-            }
-
-            if (inChar)
-            {
-                if (ch == '\\' && next != '\0')
+                if (ch == ';'
+                    && frameCount > 0
+                    && braceDepth == frames[frameCount - 1].BodyDepth)
                 {
-                    chars[index] = ' ';
-                    chars[index + 1] = ' ';
-                    index++;
+                    ref var frame = ref frames[frameCount - 1];
+                    if (frame.HasStaticContract)
+                        return true;
+                    frame.ResetMemberHeader();
                 }
-                else if (ch == '\'')
-                {
-                    chars[index] = ' ';
-                    inChar = false;
-                }
-                else if (ch is not ('\r' or '\n'))
-                {
-                    chars[index] = ' ';
-                }
-
-                continue;
-            }
-
-            if (ch == '/' && next == '/')
-            {
-                chars[index] = ' ';
-                chars[index + 1] = ' ';
                 index++;
-                inLineComment = true;
             }
-            else if (ch == '/' && next == '*')
-            {
-                chars[index] = ' ';
-                chars[index + 1] = ' ';
-                index++;
-                inBlockComment = true;
-            }
-            else if (ch == '@' && next == '"')
-            {
-                chars[index] = ' ';
-                chars[index + 1] = ' ';
-                index++;
-                inVerbatimString = true;
-            }
-            else if (ch == '"' && HasConsecutiveQuotes(chars, index, 3))
-            {
-                rawQuoteCount = CountConsecutiveQuotes(chars, index);
-                for (var quote = 0; quote < rawQuoteCount && index + quote < chars.Length; quote++)
-                    chars[index + quote] = ' ';
-                index += rawQuoteCount - 1;
-                inRawString = true;
-            }
-            else if (ch == '"')
-            {
-                chars[index] = ' ';
-                inString = true;
-            }
-            else if (ch == '\'')
-            {
-                chars[index] = ' ';
-                inChar = true;
-            }
-        }
 
-        return new string(chars);
-    }
-
-    private static bool HasConsecutiveQuotes(char[] chars, int index, int count)
-    {
-        if (index + count > chars.Length)
             return false;
-
-        for (var offset = 0; offset < count; offset++)
-        {
-            if (chars[index + offset] != '"')
-                return false;
         }
-
-        return true;
+        finally
+        {
+            if (rentedFrames is not null)
+                ArrayPool<CSharpInterfaceScanFrame>.Shared.Return(rentedFrames);
+        }
     }
 
-    private static int CountConsecutiveQuotes(char[] chars, int index)
+    private static int CountConsecutiveQuotes(ReadOnlySpan<char> content, int index)
     {
         var count = 0;
-        while (index + count < chars.Length && chars[index + count] == '"')
+        while (index + count < content.Length && content[index + count] == '"')
             count++;
         return count;
+    }
+
+    private enum CSharpLexMode : byte
+    {
+        Code,
+        LineComment,
+        BlockComment,
+        String,
+        Character,
+        VerbatimString,
+        RawString,
+    }
+
+    private struct CSharpInterfaceScanFrame(int bodyDepth)
+    {
+        internal int BodyDepth { get; } = bodyDepth;
+        internal bool HasStatic { get; set; }
+        internal bool HasAbstract { get; set; }
+        internal bool HasVirtual { get; set; }
+        internal readonly bool HasStaticContract => HasStatic && (HasAbstract || HasVirtual);
+
+        internal void ResetMemberHeader()
+        {
+            HasStatic = false;
+            HasAbstract = false;
+            HasVirtual = false;
+        }
     }
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)

@@ -1846,6 +1846,325 @@ public partial class FileIndexerTests
         Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
     }
 
+    [Theory]
+    [InlineData("raw-negative", false, false)]
+    [InlineData("semantic-negative", true, false)]
+    [InlineData("contract", true, true)]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_ProbeShapesUseOneAuthorizedBoundedSnapshot(
+        string shape,
+        bool expectsRawCandidate,
+        bool expectsSemanticContract)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_snapshot");
+        var filler = new string('x', 128 * 1024);
+        var source = shape switch
+        {
+            "raw-negative" => $"public class C {{ static int M() => 0; {filler} }}",
+            "semantic-negative" => $"public class C {{ const string S = \"interface I {{ static abstract int M(); }}\"; {filler} }}",
+            "contract" => $"public interface I {{ static abstract int M(); {filler} }}",
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+        var bytes = Encoding.UTF8.GetBytes(source);
+        var path = TestProjectHelper.WriteBinaryFile(project.Root, "Fixture.cs", bytes);
+        var openCount = 0;
+        var authorizationCount = 0;
+        CountingCSharpPrepassFileStream? openedStream = null;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (string.Equals(candidate, path, StringComparison.Ordinal))
+                    authorizationCount++;
+            },
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                openedStream = new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 4 * 1024);
+                return openedStream;
+            });
+
+        var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
+
+        Assert.Equal(1, openCount);
+        Assert.Equal(1, authorizationCount);
+        Assert.NotNull(openedStream);
+        Assert.Equal(expectsRawCandidate, candidateContent is not null);
+        Assert.Equal(
+            expectsSemanticContract,
+            candidateContent is not null
+            && CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent));
+        if (expectsRawCandidate)
+        {
+            Assert.Equal(1, openedStream.RewindCount);
+            Assert.InRange(openedStream.RawProbeBytes, 1, bytes.Length - 1);
+            Assert.Equal(bytes.Length + openedStream.RawProbeBytes, openedStream.BytesRead);
+        }
+        else
+        {
+            Assert.Equal(0, openedStream.RewindCount);
+            Assert.Equal(bytes.Length, openedStream.BytesRead);
+        }
+    }
+
+    [Theory]
+    [InlineData("utf8")]
+    [InlineData("utf8-bom")]
+    [InlineData("utf16-le")]
+    [InlineData("utf16-be")]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_ContractEncodingsPreserveSemanticProbe(string encodingName)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_encoding");
+        const string source = "public interface I { static abstract int M(); }\n";
+        Encoding encoding = encodingName switch
+        {
+            "utf8" => new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            "utf8-bom" => new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+            "utf16-le" => new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
+            "utf16-be" => new UnicodeEncoding(bigEndian: true, byteOrderMark: true),
+            _ => throw new ArgumentOutOfRangeException(nameof(encodingName), encodingName, null),
+        };
+        var bytes = encoding.GetPreamble().Concat(encoding.GetBytes(source)).ToArray();
+        var path = TestProjectHelper.WriteBinaryFile(project.Root, "Fixture.cs", bytes);
+        var openCount = 0;
+        var authorizationCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (string.Equals(candidate, path, StringComparison.Ordinal))
+                    authorizationCount++;
+            },
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 7);
+            });
+
+        var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
+
+        Assert.Equal(1, openCount);
+        Assert.Equal(1, authorizationCount);
+        Assert.Equal(source, candidateContent);
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_IndexBlockingNullPreservesBinaryRejection()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_null");
+        var bytes = Encoding.UTF8.GetBytes("public interface I { static abstract int M(); }\0binary");
+        var path = TestProjectHelper.WriteBinaryFile(project.Root, "Fixture.cs", bytes);
+        var openCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 8);
+            });
+
+        var ex = Assert.Throws<FileIndexer.BinaryFileSkippedException>(
+            () => indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs"));
+
+        Assert.Equal(1, openCount);
+        Assert.Equal(Array.IndexOf(bytes, (byte)0), ex.NullByteOffset);
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_GrowthBeyondLimitIsRejectedOnSameHandle()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_growth");
+        const string source = "interface I{static abstract int M();}";
+        var path = TestProjectHelper.WriteTextFile(project.Root, "Fixture.cs", source);
+        var initialBytes = new FileInfo(path).Length;
+        var openCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: initialBytes + 8,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 64,
+                    afterFirstRead: () => File.AppendAllText(path, new string('x', 32)));
+            });
+
+        var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(
+            () => indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs"));
+
+        Assert.Equal(1, openCount);
+        Assert.Contains("grew during read", ex.Message);
+        Assert.Contains("--max-file-bytes", ex.Message);
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_TruncationReauthorizesAndReopensSafely()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_truncation");
+        const string replacementSource = "interface I{static abstract int M();}";
+        var originalSource = replacementSource + new string('x', 32 * 1024);
+        var path = TestProjectHelper.WriteTextFile(project.Root, "Fixture.cs", originalSource);
+        var replacementBytes = Encoding.UTF8.GetBytes(replacementSource);
+        var openCount = 0;
+        var authorizationCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (string.Equals(candidate, path, StringComparison.Ordinal))
+                    authorizationCount++;
+            },
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                Action? afterFirstRead = null;
+                if (openCount == 1)
+                {
+                    afterFirstRead = () =>
+                    {
+                        using var replacement = new FileStream(
+                            path,
+                            FileMode.Create,
+                            FileAccess.Write,
+                            FileShare.ReadWrite | FileShare.Delete);
+                        replacement.Write(replacementBytes);
+                        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(5));
+                    };
+                }
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 4 * 1024,
+                    afterFirstRead);
+            });
+
+        var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
+
+        Assert.Equal(2, openCount);
+        Assert.Equal(2, authorizationCount);
+        Assert.Equal(replacementSource, candidateContent);
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_AtomicReplacementReauthorizesAndReadsNewFile()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_atomic_replace");
+        var originalSource = "class C { static int M() => 0; }" + new string('x', 32 * 1024);
+        const string replacementSource = "interface I { static abstract int M(); }";
+        var path = TestProjectHelper.WriteTextFile(project.Root, "Fixture.cs", originalSource);
+        var replacementPath = TestProjectHelper.WriteTextFile(project.Root, "Replacement.cs", replacementSource);
+        File.SetLastWriteTimeUtc(replacementPath, DateTime.UtcNow.AddSeconds(5));
+        var openCount = 0;
+        var authorizationCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (string.Equals(candidate, path, StringComparison.Ordinal))
+                    authorizationCount++;
+            },
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                var stream = new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 4 * 1024);
+                if (openCount == 1)
+                    File.Move(replacementPath, path, overwrite: true);
+                return stream;
+            });
+
+        var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
+
+        Assert.Equal(2, openCount);
+        Assert.Equal(2, authorizationCount);
+        Assert.Equal(replacementSource, candidateContent);
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_CancellationAndAccessFailuresDoNotReopen()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_failures");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "Fixture.cs",
+            "interface I { static int M(); }" + new string('x', 16 * 1024));
+        using var cancellation = new CancellationTokenSource();
+        var cancellationOpens = 0;
+        var cancellingIndexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                cancellationOpens++;
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 64,
+                    afterFirstRead: cancellation.Cancel);
+            });
+
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            cancellingIndexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(
+                path,
+                "Fixture.cs",
+                cancellation.Token));
+        Assert.Equal(1, cancellationOpens);
+
+        var authorizationCount = 0;
+        var authorizationOpens = 0;
+        var rejectingIndexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (!string.Equals(candidate, path, StringComparison.Ordinal))
+                    return;
+                authorizationCount++;
+                throw new UnauthorizedAccessException("fixture rejection");
+            },
+            openReadForIndexContent: candidate =>
+            {
+                authorizationOpens++;
+                return new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 64);
+            });
+
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            rejectingIndexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs"));
+        Assert.Equal(1, authorizationCount);
+        Assert.Equal(0, authorizationOpens);
+    }
+
     [Fact]
     public void BuildRecordWithRawBytes_ExplicitMaxFileBytes_AllowsLargerSourceFile()
     {
@@ -6648,6 +6967,74 @@ public partial class FileIndexerTests
             FileIndexer.DefaultMaxFileSizeBytes,
             out var checksum));
         Assert.Equal(FileIndexer.ComputeChecksum(bytes), checksum);
+    }
+
+    private sealed class CountingCSharpPrepassFileStream : FileStream
+    {
+        private readonly int _maxReadBytes;
+        private readonly Action? _afterFirstRead;
+        private bool _firstReadObserved;
+
+        internal CountingCSharpPrepassFileStream(
+            string path,
+            int maxReadBytes,
+            Action? afterFirstRead = null)
+            : base(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete)
+        {
+            _maxReadBytes = maxReadBytes;
+            _afterFirstRead = afterFirstRead;
+        }
+
+        internal long BytesRead { get; private set; }
+        internal long RawProbeBytes { get; private set; }
+        internal int RewindCount { get; private set; }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = base.Read(buffer, offset, Math.Min(count, _maxReadBytes));
+            RecordRead(read);
+            return read;
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            var read = base.Read(buffer[..Math.Min(buffer.Length, _maxReadBytes)]);
+            RecordRead(read);
+            return read;
+        }
+
+        public override int ReadByte()
+        {
+            var value = base.ReadByte();
+            if (value >= 0)
+                BytesRead++;
+            return value;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            if (offset == 0 && origin == SeekOrigin.Begin && Position > 0)
+            {
+                if (RewindCount == 0)
+                    RawProbeBytes = BytesRead;
+                RewindCount++;
+            }
+            return base.Seek(offset, origin);
+        }
+
+        private void RecordRead(int read)
+        {
+            BytesRead += read;
+            if (read <= 0 || _firstReadObserved)
+                return;
+
+            _firstReadObserved = true;
+            _afterFirstRead?.Invoke();
+        }
     }
 
 }
