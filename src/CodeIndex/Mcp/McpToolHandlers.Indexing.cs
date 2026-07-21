@@ -938,7 +938,7 @@ public partial class McpServer
                 if (csharpMetadataTargetsNeedRefresh)
                 {
                     McpIndexCSharpMetadataResolveForTesting?.Invoke();
-                    writer.ResolveCSharpMetadataTargets();
+                    writer.ResolveCSharpMetadataTargets(requestToken);
                 }
                 writer.MarkMetadataTargetReady("csharp");
                 csharpMetadataTargetReadyAfter = true;

@@ -31,10 +31,18 @@ public partial class DbWriter
     /// target 扱いを残す。target でない行は明示的に 0 で書き、reader で「未解決」と区別する。
     /// </summary>
     public void ResolveCSharpMetadataTargets()
+        => _ = ResolveCSharpMetadataTargetsCore(CancellationToken.None);
+
+    internal void ResolveCSharpMetadataTargets(CancellationToken cancellationToken)
+        => _ = ResolveCSharpMetadataTargetsCore(cancellationToken);
+
+    internal CSharpMetadataTargetResolutionStats ResolveCSharpMetadataTargetsCore(
+        CancellationToken cancellationToken)
     {
-        var rows = LoadCSharpClassRows();
+        cancellationToken.ThrowIfCancellationRequested();
+        var rows = LoadCSharpClassRows(cancellationToken);
         if (rows.Count == 0)
-            return;
+            return default;
 
         // Fully-qualified-name index: `Namespace.TypeName` -> ids. Used when the base type
         // in a signature is qualified (`: A.BaseAttr`) so we do not resolve against an
@@ -60,11 +68,9 @@ public partial class DbWriter
         // 名前空間 / 入れ子チェーンを辿って解決し、無関係な名前空間に同名の本物 attribute が
         // 存在するだけで非 attribute impostor が `is_metadata_target=1` に昇格するのを防ぐ。
         var scopeNameToIds = new Dictionary<(string Scope, string Name), List<long>>();
-        var rowScope = new Dictionary<long, string>();
-        var rowFileId = new Dictionary<long, long>();
-        var bases = new Dictionary<long, List<string>>();
         foreach (var row in rows)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             foreach (var fq in EnumerateQualifiedKeys(row.QualifiedName, row.Name))
             {
                 if (!qualifiedToIds.TryGetValue(fq, out var qbucket))
@@ -74,9 +80,7 @@ public partial class DbWriter
                 }
                 qbucket.Add(row.Id);
             }
-            string scope = GetEnclosingScope(row.QualifiedName, row.Name);
-            rowScope[row.Id] = scope;
-            rowFileId[row.Id] = row.FileId;
+            var scope = GetEnclosingScope(row.QualifiedName, row.Name);
             var scopeKey = (scope, row.Name);
             if (!scopeNameToIds.TryGetValue(scopeKey, out var sbucket))
             {
@@ -84,7 +88,6 @@ public partial class DbWriter
                 scopeNameToIds[scopeKey] = sbucket;
             }
             sbucket.Add(row.Id);
-            bases[row.Id] = ParseCSharpBaseIdentifiers(row.Signature);
         }
 
         // Per-file import tables so unqualified bases that come from `using Namespace;` /
@@ -95,37 +98,86 @@ public partial class DbWriter
         // ファイル別 import テーブル。非修飾基底が `using Namespace;` や `using Alias = FQN;` 経由
         // で別ファイルの実体に解決される C# の一般パターンをカバーする。`global using` は全ファイルで
         // 集約して、ファイルを跨ぐ拡張も拾う。Issue #435 codex review iter 5。
-        var (perFileImports, globalImports) = LoadCSharpImportsByFile();
+        var (perFileImports, globalImports) = LoadCSharpImportsByFile(cancellationToken);
 
         var extractorTargets = rows
             .Where(row => row.ExtractorMetadataTarget)
             .Select(row => row.Id)
             .ToHashSet();
         var targets = new HashSet<long>(extractorTargets);
-        bool changed = true;
-        while (changed)
+        var reverseDependents = new Dictionary<long, List<long>>();
+        var dependencies = new HashSet<long>();
+        int dependencyEdgeCount = 0;
+        foreach (var row in rows)
         {
-            changed = false;
-            foreach (var row in rows)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (row.ExtractorMetadataTarget)
+                continue;
+
+            dependencies.Clear();
+            perFileImports.TryGetValue(row.FileId, out var fileImports);
+            bool directTarget = CollectMetadataTargetDependencies(
+                ParseCSharpBaseIdentifiers(row.Signature),
+                GetEnclosingScope(row.QualifiedName, row.Name),
+                scopeNameToIds,
+                qualifiedToIds,
+                fileImports,
+                globalImports,
+                dependencies);
+            if (directTarget)
             {
-                if (targets.Contains(row.Id))
-                    continue;
-                FileImportSet? fileImports = null;
-                if (rowFileId.TryGetValue(row.Id, out var fid) && perFileImports.TryGetValue(fid, out var perFile))
-                    fileImports = perFile;
-                if (IsMetadataTargetByBases(bases[row.Id], rowScope[row.Id], targets, scopeNameToIds, qualifiedToIds, fileImports, globalImports))
+                targets.Add(row.Id);
+                continue;
+            }
+
+            foreach (var dependencyId in dependencies)
+            {
+                if (!reverseDependents.TryGetValue(dependencyId, out var dependents))
                 {
-                    targets.Add(row.Id);
-                    changed = true;
+                    dependents = new List<long>();
+                    reverseDependents[dependencyId] = dependents;
                 }
+                dependents.Add(row.Id);
+                dependencyEdgeCount++;
             }
         }
 
-        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        int queueVisitCount = 0;
+        var queue = new Queue<long>(targets);
+        while (queue.TryDequeue(out var targetId))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            queueVisitCount++;
+            if (!reverseDependents.TryGetValue(targetId, out var dependents))
+                continue;
+            foreach (var dependentId in dependents)
+            {
+                if (targets.Add(dependentId))
+                    queue.Enqueue(dependentId);
+            }
+        }
+
         bool hasMetadataTargetSource = ColumnExists("symbols", "metadata_target_source");
+        int rowsUpdated = 0;
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            bool target = targets.Contains(row.Id);
+            string? source = GetMetadataTargetSource(row.Id, target, extractorTargets);
+            if (row.CurrentMetadataTarget != (target ? 1L : 0L)
+                || (hasMetadataTargetSource
+                    && !string.Equals(row.CurrentMetadataTargetSource, source, StringComparison.Ordinal)))
+            {
+                rowsUpdated++;
+            }
+        }
+
         string updateSql = hasMetadataTargetSource
             ? "UPDATE symbols SET is_metadata_target = @flag, metadata_target_source = @source WHERE id = @id"
             : "UPDATE symbols SET is_metadata_target = @flag WHERE id = @id";
+        using var txn = rowsUpdated > 0 && !IsInTransaction()
+            ? BeginTransaction(cancellationToken, "resolve csharp metadata targets")
+            : null;
         var update = RentCommand(
             updateSql,
             c =>
@@ -145,28 +197,54 @@ public partial class DbWriter
             var pId = update.Parameters["@id"];
             foreach (var row in rows)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 bool target = targets.Contains(row.Id);
-                pFlag.Value = target ? 1 : 0;
-                if (pSource != null)
+                long flag = target ? 1L : 0L;
+                string? source = GetMetadataTargetSource(row.Id, target, extractorTargets);
+                if (row.CurrentMetadataTarget == flag
+                    && (!hasMetadataTargetSource
+                        || string.Equals(row.CurrentMetadataTargetSource, source, StringComparison.Ordinal)))
                 {
-                    pSource.Value = extractorTargets.Contains(row.Id)
-                        ? SymbolRecord.MetadataTargetSourceExtractor
-                        : target
-                            ? SymbolRecord.MetadataTargetSourceResolver
-                            : DBNull.Value;
+                    continue;
                 }
+
+                pFlag.Value = flag;
+                if (pSource != null)
+                    pSource.Value = source ?? (object)DBNull.Value;
                 pId.Value = row.Id;
                 update.ExecuteNonQuery();
             }
+            txn?.Commit();
         }
         finally
         {
             ReleaseCommand(update);
         }
-        txn?.Commit();
+
+        return new CSharpMetadataTargetResolutionStats(
+            rows.Count,
+            dependencyEdgeCount,
+            queueVisitCount,
+            rowsUpdated);
     }
 
-    private List<CSharpClassRow> LoadCSharpClassRows()
+    private static string? GetMetadataTargetSource(
+        long rowId,
+        bool target,
+        HashSet<long> extractorTargets)
+        => extractorTargets.Contains(rowId)
+            ? SymbolRecord.MetadataTargetSourceExtractor
+            : target
+                ? SymbolRecord.MetadataTargetSourceResolver
+                : null;
+
+    internal readonly record struct CSharpMetadataTargetResolutionStats(
+        int RowCount,
+        int DependencyEdgeCount,
+        int QueueVisitCount,
+        int RowsUpdated);
+
+    private List<CSharpClassRow> LoadCSharpClassRows(CancellationToken cancellationToken)
     {
         var rows = new List<CSharpClassRow>();
         if (!ColumnExists("symbols", "signature") || !ColumnExists("symbols", "is_metadata_target"))
@@ -191,17 +269,20 @@ public partial class DbWriter
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
-                bool extractorMetadataTarget = !reader.IsDBNull(5)
-                    && reader.GetInt64(5) == 1
-                    && !reader.IsDBNull(6)
-                    && string.Equals(reader.GetString(6), SymbolRecord.MetadataTargetSourceExtractor, StringComparison.Ordinal);
+                cancellationToken.ThrowIfCancellationRequested();
+                long? currentMetadataTarget = reader.IsDBNull(5) ? null : reader.GetInt64(5);
+                string? currentMetadataTargetSource = reader.IsDBNull(6) ? null : reader.GetString(6);
+                bool extractorMetadataTarget = currentMetadataTarget == 1
+                    && string.Equals(currentMetadataTargetSource, SymbolRecord.MetadataTargetSourceExtractor, StringComparison.Ordinal);
                 rows.Add(new CSharpClassRow(
                     reader.GetInt64(0),
                     reader.GetInt64(1),
                     reader.GetString(2),
                     reader.IsDBNull(3) ? null : reader.GetString(3),
                     reader.IsDBNull(4) ? null : reader.GetString(4),
-                    extractorMetadataTarget));
+                    extractorMetadataTarget,
+                    currentMetadataTarget,
+                    currentMetadataTargetSource));
             }
         }
         finally
@@ -217,7 +298,9 @@ public partial class DbWriter
         string Name,
         string? Signature,
         string? QualifiedName,
-        bool ExtractorMetadataTarget);
+        bool ExtractorMetadataTarget,
+        long? CurrentMetadataTarget,
+        string? CurrentMetadataTargetSource);
 
     // Per-file import set for C# unqualified-base resolution. `Namespaces` lists each
     // `using Foo.Bar;` target so `class X : Base` can probe `Foo.Bar.Base` in the qualified
@@ -243,7 +326,8 @@ public partial class DbWriter
     // `symbols.kind='import'` 行を C# ファイル別に読み、namespace 用 / alias 用に分ける。
     // `global using`（C# 10+）はリポジトリ全体に効くので、別途集約した集合として返す。判定は
     // 保存済み signature から行い、`=` があれば alias と認識する。
-    private (Dictionary<long, FileImportSet> PerFile, FileImportSet Global) LoadCSharpImportsByFile()
+    private (Dictionary<long, FileImportSet> PerFile, FileImportSet Global) LoadCSharpImportsByFile(
+        CancellationToken cancellationToken)
     {
         var perFile = new Dictionary<long, FileImportSet>();
         var global = new FileImportSet();
@@ -260,6 +344,7 @@ public partial class DbWriter
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 long fileId = reader.GetInt64(0);
                 string rawName = reader.GetString(1);
                 string? signature = reader.IsDBNull(2) ? null : reader.GetString(2);
@@ -497,14 +582,14 @@ public partial class DbWriter
         return fq;
     }
 
-    private static bool IsMetadataTargetByBases(
+    private static bool CollectMetadataTargetDependencies(
         List<string> baseIdentifiers,
         string derivingScope,
-        HashSet<long> resolvedTargets,
         Dictionary<(string Scope, string Name), List<long>> scopeNameToIds,
         Dictionary<string, List<long>> qualifiedToIds,
         FileImportSet? fileImports,
-        FileImportSet? globalImports)
+        FileImportSet? globalImports,
+        HashSet<long> dependencies)
     {
         foreach (var rawBaseName in baseIdentifiers)
         {
@@ -580,26 +665,17 @@ public partial class DbWriter
                     || qualifiedToIds.TryGetValue(normalized, out qids)
                     || (aliasExpanded != null && qualifiedToIds.TryGetValue(aliasExpanded, out qids)))
                 {
-                    bool anyResolved = false;
-                    foreach (var qid in qids)
-                    {
-                        if (resolvedTargets.Contains(qid))
-                        {
-                            anyResolved = true;
-                            break;
-                        }
-                    }
-                    if (anyResolved)
-                        return true;
-                    // Matched specific qualified in-repo classes but none (yet) resolved.
-                    // Wait for the next iteration instead of falling to the BCL heuristic —
-                    // promoting it would contradict the user's explicit qualified reference.
+                    AddMetadataTargetDependencies(dependencies, qids);
+                    // Matched specific qualified in-repo classes. Record reverse edges so a
+                    // target transition can enqueue this row instead of rescanning every class;
+                    // do not fall through to the BCL heuristic because that would contradict
+                    // the user's explicit qualified reference.
                     // A list is needed here because `partial class` can split a single FQN
                     // across multiple rows; if only the declaration carrying `: Attribute`
                     // is the real target, we must still iterate to promote it.
-                    // 修飾名で具体的な class 群に当たったが未確定。次回反復に委ねる。partial
-                    // で同一 FQN が複数行に分かれている場合も、どれか 1 つでも target になれば
-                    // この if で拾えるよう list で保持している。
+                    // 修飾名で具体的な class 群に当たったため逆辺を記録し、いずれかが target に
+                    // 遷移した時だけこの行を queue に積む。partial で同一 FQN が複数行に分かれる
+                    // 場合も、どれか 1 つから伝播できるよう list 全体を依存先として保持する。
                     continue;
                 }
                 // Qualified base did not match any in-repo class — treat as external and
@@ -640,22 +716,11 @@ public partial class DbWriter
 
             if (scopedIds != null)
             {
-                bool anyResolved = false;
-                foreach (var id in scopedIds)
-                {
-                    if (resolvedTargets.Contains(id))
-                    {
-                        anyResolved = true;
-                        break;
-                    }
-                }
-                if (anyResolved)
-                    return true;
-                // Same-scope in-repo class exists but is not (yet) a target — wait for
-                // the next fixed-point iteration. Don't fall through to the BCL
-                // heuristic because that would incorrectly promote a non-attribute
-                // in-repo class that literally shadows the base name.
-                // 同スコープに in-repo class があるなら BCL ヒューリスティックに落とさず、次回反復に委ねる。
+                AddMetadataTargetDependencies(dependencies, scopedIds);
+                // Same-scope in-repo classes become reverse dependencies. Don't fall through
+                // to the BCL heuristic because that would incorrectly promote an in-repo
+                // non-attribute class that literally shadows the base name.
+                // 同スコープの in-repo class は逆依存として記録し、BCL ヒューリスティックへは落とさない。
                 continue;
             }
 
@@ -674,46 +739,31 @@ public partial class DbWriter
             //    the alias target. Alias matches take precedence over namespace imports per
             //    C# lookup rules.
             // 1. alias import: `using AliasAttr = A.BaseAttr;` は qualified 索引を target で引く。
-            if (TryResolveAliasImport(head, fileImports, qualifiedToIds, resolvedTargets, out var aliasMatched, out var aliasResolved))
-            {
-                if (aliasResolved)
-                    return true;
-                if (aliasMatched)
-                    anyImportInRepoMatch = true;
-            }
-            if (TryResolveAliasImport(head, globalImports, qualifiedToIds, resolvedTargets, out aliasMatched, out aliasResolved))
-            {
-                if (aliasResolved)
-                    return true;
-                if (aliasMatched)
-                    anyImportInRepoMatch = true;
-            }
+            if (CollectAliasImportDependencies(
+                head, fileImports, qualifiedToIds, dependencies, out var aliasMatched))
+                return true;
+            anyImportInRepoMatch |= aliasMatched;
+            if (CollectAliasImportDependencies(
+                head, globalImports, qualifiedToIds, dependencies, out aliasMatched))
+                return true;
+            anyImportInRepoMatch |= aliasMatched;
             // 2. Namespace imports: for every `using Ns;` probe `Ns.head` in the qualified
             //    index. A single file often has several namespace imports; any one that hits
             //    an in-repo class is enough to stop the BCL suffix fallback from firing.
             // 2. namespace import: `using Ns;` ごとに `Ns.head` を qualified 索引で引く。
-            if (TryResolveNamespaceImport(head, fileImports, qualifiedToIds, resolvedTargets, out var nsMatched, out var nsResolved))
-            {
-                if (nsResolved)
-                    return true;
-                if (nsMatched)
-                    anyImportInRepoMatch = true;
-            }
-            if (TryResolveNamespaceImport(head, globalImports, qualifiedToIds, resolvedTargets, out nsMatched, out nsResolved))
-            {
-                if (nsResolved)
-                    return true;
-                if (nsMatched)
-                    anyImportInRepoMatch = true;
-            }
+            CollectNamespaceImportDependencies(
+                head, fileImports, qualifiedToIds, dependencies, out var nsMatched);
+            anyImportInRepoMatch |= nsMatched;
+            CollectNamespaceImportDependencies(
+                head, globalImports, qualifiedToIds, dependencies, out nsMatched);
+            anyImportInRepoMatch |= nsMatched;
 
             if (anyImportInRepoMatch)
             {
-                // An import resolved to a concrete in-repo class that is not (yet) a
-                // target — wait for the next fixed-point iteration. Falling through to the
-                // BCL suffix heuristic would contradict the user's explicit import and
-                // false-promote when the imported class is genuinely not an Attribute.
-                // import 経由で in-repo class には当たったが未確定。次回反復に委ねる。
+                // Imports resolved to concrete in-repo classes, now recorded as reverse
+                // dependencies. Falling through to the BCL suffix heuristic would contradict
+                // the explicit import and false-promote a genuine non-Attribute class.
+                // import 経由で当たった in-repo class は逆依存として記録し、BCL 規約へは落とさない。
                 continue;
             }
 
@@ -726,6 +776,11 @@ public partial class DbWriter
         }
         return false;
     }
+
+    private static void AddMetadataTargetDependencies(
+        HashSet<long> dependencies,
+        IEnumerable<long> ids)
+        => dependencies.UnionWith(ids);
 
     // Expand a qualified C# base name against `using Alias = Target;` entries so that
     // `Alias.C` and `Alias::C` both resolve to `Target.C`. The C# spec allows either
@@ -793,16 +848,14 @@ public partial class DbWriter
         return suffix.Length == 0 ? target : target + "." + suffix;
     }
 
-    private static bool TryResolveAliasImport(
+    private static bool CollectAliasImportDependencies(
         string head,
         FileImportSet? imports,
         Dictionary<string, List<long>> qualifiedToIds,
-        HashSet<long> resolvedTargets,
-        out bool matchedAnyInRepoClass,
-        out bool resolvedToTarget)
+        HashSet<long> dependencies,
+        out bool matchedAnyInRepoClass)
     {
         matchedAnyInRepoClass = false;
-        resolvedToTarget = false;
         if (imports == null)
             return false;
         if (!imports.Aliases.TryGetValue(head, out var target))
@@ -811,23 +864,13 @@ public partial class DbWriter
         // alias の先が BCL Attribute そのものなら直接 attribute とみなす。
         if (target == "System.Attribute" || target == "Attribute"
             || target == "global::System.Attribute" || target == "global::Attribute")
-        {
-            resolvedToTarget = true;
             return true;
-        }
         if (target.StartsWith("global::", StringComparison.Ordinal))
             target = target.Substring("global::".Length);
         if (qualifiedToIds.TryGetValue(target, out var ids))
         {
             matchedAnyInRepoClass = true;
-            foreach (var id in ids)
-            {
-                if (resolvedTargets.Contains(id))
-                {
-                    resolvedToTarget = true;
-                    return true;
-                }
-            }
+            AddMetadataTargetDependencies(dependencies, ids);
         }
         // Alias target did not match an in-repo class. If the target's simple-name tail
         // ends with `Attribute` we still trust the BCL convention for an external base.
@@ -835,26 +878,20 @@ public partial class DbWriter
         int lastDotInTarget = target.LastIndexOf('.');
         string tail = lastDotInTarget >= 0 ? target.Substring(lastDotInTarget + 1) : target;
         if (tail.Length > "Attribute".Length && tail.EndsWith("Attribute", StringComparison.Ordinal))
-        {
-            resolvedToTarget = true;
             return true;
-        }
-        return true;
+        return false;
     }
 
-    private static bool TryResolveNamespaceImport(
+    private static void CollectNamespaceImportDependencies(
         string head,
         FileImportSet? imports,
         Dictionary<string, List<long>> qualifiedToIds,
-        HashSet<long> resolvedTargets,
-        out bool matchedAnyInRepoClass,
-        out bool resolvedToTarget)
+        HashSet<long> dependencies,
+        out bool matchedAnyInRepoClass)
     {
         matchedAnyInRepoClass = false;
-        resolvedToTarget = false;
         if (imports == null)
-            return false;
-        bool any = false;
+            return;
         foreach (var ns in imports.Namespaces)
         {
             if (ns.Length == 0)
@@ -862,18 +899,9 @@ public partial class DbWriter
             var key = ns + "." + head;
             if (!qualifiedToIds.TryGetValue(key, out var ids))
                 continue;
-            any = true;
             matchedAnyInRepoClass = true;
-            foreach (var id in ids)
-            {
-                if (resolvedTargets.Contains(id))
-                {
-                    resolvedToTarget = true;
-                    return true;
-                }
-            }
+            AddMetadataTargetDependencies(dependencies, ids);
         }
-        return any;
     }
 
     /// <summary>

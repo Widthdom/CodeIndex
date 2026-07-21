@@ -2400,7 +2400,7 @@ public static partial class IndexCommandRunner
                 if (csharpMetadataTargetsNeedRefresh)
                 {
                     FullScanCSharpMetadataResolveForTesting?.Invoke();
-                    writer.ResolveCSharpMetadataTargets();
+                    writer.ResolveCSharpMetadataTargets(cancellationToken);
                 }
                 writer.MarkMetadataTargetReady("csharp");
                 csharpMetadataTargetReadyAfter = true;

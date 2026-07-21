@@ -1307,19 +1307,20 @@ public static partial class IndexCommandRunner
                 csharpSymbolNameReadyAfter = true;
             }
             // Issue #435: run the metadata-target resolver across all currently-indexed C#
-            // class rows. This is always safe because the resolver rewrites every row, so
+            // class rows. This is always safe because the resolver classifies every row and
+            // rewrites only values that differ from the authoritative result, so
             // legacy NULL rows from a pre-#435 DB and untouched rows from this partial
             // update both end up authoritative. Only stamp readiness when the resolver
             // actually ran (i.e. there are C# files to resolve).
             // Issue #435: 成功 update の末尾で全 csharp class 行を resolver で再分類する。
-            // resolver は全行を書き直すので pre-#435 DB の NULL 行と未更新行の両方が
-            // authoritative になる。csharp ファイルがある場合のみ readiness も立てる。
+            // resolver は全行を再分類し、authoritative な結果と異なる値だけを書き直すため、
+            // pre-#435 DB の NULL 行と未更新行の両方を正規化できる。csharp ファイルがある場合のみ readiness も立てる。
             if (hasCSharpFilesAfter)
             {
                 if (csharpMetadataTargetsNeedRefresh)
                 {
                     UpdateCSharpMetadataResolveForTesting?.Invoke();
-                    writer.ResolveCSharpMetadataTargets();
+                    writer.ResolveCSharpMetadataTargets(cancellationToken);
                 }
                 writer.MarkMetadataTargetReady("csharp");
                 csharpMetadataTargetReadyAfter = true;
