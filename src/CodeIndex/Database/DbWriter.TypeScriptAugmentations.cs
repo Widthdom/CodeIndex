@@ -89,7 +89,10 @@ public partial class DbWriter
             ReleaseCommand(cmd);
         }
 
-        InsertReferences(references);
+        InsertReferencesInAtomicFileScope(
+            references,
+            refreshMutualRecursionFlags: true,
+            CancellationToken.None);
         foreach (var reference in references)
             affectedFileIds.Remove(reference.FileId);
         RefreshHotspotReferenceCounts(affectedFileIds, CancellationToken.None);

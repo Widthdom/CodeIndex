@@ -35,6 +35,8 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractPreflightForTesting = new();
+    private static readonly AsyncLocal<Action<bool>?> ScopedAtomicFileReferenceInsertForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedReferenceBatchTransactionOpeningForTesting = new();
     internal static Action<string>? LanguagePresenceCheckForTesting
     {
         get => ScopedLanguagePresenceCheckForTesting.Value;
@@ -81,6 +83,18 @@ public partial class DbWriter
     {
         get => ScopedCSharpContractPreflightForTesting.Value;
         set => ScopedCSharpContractPreflightForTesting.Value = value;
+    }
+
+    internal static Action<bool>? AtomicFileReferenceInsertForTesting
+    {
+        get => ScopedAtomicFileReferenceInsertForTesting.Value;
+        set => ScopedAtomicFileReferenceInsertForTesting.Value = value;
+    }
+
+    internal static Action? ReferenceBatchTransactionOpeningForTesting
+    {
+        get => ScopedReferenceBatchTransactionOpeningForTesting.Value;
+        set => ScopedReferenceBatchTransactionOpeningForTesting.Value = value;
     }
 
     // Transaction ownership (#4154): the semaphore is held for the outermost writer

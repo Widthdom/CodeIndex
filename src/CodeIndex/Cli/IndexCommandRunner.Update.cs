@@ -881,7 +881,7 @@ public static partial class IndexCommandRunner
                     {
                         writer.InsertChunks(chunks, cancellationToken);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
+                        writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                         currentUpdatePhase = "validating";
                         var generatedIssues = AppendIssueIfMissing(
@@ -922,7 +922,7 @@ public static partial class IndexCommandRunner
                             ? [issue]
                             : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
+                        writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
                         writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
@@ -943,7 +943,7 @@ public static partial class IndexCommandRunner
                             ? [issue]
                             : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
+                        writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
                         writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
@@ -985,7 +985,7 @@ public static partial class IndexCommandRunner
                         referenceCapIssue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
                         references = [];
                     }
-                    writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
+                    writer.InsertReferencesInAtomicFileScope(references, refreshMutualRecursionFlags: false, cancellationToken);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                     currentUpdatePhase = "validating";
@@ -1050,7 +1050,7 @@ public static partial class IndexCommandRunner
                             mutualRecursionRefreshNeeded = true;
                         writer.InsertChunks([], cancellationToken);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
+                        writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
                         writer.InsertIssues(fileId, [BuildNullByteIssue(binaryFile)]);
                         writer.ClearBatchInProgress();
                         txn.Commit();
@@ -1083,7 +1083,7 @@ public static partial class IndexCommandRunner
                             mutualRecursionRefreshNeeded = true;
                         writer.InsertChunks([], cancellationToken);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
+                        writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
                         writer.InsertIssues(fileId,
                         [
                             new FileIssue

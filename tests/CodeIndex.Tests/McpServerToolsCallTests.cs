@@ -8154,9 +8154,11 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_mutual_recursion_{Guid.NewGuid():N}");
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_mutual_recursion");
         var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
         var previousFtsOptimizeHook = McpServer.McpIndexFtsOptimizeForTesting;
         var refreshCount = 0;
         var ftsOptimizeCount = 0;
+        var atomicCalls = new List<bool>();
         try
         {
             Directory.CreateDirectory(fixtureDir);
@@ -8182,12 +8184,18 @@ public partial class McpServerTests
                 refreshCount++;
                 previousRefreshHook?.Invoke();
             };
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCalls.Add(newFiles);
+                previousAtomicHook?.Invoke(newFiles);
+            };
 
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var response = CallIndex(server, fixtureDir);
 
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
             Assert.Equal(1, refreshCount);
+            Assert.Contains(true, atomicCalls);
 
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
@@ -8243,6 +8251,7 @@ public partial class McpServerTests
         finally
         {
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
             McpServer.McpIndexFtsOptimizeForTesting = previousFtsOptimizeHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);

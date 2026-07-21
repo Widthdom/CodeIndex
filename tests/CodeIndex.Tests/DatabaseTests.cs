@@ -3950,8 +3950,15 @@ public class DatabaseTests : IDisposable
     public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesOnly()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug");
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var atomicCalls = new List<bool>();
         try
         {
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCalls.Add(newFiles);
+                previousAtomicHook?.Invoke(newFiles);
+            };
             TestProjectHelper.CreateDirectory(projectRoot, "src");
             TestProjectHelper.WriteTextFile(projectRoot, "src/module-c.ts", "export {}\ninterface Ambient {}\n");
             TestProjectHelper.WriteTextFile(projectRoot, "src/module-d.ts", "import \"./setup\";\ninterface Ambient {}\n");
@@ -4057,6 +4064,7 @@ public class DatabaseTests : IDisposable
             var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
 
             Assert.Equal(4, inserted);
+            Assert.Contains(false, atomicCalls);
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = @"
             SELECT symbol_name, container_kind, COUNT(*)
@@ -4084,6 +4092,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -4424,6 +4433,355 @@ public class DatabaseTests : IDisposable
               AND NOT EXISTS (SELECT 1 FROM symbol_references sr WHERE sr.reference_line_id = rl.id)";
         Assert.Equal(0L, (long)orphanCount.ExecuteScalar()!);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InsertReferences_AtomicFileScopeSkipsBatchTransactionsWhilePublicApiKeepsThem(bool referenceLinesAreNew)
+    {
+        var publicFileId = UpsertTestFile(
+            $"src/public-reference-batches-{referenceLinesAreNew}.cs",
+            checksum: $"public-reference-batches-{referenceLinesAreNew}");
+        var atomicFileId = UpsertTestFile(
+            $"src/atomic-reference-batches-{referenceLinesAreNew}.cs",
+            checksum: $"atomic-reference-batches-{referenceLinesAreNew}");
+        var publicReferences = BuildAtomicScopeReferences(publicFileId, count: 143);
+        var atomicReferences = BuildAtomicScopeReferences(atomicFileId, count: 143);
+        var previousBatchHook = DbWriter.ReferenceBatchTransactionOpeningForTesting;
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var batchTransactionCount = 0;
+        var atomicCalls = new List<bool>();
+        try
+        {
+            DbWriter.ReferenceBatchTransactionOpeningForTesting = () =>
+            {
+                batchTransactionCount++;
+                previousBatchHook?.Invoke();
+            };
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCalls.Add(newFiles);
+                previousAtomicHook?.Invoke(newFiles);
+            };
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                if (referenceLinesAreNew)
+                {
+                    _writer.InsertReferencesForNewFiles(
+                        publicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                else
+                {
+                    _writer.InsertReferences(
+                        publicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                transaction.Commit();
+            }
+
+            Assert.Equal(3, batchTransactionCount);
+            batchTransactionCount = 0;
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                if (referenceLinesAreNew)
+                {
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        atomicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                else
+                {
+                    _writer.InsertReferencesInAtomicFileScope(
+                        atomicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                transaction.Commit();
+            }
+
+            Assert.Equal(0, batchTransactionCount);
+            Assert.Equal([referenceLinesAreNew], atomicCalls);
+        }
+        finally
+        {
+            DbWriter.ReferenceBatchTransactionOpeningForTesting = previousBatchHook;
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+        }
+    }
+
+    [Theory]
+    [InlineData(false, 72)]
+    [InlineData(true, 142)]
+    public void InsertReferences_AtomicFileScopeFailureRollsBackEveryPriorBatch(
+        bool referenceLinesAreNew,
+        int failureIndex)
+    {
+        var fileId = UpsertTestFile(
+            $"src/atomic-reference-rollback-{referenceLinesAreNew}.cs",
+            checksum: $"atomic-reference-rollback-{referenceLinesAreNew}");
+        var references = BuildAtomicScopeReferences(fileId, count: 143, failureIndex);
+        using (var trigger = _db.Connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TRIGGER fail_atomic_file_reference_batch
+                BEFORE INSERT ON symbol_references
+                WHEN NEW.symbol_name = 'FAIL_ME'
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced atomic-file reference failure');
+                END
+                """;
+            trigger.ExecuteNonQuery();
+        }
+
+        try
+        {
+            var exception = Record.Exception(() =>
+            {
+                using var transaction = _writer.BeginTransaction();
+                if (referenceLinesAreNew)
+                {
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        references,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                else
+                {
+                    _writer.InsertReferencesInAtomicFileScope(
+                        references,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                transaction.Commit();
+            });
+
+            Assert.IsType<SqliteException>(exception);
+        }
+        finally
+        {
+            using var drop = _db.Connection.CreateCommand();
+            drop.CommandText = "DROP TRIGGER IF EXISTS fail_atomic_file_reference_batch";
+            drop.ExecuteNonQuery();
+        }
+
+        using var countCommand = _db.Connection.CreateCommand();
+        countCommand.Parameters.AddWithValue("@fileId", fileId);
+        countCommand.CommandText = """
+            SELECT (SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId),
+                   (SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId)
+            """;
+        using var counts = countCommand.ExecuteReader();
+        Assert.True(counts.Read());
+        Assert.Equal(0L, counts.GetInt64(0));
+        Assert.Equal(0L, counts.GetInt64(1));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InsertReferences_AtomicFileScopeReusesSameContextAcrossBatchBoundary(bool referenceLinesAreNew)
+    {
+        var fileId = UpsertTestFile(
+            $"src/atomic-reference-boundary-{referenceLinesAreNew}.cs",
+            checksum: $"atomic-reference-boundary-{referenceLinesAreNew}");
+        var references = Enumerable.Range(0, 143)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = index switch
+                {
+                    70 => "boundary_same_first",
+                    71 => "boundary_same_second",
+                    72 => "boundary_different_context",
+                    _ => $"callee_{index}",
+                },
+                ReferenceKind = "call",
+                Line = index is 70 or 71 or 72 ? 500 : index + 1,
+                Column = index + 1,
+                Context = index switch
+                {
+                    70 or 71 => "shared boundary context",
+                    72 => "different boundary context",
+                    _ => $"line {index}",
+                },
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+
+        using (var transaction = _writer.BeginTransaction())
+        {
+            if (referenceLinesAreNew)
+            {
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+            else
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+            transaction.Commit();
+        }
+
+        using var command = _db.Connection.CreateCommand();
+        command.Parameters.AddWithValue("@fileId", fileId);
+        command.CommandText = """
+            SELECT COUNT(DISTINCT reference_line_id)
+            FROM symbol_references
+            WHERE file_id = @fileId
+              AND symbol_name IN ('boundary_same_first', 'boundary_same_second')
+            """;
+        Assert.Equal(1L, (long)command.ExecuteScalar()!);
+
+        command.CommandText = """
+            SELECT COUNT(DISTINCT reference_line_id)
+            FROM symbol_references
+            WHERE file_id = @fileId
+              AND symbol_name IN ('boundary_same_first', 'boundary_same_second', 'boundary_different_context')
+            """;
+        Assert.Equal(2L, (long)command.ExecuteScalar()!);
+
+        command.CommandText = "SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId AND line = 500";
+        Assert.Equal(2L, (long)command.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public async Task InsertReferences_AtomicFileScopeRequiresLiveOwnedTransactionBeforeEmptyOrCancellationChecks()
+    {
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var atomicCallCount = 0;
+        try
+        {
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCallCount++;
+                previousAtomicHook?.Invoke(newFiles);
+            };
+
+            var missingTransaction = Assert.Throws<InvalidOperationException>(() =>
+                _writer.InsertReferencesInAtomicFileScope(
+                    [],
+                    refreshMutualRecursionFlags: false,
+                    cancelled.Token));
+            Assert.Contains("requires an active transaction", missingTransaction.Message, StringComparison.Ordinal);
+            Assert.Equal(0, atomicCallCount);
+
+            var publicEmptyException = Record.Exception(() =>
+                _writer.InsertReferences([], refreshMutualRecursionFlags: false, cancelled.Token));
+            Assert.Null(publicEmptyException);
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                var copiedContextException = await Task.Run(() => Record.Exception(() =>
+                    _writer.InsertReferencesInAtomicFileScope(
+                        [],
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None)));
+                Assert.IsType<InvalidOperationException>(copiedContextException);
+                Assert.Equal(0, atomicCallCount);
+            }
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    [],
+                    refreshMutualRecursionFlags: false,
+                    cancelled.Token);
+                transaction.Commit();
+            }
+            Assert.Equal(1, atomicCallCount);
+
+            using (var committedTransaction = _writer.BeginTransaction())
+            {
+                committedTransaction.Commit();
+                Assert.Throws<InvalidOperationException>(() =>
+                    _writer.InsertReferencesInAtomicFileScope(
+                        [],
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None));
+            }
+            Assert.Equal(1, atomicCallCount);
+        }
+        finally
+        {
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+        }
+    }
+
+    [Fact]
+    public void InsertReferences_AtomicFileScopeCancellationRollsBackReferenceAndContextRows()
+    {
+        var fileId = UpsertTestFile("src/atomic-reference-cancel.cs", checksum: "atomic-reference-cancel");
+        var references = BuildAtomicScopeReferences(fileId, count: 143);
+        using var cancellation = new CancellationTokenSource();
+        var previousProgressHook = DbWriter.BatchProgressCheckpointForTesting;
+        try
+        {
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (progress.Operation == "insert_references" && progress.RowsProcessed == 71)
+                    cancellation.Cancel();
+                previousProgressHook?.Invoke(progress);
+            };
+
+            var exception = Record.Exception(() =>
+            {
+                using var transaction = _writer.BeginTransaction();
+                _writer.InsertReferencesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    cancellation.Token);
+                transaction.Commit();
+            });
+            Assert.IsAssignableFrom<OperationCanceledException>(exception);
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = previousProgressHook;
+        }
+
+        using var command = _db.Connection.CreateCommand();
+        command.Parameters.AddWithValue("@fileId", fileId);
+        command.CommandText = """
+            SELECT (SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId),
+                   (SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId)
+            """;
+        using var counts = command.ExecuteReader();
+        Assert.True(counts.Read());
+        Assert.Equal(0L, counts.GetInt64(0));
+        Assert.Equal(0L, counts.GetInt64(1));
+    }
+
+    private static ReferenceRecord[] BuildAtomicScopeReferences(
+        long fileId,
+        int count,
+        int failureIndex = -1)
+        => Enumerable.Range(0, count)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = index == failureIndex ? "FAIL_ME" : $"callee_{index}",
+                ReferenceKind = "call",
+                Line = index + 1,
+                Column = index + 1,
+                Context = $"callee_{index}();",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
 
     [Fact]
     public void CleanExistingFileData_PreventsFtsOrphans()

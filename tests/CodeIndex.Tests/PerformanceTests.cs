@@ -28,6 +28,32 @@ public class PerformanceTests : IDisposable
         _db.InitializeSchema();
     }
 
+    [Fact]
+    public void ReferenceBatchTransactions_RepositoryScaleAtomicFileScopeEliminatesControlledSqlScopes()
+    {
+        // Model the repository snapshot's 321,352 references across 856 files without
+        // allocating the rows themselves. The 5/6-batch distribution keeps large-file
+        // batching in the contract instead of reducing every file to one SQL scope.
+        // 参照row自体を確保せず、自己snapshotの321,352 refs / 856 filesを5/6 batch分布で固定する。
+        var referenceCountsByFile = Enumerable.Repeat(386, 729)
+            .Concat(Enumerable.Repeat(315, 80))
+            .Concat(Enumerable.Repeat(314, 47))
+            .ToArray();
+
+        Assert.Equal(856, referenceCountsByFile.Length);
+        Assert.Equal(321_352, referenceCountsByFile.Sum());
+        Assert.Equal(
+            5_009L,
+            DbWriter.CountReferenceBatchTransactionScopesForTesting(
+                referenceCountsByFile,
+                atomicFileScope: false));
+        Assert.Equal(
+            0L,
+            DbWriter.CountReferenceBatchTransactionScopesForTesting(
+                referenceCountsByFile,
+                atomicFileScope: true));
+    }
+
     [Fact(Skip = "Performance test — run manually with: dotnet test --filter Insert10KFiles")]
     public void Insert10KFiles_CompletesInReasonableTime()
     {

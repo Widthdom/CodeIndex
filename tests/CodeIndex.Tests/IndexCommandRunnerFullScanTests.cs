@@ -19,6 +19,44 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_FullScanAndScopedUpdateUseGuardedAtomicFileReferenceScope()
+    {
+        var projectRoot = CreateTempProject();
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var atomicCalls = new List<bool>();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(sourcePath, "def run():\n    return helper()\n");
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCalls.Add(newFiles);
+                previousAtomicHook?.Invoke(newFiles);
+            };
+
+            var (fullExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            Assert.Contains(true, atomicCalls);
+
+            atomicCalls.Clear();
+            File.WriteAllText(sourcePath, "def run():\n    return updated_helper()\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+            var (updateExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--files", sourcePath, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Contains(false, atomicCalls);
+        }
+        finally
+        {
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MemoryTrace_ReportsFullScanAndUpdatePhaseBoundaries()
     {
         var projectRoot = CreateTempProject();

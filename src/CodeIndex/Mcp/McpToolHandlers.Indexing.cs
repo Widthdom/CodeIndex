@@ -686,7 +686,7 @@ public partial class McpServer
                 {
                     writer.InsertChunks(chunks, requestToken);
                     writer.InsertSymbols([], requestToken);
-                    writer.InsertReferences([], requestToken);
+                    writer.InsertReferencesInAtomicFileScope([], requestToken);
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
                         FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
                         generatedSuppressionIssue);
@@ -732,7 +732,7 @@ public partial class McpServer
                         ? [issue]
                         : IndexCommandRunner.AppendIssue([symbolRegexTimeoutIssue], issue);
                     writer.InsertSymbols([], requestToken);
-                    writer.InsertReferences([], requestToken);
+                    writer.InsertReferencesInAtomicFileScope([], requestToken);
                     InsertIssuesForIndexedFile(fileId, capIssues);
                 }
                 else
@@ -767,9 +767,9 @@ public partial class McpServer
                         references = [];
                     }
                     if (startedWithNoIndexedFiles)
-                        writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, requestToken);
+                        writer.InsertReferencesForNewFilesInAtomicFileScope(references, refreshMutualRecursionFlags: false, requestToken);
                     else
-                        writer.InsertReferences(references, refreshMutualRecursionFlags: false, requestToken);
+                        writer.InsertReferencesInAtomicFileScope(references, refreshMutualRecursionFlags: false, requestToken);
                     if (symbols.Count > 0 || references.Count > 0)
                         mutualRecursionRefreshNeeded = true;
                     committedChunkCount = chunks.Count;
@@ -826,7 +826,7 @@ public partial class McpServer
                         mutualRecursionRefreshNeeded = true;
                     writer.InsertChunks([], requestToken);
                     writer.InsertSymbols([], requestToken);
-                    writer.InsertReferences([], requestToken);
+                    writer.InsertReferencesInAtomicFileScope([], requestToken);
                     InsertIssuesForIndexedFile(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
                     WriteProjectRootOnce();
                     txn.Commit();

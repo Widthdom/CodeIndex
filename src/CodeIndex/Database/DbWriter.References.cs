@@ -405,16 +405,97 @@ public partial class DbWriter
         => InsertReferences(references, refreshMutualRecursionFlags: true, cancellationToken);
 
     public void InsertReferences(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags, CancellationToken cancellationToken)
-        => InsertReferencesCore(references, refreshMutualRecursionFlags, cancellationToken, referenceLinesAreNew: false);
+        => InsertReferencesCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: false,
+            batchesAreAtomicInCaller: false);
 
     public void InsertReferencesForNewFiles(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags, CancellationToken cancellationToken)
-        => InsertReferencesCore(references, refreshMutualRecursionFlags, cancellationToken, referenceLinesAreNew: true);
+        => InsertReferencesCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: true,
+            batchesAreAtomicInCaller: false);
+
+    /// <summary>
+    /// Insert references while explicitly delegating all-batch atomicity to an active
+    /// file transaction owned by this writer and execution context.
+    /// このwriterと実行contextが所有するfile transactionへ全batchの原子性を明示委譲して参照を挿入する。
+    /// </summary>
+    internal void InsertReferencesInAtomicFileScope(
+        IReadOnlyList<ReferenceRecord> references,
+        CancellationToken cancellationToken)
+        => InsertReferencesInAtomicFileScope(
+            references,
+            refreshMutualRecursionFlags: true,
+            cancellationToken);
+
+    internal void InsertReferencesInAtomicFileScope(
+        IReadOnlyList<ReferenceRecord> references,
+        bool refreshMutualRecursionFlags,
+        CancellationToken cancellationToken)
+        => InsertReferencesInAtomicFileScopeCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: false,
+            operation: nameof(InsertReferencesInAtomicFileScope));
+
+    internal void InsertReferencesForNewFilesInAtomicFileScope(
+        IReadOnlyList<ReferenceRecord> references,
+        bool refreshMutualRecursionFlags,
+        CancellationToken cancellationToken)
+        => InsertReferencesInAtomicFileScopeCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: true,
+            operation: nameof(InsertReferencesForNewFilesInAtomicFileScope));
+
+    private void InsertReferencesInAtomicFileScopeCore(
+        IReadOnlyList<ReferenceRecord> references,
+        bool refreshMutualRecursionFlags,
+        CancellationToken cancellationToken,
+        bool referenceLinesAreNew,
+        string operation)
+    {
+        RequireCallerOwnedTransaction(operation);
+        AtomicFileReferenceInsertForTesting?.Invoke(referenceLinesAreNew);
+        InsertReferencesCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew,
+            batchesAreAtomicInCaller: true);
+    }
+
+    private void RequireCallerOwnedTransaction(string operation)
+    {
+        lock (_transactionStateLock)
+        {
+            if (_transactionDepth > 0
+                && _activeTransaction != null
+                && _transactionOwnerThreadId == Environment.CurrentManagedThreadId
+                && _transactionOwnerToken != Guid.Empty
+                && _currentTransactionGateToken.Value == _transactionOwnerToken)
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"{operation} requires an active transaction owned by this DbWriter on the current execution context.");
+    }
 
     private void InsertReferencesCore(
         IReadOnlyList<ReferenceRecord> references,
         bool refreshMutualRecursionFlags,
         CancellationToken cancellationToken,
-        bool referenceLinesAreNew)
+        bool referenceLinesAreNew,
+        bool batchesAreAtomicInCaller)
     {
         if (references.Count == 0) return;
         InvalidateReferenceIdentityContractForMutation();
@@ -431,21 +512,27 @@ public partial class DbWriter
         var newReferenceLineIds = referenceLinesAreNew
             ? new Dictionary<(long FileId, int Line, string Context), long>()
             : null;
-        for (int i = 0; i < references.Count; i += rowsPerStatement)
+        int referenceBatchCount = GetReferenceBatchCount(references.Count, rowsPerStatement);
+        for (int batchIndex = 0; batchIndex < referenceBatchCount; batchIndex++)
         {
+            int i = batchIndex * rowsPerStatement;
             CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, references.Count);
-            // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
-            // symbol_references share one rollback boundary; without it a mid-chunk failure
-            // under an outer transaction would orphan committed reference_lines (#1518).
-            using var transaction = BeginTransaction(cancellationToken, "insert references");
+            // Public APIs always retain the #1518 chunk transaction/SAVEPOINT contract.
+            // Only explicit atomic-file APIs delegate this rollback boundary to their
+            // required caller-owned file transaction, avoiding one SAVEPOINT per 71 refs.
+            // public APIは#1518のchunk transaction/SAVEPOINT契約を常に維持する。
+            // 明示atomic-file APIだけが必須の呼出元file transactionへrollback境界を委譲する。
+            using var transaction = batchesAreAtomicInCaller
+                ? null
+                : BeginReferenceBatchTransaction(cancellationToken);
             var referenceLineIds = referenceLinesAreNew
                 ? InsertNewReferenceLines(references, i, end, newReferenceLineIds!, cancellationToken)
                 : UpsertReferenceLines(references, i, end, cancellationToken);
 
-            var batchCount = end - i;
-            var sql = ReferenceInsertSqlCache.GetOrAdd(batchCount, static count => BuildReferenceInsertSql(count));
-            var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, batchCount));
+            var rowsInBatch = end - i;
+            var sql = ReferenceInsertSqlCache.GetOrAdd(rowsInBatch, static count => BuildReferenceInsertSql(count));
+            var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
             try
             {
                 var parameterIndex = 0;
@@ -485,7 +572,7 @@ public partial class DbWriter
             {
                 ReleaseCommand(cmd);
             }
-            transaction.Commit();
+            transaction?.Commit();
         }
 
         CheckBatchCancellationAndReportProgress("insert_references", references.Count, references.Count, cancellationToken);
@@ -496,6 +583,39 @@ public partial class DbWriter
             cancellationToken.ThrowIfCancellationRequested();
             RefreshMutualRecursionFlags(cancellationToken);
         }
+    }
+
+    private TransactionScope BeginReferenceBatchTransaction(CancellationToken cancellationToken)
+    {
+        ReferenceBatchTransactionOpeningForTesting?.Invoke();
+        return BeginTransaction(cancellationToken, "insert references");
+    }
+
+    private static int GetReferenceBatchCount(int referenceCount, int rowsPerStatement)
+    {
+        if (referenceCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(referenceCount));
+        if (rowsPerStatement <= 0)
+            throw new ArgumentOutOfRangeException(nameof(rowsPerStatement));
+
+        return referenceCount == 0
+            ? 0
+            : ((referenceCount - 1) / rowsPerStatement) + 1;
+    }
+
+    internal static long CountReferenceBatchTransactionScopesForTesting(
+        IReadOnlyList<int> referenceCountsByFile,
+        bool atomicFileScope)
+    {
+        ArgumentNullException.ThrowIfNull(referenceCountsByFile);
+        if (atomicFileScope)
+            return 0;
+
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 14);
+        long transactionCount = 0;
+        foreach (var referenceCount in referenceCountsByFile)
+            transactionCount += GetReferenceBatchCount(referenceCount, rowsPerStatement);
+        return transactionCount;
     }
 
     private void RefreshHotspotReferenceCounts(

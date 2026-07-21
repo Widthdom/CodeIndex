@@ -2051,7 +2051,7 @@ public static partial class IndexCommandRunner
                         {
                             writer.InsertChunks(chunks, cancellationToken);
                             writer.InsertSymbols([], cancellationToken);
-                            writer.InsertReferences([], cancellationToken);
+                            writer.InsertReferencesInAtomicFileScope([], cancellationToken);
                             var generatedIssues = AppendIssueIfMissing(
                                 RequireWorkItemIssues(item),
                                 generatedSuppressionIssue);
@@ -2102,7 +2102,7 @@ public static partial class IndexCommandRunner
                                 ? [issue]
                                 : AppendIssue([symbolRegexTimeoutIssue], issue);
                             writer.InsertSymbols([], cancellationToken);
-                            writer.InsertReferences([], cancellationToken);
+                            writer.InsertReferencesInAtomicFileScope([], cancellationToken);
                             InsertIssuesForIndexedFile(fileId, capIssues);
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
@@ -2133,7 +2133,7 @@ public static partial class IndexCommandRunner
                                 ? [issue]
                                 : AppendIssue([symbolRegexTimeoutIssue], issue);
                             writer.InsertSymbols([], cancellationToken);
-                            writer.InsertReferences([], cancellationToken);
+                            writer.InsertReferencesInAtomicFileScope([], cancellationToken);
                             writer.InsertIssues(fileId, capIssues);
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
@@ -2216,9 +2216,9 @@ public static partial class IndexCommandRunner
                             }
                         }
                         if (startedWithNoIndexedFiles)
-                            writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, cancellationToken);
+                            writer.InsertReferencesForNewFilesInAtomicFileScope(references, refreshMutualRecursionFlags: false, cancellationToken);
                         else
-                            writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
+                            writer.InsertReferencesInAtomicFileScope(references, refreshMutualRecursionFlags: false, cancellationToken);
                         if (!options.SymbolsOnly && (symbols.Count > 0 || references.Count > 0))
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
