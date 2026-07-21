@@ -36,6 +36,26 @@ public partial class DbWriter
             BindSupportedLanguageParameterValues(countCmd, values);
             deleted = checked((int)(long)countCmd.ExecuteScalar()!);
         }
+        if (deleted > 0 && _deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
+        {
+            using var affectedCmd = _conn.CreateCommand();
+            affectedCmd.Transaction = _activeTransaction;
+            affectedCmd.CommandText = $@"
+                SELECT DISTINCT sr.file_id
+                FROM symbol_references sr
+                JOIN files f ON f.id = sr.file_id
+                WHERE f.lang IS NOT NULL
+                  AND f.lang NOT IN ({string.Join(", ", inParams)})";
+            AddSupportedLanguageParameters(affectedCmd, values.Count);
+            BindSupportedLanguageParameterValues(affectedCmd, values);
+            var affectedFileIds = new HashSet<long>();
+            using (var reader = affectedCmd.ExecuteReader())
+            {
+                while (reader.Read())
+                    affectedFileIds.Add(reader.GetInt64(0));
+            }
+            TrackDeferredHotspotReferenceFiles(affectedFileIds);
+        }
         using (var aggregateCmd = _conn.CreateCommand())
         {
             aggregateCmd.Transaction = _activeTransaction;
@@ -88,6 +108,19 @@ public partial class DbWriter
             countCmd.Transaction = _activeTransaction;
             countCmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
             deletedReferences = checked((int)(long)countCmd.ExecuteScalar()!);
+        }
+        if (deletedReferences > 0 && _deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
+        {
+            using var affectedCmd = _conn.CreateCommand();
+            affectedCmd.Transaction = _activeTransaction;
+            affectedCmd.CommandText = "SELECT DISTINCT file_id FROM symbol_references";
+            var affectedFileIds = new HashSet<long>();
+            using (var reader = affectedCmd.ExecuteReader())
+            {
+                while (reader.Read())
+                    affectedFileIds.Add(reader.GetInt64(0));
+            }
+            TrackDeferredHotspotReferenceFiles(affectedFileIds);
         }
         using (var aggregateCmd = _conn.CreateCommand())
         {

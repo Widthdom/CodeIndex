@@ -146,6 +146,7 @@ public static partial class IndexCommandRunner
 
         if (!options.Json && !options.Quiet)
             CommandOutputWriter.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
+        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
         CancellationTokenSource? updateCts = null;
         var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
@@ -1366,6 +1367,7 @@ public static partial class IndexCommandRunner
             writer.ClearBatchInProgress();
             readinessTxn.Commit();
         }
+        hotspotAggregateRefresh.Complete(cancellationToken);
         if (errors == 0)
         {
             StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);

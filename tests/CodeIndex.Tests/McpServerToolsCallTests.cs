@@ -8155,8 +8155,10 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_mutual_recursion");
         var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var previousAggregateRefreshHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var previousFtsOptimizeHook = McpServer.McpIndexFtsOptimizeForTesting;
         var refreshCount = 0;
+        var aggregateRefreshStatements = 0;
         var ftsOptimizeCount = 0;
         var atomicCalls = new List<bool>();
         try
@@ -8189,6 +8191,11 @@ public partial class McpServerTests
                 atomicCalls.Add(newFiles);
                 previousAtomicHook?.Invoke(newFiles);
             };
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                aggregateRefreshStatements++;
+                previousAggregateRefreshHook?.Invoke();
+            };
 
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var response = CallIndex(server, fixtureDir);
@@ -8196,6 +8203,7 @@ public partial class McpServerTests
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
             Assert.Equal(1, refreshCount);
             Assert.Contains(true, atomicCalls);
+            Assert.Equal(1, aggregateRefreshStatements);
 
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
@@ -8252,6 +8260,7 @@ public partial class McpServerTests
         {
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousAggregateRefreshHook;
             McpServer.McpIndexFtsOptimizeForTesting = previousFtsOptimizeHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);

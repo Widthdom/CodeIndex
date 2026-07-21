@@ -36,6 +36,11 @@ public partial class DbWriter
         }
         if (HasReferenceIdentityRowsForFile(existingFileId))
             InvalidateReferenceIdentityContractForMutation();
+        if (_deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
+        {
+            TrackDeferredHotspotReferenceFiles([existingFileId]);
+            TrackDeferredHotspotReferenceFiles(GetReferenceFilesDependingOnLinesOwnedBy(existingFileId));
+        }
 
         var cmd = RentCommand(
             "DELETE FROM files WHERE path = @path",
@@ -169,6 +174,11 @@ public partial class DbWriter
         // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する。
         using var txn = BeginTransaction();
         InvalidateReferenceIdentityContractForMutation();
+        if (_deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
+        {
+            TrackDeferredHotspotReferenceFiles(fileIds);
+            TrackDeferredHotspotReferenceFiles(GetReferenceFilesDependingOnLinesOwnedBy(fileIds));
+        }
         DeleteFileRowsByIdBatched(fileIds);
         beforeCommit?.Invoke();
         txn.Commit();

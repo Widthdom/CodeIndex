@@ -196,6 +196,7 @@ public partial class DbWriter
         // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
         // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
         var aggregateWasReady = ClearHotspotReferenceAggregateReady();
+        TrackDeferredHotspotReferenceFiles([fileId]);
         var cmd = RentCommand(
             """
             DELETE FROM chunks WHERE file_id = @fid;
@@ -241,6 +242,36 @@ public partial class DbWriter
         while (reader.Read())
             fileIds.Add(reader.GetInt64(0));
         return fileIds;
+    }
+
+    private HashSet<long> GetReferenceFilesDependingOnLinesOwnedBy(IReadOnlyList<long> fileIds)
+    {
+        var dependentFileIds = new HashSet<long>();
+        for (var offset = 0; offset < fileIds.Count; offset += DeleteFilesBatchSize)
+        {
+            var batchCount = Math.Min(DeleteFilesBatchSize, fileIds.Count - offset);
+            using var cmd = _conn.CreateCommand();
+            cmd.Transaction = _activeTransaction;
+            var batch = new long[batchCount];
+            for (var i = 0; i < batchCount; i++)
+                batch[i] = fileIds[offset + i];
+            var parameters = SqliteDynamicSql.AddParameters(
+                cmd,
+                "line_owner_file_id",
+                batch,
+                SqliteType.Integer,
+                "cross-file reference-line dependency batch");
+            cmd.CommandText = $"""
+                SELECT DISTINCT sr.file_id
+                FROM symbol_references sr
+                JOIN reference_lines rl ON rl.id = sr.reference_line_id
+                WHERE rl.file_id IN ({string.Join(", ", parameters)})
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                dependentFileIds.Add(reader.GetInt64(0));
+        }
+        return dependentFileIds;
     }
 
     private bool HasReferenceIdentityRowsForFile(long fileId)

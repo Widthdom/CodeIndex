@@ -3951,13 +3951,20 @@ public class DatabaseTests : IDisposable
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug");
         var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var previousAggregateRefreshHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var atomicCalls = new List<bool>();
+        var aggregateRefreshStatements = 0;
         try
         {
             DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
             {
                 atomicCalls.Add(newFiles);
                 previousAtomicHook?.Invoke(newFiles);
+            };
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                aggregateRefreshStatements++;
+                previousAggregateRefreshHook?.Invoke();
             };
             TestProjectHelper.CreateDirectory(projectRoot, "src");
             TestProjectHelper.WriteTextFile(projectRoot, "src/module-c.ts", "export {}\ninterface Ambient {}\n");
@@ -4065,6 +4072,7 @@ public class DatabaseTests : IDisposable
 
             Assert.Equal(4, inserted);
             Assert.Contains(false, atomicCalls);
+            Assert.Equal(1, aggregateRefreshStatements);
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = @"
             SELECT symbol_name, container_kind, COUNT(*)
@@ -4087,12 +4095,14 @@ public class DatabaseTests : IDisposable
             }
 
             Assert.Equal(4, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+            Assert.Equal(2, aggregateRefreshStatements);
             cmd.CommandText = "SELECT SUM(reference_count) FROM hotspot_reference_counts WHERE lang = 'typescript'";
             Assert.Equal(4L, (long)Assert.IsType<long>(cmd.ExecuteScalar()));
         }
         finally
         {
             DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousAggregateRefreshHook;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

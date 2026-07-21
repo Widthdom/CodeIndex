@@ -252,6 +252,7 @@ public partial class McpServer
         db.InitializeSchema();
 
         var writer = new DbWriter(db);
+        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(requestToken);
         var repositoryRoot = GitHelper.TryGetRepositoryRoot(projectPath, requestToken);
         var ignoreRuleRoot = repositoryRoot != null && IsPathAuthorized(repositoryRoot)
@@ -1109,6 +1110,7 @@ public partial class McpServer
         {
             writer.ClearBatchInProgress();
         }
+        hotspotAggregateRefresh.Complete(requestToken);
         if (!scanResult.HadErrors && errors == 0)
         {
             var plannerMaintenanceFailure = db.RunPlannerStatisticsMaintenance(

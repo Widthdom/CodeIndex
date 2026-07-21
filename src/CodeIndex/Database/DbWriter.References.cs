@@ -635,6 +635,8 @@ public partial class DbWriter
     {
         if (fileIds.Count == 0)
             return;
+        if (TryDeferHotspotReferenceRefresh(fileIds, requireDirtyFileIds: true))
+            return;
 
         using var transaction = BeginTransaction(cancellationToken, "refresh hotspot reference counts");
         var refreshCheckpoint = HotspotAggregateRefreshExecutingForTesting;
@@ -668,6 +670,7 @@ public partial class DbWriter
                 cmd.Parameters["@file_id"].Value = fileId;
                 try
                 {
+                    HotspotAggregateRefreshStatementExecutingForTesting?.Invoke();
                     cmd.ExecuteNonQuery();
                 }
                 catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))

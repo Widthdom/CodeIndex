@@ -7,7 +7,11 @@ public partial class DbWriter
 {
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null)
     {
+        using var ownedDeferredRefresh = _deferredHotspotReferenceRefresh == null
+            ? BeginDeferredHotspotReferenceAggregateRefresh()
+            : null;
         using var transaction = BeginTransaction();
+        _ = TryStartDeferredHotspotReferenceMutation();
 
         var affectedFileIds = new HashSet<long>();
         var deleteCmd = RentCommand(
@@ -97,6 +101,7 @@ public partial class DbWriter
             affectedFileIds.Remove(reference.FileId);
         RefreshHotspotReferenceCounts(affectedFileIds, CancellationToken.None);
         MarkTypeScriptAugmentationReady();
+        ownedDeferredRefresh?.Complete(CancellationToken.None);
         transaction.Commit();
         return references.Count;
     }

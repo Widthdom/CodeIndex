@@ -233,6 +233,7 @@ public partial class DbWriter
         private readonly string? _savepointName;
         private readonly SqliteConnection? _conn;
         private readonly DbWriter _writer;
+        private readonly DeferredHotspotReferenceTransactionFrame? _deferredHotspotReferenceFrame;
         private readonly TransactionGateLease _transactionGateLease;
         private readonly object _stateWaitLock = new();
         private const int StateActive = 0;
@@ -253,6 +254,7 @@ public partial class DbWriter
         {
             _transaction = transaction;
             _writer = writer;
+            _deferredHotspotReferenceFrame = writer.BeginDeferredHotspotReferenceTransactionFrame();
             _transactionGateLease = transactionGateLease;
         }
 
@@ -267,6 +269,7 @@ public partial class DbWriter
             _savepointName = savepointName;
             _conn = conn;
             _writer = writer;
+            _deferredHotspotReferenceFrame = writer.BeginDeferredHotspotReferenceTransactionFrame();
             _transactionGateLease = transactionGateLease;
         }
 
@@ -304,6 +307,9 @@ public partial class DbWriter
                 {
                     ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
                 }
+                _writer.EndDeferredHotspotReferenceTransactionFrame(
+                    _deferredHotspotReferenceFrame,
+                    committed: true);
                 // Mark committed after success so Dispose() will rollback if Commit/Release throws.
                 // コミット/リリース成功後に committed に遷移し、失敗時は Dispose() でロールバックされるようにする。
                 SetState(StateCommitted);
@@ -354,6 +360,9 @@ public partial class DbWriter
                     _transaction.Rollback();
                 else
                     ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+                _writer.EndDeferredHotspotReferenceTransactionFrame(
+                    _deferredHotspotReferenceFrame,
+                    committed: false);
                 SetState(StateRolledBack);
                 // Same rationale as Commit: drop the stale reference so cached commands
                 // re-bind correctly after the transaction boundary.
@@ -406,6 +415,12 @@ public partial class DbWriter
                         // Best effort during dispose / Dispose中はベストエフォート
                         GlobalToolLog.Error($"transaction_scope_dispose_rollback_failed {GlobalToolLog.FormatExceptionChain(ex)}");
                         SetState(StateRolledBack);
+                    }
+                    finally
+                    {
+                        _writer.EndDeferredHotspotReferenceTransactionFrame(
+                            _deferredHotspotReferenceFrame,
+                            committed: false);
                     }
                     break;
                 }

@@ -176,6 +176,11 @@ public partial class DbWriter
         // definition / cross-file reference の削除は retained reference の candidate
         // cardinality を変え得るため、削除前に同一 transaction 内で contract を降格する。
         InvalidateReferenceIdentityContractForMutation();
+        if (_deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
+        {
+            TrackDeferredHotspotReferenceFiles(fileIds);
+            TrackDeferredHotspotReferenceFiles(GetReferenceFilesDependingOnLinesOwnedBy(fileIds));
+        }
         DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(fileIds);
         DeleteFileRowsByIdBatch(fileIds, offset: 0, batchCount: fileIds.Count);
     }

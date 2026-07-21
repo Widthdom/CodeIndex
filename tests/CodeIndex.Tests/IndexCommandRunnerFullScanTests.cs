@@ -23,7 +23,9 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var previousAggregateRefreshHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var atomicCalls = new List<bool>();
+        var aggregateRefreshStatements = 0;
         try
         {
             var sourcePath = Path.Combine(projectRoot, "app.py");
@@ -33,13 +35,20 @@ public partial class IndexCommandRunnerTests
                 atomicCalls.Add(newFiles);
                 previousAtomicHook?.Invoke(newFiles);
             };
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                aggregateRefreshStatements++;
+                previousAggregateRefreshHook?.Invoke();
+            };
 
             var (fullExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
 
             Assert.Equal(CommandExitCodes.Success, fullExitCode);
             Assert.Contains(true, atomicCalls);
+            Assert.Equal(1, aggregateRefreshStatements);
 
             atomicCalls.Clear();
+            aggregateRefreshStatements = 0;
             File.WriteAllText(sourcePath, "def run():\n    return updated_helper()\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
             var (updateExitCode, _) = RunAndCaptureJson(
@@ -47,10 +56,12 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Contains(false, atomicCalls);
+            Assert.Equal(1, aggregateRefreshStatements);
         }
         finally
         {
             DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousAggregateRefreshHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
