@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.39.3] - 2026-07-21
+
+#### Fixed
+
+- **Windows release validation no longer flakes on SQLite WAL cleanup or pattern timeout snapshot churn** — the release tests now keep the external WAL writer alive through artifact comparison and reuse one published pattern extractor snapshot, preventing spurious missing sidecars and duplicate timeout diagnostics.
+
 ### [1.39.2] - 2026-07-21
 
 #### Fixed
@@ -6070,6 +6076,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.39.3] - 2026-07-21
+
+#### 修正
+
+- **Windows のリリース検証で SQLite WAL cleanup や pattern timeout snapshot churn による不安定な失敗が起きないようになりました** — release test は artifact 比較が終わるまで外部 WAL writer を保持し、公開済み pattern extractor snapshot を1つだけ再利用することで、sidecar の予期しない消失や timeout diagnostic の重複を防ぎます。
+
 ### [1.39.2] - 2026-07-21
 
 #### 修正
@@ -12107,7 +12119,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.39.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.39.3...HEAD
+[1.39.3]: https://github.com/Widthdom/CodeIndex/compare/v1.39.2...v1.39.3
 [1.39.2]: https://github.com/Widthdom/CodeIndex/compare/v1.39.1...v1.39.2
 [1.39.1]: https://github.com/Widthdom/CodeIndex/compare/v1.39.0...v1.39.1
 [1.39.0]: https://github.com/Widthdom/CodeIndex/compare/v1.38.0...v1.39.0
