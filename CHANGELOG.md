@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.39.2] - 2026-07-21
+
+#### Fixed
+
+- **Per-file indexing failures now retain actionable diagnostics** — full-scan and update failures record the active phase and a bounded safe detail, exceptions retain their extraction stack across the parallel full-scan boundary, isolated symbol-worker failures report a redacted origin frame, and long stack frames preserve their source-line suffix instead of losing it behind a truncated method signature.
+
 ### [1.39.1] - 2026-07-21
 
 #### Fixed
@@ -6064,6 +6070,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.39.2] - 2026-07-21
+
+#### 修正
+
+- **ファイル単位の index failure で原因調査に必要な診断情報を保持するようになりました** — full scan / update の failure は active phase と上限付きの安全な detail を記録し、parallel full-scan boundary をまたぐ exception も extraction stack を保持します。隔離 symbol worker の failure は redaction 済み origin frame を報告し、長い stack frame でも method signature の切り詰めによって source-line suffix が失われません。
+
 ### [1.39.1] - 2026-07-21
 
 #### 修正
@@ -12095,7 +12107,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.39.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.39.2...HEAD
+[1.39.2]: https://github.com/Widthdom/CodeIndex/compare/v1.39.1...v1.39.2
 [1.39.1]: https://github.com/Widthdom/CodeIndex/compare/v1.39.0...v1.39.1
 [1.39.0]: https://github.com/Widthdom/CodeIndex/compare/v1.38.0...v1.39.0
 [1.38.0]: https://github.com/Widthdom/CodeIndex/compare/v1.37.2...v1.38.0
