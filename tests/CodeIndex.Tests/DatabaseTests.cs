@@ -490,22 +490,28 @@ public class DatabaseTests : IDisposable
 
             var retainedId = UpsertTestFile("src/target_%100.py", checksum: "retained");
             var staleId = UpsertTestFile("src/target_%100.cs", checksum: "stale");
+            var extensionlessStaleId = UpsertTestFile("src/target_%100", checksum: "stale-extensionless");
+            var differentStemId = UpsertTestFile("src/target_%100..cs", checksum: "different-stem");
             var similarId = UpsertTestFile("src/targetA%100.cs", checksum: "similar");
             _writer.InsertChunks([
                 new() { FileId = retainedId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "retained" },
                 new() { FileId = staleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "stale" },
+                new() { FileId = extensionlessStaleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "extensionless stale" },
+                new() { FileId = differentStemId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "different stem" },
                 new() { FileId = similarId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "similar" },
             ]);
 
             var purged = _writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target_%100.py");
 
-            Assert.Equal(1, purged);
+            Assert.Equal(2, purged);
             Assert.True(_writer.HasFileAtPath("src/target_%100.py"));
             Assert.False(_writer.HasFileAtPath("src/target_%100.cs"));
+            Assert.False(_writer.HasFileAtPath("src/target_%100"));
+            Assert.True(_writer.HasFileAtPath("src/target_%100..cs"));
             Assert.True(_writer.HasFileAtPath("src/targetA%100.cs"));
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = "SELECT COUNT(*) FROM chunks";
-            Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+            Assert.Equal(3L, (long)cmd.ExecuteScalar()!);
         }
         finally
         {
@@ -1796,6 +1802,59 @@ public class DatabaseTests : IDisposable
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_symbol_name_folded_kind", [("symbol_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_symbol_name_folded_file", [("symbol_name_folded", "BINARY"), ("file_id", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
+    }
+
+    [Fact]
+    public void InitializeSchema_CreatesBoundedMaintenanceLookupIndexes()
+    {
+        Assert.Contains("idx_files_checksum", ReadIndexNames(_db.Connection, "files"));
+        Assert.Contains("idx_file_issues_file_kind", ReadIndexNames(_db.Connection, "file_issues"));
+
+        AssertIndexColumns(_db.Connection, "idx_files_checksum", [("checksum", "BINARY")]);
+        AssertIndexColumns(
+            _db.Connection,
+            "idx_file_issues_file_kind",
+            [("file_id", "BINARY"), ("kind", "BINARY")]);
+    }
+
+    [Fact]
+    public void MaintenanceLookupQueries_UseBoundedIndexes()
+    {
+        var checksumPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            "SELECT id, path FROM files WHERE checksum = @checksum AND path <> @path",
+            ("@checksum", "same-checksum"),
+            ("@path", "src/current.cs"));
+        Assert.Contains(checksumPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX idx_files_checksum", StringComparison.Ordinal));
+        Assert.DoesNotContain(checksumPlan, detail => detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var issuePlan = ReadQueryPlanDetails(
+            _db.Connection,
+            """
+            SELECT f.id
+            FROM files f
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM file_issues
+                WHERE file_id = f.id AND kind = @kind
+            )
+            """,
+            ("@kind", "symbol_count_exceeded"));
+        Assert.Contains(issuePlan, detail =>
+            detail.Contains("SEARCH file_issues USING COVERING INDEX idx_file_issues_file_kind", StringComparison.Ordinal));
+        Assert.DoesNotContain(issuePlan, detail => detail.Contains("SCAN file_issues", StringComparison.Ordinal));
+
+        var directoryStemPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleDirectoryStemCandidateSql,
+            ("@path", "src/target.py"),
+            ("@base_path", "src/target"),
+            ("@base_dot_lower_bound", "src/target."),
+            ("@base_dot_upper_bound", "src/target/"));
+        Assert.Contains(directoryStemPlan, detail =>
+            detail.Contains("SEARCH files USING COVERING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+        Assert.DoesNotContain(directoryStemPlan, detail => detail.Contains("SCAN files", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -3966,6 +4025,23 @@ public class DatabaseTests : IDisposable
         while (reader.Read())
             indexes.Add(reader.GetString(0));
         return indexes;
+    }
+
+    private static IReadOnlyList<string> ReadQueryPlanDetails(
+        SqliteConnection connection,
+        string sql,
+        params (string Name, object Value)[] parameters)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        foreach (var parameter in parameters)
+            cmd.Parameters.AddWithValue(parameter.Name, parameter.Value);
+
+        var details = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            details.Add(reader.GetString(3));
+        return details;
     }
 
     private static void AssertIndexColumns(SqliteConnection connection, string indexName, IReadOnlyList<(string Name, string Collation)> expected)

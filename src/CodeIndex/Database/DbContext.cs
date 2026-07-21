@@ -2514,6 +2514,8 @@ public class DbContext : IDisposable
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_generated ON files(generated)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_files_checksum ON files(checksum)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_file_issues_file_kind ON file_issues(file_id, kind)");
                 // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
                 // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
                 Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");

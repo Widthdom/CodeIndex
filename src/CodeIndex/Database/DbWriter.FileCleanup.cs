@@ -1,4 +1,3 @@
-using System.Text;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -6,6 +5,19 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    internal const string StaleDirectoryStemCandidateSql = """
+        SELECT id, path
+        FROM files
+        WHERE path <> @path
+          AND (
+              path = @base_path
+              OR (
+                  path >= @base_dot_lower_bound
+                  AND path < @base_dot_upper_bound
+              )
+          )
+        """;
+
     /// <summary>
     /// Clean up existing file data (FTS, chunks, symbols) before re-indexing.
     /// 再インデックス前に既存ファイルデータ（FTS、チャンク、シンボル）を削除する。
@@ -82,29 +94,27 @@ public partial class DbWriter
         var basePath = retainedDirectory.Length == 0
             ? retainedStem
             : $"{retainedDirectory}/{retainedStem}";
-        var baseDotPattern = EscapeLikePattern(basePath + ".") + "%";
+        // '.' and '/' are adjacent ASCII values. The half-open ordinal range therefore selects
+        // only the extension-prefixed paths while allowing SQLite to seek the UNIQUE path index.
+        // '.' と '/' の半開 ordinal range で拡張子候補だけを path index から seek する。
+        var baseDotLowerBound = basePath + ".";
+        var baseDotUpperBound = basePath + "/";
         var staleIds = new List<long>();
         var cmd = RentCommand(
-            """
-            SELECT id, path
-            FROM files
-            WHERE path <> @path
-              AND (
-                  path = @base_path
-                  OR path LIKE @base_dot_pattern ESCAPE '\'
-              )
-            """,
+            StaleDirectoryStemCandidateSql,
             static c =>
             {
                 c.Parameters.Add("@path", SqliteType.Text);
                 c.Parameters.Add("@base_path", SqliteType.Text);
-                c.Parameters.Add("@base_dot_pattern", SqliteType.Text);
+                c.Parameters.Add("@base_dot_lower_bound", SqliteType.Text);
+                c.Parameters.Add("@base_dot_upper_bound", SqliteType.Text);
             });
         try
         {
             cmd.Parameters["@path"].Value = retainedRelativePath;
             cmd.Parameters["@base_path"].Value = basePath;
-            cmd.Parameters["@base_dot_pattern"].Value = baseDotPattern;
+            cmd.Parameters["@base_dot_lower_bound"].Value = baseDotLowerBound;
+            cmd.Parameters["@base_dot_upper_bound"].Value = baseDotUpperBound;
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -219,17 +229,4 @@ public partial class DbWriter
         return dotIndex <= 0 ? fileName : fileName[..dotIndex];
     }
 
-    private static string EscapeLikePattern(string value)
-    {
-        var builder = new StringBuilder(value.Length);
-        foreach (var ch in value)
-        {
-            if (ch is '\\' or '%' or '_')
-                builder.Append('\\');
-
-            builder.Append(ch);
-        }
-
-        return builder.ToString();
-    }
 }
