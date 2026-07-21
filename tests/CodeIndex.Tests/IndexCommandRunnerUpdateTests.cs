@@ -248,6 +248,26 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, deleteJson.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, refreshCount);
             Assert.Equal(0, CountMutualRecursionReferences(dbPath));
+
+            refreshCount = 0;
+            var graphNeutralPath = Path.Combine(projectRoot, "graph-neutral.py");
+            File.WriteAllText(graphNeutralPath, "# text-only source\n");
+
+            var (neutralInsertExitCode, neutralInsertJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "graph-neutral.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, neutralInsertExitCode);
+            Assert.Equal(1, neutralInsertJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, refreshCount);
+
+            File.WriteAllText(graphNeutralPath, "# changed text-only source\n");
+            File.SetLastWriteTimeUtc(graphNeutralPath, DateTime.UtcNow.AddSeconds(2));
+            var (neutralUpdateExitCode, neutralUpdateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "graph-neutral.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, neutralUpdateExitCode);
+            Assert.Equal(1, neutralUpdateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, refreshCount);
         }
         finally
         {
@@ -3253,6 +3273,57 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DegradedIssuesKeepsLastRunReferenceCapSnapshotUnavailable()
+    {
+        // A scoped update preserves readiness that existed before the run. Its lightweight
+        // finalization read must use that same snapshot: physical file_issues rows alone do
+        // not make reference-cap state authoritative when IssuesReady is absent.
+        // scoped update の lightweight finalize でも事前の IssuesReady を尊重し、物理 row の
+        // 存在だけで last-run reference-cap snapshot を authoritative に昇格させない。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var readVersion = connection.CreateCommand();
+                readVersion.CommandText = "PRAGMA user_version";
+                var userVersion = Convert.ToInt64(readVersion.ExecuteScalar(), CultureInfo.InvariantCulture);
+                using var clearIssuesReady = connection.CreateCommand();
+                clearIssuesReady.CommandText = $"PRAGMA user_version = {userVersion & ~DbContext.IssuesReadyFlag}";
+                clearIssuesReady.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.False(updateJson.GetProperty("issues_table_available").GetBoolean());
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            var lastRunCapHits = statusJson
+                .GetProperty("last_index_run")
+                .GetProperty("reference_extraction_cap_hits");
+            Assert.False(lastRunCapHits.GetProperty("state_available").GetBoolean());
+            Assert.Contains(
+                DegradationReasonCodes.ReferenceExtractionCapStateUnavailable,
+                lastRunCapHits.GetProperty("reasons").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }

@@ -88,6 +88,33 @@ public partial class DbWriter
         )
         """;
 
+    private const string CreateReferenceUniqueFamiliesSql = """
+        CREATE TEMP TABLE IF NOT EXISTS reference_unique_symbol_families (
+            lang        TEXT NOT NULL,
+            name_folded TEXT NOT NULL,
+            family_key  TEXT NOT NULL,
+            PRIMARY KEY(lang, name_folded)
+        ) WITHOUT ROWID
+        """;
+
+    private const string RefreshReferenceUniqueFamiliesSql = """
+        DELETE FROM temp.reference_unique_symbol_families;
+
+        INSERT INTO temp.reference_unique_symbol_families(lang, name_folded, family_key)
+        SELECT target_file.lang,
+               s.name_folded,
+               MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, '')) AS family_key
+        FROM symbols AS s
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE s.name_folded IS NOT NULL
+        GROUP BY target_file.lang, s.name_folded
+        HAVING COUNT(DISTINCT target_file.path || char(31) ||
+                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                              COALESCE(s.name, '')) = 1;
+        """;
+
     private const string RefreshReferenceCandidatesSql = """
         DELETE FROM symbol_reference_candidates;
 
@@ -236,21 +263,7 @@ public partial class DbWriter
         SELECT r.id, target.id, 5
         FROM symbol_references AS r
         JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN (
-            SELECT target_file.lang,
-                   s.name_folded,
-                   MIN(target_file.path || char(31) ||
-                       COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                       COALESCE(s.name, '')) AS family_key
-            FROM symbols AS s
-            JOIN files AS target_file ON target_file.id = s.file_id
-            WHERE target_file.lang <> 'csharp'
-              AND s.name_folded IS NOT NULL
-            GROUP BY target_file.lang, s.name_folded
-            HAVING COUNT(DISTINCT target_file.path || char(31) ||
-                                  COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                                  COALESCE(s.name, '')) = 1
-        ) AS unique_family
+        JOIN temp.reference_unique_symbol_families AS unique_family
           ON unique_family.lang = source_file.lang
          AND unique_family.name_folded = r.symbol_name_folded
         JOIN symbols AS target ON target.name_folded = unique_family.name_folded
@@ -271,20 +284,9 @@ public partial class DbWriter
         SELECT r.id, target.id, 5
         FROM symbol_references AS r
         JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN (
-            SELECT s.name_folded,
-                   MIN(target_file.path || char(31) ||
-                       COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                       COALESCE(s.name, '')) AS family_key
-            FROM symbols AS s
-            JOIN files AS target_file ON target_file.id = s.file_id
-            WHERE target_file.lang = 'csharp'
-              AND s.name_folded IS NOT NULL
-            GROUP BY s.name_folded
-            HAVING COUNT(DISTINCT target_file.path || char(31) ||
-                                  COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                                  COALESCE(s.name, '')) = 1
-        ) AS unique_family ON unique_family.name_folded = r.symbol_name_folded
+        JOIN temp.reference_unique_symbol_families AS unique_family
+          ON unique_family.lang = 'csharp'
+         AND unique_family.name_folded = r.symbol_name_folded
         JOIN symbols AS target ON target.name_folded = unique_family.name_folded
         JOIN files AS target_file
           ON target_file.id = target.file_id
@@ -304,20 +306,9 @@ public partial class DbWriter
         SELECT r.id, target.id, 5
         FROM symbol_references AS r
         JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN (
-            SELECT s.name_folded,
-                   MIN(target_file.path || char(31) ||
-                       COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                       COALESCE(s.name, '')) AS family_key
-            FROM symbols AS s
-            JOIN files AS target_file ON target_file.id = s.file_id
-            WHERE target_file.lang = 'csharp'
-              AND s.name_folded IS NOT NULL
-            GROUP BY s.name_folded
-            HAVING COUNT(DISTINCT target_file.path || char(31) ||
-                                  COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
-                                  COALESCE(s.name, '')) = 1
-        ) AS unique_family ON unique_family.name_folded = r.symbol_name_folded || 'attribute'
+        JOIN temp.reference_unique_symbol_families AS unique_family
+          ON unique_family.lang = 'csharp'
+         AND unique_family.name_folded = r.symbol_name_folded || 'attribute'
         JOIN symbols AS target ON target.name_folded = unique_family.name_folded
         JOIN files AS target_file
           ON target_file.id = target.file_id
@@ -355,51 +346,36 @@ public partial class DbWriter
               SELECT 1 FROM symbol_reference_candidates AS existing
               WHERE existing.reference_id = r.id
           );
+
         """;
 
     private const string RefreshReferenceResolutionSql = """
         UPDATE symbol_references AS r
-        SET target_symbol_id = (
-                SELECT MIN(c.symbol_id)
-                FROM symbol_reference_candidates AS c
-                WHERE c.reference_id = r.id
-                HAVING COUNT(*) = 1
-            ),
-            target_symbol_key = (
-                SELECT CASE WHEN COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
-                                               COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                                               COALESCE(target.name, '')) = 1
-                            THEN MIN(target_file.lang || char(31) || target_file.path || char(31) ||
-                                     COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                                     COALESCE(target.name, ''))
-                       END
-                FROM symbol_reference_candidates AS c
-                JOIN symbols AS target ON target.id = c.symbol_id
-                JOIN files AS target_file ON target_file.id = target.file_id
-                WHERE c.reference_id = r.id
-            ),
-            resolution_candidate_count = (
-                SELECT COUNT(*)
-                FROM symbol_reference_candidates AS c
-                WHERE c.reference_id = r.id
-            ),
-            resolution_state = CASE
-                WHEN NOT EXISTS (
-                    SELECT 1 FROM symbol_reference_candidates AS c WHERE c.reference_id = r.id
-                ) THEN 'unresolved'
-                WHEN (SELECT COUNT(*) FROM symbol_reference_candidates AS c WHERE c.reference_id = r.id) = 1
-                    THEN 'resolved'
-                WHEN (
-                    SELECT COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
-                                          COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                                          COALESCE(target.name, ''))
+        SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = (
+            SELECT CASE WHEN candidate_count = 1 THEN minimum_symbol_id END,
+                   CASE WHEN target_family_count = 1 THEN minimum_target_key END,
+                   candidate_count,
+                   CASE
+                       WHEN candidate_count = 0 THEN 'unresolved'
+                       WHEN candidate_count = 1 THEN 'resolved'
+                       WHEN target_family_count = 1 THEN 'resolved_group'
+                       ELSE 'ambiguous'
+                   END
+            FROM (
+                SELECT COUNT(*) AS candidate_count,
+                       MIN(c.symbol_id) AS minimum_symbol_id,
+                       COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
+                                              COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                                              COALESCE(target.name, '')) AS target_family_count,
+                       MIN(target_file.lang || char(31) || target_file.path || char(31) ||
+                           COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                           COALESCE(target.name, '')) AS minimum_target_key
                     FROM symbol_reference_candidates AS c
                     JOIN symbols AS target ON target.id = c.symbol_id
                     JOIN files AS target_file ON target_file.id = target.file_id
                     WHERE c.reference_id = r.id
-                ) = 1 THEN 'resolved_group'
-                ELSE 'ambiguous'
-            END;
+            ) AS resolution
+        );
 
         UPDATE symbol_references
         SET is_self_reference = CASE
@@ -743,22 +719,28 @@ public partial class DbWriter
         MutualRecursionRefreshForTesting?.Invoke();
         cancellationToken.ThrowIfCancellationRequested();
         using var transaction = BeginTransaction(cancellationToken, "refresh reference identities");
-        var cmd = RentCommand(
-            RefreshReferenceSourceSymbolsSql + ";\n" +
-            RefreshReferenceCandidatesSql + "\n" +
-            RefreshReferenceResolutionSql + "\n" +
-            RefreshMutualRecursionFlagsSql,
-            static _ => { });
+        SqliteCommand? createUniqueFamiliesCommand = null;
+        SqliteCommand? refreshCommand = null;
         try
         {
             using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            createUniqueFamiliesCommand = RentCommand(CreateReferenceUniqueFamiliesSql, static _ => { });
+            createUniqueFamiliesCommand.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
+            refreshCommand = RentCommand(
+                RefreshReferenceSourceSymbolsSql + ";\n" +
+                RefreshReferenceUniqueFamiliesSql + "\n" +
+                RefreshReferenceCandidatesSql + "\n" +
+                RefreshReferenceResolutionSql + "\n" +
+                RefreshMutualRecursionFlagsSql,
+                static _ => { });
             // Stamp inside the same transaction, but before the graph refresh so the
             // public SQLite changes() result continues to describe recursion updates.
             // 同一トランザクション内で先に marker を設定し、公開 changes() は再帰更新件数を維持する。
             MarkReferenceIdentityContractReady();
             cancellationToken.ThrowIfCancellationRequested();
-            cmd.ExecuteNonQuery();
+            refreshCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
             transaction.Commit();
         }
@@ -768,7 +750,10 @@ public partial class DbWriter
         }
         finally
         {
-            ReleaseCommand(cmd);
+            if (refreshCommand != null)
+                ReleaseCommand(refreshCommand);
+            if (createUniqueFamiliesCommand != null)
+                ReleaseCommand(createUniqueFamiliesCommand);
         }
     }
 

@@ -1073,7 +1073,7 @@ public static class ConsoleUi
         WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
         WriteHelpLine("  --max-symbols-per-file <n> Skip file content, symbols, and references when one file emits too many symbols (default: 5000; max: 50000)");
         WriteHelpLine("  --max-references-per-file <n> Skip references when one file emits too many references (default: 100000; max: 1000000)");
-        WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
+        WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 8; explicit max: 16; also honors CDIDX_INDEX_PARALLELISM)");
         WriteHelpLine("  --follow-symlinks <mode>  Symlink policy for directories and files: none (default), internal, or all");
         WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
         WriteHelpLine("  --exclude-symbol-kind <kind>[,<kind>]  Drop matching symbol kinds during indexing");

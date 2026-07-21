@@ -21,6 +21,7 @@ internal sealed record SymbolExtractionWorkerResult(
 
 internal sealed class SymbolExtractionWorkerClient : IDisposable
 {
+    private static readonly byte[] ProtocolLineTerminator = [(byte)'\n'];
     private readonly int maxProtocolLineBytes;
     private readonly object gate = new();
     private Process? process;
@@ -83,23 +84,22 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 contentIsNormalized,
                 hasOversizeLine,
                 conflictMarkerLine);
-            var requestJson = JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions);
+            var requestUtf8 = JsonSerializer.SerializeToUtf8Bytes(request, SymbolExtractionWorker.JsonOptions);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
             {
                 return TimedOutAfterKill(stopwatch);
             }
 
-            Task<string?> responseTask;
+            Task<ReadOnlyMemory<byte>?> responseTask;
             Task sendTask;
             try
             {
-                responseTask = BoundedLineReader.ReadLineAsync(
-                    process!.StandardOutput,
-                    maxProtocolLineBytes,
+                responseTask = BoundedLineReader.ReadUtf8LineAsync(
+                    process!.StandardOutput.BaseStream,
                     maxProtocolLineBytes,
                     cancellationToken);
-                sendTask = SendRequestAsync(process.StandardInput, requestJson);
+                sendTask = SendRequestAsync(process.StandardInput.BaseStream, requestUtf8);
             }
             catch (Exception ex)
             {
@@ -141,8 +141,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             stopwatch.Stop();
             // WaitForTask already proved the async read completed within the worker budget;
             // GetResult only observes that completed protocol response on this sync API.
-            var responseJson = responseTask.GetAwaiter().GetResult();
-            if (responseJson == null)
+            var responseUtf8 = responseTask.GetAwaiter().GetResult();
+            if (responseUtf8 == null)
             {
                 var workerError = BuildWorkerExitError(process, stderr.GetCapturedText(), "worker exited before returning a response.");
                 ClearExitedWorker();
@@ -153,7 +153,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             try
             {
                 response = BoundedJson.Deserialize<SymbolExtractionWorker.WorkerResponse>(
-                    responseJson,
+                    responseUtf8.Value.Span,
                     maxProtocolLineBytes,
                     SymbolExtractionWorker.JsonOptions);
             }
@@ -310,9 +310,10 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             DurationMs: Math.Max(0, durationMs),
             Symbols: null);
 
-    private static async Task SendRequestAsync(TextWriter input, string requestJson)
+    private static async Task SendRequestAsync(Stream input, ReadOnlyMemory<byte> requestUtf8)
     {
-        await input.WriteLineAsync(requestJson).ConfigureAwait(false);
+        await input.WriteAsync(requestUtf8).ConfigureAwait(false);
+        await input.WriteAsync(ProtocolLineTerminator).ConfigureAwait(false);
         await input.FlushAsync().ConfigureAwait(false);
     }
 
@@ -411,7 +412,41 @@ internal static class SymbolExtractionWorker
             return false;
         }
 
-        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes, cancellationToken);
+        exitCode = RunCommand(
+            args,
+            input,
+            response => WriteResponse(output, response),
+            error,
+            maxProtocolLineCharacters,
+            maxProtocolLineUtf8Bytes,
+            cancellationToken);
+        return true;
+    }
+
+    internal static bool TryRunCommand(
+        string[] args,
+        TextReader input,
+        Stream output,
+        TextWriter error,
+        out int exitCode,
+        int maxProtocolLineCharacters = WorkerProtocolLineLimits.MaxLineCharacters,
+        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+        CancellationToken cancellationToken = default)
+    {
+        if (args.Length == 0 || !StringComparer.Ordinal.Equals(args[0], CommandName))
+        {
+            exitCode = 0;
+            return false;
+        }
+
+        exitCode = RunCommand(
+            args,
+            input,
+            response => WriteResponse(output, response),
+            error,
+            maxProtocolLineCharacters,
+            maxProtocolLineUtf8Bytes,
+            cancellationToken);
         return true;
     }
 
@@ -493,7 +528,7 @@ internal static class SymbolExtractionWorker
     private static int RunCommand(
         string[] args,
         TextReader input,
-        TextWriter output,
+        Action<WorkerResponse> writeResponse,
         TextWriter error,
         int maxProtocolLineCharacters,
         int maxProtocolLineUtf8Bytes,
@@ -529,8 +564,7 @@ internal static class SymbolExtractionWorker
                 catch (BoundedLineLengthException ex)
                 {
                     response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex), null);
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
-                    output.Flush();
+                    writeResponse(response);
                     return 1;
                 }
 
@@ -540,8 +574,7 @@ internal static class SymbolExtractionWorker
                 if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
                 {
                     response = new WorkerResponse(null, validationError, null);
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
-                    output.Flush();
+                    writeResponse(response);
                     continue;
                 }
 
@@ -553,8 +586,7 @@ internal static class SymbolExtractionWorker
                 catch (Exception ex)
                 {
                     response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex), null);
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
-                    output.Flush();
+                    writeResponse(response);
                     continue;
                 }
 
@@ -571,8 +603,7 @@ internal static class SymbolExtractionWorker
                     response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex), null);
                 }
 
-                output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
-                output.Flush();
+                writeResponse(response);
             }
 
             return 0;
@@ -586,6 +617,19 @@ internal static class SymbolExtractionWorker
             error.WriteLine(SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
             return 1;
         }
+    }
+
+    private static void WriteResponse(TextWriter output, WorkerResponse response)
+    {
+        output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+        output.Flush();
+    }
+
+    private static void WriteResponse(Stream output, WorkerResponse response)
+    {
+        JsonSerializer.Serialize(output, response, JsonOptions);
+        output.WriteByte((byte)'\n');
+        output.Flush();
     }
 
     private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options, CancellationToken cancellationToken)

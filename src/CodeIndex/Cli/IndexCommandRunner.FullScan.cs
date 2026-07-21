@@ -1458,6 +1458,8 @@ public static partial class IndexCommandRunner
                 StopFullScanJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
             }
         }
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("csharp_prepass", stopwatch));
 
         var freshCountFiles = 0L;
         var freshCountChunks = 0L;
@@ -1960,6 +1962,8 @@ public static partial class IndexCommandRunner
                                 ftsMutated = true;
                                 csharpMetadataTargetsNeedRefresh = true;
                                 RequireTypeScriptAugmentationRefresh();
+                                if (!options.SymbolsOnly)
+                                    mutualRecursionRefreshNeeded = true;
                             }
                             skipped++;
                             processed++;
@@ -2004,11 +2008,16 @@ public static partial class IndexCommandRunner
                             {
                                 ftsMutated = true;
                                 csharpMetadataTargetsNeedRefresh = true;
+                                if (!options.SymbolsOnly)
+                                    mutualRecursionRefreshNeeded = true;
                             }
                         }
+                        var referenceIdentityChanged = false;
                         var fileId = startedWithNoIndexedFiles
                             ? writer.InsertNewFile(record)
-                            : writer.UpsertFile(record);
+                            : writer.UpsertFile(record, out referenceIdentityChanged);
+                        if (!options.SymbolsOnly && referenceIdentityChanged)
+                            mutualRecursionRefreshNeeded = true;
                         ftsMutated = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                         indexFilePhase = "chunking";
@@ -2192,7 +2201,7 @@ public static partial class IndexCommandRunner
                             writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, cancellationToken);
                         else
                             writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
-                        if (!options.SymbolsOnly)
+                        if (!options.SymbolsOnly && (symbols.Count > 0 || references.Count > 0))
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
                         indexFilePhase = "validating";
@@ -2259,6 +2268,9 @@ public static partial class IndexCommandRunner
 
         PauseIndexSpinnerForConsoleWrite();
 
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("extraction", stopwatch));
+
         ThrowIfFullScanCancelled(processed, files.Count);
         if (mutualRecursionRefreshNeeded)
         {
@@ -2273,6 +2285,8 @@ public static partial class IndexCommandRunner
                 StopFullScanJsonPhaseHeartbeat(referenceGraphHeartbeat);
             }
         }
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfFullScanCancelled(processed, files.Count);
         if (ftsBulkLoad != null)
         {
@@ -2290,18 +2304,25 @@ public static partial class IndexCommandRunner
         }
         else if (ftsMutated)
         {
-            WriteFullScanJsonLiveness(options, "optimizing index...");
-            var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");
-            try
+            var incrementalWrites = writer.RecordFtsIncrementalWrite();
+            if (incrementalWrites >= DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold)
             {
-                FullScanFtsOptimizeForTesting?.Invoke();
-                writer.OptimizeFts(cancellationToken);
-            }
-            finally
-            {
-                StopFullScanJsonPhaseHeartbeat(optimizeHeartbeat);
+                WriteFullScanJsonLiveness(options, "optimizing index...");
+                var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");
+                try
+                {
+                    FullScanFtsOptimizeForTesting?.Invoke();
+                    writer.OptimizeFtsIfIncrementalWriteThresholdReached(
+                        cancellationToken: cancellationToken);
+                }
+                finally
+                {
+                    StopFullScanJsonPhaseHeartbeat(optimizeHeartbeat);
+                }
             }
         }
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("text_index", stopwatch));
         ThrowIfFullScanCancelled(processed, files.Count);
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
@@ -2500,10 +2521,12 @@ public static partial class IndexCommandRunner
                 purged,
                 memoryTimelineForStamp,
                 indexRunDiagnostics,
-                new DbReader(writer.Connection).GetReferenceExtractionCapHits());
+                writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter));
         }
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("commit", stopwatch));
         stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(memorySamples);
         WarnIfMemoryThresholdExceeded(memoryTimeline);

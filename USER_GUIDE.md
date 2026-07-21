@@ -648,13 +648,17 @@ Use the smallest change that reduces the expensive part of your run.
 | `--changed-between <old> <new>` | off | After branch switches when both refs are known | Only as accurate as the supplied refs |
 | `--dry-run-path-limit <n>` | `100000` | Previewing a very large scan without building unbounded dry-run estimates | Truncated output reports lower-bound totals |
 | `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | Legitimate large source files are skipped | Raising it can bloat the DB and slow snippet extraction |
-| `--parallelism <n>` / `CDIDX_INDEX_PARALLELISM` | CPU count, capped at `16` | Full-scan extraction is CPU-bound | Higher values can increase memory and IO pressure |
+| `--parallelism <n>` / `CDIDX_INDEX_PARALLELISM` | CPU count, capped at `8` | Full-scan extraction is CPU-bound | Explicit values up to `16` can increase memory and IO pressure |
 | `--watch --debounce <ms>` | `500` ms | Keep an active worktree fresh during editing | Long-running process; incompatible with commit/file scoped refresh flags |
 | `--watch-pending-path-limit <n>` / `CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` | `4096` | Watcher sees more distinct changed paths than the default queue keeps | Higher values use more memory before the safe full-rescan fallback |
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | Query payloads are too large for AI context | Smaller snippets may hide nearby context |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | Queries or maps are noisy | Over-filtering can hide real matches |
 
 `index --dry-run --rebuild` previews a full replacement scan but does not delete the existing index, so it never prompts for `--yes`. Add `--json --memory-trace` to receive a `memory_timeline` with `start`, `snapshot`, `scan`, and `finalize` samples from the preview itself. Dry-run reads its database snapshot and source files without changing the workspace or DB/WAL/SHM set.
+
+On an actual full scan, the same timeline also separates `csharp_prepass`, `extraction`, `reference_graph`, `text_index`, `finalize`, and `commit`; file/commit-scoped updates report the shared extraction, graph, text-index, and finalization boundaries. Sample `elapsed_ms` values are cumulative, so subtract adjacent samples to attribute elapsed time without enabling a profiler.
+
+Index finalization reads reference-completeness metadata through the active writer transaction while preserving the issue-readiness state already established for that run, and validates cross-file hotspot-family readiness in one grouped pass over only the languages present in the index. Large mixed-language indexes therefore avoid repeated reader bootstraps and per-language correlated symbol scans before returning CLI or MCP completion output without treating degraded issue data as authoritative.
 
 For very large repos, index from the repository root once, exclude generated
 trees early, then use scoped refreshes for daily work. If a branch switch,
@@ -1819,7 +1823,7 @@ same source location.
 | `--max-file-bytes <bytes>` | `index` | Override the per-file indexing limit for this run. Defaults to 4MiB, or `CDIDX_MAX_FILE_BYTES` when set. Values accept raw bytes or `K` / `M` / `G` suffixes such as `50M`. |
 | `--max-symbols-per-file <n>` | `index` | Skip file content, symbols, and references when one file emits too many symbols. Defaults to `5000`; values above `50000` are rejected. |
 | `--symbols-only` | `index` | Full-scan only. Build chunks, symbols, and issues while skipping reference extraction and graph finalization for a faster first pass. `search`, `definition`, `symbols`, and `map` are available; reference graph commands remain degraded until a normal `cdidx index <projectPath>` run. |
-| `--parallelism <n>` | `index` | Set full-scan extraction worker count. Defaults to CPU count capped at 16, or `CDIDX_INDEX_PARALLELISM` when set. SQLite writes stay single-consumer. |
+| `--parallelism <n>` | `index` | Set full-scan extraction worker count. Defaults to CPU count capped at 8, or `CDIDX_INDEX_PARALLELISM` when set; explicit values are capped at 16. SQLite writes stay single-consumer. |
 | `--watch` | `index` | After the initial scan completes, stay running and reindex incrementally as files change (FileSystemWatcher / inotify / FSEvents). Watch subscribes before a startup reconciliation scan, drains the buffered startup generation, and only then emits `watching`, so edits made during the initial-scan handoff are not missed. Changes to `.gitignore`, `.cdidxignore`, `.cdidx/patterns/**`, or `.cdidx/plugins/**` trigger a debounced full-workspace reconciliation; pattern/plugin additions, edits, and removals refresh the in-process extractor registry before that scan. The `.cdidx` namespace itself is excluded from source membership consistently with full scan and `status --check`, including ordinary sidecars. Ctrl-C cancels an active indexing sub-run before the loop emits its stopped event. Sub-run stdout is captured through a runner-scoped writer, so an embedded or concurrent command keeps its own process stdout. Rejects `--commits`, `--changed-between`, `--files`, and `--dry-run` because the loop already drives continuous incremental updates. |
 | `--debounce <ms>` | `index` (watch only) | Coalesce bursts of file events into a single update after `<ms>` of quiet (non-negative integer; default: 500). Invalid values emit a warning and are ignored. |
 | `--watch-pending-path-limit <n>` | `index` (watch only) | Set the number of distinct changed paths the watch loop will queue before it reports an overflow and falls back to a full rescan. Defaults to `4096`, honors `CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` and `indexing.watchPendingPathLimit`, and rejects values above `262144`. The `watching` and `overflow` JSON events include `watch_pending_path_limit`. |
@@ -2175,6 +2179,10 @@ At index time, `--include-symbol-kind` keeps only matching symbol kinds and `--e
 ### Incremental update reliability
 
 Scoped updates use the same path filter as a full scan, including the same `.gitignore`-then-`.cdidxignore` ordering and `!` re-include semantics. If a commit-based update sees `.gitignore` or `.cdidxignore` change in the selected commits, cdidx promotes that run to a full incremental scan so newly ignored files are purged and newly re-included files can be indexed. `--files` only updates the paths you pass, so after changing ignore rules use `cdidx <projectPath> --json` unless a commit-scoped command can see the ignore-file change.
+
+Incremental full scans, scoped updates, and MCP indexing skip the repository-wide mutual-recursion refresh when every changed file has neither old nor new symbol/reference identity rows. Text-only source edits therefore do not pay a whole-graph pass; adding or removing symbols, references, dependent reference-line context, or stale indexed paths still refreshes the graph before readiness is restored.
+
+Fresh indexes and `--rebuild` still rebuild and optimize FTS5 immediately. Incremental full scans, scoped updates, and MCP indexing instead record one FTS maintenance write per mutating run and merge FTS segments after 25 such runs, avoiding repository-size `optimize` work after every small edit while keeping periodic query maintenance.
 
 Indexing commits file-by-file SQLite transactions. Other processes can query during a long refresh, but they may observe a transitional live snapshot until the indexing command finishes. For automation, run `cdidx status --check --json` after the refresh completes and require `index_matches_workspace: true` before trusting search, symbol, or graph results.
 
@@ -3719,13 +3727,17 @@ cdidx index . --duration-format seconds
 | `--changed-between <old> <new>` | off | branch switch 後に両 ref が分かる | 渡した ref の正確さに依存 |
 | `--dry-run-path-limit <n>` | `100000` | 非常に大きい scan を preview し、dry-run estimate を無制限に作らない | truncate された出力は lower-bound totals を報告する |
 | `--max-file-bytes <bytes>` / `CDIDX_MAX_FILE_BYTES` | `4MiB` | 正当な大きい source file が skip される | DB が大きくなり snippet extraction も遅くなりうる |
-| `--parallelism <n>` / `CDIDX_INDEX_PARALLELISM` | CPU 数、最大 `16` | フルスキャンの抽出が CPU-bound | 大きくするとメモリと IO の圧力が増えうる |
+| `--parallelism <n>` / `CDIDX_INDEX_PARALLELISM` | CPU 数、最大 `8` | フルスキャンの抽出が CPU-bound | 明示値は最大 `16` で、増やすとメモリと IO の圧力が増えうる |
 | `--watch --debounce <ms>` | `500` ms | 編集中の worktree を live に保つ | long-running process。commit/file scoped refresh flags とは併用不可 |
 | `--watch-pending-path-limit <n>` / `CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` | `4096` | watcher が既定 queue を超える数の changed path を検知する | 大きくすると安全な full-rescan fallback 前に使うメモリが増える |
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | AI context に対して query payload が大きすぎる | 小さくしすぎると周辺文脈が見えない |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | query / map が noisy | 絞り込みすぎると実 match を隠す |
 
 `index --dry-run --rebuild` は full replacement scan を preview しますが既存 index を削除しないため、`--yes` の確認を要求しません。`--json --memory-trace` を追加すると、preview 自身から取得した `start`、`snapshot`、`scan`、`finalize` sample を含む `memory_timeline` を返します。dry-run は database snapshot と source file を読み取るだけで、workspace や DB/WAL/SHM set を変更しません。
+
+実際の full scan では、同じ timeline が `csharp_prepass`、`extraction`、`reference_graph`、`text_index`、`finalize`、`commit` も分離します。file/commit-scoped update は共通の extraction、graph、text-index、finalize 境界を返します。sample の `elapsed_ms` は累積値なので、隣接 sample の差分から profiler なしで所要時間を帰属できます。
+
+index finalize は、その run で既に確定した issue-readiness state を維持しながら active writer transaction から reference completeness metadata を読み、cross-file hotspot-family readiness は index に実在する言語だけを対象に1回の grouped scan で検証します。これにより、degraded な issue data を authoritative と誤認せず、大規模な mixed-language index でも CLI / MCP の完了出力前に reader bootstrap や言語ごとの correlated symbol scan を繰り返しません。
 
 非常に大きい repo では、repo root で一度 index し、generated tree を早めに除外し、
 日々の作業は scoped refresh を使ってください。branch switch、rebase、reset、merge で
@@ -4873,7 +4885,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--dry-run-path-limit <n>` | `index`（`--dry-run` 専用） | truncate された estimate を返す前に処理する dry-run candidate path 数を指定する。既定は `100000` で、`1000000` を超える値は拒否される。上限に達した場合、dry-run JSON は `candidate_paths_truncated: true` と `totals_lower_bound: true` を設定し、`candidate_path_limit` と `candidate_paths_processed` も返す。 |
 | `--max-file-bytes <bytes>` | `index` | この実行で使うファイル単位の索引サイズ上限を上書きする。既定は 4MiB、または `CDIDX_MAX_FILE_BYTES` 設定値。値は raw byte 数、または `50M` のような `K` / `M` / `G` 接尾辞を受け付ける。 |
 | `--symbols-only` | `index` | フルスキャン専用。参照抽出と graph finalization を省き、chunks、symbols、issues だけを作ることで初回利用を速くする。`search`、`definition`、`symbols`、`map` は使えるが、reference graph 系コマンドは通常の `cdidx index <projectPath>` を実行するまで degraded のまま。 |
-| `--parallelism <n>` | `index` | フルスキャンの抽出 worker 数を指定する。既定は CPU 数を最大 16 に丸めた値、または `CDIDX_INDEX_PARALLELISM` 設定値。SQLite 書き込みは単一 consumer のまま。 |
+| `--parallelism <n>` | `index` | フルスキャンの抽出 worker 数を指定する。既定は CPU 数を最大 8 に丸めた値、または `CDIDX_INDEX_PARALLELISM` 設定値。明示値は最大 16。SQLite 書き込みは単一 consumer のまま。 |
 | `--watch` | `index` | 初回スキャン完了後もプロセスを残し、ファイル変更を検知して差分更新を繰り返す（FileSystemWatcher / inotify / FSEvents）。watch は startup reconciliation scan より先に subscribe し、buffer した startup generation を drain してから `watching` を出力するため、初回 scan からの handoff 中に行われた編集を取りこぼさない。`.gitignore`、`.cdidxignore`、`.cdidx/patterns/**`、`.cdidx/plugins/**` の変更は debounce 後に workspace 全体を reconciliation し、pattern / plugin の追加・編集・削除では scan 前に process 内 extractor registry も refresh する。通常 sidecar を含む `.cdidx` namespace 自体は full scan と `status --check` と同様に source membership から除外する。Ctrl-C は実行中の indexing sub-run をキャンセルしてから stopped event を出力する。sub-run の stdout は runner scope の writer で capture するため、埋め込み先や同時実行 command の process stdout を置き換えない。連続的な差分更新を内蔵しているため `--commits` / `--changed-between` / `--files` / `--dry-run` との併用は拒否する。 |
 | `--debounce <ms>` | `index`（`--watch` 専用） | 一連のイベントを `<ms>` の静止後に 1 つの更新へ集約する（0 以上の整数。既定: 500）。不正な値は警告を出して無視する。 |
 | `--watch-pending-path-limit <n>` | `index`（`--watch` 専用） | watch loop が overflow を報告して full rescan へ fallback する前に保持する distinct changed path 数を設定する。既定は `4096` で、`CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` と `indexing.watchPendingPathLimit` も使える。`262144` を超える値は拒否される。`watching` と `overflow` の JSON event には `watch_pending_path_limit` が入る。 |
@@ -5228,6 +5240,10 @@ index 時には `--include-symbol-kind` で一致する kind だけを保持し�
 ### インクリメンタル更新の信頼性
 
 部分更新はフルスキャンと同じ path filter を使い、同じ `.gitignore` から `.cdidxignore` への順序と `!` 再包含 semantics を適用します。commit ベースの更新で対象コミット内の `.gitignore` または `.cdidxignore` 変更を検出した場合、cdidx はその実行をフルインクリメンタルスキャンへ昇格し、新しく ignore されたファイルを purge し、新しく再包含されたファイルを index できるようにします。`--files` は渡した path だけを更新するため、ignore ルール変更後は、commit-scoped コマンドがその ignore ファイル変更を見られる場合を除き、`cdidx <projectPath> --json` を使ってください。
+
+incremental full scan、scoped update、MCP indexing は、変更ファイルの新旧どちらにも symbol/reference identity 行がない場合、repository 全体の mutual-recursion refresh を省略します。そのため text-only な source 編集は全 graph pass を負担しません。一方で symbol、reference、依存する reference-line context、または stale indexed path の追加・削除時は、readiness を復元する前に従来どおり graph を refresh します。
+
+fresh index と `--rebuild` は引き続き FTS5 を直ちに rebuild・optimize します。incremental full scan、scoped update、MCP indexing は、変更を伴う run ごとに FTS maintenance write を1回記録し、25回ごとに FTS segment を統合します。小さな編集のたびに repository-size の `optimize` を行わず、query 用の定期 maintenance は維持します。
 
 indexing はファイル単位の SQLite transaction を commit します。長い refresh 中も別プロセスから query できますが、indexing command が完了するまでは途中の live snapshot を観測する可能性があります。自動化では refresh 完了後に `cdidx status --check --json` を実行し、`index_matches_workspace: true` を確認してから search、symbol、graph の結果を信頼してください。
 

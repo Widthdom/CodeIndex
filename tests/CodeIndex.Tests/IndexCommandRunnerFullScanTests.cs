@@ -19,6 +19,68 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_MemoryTrace_ReportsFullScanAndUpdatePhaseBoundaries()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var csharpPath = Path.Combine(projectRoot, "App.cs");
+            var pythonPath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(csharpPath, "public class App { public void Run() { } }\n");
+            File.WriteAllText(pythonPath, "def run():\n    return 1\n");
+
+            var (fullExitCode, fullJson) = RunAndCaptureJson([
+                projectRoot,
+                "--memory-trace",
+                "--json",
+                "--quiet",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            var fullSamples = fullJson.GetProperty("memory_timeline").GetProperty("samples").EnumerateArray().ToArray();
+            Assert.Equal(
+                ["start", "scan", "purge", "csharp_prepass", "extraction", "reference_graph", "text_index", "finalize", "commit"],
+                fullSamples.Select(sample => sample.GetProperty("phase").GetString()));
+            AssertPhaseSamplesAreMonotonic(fullSamples);
+
+            File.WriteAllText(pythonPath, "def run():\n    return 2\n");
+            var (updateExitCode, updateJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                pythonPath,
+                "--memory-trace",
+                "--json",
+                "--quiet",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            var updateSamples = updateJson.GetProperty("memory_timeline").GetProperty("samples").EnumerateArray().ToArray();
+            Assert.Equal(
+                ["start", "extraction", "reference_graph", "text_index", "finalize"],
+                updateSamples.Select(sample => sample.GetProperty("phase").GetString()));
+            AssertPhaseSamplesAreMonotonic(updateSamples);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static void AssertPhaseSamplesAreMonotonic(JsonElement[] samples)
+    {
+        long priorElapsedMs = -1;
+        foreach (var sample in samples)
+        {
+            var elapsedMs = sample.GetProperty("elapsed_ms").GetInt64();
+            Assert.True(elapsedMs >= priorElapsedMs);
+            Assert.True(sample.GetProperty("heap_bytes").GetInt64() >= 0);
+            Assert.True(sample.GetProperty("working_set_bytes").GetInt64() > 0);
+            priorElapsedMs = elapsedMs;
+        }
+    }
+
+    [Fact]
     public void Run_FullScanJson_ProjectMarkerBudgetWarningIncludesTruncatedWarning()
     {
         var projectRoot = CreateTempProject();
@@ -551,6 +613,41 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_GraphNeutralChangeSkipsMutualRecursionRefresh()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_graph_neutral");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            var graphNeutralPath = Path.Combine(projectRoot, "graph-neutral.py");
+            File.WriteAllText(graphNeutralPath, "# text-only source\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+            File.WriteAllText(graphNeutralPath, "# changed text-only source\n");
+            File.SetLastWriteTimeUtc(graphNeutralPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_scanned").GetInt32());
+            Assert.Equal(0, refreshCount);
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

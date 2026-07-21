@@ -419,6 +419,85 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_Utf8RequestsPreserveUnicodeAcrossLanguages()
+    {
+        var projectRoot = CreateTempProject();
+        var sourceDirectory = Path.Combine(projectRoot, "ソース");
+        Directory.CreateDirectory(sourceDirectory);
+        try
+        {
+            var cases = new[]
+            {
+                (Lang: "csharp", Extension: ".cs", Content: "// 顧客\npublic class Customer { }\n"),
+                (Lang: "java", Extension: ".java", Content: "// 顧客\npublic class Customer { }\n"),
+                (Lang: "typescript", Extension: ".ts", Content: "// 顧客\nexport class Customer { }\n"),
+                (Lang: "python", Extension: ".py", Content: "# 顧客\nclass Customer:\n    pass\n"),
+                (Lang: "go", Extension: ".go", Content: "// 顧客\ntype Customer struct {}\n"),
+                (Lang: "rust", Extension: ".rs", Content: "// 顧客\npub struct Customer {}\n"),
+            };
+            using var worker = new SymbolExtractionWorkerClient();
+
+            foreach (var testCase in cases)
+            {
+                var result = worker.Invoke(
+                    0,
+                    testCase.Lang,
+                    testCase.Content,
+                    Path.Combine(sourceDirectory, "顧客" + testCase.Extension),
+                    projectRoot,
+                    TimeSpan.FromSeconds(5));
+
+                Assert.True(result.Success, $"{testCase.Lang}: {result.WorkerError}");
+                Assert.Contains(result.Symbols!, symbol => symbol.Name == "Customer");
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StreamResponseWritesBomlessUtf8Frame()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var request = new SymbolExtractionWorker.WorkerRequest(
+                0,
+                "csharp",
+                "public class 顧客 { }\n",
+                Path.Combine(projectRoot, "顧客.cs"),
+                projectRoot);
+            using var input = new StringReader(
+                JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + "\n");
+            using var output = new MemoryStream();
+            using var error = new StringWriter();
+
+            var handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName],
+                input,
+                output,
+                error,
+                out var exitCode);
+
+            Assert.True(handled);
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+            var responseUtf8 = output.ToArray();
+            Assert.Equal((byte)'{', responseUtf8[0]);
+            Assert.Equal((byte)'\n', responseUtf8[^1]);
+            using var document = JsonDocument.Parse(responseUtf8.AsMemory(0, responseUtf8.Length - 1));
+            var symbols = document.RootElement.GetProperty("Symbols");
+            Assert.Contains(symbols.EnumerateArray(), symbol => symbol.GetProperty("Name").GetString() == "顧客");
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_CapturesStdoutAndForwardsStderrDiagnostics()
     {
         var projectRoot = CreateTempProject();
@@ -2300,6 +2379,60 @@ public sealed class Caller
         }
     }
 
+    [Fact]
+    public void Run_IncrementalFullScan_DefersFtsOptimizeUntilWriteThreshold()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_threshold");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var sourcePath = Path.Combine(projectRoot, "app.py");
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var optimizeCount = 0;
+        try
+        {
+            File.WriteAllText(sourcePath, "def run():\n    return 1\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+            {
+                optimizeCount++;
+                previousOptimizeHook?.Invoke();
+            };
+            File.WriteAllText(sourcePath, "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (deferredExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, deferredExitCode);
+            Assert.Equal(0, optimizeCount);
+            using (var deferredDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Equal(1, new DbWriter(deferredDb).GetFtsIncrementalWritesSinceOptimize());
+            }
+
+            using (var thresholdDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                new DbWriter(thresholdDb).SetMeta(
+                    DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+                    (DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold - 1).ToString(CultureInfo.InvariantCulture));
+            }
+            File.WriteAllText(sourcePath, "def run():\n    return 3\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(4));
+
+            var (optimizedExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, optimizedExitCode);
+            Assert.Equal(1, optimizeCount);
+            using var optimizedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(0, new DbWriter(optimizedDb).GetFtsIncrementalWritesSinceOptimize());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
 
     [Fact]
     public void Run_NoOpUpdate_DoesNotStartExtractionWork()
@@ -3518,6 +3651,19 @@ public sealed class Caller
         Assert.Empty(options.Commits);
         Assert.Contains("commit ref is too long", options.ParseError);
         Assert.Contains($"max {IndexCommandRunner.MaxCommitRefLength}", options.ParseError);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(4, 4)]
+    [InlineData(8, 8)]
+    [InlineData(10, 8)]
+    [InlineData(64, 8)]
+    public void CalculateDefaultIndexParallelism_CapsAutomaticWorkersWithoutLoweringSmallHosts(
+        int processorCount,
+        int expected)
+    {
+        Assert.Equal(expected, IndexCommandRunner.CalculateDefaultIndexParallelism(processorCount));
     }
 
     [Fact]

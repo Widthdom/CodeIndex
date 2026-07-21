@@ -1274,6 +1274,24 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RecordFtsIncrementalWriteAndOptimizeIfThresholdReached_BatchesMaintenance()
+    {
+        var optimizeCount = 0;
+
+        Assert.False(_writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
+            () => optimizeCount++,
+            threshold: 2));
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, optimizeCount);
+
+        Assert.True(_writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
+            () => optimizeCount++,
+            threshold: 2));
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(1, optimizeCount);
+    }
+
+    [Fact]
     public void DbContext_OpenWithBatchInProgress_Warns()
     {
         _writer.MarkBatchInProgress();
@@ -2108,8 +2126,9 @@ public class DatabaseTests : IDisposable
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         };
 
-        var id = _writer.UpsertFile(file);
+        var id = _writer.UpsertFile(file, out var referenceIdentityChanged);
         Assert.True(id > 0);
+        Assert.False(referenceIdentityChanged);
     }
 
     [Fact]
@@ -2238,9 +2257,10 @@ public class DatabaseTests : IDisposable
             Lines = 8,
             Checksum = "new",
             Modified = new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
+        }, out var referenceIdentityChanged);
 
         Assert.Equal(fileId, updatedId);
+        Assert.True(referenceIdentityChanged);
         using (var command = _db.Connection.CreateCommand())
         {
             command.Parameters.AddWithValue("@fileId", fileId);
@@ -3058,6 +3078,44 @@ public class DatabaseTests : IDisposable
             maxReferencesPerFile: 10);
         Assert.DoesNotContain("src/caps.cs", reusableStatsUnderLowerCap.Keys);
         Assert.Contains("src/generated.g.cs", reusableStatsUnderLowerCap.Keys);
+    }
+
+    [Fact]
+    public void GetReferenceExtractionCapHits_ReadsInsideActiveWriterTransaction()
+    {
+        var file = new FileRecord
+        {
+            Path = "src/reference-cap.py",
+            Lang = "python",
+            Size = 20,
+            Lines = 2,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "reference_cap_checksum",
+        };
+        var fileId = _writer.UpsertFile(file);
+
+        using (var transaction = _writer.BeginTransaction())
+        {
+            _writer.InsertIssues(fileId,
+            [
+                new FileIssue
+                {
+                    Path = file.Path,
+                    Kind = ReferenceExtractor.ReferenceSafetyCapDiagnosticKinds[0],
+                    Line = 1,
+                    Message = "reference extraction safety cap reached",
+                },
+            ]);
+
+            var summary = _writer.GetReferenceExtractionCapHits(issuesStateAvailable: true);
+
+            Assert.Equal(1, summary.HitCount);
+            Assert.Equal(1, summary.AffectedFileCount);
+            Assert.Equal(file.Path, Assert.Single(summary.Files).File);
+            transaction.Commit();
+        }
+
+        Assert.Equal(1, _writer.GetReferenceExtractionCapHits(issuesStateAvailable: true).HitCount);
     }
 
     [Fact]

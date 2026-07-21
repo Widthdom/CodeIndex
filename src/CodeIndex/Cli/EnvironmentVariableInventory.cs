@@ -36,7 +36,7 @@ internal static class EnvironmentVariableInventory
 
         Item(FileIndexer.MaxFileSizeEnvironmentVariable, "indexing", SensitivityPublic, "performance", "4 MiB", "no", "Default maximum file size to index.", Location("src/CodeIndex/Indexer/Scanning/FileIndexer.cs", 457, "FileIndexer")),
         Item(IndexCommandRunner.CompletionNotificationEnvironmentVariable, "indexing", SensitivityPublic, "display", "auto", "no", "Long index completion notification mode.", Location("src/CodeIndex/Cli/IndexCommandRunner.Parse.cs", 24, "IndexCommandRunner")),
-        Item(IndexCommandRunner.IndexParallelismEnvironmentVariable, "indexing", SensitivityPublic, "performance", "CPU count capped at 16", "no", "Full-scan extraction worker count.", Location("src/CodeIndex/Cli/IndexCommandRunner.Parse.cs", 25, "IndexCommandRunner")),
+        Item(IndexCommandRunner.IndexParallelismEnvironmentVariable, "indexing", SensitivityPublic, "performance", "CPU count capped at 8", "no", "Full-scan extraction worker count; explicit values are capped at 16.", Location("src/CodeIndex/Cli/IndexCommandRunner.Parse.cs", 25, "IndexCommandRunner")),
         Item(IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable, "indexing", SensitivityPublic, "performance", "watch default", "yes", "Pending changed-path queue limit before full watch rescan.", Location("src/CodeIndex/Cli/IndexCommandRunner.Parse.cs", 26, "IndexCommandRunner")),
 
         Item(DbContext.CacheSizeEnvironmentVariable, "sqlite", SensitivityPublic, "performance", DbContext.DefaultCacheSizeKb.ToString(System.Globalization.CultureInfo.InvariantCulture), "no", "SQLite cache size in KiB.", Location("src/CodeIndex/Database/DbContext.cs", 21, "DbContext")),

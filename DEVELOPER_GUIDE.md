@@ -232,7 +232,7 @@ Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostic
 
 | Path | Contract |
 |---|---|
-| Worker protocol JSON | Isolated worker stdin frames are read through `BoundedLineReader`. The default frame cap is 32 MiB for both characters and UTF-8 bytes. When a larger `--max-file-bytes` setting needs JSON-escaping headroom, the protocol frame cap may expand up to `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes` (384 MiB), never to `int.MaxValue`. `WorkerProtocolJsonValidator` rejects payloads over the negotiated character/UTF-8 byte cap before `JsonDocument.Parse`, parses with `DefaultMaxJsonDepth` (32), rejects more than 1,000,000 object properties, and rejects strings longer than the frame cap. |
+| Worker protocol JSON | Isolated worker stdin frames are read through `BoundedLineReader`. The symbol-worker client serializes requests directly to UTF-8 and writes newline-framed bytes to the process stream; the worker serializes responses directly to its stdout stream, and the client reads each bounded response frame as UTF-8 bytes for direct deserialization. This avoids an additional UTF-16 JSON string and encoding pass in each direction for every source file. The default frame cap is 32 MiB for both characters and UTF-8 bytes. When a larger `--max-file-bytes` setting needs JSON-escaping headroom, the protocol frame cap may expand up to `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes` (384 MiB), never to `int.MaxValue`. `WorkerProtocolJsonValidator` rejects payloads over the negotiated character/UTF-8 byte cap before `JsonDocument.Parse`, parses with `DefaultMaxJsonDepth` (32), rejects more than 1,000,000 object properties, and rejects strings longer than the frame cap. |
 | User regex find | `find --regex` keeps the classic .NET regex engine for lookaround/backreference compatibility, adds `RegexOptions.CultureInvariant`, adds `IgnoreCase` unless `--exact` is set, and uses `BoundedRegex.DefaultMatchTimeout` per match. Timeouts surface as `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` in CLI JSON, and human output includes the same recovery hint. `find --all` additionally applies candidate-file and line-scan caps before walking the whole index. |
 | Shared regex construction | Production regex construction is centralized through `BoundedRegex`, `RegexRegistry`, or `RegexTimeoutPolicy`. Use `BoundedRegex` for extractor patterns and bounded static regex APIs, `RegexRegistry` for raw BCL regex factories that must preserve timeout exceptions (`find --regex`, ignore glob regexes, generated-code path patterns), and `RegexTimeoutPolicy` for diagnostic/redaction surfaces. `RegexRegistry` owns the named ignore-glob timeout (100 ms), generated-code pattern timeout (50 ms), and find-regex factory using `BoundedRegex.DefaultMatchTimeout`. Search-audit recipes treat only `BoundedRegex` aliases and `RegexRegistry.cs` as centralized positive evidence, so new production raw constructors require a deliberate factory or generated-regex entry plus tests. |
 | Filesystem traversal helpers | `FileSystemTraversalPolicy` keeps top-directory-only enumeration explicit (`IgnoreInaccessible=false`, no implicit recursion) and exposes opt-in `CancellationToken` / entry-budget options. Expected traversal failures are classified centrally so command diagnostics share the same permission, I/O, invalid-path, unsupported-path, path-too-long, and budget-exceeded taxonomy. |
@@ -242,7 +242,7 @@ Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostic
 
 ```
 Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + directory symlink policy + reparse/Windows Hidden/System attribute pruning)
-  → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 16) read UTF-8, split chunks, extract symbols/references, and validate content
+  → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 8, explicit maximum 16) read UTF-8, split chunks, extract symbols/references, and validate content
   → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, runs post-extraction hooks, and inserts chunks + symbols + references + issues in per-file transactions
   → Populate FTS5 index
 ```
@@ -885,6 +885,15 @@ run refreshes reference resolution and stamps the marker atomically. C# referenc
 unqualified name receive a global candidate only when that name is unique in the applicable
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
+
+Reference finalization computes candidate count, minimum symbol ID, distinct target-family
+count, and stable target key in one correlated aggregate per reference. Keep these four
+resolution fields on the row-value assignment path; separate scalar subqueries multiply the
+candidate-index and symbol/file lookup work on large graphs. The language/name families that
+are globally unique are aggregated once into the connection-local
+`temp.reference_unique_symbol_families` table and reused by non-C#, C#, and C# attribute
+fallbacks. Create that temp table in a separate prepared command before preparing the refresh;
+SQLite resolves referenced tables while preparing every statement in a command batch.
 
 `inspect` / MCP `analyze_symbol` treats each returned definition as a separate identity
 bundle. Candidate selectors expose the persisted symbol ID plus qualified/container name,
@@ -3082,7 +3091,7 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
 
 | 経路 | 契約 |
 |---|---|
-| worker protocol JSON | isolated worker の stdin frame は `BoundedLineReader` で読みます。既定の frame 上限は文字数・UTF-8 byte 数ともに 32 MiB です。大きな `--max-file-bytes` によって JSON escape 分の余裕が必要な場合、protocol frame 上限は `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes`（384 MiB）まで拡張できますが、`int.MaxValue` までは拡張しません。`WorkerProtocolJsonValidator` は `JsonDocument.Parse` の前に合意済みの文字数 / UTF-8 byte 上限を超える payload を拒否し、`DefaultMaxJsonDepth`（32）で parse し、object property 1,000,000 件超と frame 上限を超える string を拒否します。 |
+| worker protocol JSON | isolated worker の stdin frame は `BoundedLineReader` で読みます。symbol-worker client は request を直接 UTF-8 に serialize して改行区切りの byte を process stream へ書き、worker は response を stdout stream へ直接 serialize し、client は bounded response frame を UTF-8 byte のまま読み取って直接 deserialize します。これにより source file ごとに両方向で発生していた追加 UTF-16 JSON string と encoding pass を避けます。既定の frame 上限は文字数・UTF-8 byte 数ともに 32 MiB です。大きな `--max-file-bytes` によって JSON escape 分の余裕が必要な場合、protocol frame 上限は `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes`（384 MiB）まで拡張できますが、`int.MaxValue` までは拡張しません。`WorkerProtocolJsonValidator` は `JsonDocument.Parse` の前に合意済みの文字数 / UTF-8 byte 上限を超える payload を拒否し、`DefaultMaxJsonDepth`（32）で parse し、object property 1,000,000 件超と frame 上限を超える string を拒否します。 |
 | user regex find | `find --regex` は lookaround / backreference 互換性のため classic .NET regex engine を維持し、`RegexOptions.CultureInvariant` を付け、`--exact` でない場合は `IgnoreCase` も付け、各 match に `BoundedRegex.DefaultMatchTimeout` を使います。timeout は CLI JSON で `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` として返り、人間向け出力にも同じ recovery hint が出ます。`find --all` は index 全体を走査する前に candidate file と line scan の上限も適用します。 |
 | shared regex construction | production の regex 構築は `BoundedRegex`、`RegexRegistry`、または `RegexTimeoutPolicy` に集約します。extractor pattern と bounded static regex API には `BoundedRegex`、timeout 例外を維持する必要がある raw BCL regex factory（`find --regex`、ignore glob regex、generated-code path pattern）には `RegexRegistry`、diagnostic / redaction surface には `RegexTimeoutPolicy` を使います。`RegexRegistry` は ignore glob timeout（100 ms）、generated-code pattern timeout（50 ms）、および `BoundedRegex.DefaultMatchTimeout` を使う find-regex factory の名前付き policy を所有します。search-audit recipe は `BoundedRegex` alias と `RegexRegistry.cs` だけを集約済みの positive evidence と見なすため、新しい production raw constructor は明示的な factory または generated-regex entry とテストを伴う必要があります。 |
 | filesystem traversal helper | `FileSystemTraversalPolicy` は top-directory-only enumeration を明示し（`IgnoreInaccessible=false`、暗黙の再帰なし）、任意指定の `CancellationToken` / entry budget option を公開します。想定内の traversal failure は中央で分類し、command diagnostic が permission、I/O、invalid-path、unsupported-path、path-too-long、budget-exceeded の taxonomy を共有します。 |
@@ -3794,6 +3803,15 @@ identity-aware read は、`codeindex_meta` の `reference_identity_contract_vers
 resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+reference finalization は、candidate count、最小 symbol ID、distinct target-family count、安定 target
+key を reference ごとに1回の correlated aggregate で計算します。この4つの resolution field は
+row-value assignment のまま維持してください。scalar subquery を分けると、大規模 graph で
+candidate index と symbol/file lookup が重複します。global に一意な language/name family は
+connection-local な `temp.reference_unique_symbol_families` table へ1回だけ集約し、non-C#、C#、
+C# attribute fallback で共有します。この temp table は refresh command を prepare する前に別の
+prepared command で作成してください。SQLite は command batch の全statementをprepareする時点で
+参照tableを解決します。
 
 `inspect` / MCP `analyze_symbol` は返された各定義を別々の identity bundle として
 扱います。candidate selector は永続化した symbol ID に加え、qualified/container name、

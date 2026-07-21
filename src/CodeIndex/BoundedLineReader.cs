@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using System.Runtime.CompilerServices;
 using CodeIndex.Diagnostics;
@@ -74,6 +75,7 @@ internal static class BoundedLineReader
 {
     private const int AsyncReadBufferSize = 4096;
     private static readonly ConditionalWeakTable<TextReader, AsyncReadBuffer> AsyncBuffers = new();
+    private static readonly ConditionalWeakTable<Stream, AsyncByteReadBuffer> AsyncByteBuffers = new();
 
     internal static bool TryReadUtf8File(
         string path,
@@ -241,6 +243,55 @@ internal static class BoundedLineReader
         }
     }
 
+    internal static async Task<ReadOnlyMemory<byte>?> ReadUtf8LineAsync(
+        Stream stream,
+        int maxUtf8Bytes,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (maxUtf8Bytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxUtf8Bytes), maxUtf8Bytes, "Maximum line UTF-8 bytes must be positive.");
+
+        var state = new Utf8LineState(maxUtf8Bytes);
+        var asyncBuffer = AsyncByteBuffers.GetValue(stream, _ => new AsyncByteReadBuffer(AsyncReadBufferSize));
+
+        while (true)
+        {
+            var buffered = asyncBuffer.BufferedMemory;
+            if (!buffered.IsEmpty)
+            {
+                var newlineIndex = buffered.Span.IndexOf((byte)'\n');
+                if (newlineIndex >= 0)
+                {
+                    state.Append(buffered.Span[..newlineIndex]);
+                    asyncBuffer.Consume(newlineIndex + 1);
+                    return state.CompleteLine();
+                }
+
+                state.Append(buffered.Span);
+                asyncBuffer.Consume(buffered.Length);
+                continue;
+            }
+
+            if (asyncBuffer.ReachedEndOfStream)
+                return state.HasAnyInput
+                    ? state.CompleteLine()
+                    : (ReadOnlyMemory<byte>?)null;
+
+            var buffer = asyncBuffer.Buffer;
+            var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                asyncBuffer.MarkEndOfStream();
+                return state.HasAnyInput
+                    ? state.CompleteLine()
+                    : (ReadOnlyMemory<byte>?)null;
+            }
+
+            asyncBuffer.StoreRead(read);
+        }
+    }
+
     private sealed class AsyncReadBuffer(int size)
     {
         private int _start;
@@ -267,6 +318,100 @@ internal static class BoundedLineReader
         {
             _start = start;
             _length = Math.Max(0, read - start);
+        }
+    }
+
+    private sealed class AsyncByteReadBuffer(int size)
+    {
+        private int _start;
+        private int _length;
+
+        internal byte[] Buffer { get; } = new byte[size];
+
+        internal bool ReachedEndOfStream { get; private set; }
+
+        internal ReadOnlyMemory<byte> BufferedMemory
+            => Buffer.AsMemory(_start, _length);
+
+        internal void Consume(int count)
+        {
+            if (count < 0 || count > _length)
+                throw new ArgumentOutOfRangeException(nameof(count));
+
+            _start += count;
+            _length -= count;
+            if (_length == 0)
+                _start = 0;
+        }
+
+        internal void StoreRead(int read)
+        {
+            _start = 0;
+            _length = read;
+        }
+
+        internal void MarkEndOfStream()
+            => ReachedEndOfStream = true;
+    }
+
+    private sealed class Utf8LineState
+    {
+        private readonly int _maxUtf8Bytes;
+        private readonly ArrayBufferWriter<byte> _writer;
+        private bool _pendingCarriageReturn;
+
+        internal Utf8LineState(int maxUtf8Bytes)
+        {
+            _maxUtf8Bytes = maxUtf8Bytes;
+            _writer = new ArrayBufferWriter<byte>(Math.Min(AsyncReadBufferSize, maxUtf8Bytes));
+        }
+
+        internal bool HasAnyInput { get; private set; }
+
+        internal void Append(ReadOnlySpan<byte> bytes)
+        {
+            if (_pendingCarriageReturn)
+            {
+                if (bytes.IsEmpty)
+                    return;
+
+                AppendCore([(byte)'\r']);
+                _pendingCarriageReturn = false;
+            }
+
+            if (bytes.IsEmpty)
+                return;
+
+            HasAnyInput = true;
+            if (bytes[^1] == (byte)'\r')
+            {
+                AppendCore(bytes[..^1]);
+                _pendingCarriageReturn = true;
+                return;
+            }
+
+            AppendCore(bytes);
+        }
+
+        internal ReadOnlyMemory<byte> CompleteLine()
+        {
+            _pendingCarriageReturn = false;
+            return _writer.WrittenMemory;
+        }
+
+        private void AppendCore(ReadOnlySpan<byte> bytes)
+        {
+            if (bytes.IsEmpty)
+                return;
+
+            if (bytes.Length > _maxUtf8Bytes - _writer.WrittenCount)
+            {
+                var bytesRead = checked(_writer.WrittenCount + bytes.Length);
+                throw new BoundedLineLengthException(bytesRead, bytesRead, _maxUtf8Bytes, _maxUtf8Bytes);
+            }
+
+            bytes.CopyTo(_writer.GetSpan(bytes.Length));
+            _writer.Advance(bytes.Length);
         }
     }
 
