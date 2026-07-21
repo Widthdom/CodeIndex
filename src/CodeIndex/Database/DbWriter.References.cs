@@ -70,9 +70,8 @@ public partial class DbWriter
         END
         """;
 
-    private const string RefreshReferenceSourceSymbolsSql = """
-        UPDATE symbol_references AS r
-        SET source_symbol_id = (
+    private const string ReferenceSourceSymbolValueSql = """
+        (
             SELECT s.id
             FROM symbols AS s
             WHERE s.file_id = r.file_id
@@ -86,6 +85,19 @@ public partial class DbWriter
                      s.id
             LIMIT 1
         )
+        """;
+
+    private static readonly string RefreshReferenceSourceSymbolsFullSql = $"""
+        UPDATE symbol_references AS r
+        SET source_symbol_id = {ReferenceSourceSymbolValueSql}
+        """;
+
+    private static readonly string RefreshReferenceSourceSymbolsDifferentialSql = $"""
+        UPDATE symbol_references AS r
+        SET source_symbol_id = {ReferenceSourceSymbolValueSql}
+        -- IS NOT is null-safe: stable NULL identities must not be rewritten either.
+        -- IS NOTはNULL-safeであり、安定したNULL identityも再書込みしない。
+        WHERE r.source_symbol_id IS NOT {ReferenceSourceSymbolValueSql}
         """;
 
     private const string CreateReferenceUniqueFamiliesSql = """
@@ -349,9 +361,8 @@ public partial class DbWriter
 
         """;
 
-    private const string RefreshReferenceResolutionSql = """
-        UPDATE symbol_references AS r
-        SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = (
+    private const string ReferenceResolutionValueSql = """
+        (
             SELECT CASE WHEN candidate_count = 1 THEN minimum_symbol_id END,
                    CASE WHEN target_family_count = 1 THEN minimum_target_key END,
                    candidate_count,
@@ -375,15 +386,38 @@ public partial class DbWriter
                     JOIN files AS target_file ON target_file.id = target.file_id
                     WHERE c.reference_id = r.id
             ) AS resolution
-        );
+        )
+        """;
+
+    private const string SelfReferenceValueSql = """
+        CASE
+            WHEN source_symbol_id IS NOT NULL
+             AND target_symbol_id IS NOT NULL
+             AND source_symbol_id = target_symbol_id THEN 1
+            ELSE 0
+        END
+        """;
+
+    private static readonly string RefreshReferenceResolutionFullSql = $"""
+        UPDATE symbol_references AS r
+        SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = {ReferenceResolutionValueSql};
 
         UPDATE symbol_references
-        SET is_self_reference = CASE
-                WHEN source_symbol_id IS NOT NULL
-                 AND target_symbol_id IS NOT NULL
-                 AND source_symbol_id = target_symbol_id THEN 1
-                ELSE 0
-            END;
+        SET is_self_reference = {SelfReferenceValueSql};
+        """;
+
+    private static readonly string RefreshReferenceResolutionDifferentialSql = $"""
+        UPDATE symbol_references AS r
+        SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = {ReferenceResolutionValueSql}
+        -- A row-value IS NOT comparison preserves NULL semantics while avoiding four
+        -- index-maintaining writes for every already-current reference.
+        -- row-value IS NOTでNULL semanticsを保ち、最新referenceへの4列再書込みを避ける。
+        WHERE (r.target_symbol_id, r.target_symbol_key, r.resolution_candidate_count, r.resolution_state)
+              IS NOT {ReferenceResolutionValueSql};
+
+        UPDATE symbol_references
+        SET is_self_reference = {SelfReferenceValueSql}
+        WHERE is_self_reference IS NOT ({SelfReferenceValueSql});
         """;
 
     private static readonly string RefreshMutualRecursionFlagsSql = $"""
@@ -836,6 +870,21 @@ public partial class DbWriter
            && left.Line == right.Line
            && string.Equals(left.Context, right.Context, StringComparison.Ordinal);
 
+    private bool HasPersistedReferenceResolutionState(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        const string sql = "SELECT EXISTS(SELECT 1 FROM symbol_references WHERE resolution_state IS NOT NULL LIMIT 1)";
+        var command = RentCommand(sql, static _ => { });
+        try
+        {
+            return Convert.ToInt64(command.ExecuteScalar()) != 0;
+        }
+        finally
+        {
+            ReleaseCommand(command);
+        }
+    }
+
     internal void RefreshMutualRecursionFlags(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -851,12 +900,22 @@ public partial class DbWriter
             createUniqueFamiliesCommand = RentCommand(CreateReferenceUniqueFamiliesSql, static _ => { });
             createUniqueFamiliesCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
+            // A fresh graph evaluates each correlated identity expression once. Once any
+            // persisted resolution exists, differential SQL avoids rewriting the stable
+            // majority while newly inserted or invalidated rows still repair normally.
+            // fresh graphでは相関identity式を1回だけ評価し、既存resolutionがあれば
+            // differential SQLで安定多数の再書込みを避けつつ新規/無効rowを修復する。
+            var refreshIdentitySql = HasPersistedReferenceResolutionState(cancellationToken)
+                ? RefreshReferenceSourceSymbolsDifferentialSql + ";\n" +
+                  RefreshReferenceUniqueFamiliesSql + "\n" +
+                  RefreshReferenceCandidatesSql + "\n" +
+                  RefreshReferenceResolutionDifferentialSql + "\n"
+                : RefreshReferenceSourceSymbolsFullSql + ";\n" +
+                  RefreshReferenceUniqueFamiliesSql + "\n" +
+                  RefreshReferenceCandidatesSql + "\n" +
+                  RefreshReferenceResolutionFullSql + "\n";
             refreshCommand = RentCommand(
-                RefreshReferenceSourceSymbolsSql + ";\n" +
-                RefreshReferenceUniqueFamiliesSql + "\n" +
-                RefreshReferenceCandidatesSql + "\n" +
-                RefreshReferenceResolutionSql + "\n" +
-                RefreshMutualRecursionFlagsSql,
+                refreshIdentitySql + RefreshMutualRecursionFlagsSql,
                 static _ => { });
             // Stamp inside the same transaction, but before the graph refresh so the
             // public SQLite changes() result continues to describe recursion updates.

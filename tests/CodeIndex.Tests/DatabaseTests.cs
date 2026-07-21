@@ -289,6 +289,119 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RefreshReferenceIdentities_UpdatesOnlyChangedRowsAndRollsBackEarlierPhases()
+    {
+        var fileId = UpsertTestFile(
+            "src/reference-identity-differential.cs",
+            checksum: "reference-identity-differential");
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Invoke",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+            },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Invoke",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 9,
+                Context = "Invoke();",
+                ContainerKind = "function",
+                ContainerName = "Invoke",
+            },
+        ],
+        refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        ExecuteNonQuery(_db.Connection, """
+            CREATE TABLE reference_identity_refresh_audit (phase TEXT NOT NULL);
+            CREATE TRIGGER audit_reference_identity_source
+            AFTER UPDATE OF source_symbol_id ON symbol_references
+            BEGIN
+                INSERT INTO reference_identity_refresh_audit VALUES ('source');
+            END;
+            CREATE TRIGGER audit_reference_identity_resolution
+            AFTER UPDATE OF target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state
+            ON symbol_references
+            BEGIN
+                INSERT INTO reference_identity_refresh_audit VALUES ('resolution');
+            END;
+            CREATE TRIGGER audit_reference_identity_self
+            AFTER UPDATE OF is_self_reference ON symbol_references
+            BEGIN
+                INSERT INTO reference_identity_refresh_audit VALUES ('self');
+            END;
+            CREATE TRIGGER audit_reference_identity_mutual
+            AFTER UPDATE OF is_mutual_recursion ON symbol_references
+            BEGIN
+                INSERT INTO reference_identity_refresh_audit VALUES ('mutual');
+            END;
+            """);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(0, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit"));
+
+        ExecuteNonQuery(_db.Connection, """
+            UPDATE symbol_references
+            SET source_symbol_id = NULL,
+                target_symbol_id = NULL,
+                target_symbol_key = 'stale-target',
+                resolution_candidate_count = 9,
+                resolution_state = 'ambiguous',
+                is_self_reference = 0,
+                is_mutual_recursion = 2;
+            DELETE FROM reference_identity_refresh_audit;
+            CREATE TRIGGER fail_reference_identity_resolution
+            BEFORE UPDATE OF target_symbol_id ON symbol_references
+            BEGIN
+                SELECT RAISE(ABORT, 'forced resolution refresh failure');
+            END;
+            """);
+
+        Assert.Throws<SqliteException>(() => _writer.RefreshMutualRecursionFlags());
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE source_symbol_id IS NULL"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE target_symbol_key = 'stale-target'"));
+
+        ExecuteNonQuery(_db.Connection, "DROP TRIGGER fail_reference_identity_resolution");
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(1, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit WHERE phase = 'source'"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit WHERE phase = 'resolution'"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit WHERE phase = 'self'"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit WHERE phase = 'mutual'"));
+        Assert.Equal(1, ExecuteScalarLong("""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE source_symbol_id = target_symbol_id
+              AND target_symbol_id IS NOT NULL
+              AND target_symbol_key IS NOT NULL
+              AND resolution_candidate_count = 1
+              AND resolution_state = 'resolved'
+              AND is_self_reference = 1
+              AND is_mutual_recursion = 0
+            """));
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(0, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(4, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit"));
+    }
+
+    [Fact]
     public void RefreshMutualRecursionFlags_CancellationInterruptsRunningSqlAndRollsBack()
     {
         var writer = new DbWriter(_db);
