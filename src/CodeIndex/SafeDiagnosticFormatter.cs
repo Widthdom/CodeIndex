@@ -13,6 +13,20 @@ internal static class SafeDiagnosticFormatter
     internal static string FormatExceptionCategory(string category, Exception ex)
         => FormatCategoryType(category, ex.GetType().Name);
 
+    internal static string FormatExceptionCategoryWithOrigin(string category, Exception ex)
+    {
+        var formatted = FormatExceptionCategory(category, ex);
+        if (string.IsNullOrWhiteSpace(ex.StackTrace))
+            return formatted;
+
+        var firstLineEnd = ex.StackTrace.IndexOfAny(['\r', '\n']);
+        var firstLine = firstLineEnd < 0 ? ex.StackTrace : ex.StackTrace[..firstLineEnd];
+        var origin = DiagnosticRedactor.FormatExceptionStackLine(firstLine.Trim(), maxChars: 512);
+        return string.IsNullOrWhiteSpace(origin)
+            ? formatted
+            : $"{formatted}; origin={origin}";
+    }
+
     internal static string FormatCategoryType(string category, string typeName)
         => $"{BoundToken(category, MaxCategoryCharacters)}: {BoundToken(typeName, MaxExceptionTypeCharacters)}";
 

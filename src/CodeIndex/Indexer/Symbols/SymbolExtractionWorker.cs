@@ -19,6 +19,12 @@ internal sealed record SymbolExtractionWorkerResult(
     List<BoundedRegex.RegexTimeoutDiagnostic>? RegexTimeoutDiagnostics = null,
     bool RegexTimeoutDiagnosticsTruncated = false);
 
+internal sealed class SymbolExtractionWorkerFailureException(string workerError)
+    : InvalidOperationException(workerError)
+{
+    internal string WorkerError { get; } = workerError;
+}
+
 internal sealed class SymbolExtractionWorkerClient : IDisposable
 {
     private static readonly byte[] ProtocolLineTerminator = [(byte)'\n'];
@@ -391,6 +397,9 @@ internal static class SymbolExtractionWorker
     private const int CapturedConsoleMaxChars = 32 * 1024;
     private static readonly object PatternConfigProjectRootsGate = new();
     private static readonly List<string> LoadedPatternConfigProjectRoots = [];
+
+    internal static string FormatExecutionFailure(Exception ex)
+        => SafeDiagnosticFormatter.FormatExceptionCategoryWithOrigin("worker_execution_failed", ex);
     internal static readonly JsonSerializerOptions JsonOptions =
         WorkerProtocolJsonValidator.CreateSerializerOptions(SymbolExtractionWorkerJsonContext.Default.Options);
     internal static int? DelayMillisecondsForTesting { get; set; }
@@ -686,7 +695,7 @@ internal static class SymbolExtractionWorker
         }
         catch (Exception ex)
         {
-            return new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex), capturedError.GetCapturedText());
+            return new WorkerResponse(null, FormatExecutionFailure(ex), capturedError.GetCapturedText());
         }
         finally
         {

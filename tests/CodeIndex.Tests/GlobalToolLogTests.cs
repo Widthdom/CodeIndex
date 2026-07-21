@@ -644,19 +644,21 @@ public class GlobalToolLogTests
 
             using (GlobalToolLog.TryStartForTesting(["index", "."], "test"))
             {
+                var captured = Assert.Throws<ArgumentException>(ThrowForIndexFileFailureLogTest);
+
                 try
                 {
-                    ThrowForIndexFileFailureLogTest();
+                    IndexCommandRunner.RethrowPreservingStackTrace(captured);
                 }
                 catch (Exception ex)
                 {
-                    IndexCommandRunner.LogIndexFileFailure("index_file_failed", "src/bad\nfile.js", ex);
+                    IndexCommandRunner.LogIndexFileFailure("index_file_failed", "src/bad\nfile.js", "symbols", ex);
                 }
             }
 
             var logPath = Assert.Single(Directory.GetFiles(logRoot, "stderr-*.log"));
             var log = File.ReadAllText(logPath);
-            Assert.Contains("index_file_failed path=src/bad file.js", log);
+            Assert.Contains("index_file_failed path=src/bad file.js phase=symbols detail=ArgumentException", log);
             Assert.Contains("exception[0] type=System.ArgumentException message=\"argument_error\"", log);
             Assert.Contains("  stack: ", log);
             Assert.Contains(nameof(ThrowForIndexFileFailureLogTest), log);

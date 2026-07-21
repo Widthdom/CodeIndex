@@ -141,6 +141,18 @@ public class DiagnosticRedactorTests
     }
 
     [Fact]
+    public void FormatExceptionStackLine_LongSignaturePreservesRedactedSourceLocation()
+    {
+        var stackLine = $"at CodeIndex.Cli.IndexCommandRunner.RunFullScan({new string('x', 900)}) in C:\\private\\CodeIndex\\IndexCommandRunner.FullScan.cs:line 1880";
+
+        var formatted = DiagnosticRedactor.FormatExceptionStackLine(stackLine, maxChars: 128);
+
+        Assert.Contains("... <truncated; original length ", formatted, StringComparison.Ordinal);
+        Assert.Contains(" in <redacted>:line 1880", formatted, StringComparison.Ordinal);
+        Assert.DoesNotContain("C:\\private", formatted, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RedactSensitiveText_RedactsAuthorizationBearerHeader_Issue4134()
     {
         const string token = "secret-token-4134";
