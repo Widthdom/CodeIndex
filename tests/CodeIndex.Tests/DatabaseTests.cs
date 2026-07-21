@@ -1785,8 +1785,13 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void InitializeSchema_CreatesReferenceCompositeIndexesForGraphLookups()
     {
+        var symbolIndexes = ReadIndexNames(_db.Connection, "symbols");
         var indexes = ReadIndexNames(_db.Connection, "symbol_references");
 
+        Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
+        Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
+        Assert.Contains("idx_symbols_name_folded_container_name_nocase", symbolIndexes);
+        Assert.Contains("idx_symbols_name_folded_container_qualified_name_nocase", symbolIndexes);
         Assert.Contains("idx_symbol_refs_name_kind", indexes);
         Assert.Contains("idx_symbol_refs_name_file", indexes);
         Assert.Contains("idx_symbol_refs_name_nocase_kind", indexes);
@@ -1795,13 +1800,84 @@ public class DatabaseTests : IDisposable
         Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
         Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
         Assert.Contains("idx_symbol_refs_container_name_folded_kind", indexes);
+        Assert.Contains("idx_symbol_refs_resolved_source_target_kind", indexes);
 
+        AssertIndexColumns(_db.Connection, "idx_symbols_file_name_folded", [("file_id", "BINARY"), ("name_folded", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbols_file_name_nocase", [("file_id", "BINARY"), ("name", "NOCASE")]);
+        AssertIndexColumns(_db.Connection, "idx_symbols_name_folded_container_name_nocase", [("name_folded", "BINARY"), ("container_name", "NOCASE")]);
+        AssertIndexColumns(_db.Connection, "idx_symbols_name_folded_container_qualified_name_nocase", [("name_folded", "BINARY"), ("container_qualified_name", "NOCASE")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_name_nocase_kind", [("symbol_name", "NOCASE"), ("reference_kind", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_name_nocase_file", [("symbol_name", "NOCASE"), ("file_id", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_symbol_name_folded_kind", [("symbol_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_symbol_name_folded_file", [("symbol_name_folded", "BINARY"), ("file_id", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbol_refs_resolved_source_target_kind", [("source_symbol_id", "BINARY"), ("target_symbol_id", "BINARY"), ("reference_kind", "BINARY")]);
+        AssertIndexSqlContains(
+            _db.Connection,
+            "idx_symbol_refs_resolved_source_target_kind",
+            "WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL");
+    }
+
+    [Fact]
+    public void ReferenceResolutionLookupQueries_UseCompositeSymbolIndexes()
+    {
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE file_id = @file_id AND name_folded = @name_folded",
+                ("@file_id", 1L),
+                ("@name_folded", "worker")),
+            "idx_symbols_file_name_folded");
+
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE file_id = @file_id AND name = @name COLLATE NOCASE",
+                ("@file_id", 1L),
+                ("@name", "Worker")),
+            "idx_symbols_file_name_nocase");
+
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE name_folded = @name_folded AND container_name = @container COLLATE NOCASE",
+                ("@name_folded", "run"),
+                ("@container", "Worker")),
+            "idx_symbols_name_folded_container_name_nocase");
+
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE name_folded = @name_folded AND container_qualified_name = @container COLLATE NOCASE",
+                ("@name_folded", "run"),
+                ("@container", "Demo.Worker")),
+            "idx_symbols_name_folded_container_qualified_name_nocase");
+
+        var reverseEdgePlan = ReadQueryPlanDetails(
+            _db.Connection,
+            """
+            SELECT id
+            FROM symbol_references
+            WHERE source_symbol_id = @source_symbol_id
+              AND target_symbol_id = @target_symbol_id
+              AND reference_kind = @reference_kind
+            """,
+            ("@source_symbol_id", 1L),
+            ("@target_symbol_id", 2L),
+            ("@reference_kind", "call"));
+        Assert.Contains(reverseEdgePlan, detail =>
+            detail.Contains("SEARCH symbol_references USING COVERING INDEX idx_symbol_refs_resolved_source_target_kind", StringComparison.Ordinal));
+        Assert.DoesNotContain(reverseEdgePlan, detail =>
+            detail.Contains("SCAN symbol_references", StringComparison.Ordinal));
+
+        static void AssertSearchesWithIndex(IReadOnlyList<string> plan, string indexName)
+        {
+            Assert.Contains(plan, detail =>
+                detail.Contains("SEARCH symbols USING", StringComparison.Ordinal)
+                && detail.Contains(indexName, StringComparison.Ordinal));
+            Assert.DoesNotContain(plan, detail => detail.Contains("SCAN symbols", StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -1896,8 +1972,13 @@ public class DatabaseTests : IDisposable
 
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
+            var symbolIndexes = ReadIndexNames(db.Connection, "symbols");
             var indexes = ReadIndexNames(db.Connection, "symbol_references");
 
+            Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
+            Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
+            Assert.Contains("idx_symbols_name_folded_container_name_nocase", symbolIndexes);
+            Assert.Contains("idx_symbols_name_folded_container_qualified_name_nocase", symbolIndexes);
             Assert.Contains("idx_symbol_refs_name_kind", indexes);
             Assert.Contains("idx_symbol_refs_name_file", indexes);
             Assert.Contains("idx_symbol_refs_name_nocase_kind", indexes);
@@ -1906,9 +1987,19 @@ public class DatabaseTests : IDisposable
             Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
             Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
             Assert.Contains("idx_symbol_refs_container_name_folded_kind", indexes);
+            Assert.Contains("idx_symbol_refs_resolved_source_target_kind", indexes);
 
+            AssertIndexColumns(db.Connection, "idx_symbols_file_name_folded", [("file_id", "BINARY"), ("name_folded", "BINARY")]);
+            AssertIndexColumns(db.Connection, "idx_symbols_file_name_nocase", [("file_id", "BINARY"), ("name", "NOCASE")]);
+            AssertIndexColumns(db.Connection, "idx_symbols_name_folded_container_name_nocase", [("name_folded", "BINARY"), ("container_name", "NOCASE")]);
+            AssertIndexColumns(db.Connection, "idx_symbols_name_folded_container_qualified_name_nocase", [("name_folded", "BINARY"), ("container_qualified_name", "NOCASE")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
+            AssertIndexColumns(db.Connection, "idx_symbol_refs_resolved_source_target_kind", [("source_symbol_id", "BINARY"), ("target_symbol_id", "BINARY"), ("reference_kind", "BINARY")]);
+            AssertIndexSqlContains(
+                db.Connection,
+                "idx_symbol_refs_resolved_source_target_kind",
+                "WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL");
         }
         finally
         {
@@ -4071,6 +4162,16 @@ public class DatabaseTests : IDisposable
         }
 
         Assert.Equal(expected, actual);
+    }
+
+    private static void AssertIndexSqlContains(SqliteConnection connection, string indexName, string expectedSql)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = @indexName";
+        cmd.Parameters.AddWithValue("@indexName", indexName);
+
+        var sql = Assert.IsType<string>(cmd.ExecuteScalar());
+        Assert.Contains(expectedSql, sql, StringComparison.Ordinal);
     }
 
     [Fact]
