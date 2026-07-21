@@ -997,7 +997,9 @@ public partial class ReleaseWorkflowTests
             verifyJob,
             "needs: [preflight, create-release]",
             "permissions:\n      contents: read",
+            "attestations: read",
             "name: Verify install.sh against the published release",
+            "GH_TOKEN: ${{ github.token }}",
             "releases/download/${TAG_NAME}/install.sh",
             "curl -fsSL",
             "bash install.sh \"${TAG_NAME}\"");

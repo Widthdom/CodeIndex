@@ -732,9 +732,11 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      attestations: read
     steps:
       - name: Verify install.sh against the published release
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
