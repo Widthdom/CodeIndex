@@ -1750,6 +1750,8 @@ public sealed class Caller
     public void Run_SymbolsOnly_OnGraphReadyDbDemotesReferencesAndSqlContract()
     {
         var projectRoot = CreateTempProject();
+        var previousTypeScriptRebuildHook = IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting;
+        var rebuiltTypeScriptAugmentation = false;
         try
         {
             File.WriteAllText(
@@ -1758,6 +1760,9 @@ public sealed class Caller
             File.WriteAllText(
                 Path.Combine(projectRoot, "query.sql"),
                 "CREATE TABLE users (id INTEGER PRIMARY KEY);\nSELECT id FROM users;\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "types.ts"),
+                "interface SharedSymbolsOnly { first: number }\ninterface SharedSymbolsOnly { second: number }\n");
 
             var (normalExitCode, normalJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
@@ -1767,6 +1772,11 @@ public sealed class Caller
             Assert.True(normalJson.GetProperty("sql_graph_contract_ready").GetBoolean());
             Assert.True(CountRows(dbPath, "symbol_references") > 0);
             Assert.True(CountRows(dbPath, "reference_lines") > 0);
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () =>
+            {
+                rebuiltTypeScriptAugmentation = true;
+                previousTypeScriptRebuildHook?.Invoke();
+            };
 
             var (symbolsOnlyExitCode, symbolsOnlyJson) = RunAndCaptureJson([projectRoot, "--symbols-only", "--json"]);
 
@@ -1776,9 +1786,13 @@ public sealed class Caller
             Assert.True(symbolsOnlyJson.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.Equal(0, CountRows(dbPath, "symbol_references"));
             Assert.Equal(0, CountRows(dbPath, "reference_lines"));
+            Assert.False(rebuiltTypeScriptAugmentation);
+            using var verify = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.False(new DbWriter(verify).TypeScriptAugmentationVersionMatchesCurrent());
         }
         finally
         {
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = previousTypeScriptRebuildHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -2415,6 +2429,106 @@ public sealed class Caller
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
             IndexCommandRunner.FullScanExtractionWorkStartedForTesting = null;
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IncrementalFullScan_ScopesTypeScriptAugmentationToDirtyNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_ts_augmentation_dirty_names");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var changedPath = Path.Combine(projectRoot, "changed.ts");
+            File.WriteAllText(changedPath, "interface OldMerge { changed: number }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "peer.ts"),
+                "interface OldMerge { oldPeer: number }\ninterface NewMerge { newPeer: number }\n");
+            var singletonSource = new StringBuilder();
+            for (var index = 0; index < 1_000; index++)
+                singletonSource.Append("interface Unchanged").Append(index).Append(" { value: number }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "singletons.ts"), singletonSource.ToString());
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(changedPath, "interface NewMerge { changed: number }\n");
+            File.SetLastWriteTimeUtc(changedPath, DateTime.UtcNow.AddSeconds(2));
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.NotNull(groupingStats);
+            Assert.Equal(3, groupingStats!.DeclarationCount);
+            Assert.Equal(2, groupingStats.GroupCount);
+            Assert.Equal(1, groupingStats.MergedGroupCount);
+            Assert.Equal(2, groupingStats.ScopedNameCount);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IncrementalFullScan_TypeScriptToCSharpLanguageTransitionRemovesAugmentation()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_ts_language_transition");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var changedPath = Path.Combine(projectRoot, "changed.cs");
+            File.WriteAllText(changedPath, "public interface SharedTransition { int Changed { get; } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "peer.ts"),
+                "interface SharedTransition { peer: number }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(
+                2,
+                TestProjectHelper.ReclassifyIndexedFileAsTypeScriptAndRebuildAugmentations(
+                    dbPath,
+                    projectRoot,
+                    "changed.cs"));
+
+            File.WriteAllText(changedPath, "public class Changed { }\n");
+            File.SetLastWriteTimeUtc(changedPath, DateTime.UtcNow.AddSeconds(2));
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.NotNull(groupingStats);
+            Assert.Equal(1, groupingStats!.DeclarationCount);
+            Assert.Equal(1, groupingStats.ScopedNameCount);
+            using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            connection.Open();
+            using var count = connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(0L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

@@ -4388,11 +4388,525 @@ public class DatabaseTests : IDisposable
             using var count = _db.Connection.CreateCommand();
             count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
             Assert.Equal(2L, (long)count.ExecuteScalar()!);
+
+            groupingStats = null;
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(".", ["MergedInterface"]));
+            Assert.NotNull(groupingStats);
+            Assert.Equal(2, groupingStats!.DeclarationCount);
+            Assert.Equal(1, groupingStats.GroupCount);
+            Assert.Equal(1, groupingStats.MergedGroupCount);
+            Assert.Equal(2, groupingStats.MaterializedDeclarationIndexCount);
+            Assert.Equal(1, groupingStats.ScopedNameCount);
+
+            groupingStats = null;
+            var batchedDirtyNames = Enumerable.Range(0, 1_000)
+                .Select(static index => $"MissingInterface{index:D4}")
+                .Append("MergedInterface")
+                .ToArray();
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(".", batchedDirtyNames));
+            Assert.NotNull(groupingStats);
+            Assert.Equal(2, groupingStats!.DeclarationCount);
+            Assert.Equal(batchedDirtyNames.Length, groupingStats.ScopedNameCount);
+
+            groupingStats = null;
+            var broadDirtyNames = Enumerable.Range(0, singletonInterfaceCount)
+                .Select(static index => $"UniqueInterface{index:D4}")
+                .Append("MergedInterface")
+                .ToArray();
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(".", broadDirtyNames));
+            Assert.NotNull(groupingStats);
+            Assert.Equal(singletonInterfaceCount + 2, groupingStats!.DeclarationCount);
+            Assert.Null(groupingStats.ScopedNameCount);
         }
         finally
         {
             DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
         }
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_ScopesOldAndNewDirtyNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug_dirty_names");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var firstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/first.ts"));
+            var secondFileId = _writer.UpsertFile(CreateTypeScriptFile("src/second.ts"));
+            var thirdFileId = _writer.UpsertFile(CreateTypeScriptFile("src/third.ts"));
+            _writer.InsertSymbols([
+                CreateInterface(firstFileId, "OldMerge", 1),
+                CreateInterface(firstFileId, "RemovedOnly", 2),
+                CreateInterface(secondFileId, "OldMerge", 1),
+                CreateInterface(secondFileId, "NewMerge", 2),
+                CreateInterface(secondFileId, "UntouchedMerge", 3),
+                CreateInterface(thirdFileId, "UntouchedMerge", 1),
+            ]);
+            Assert.Equal(4, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+
+            using var dirtyNames = _writer.BeginTypeScriptAugmentationDirtyNameTracking();
+            var retainedFirstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/first.ts"));
+            Assert.Equal(firstFileId, retainedFirstFileId);
+            _writer.InsertSymbols([CreateInterface(firstFileId, "NewMerge", 1)]);
+            Assert.Equal(
+                ["NewMerge", "OldMerge", "RemovedOnly"],
+                dirtyNames.DirtyNames.OrderBy(static name => name, StringComparer.Ordinal).ToArray());
+
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(projectRoot, dirtyNames.DirtyNames));
+
+            Assert.NotNull(groupingStats);
+            Assert.Equal(3, groupingStats!.DeclarationCount);
+            Assert.Equal(2, groupingStats.GroupCount);
+            Assert.Equal(1, groupingStats.MergedGroupCount);
+            Assert.Equal(2, groupingStats.MaterializedDeclarationIndexCount);
+            Assert.Equal(3, groupingStats.ScopedNameCount);
+
+            using var references = _db.Connection.CreateCommand();
+            references.CommandText = """
+                SELECT symbol_name, COUNT(*)
+                FROM symbol_references
+                WHERE reference_kind = 'augmentation'
+                GROUP BY symbol_name
+                ORDER BY symbol_name
+                """;
+            using var reader = references.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("NewMerge", reader.GetString(0));
+            Assert.Equal(2, reader.GetInt32(1));
+            Assert.True(reader.Read());
+            Assert.Equal("UntouchedMerge", reader.GetString(0));
+            Assert.Equal(2, reader.GetInt32(1));
+            Assert.False(reader.Read());
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name, int line) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = line,
+            StartLine = line,
+            EndLine = line,
+            Signature = $"interface {name} {{ value: number }}",
+        };
+    }
+
+    [Fact]
+    public void TypeScriptAugmentationDirtyNameTracking_CapturesBatchedStaleFilePurge()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug_stale_purge");
+        try
+        {
+            var staleFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/stale.ts",
+                Lang = "typescript",
+                Checksum = "rename-checksum",
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var peerFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/peer.ts",
+                Lang = "typescript",
+                Checksum = "peer-checksum",
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = staleFileId, Kind = "interface", Name = "RenamedMerge", Line = 1, StartLine = 1, EndLine = 1, Signature = "interface RenamedMerge { stale: number }" },
+                new SymbolRecord { FileId = peerFileId, Kind = "interface", Name = "RenamedMerge", Line = 1, StartLine = 1, EndLine = 1, Signature = "interface RenamedMerge { peer: number }" },
+            ]);
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+
+            using var dirtyNames = _writer.BeginTypeScriptAugmentationDirtyNameTracking();
+            Assert.Equal(
+                1,
+                _writer.PurgeStaleFilesSharingChecksum(
+                    projectRoot,
+                    "src/renamed.cs",
+                    "rename-checksum"));
+
+            Assert.True(dirtyNames.RequiresRefresh);
+            Assert.Equal(["RenamedMerge"], dirtyNames.DirtyNames);
+            Assert.False(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+            Assert.Equal(
+                0,
+                _writer.RebuildTypeScriptAugmentationReferences(projectRoot, dirtyNames.DirtyNames));
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(0L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_ScopedNamesUseOtherIndexedInterfaceAsModuleMarker()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug_scoped_module_marker");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var globalFileId = _writer.UpsertFile(CreateTypeScriptFile("src/global.ts"));
+            var moduleFileId = _writer.UpsertFile(CreateTypeScriptFile("src/module.ts"));
+            _writer.InsertSymbols([
+                CreateInterface(globalFileId, "Shared", "interface Shared { global: number }"),
+                CreateInterface(moduleFileId, "Shared", "interface Shared { local: number }"),
+                CreateInterface(moduleFileId, "ModuleMarker", "export interface ModuleMarker { value: number }", "export"),
+            ]);
+
+            Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences(projectRoot, ["Shared"]));
+            Assert.NotNull(groupingStats);
+            Assert.Equal(2, groupingStats!.DeclarationCount);
+            Assert.Equal(2, groupingStats.GroupCount);
+            Assert.Equal(0, groupingStats.MergedGroupCount);
+            Assert.Equal(1, groupingStats.ScopedNameCount);
+
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(0L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name, string signature, string? visibility = null) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = signature,
+            Visibility = visibility,
+        };
+    }
+
+    [Fact]
+    public void TypeScriptAugmentationDirtyNameTracking_ClearsOnceUntilRollbackAndRechecksOnceForNewFiles()
+    {
+        const int fileCount = 32;
+        var previousClearHook = DbWriter.TypeScriptAugmentationReadyClearForTesting;
+        var previousCheckHook = DbWriter.TypeScriptAugmentationReadyCheckForTesting;
+        var clearCount = 0;
+        var readyCheckCount = 0;
+        try
+        {
+            var files = Enumerable.Range(0, fileCount)
+                .Select(static index => new FileRecord
+                {
+                    Path = $"src/dirty-{index:D3}.ts",
+                    Lang = "typescript",
+                    Size = 80,
+                    Lines = 4,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                })
+                .ToArray();
+            foreach (var (file, index) in files.Select(static (file, index) => (file, index)))
+            {
+                var fileId = _writer.UpsertFile(file);
+                _writer.InsertSymbols([new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "interface",
+                    Name = $"DirtyInterface{index:D3}",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = $"interface DirtyInterface{index:D3} {{ value: number }}",
+                }]);
+            }
+            Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences("."));
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+
+            DbWriter.TypeScriptAugmentationReadyClearForTesting = () =>
+            {
+                clearCount++;
+                previousClearHook?.Invoke();
+            };
+            DbWriter.TypeScriptAugmentationReadyCheckForTesting = () =>
+            {
+                readyCheckCount++;
+                previousCheckHook?.Invoke();
+            };
+            using var dirtyNames = _writer.BeginTypeScriptAugmentationDirtyNameTracking();
+            using (_writer.BeginTransaction())
+                _writer.UpsertFile(files[0]);
+
+            Assert.Equal(1, clearCount);
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                for (var index = 0; index < fileCount; index++)
+                {
+                    var newFileId = _writer.UpsertFile(new FileRecord
+                    {
+                        Path = $"src/new-after-rollback-{index:D3}.ts",
+                        Lang = "typescript",
+                        Size = 80,
+                        Lines = 4,
+                        Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                    });
+                    _writer.InsertSymbols([new SymbolRecord
+                    {
+                        FileId = newFileId,
+                        Kind = "interface",
+                        Name = $"NewAfterRollback{index:D3}",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Signature = $"interface NewAfterRollback{index:D3} {{ value: number }}",
+                    }]);
+                }
+                Assert.Equal(2, clearCount);
+                Assert.Equal(1, readyCheckCount);
+                transaction.Commit();
+            }
+
+            Assert.Equal(2, clearCount);
+            Assert.Equal(1, readyCheckCount);
+            Assert.False(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+            Assert.True(dirtyNames.RequiresRefresh);
+            Assert.Equal(fileCount + 1, dirtyNames.DirtyNames.Count);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationReadyClearForTesting = previousClearHook;
+            DbWriter.TypeScriptAugmentationReadyCheckForTesting = previousCheckHook;
+        }
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_CancellationBetweenNameBatchesRollsBack()
+    {
+        var previousBatchHook = DbWriter.TypeScriptAugmentationNameBatchForTesting;
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var firstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/cancel-first.ts"));
+            var secondFileId = _writer.UpsertFile(CreateTypeScriptFile("src/cancel-second.ts"));
+            _writer.InsertSymbols([
+                CreateInterface(firstFileId, "MergedInterface"),
+                CreateInterface(secondFileId, "MergedInterface"),
+            ]);
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences("."));
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+
+            DbWriter.TypeScriptAugmentationNameBatchForTesting = batchNumber =>
+            {
+                previousBatchHook?.Invoke(batchNumber);
+                if (batchNumber == 1)
+                    cancellation.Cancel();
+            };
+            var dirtyNames = Enumerable.Range(0, 1_000)
+                .Select(static index => $"ZMissingInterface{index:D4}")
+                .Prepend("MergedInterface")
+                .ToArray();
+
+            var exception = Assert.Throws<OperationCanceledException>(() =>
+                _writer.RebuildTypeScriptAugmentationReferences(".", dirtyNames, cancellation.Token));
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(2L, (long)count.ExecuteScalar()!);
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationNameBatchForTesting = previousBatchHook;
+        }
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = $"interface {name} {{ value: number }}",
+        };
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_CancellationInterruptsActiveDeleteStatementAndRollsBack()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var firstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/interrupt-first.ts"));
+        var secondFileId = _writer.UpsertFile(CreateTypeScriptFile("src/interrupt-second.ts"));
+        _writer.InsertSymbols([
+            CreateInterface(firstFileId, "InterruptedMerge"),
+            CreateInterface(secondFileId, "InterruptedMerge"),
+        ]);
+        Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences("."));
+        _db.Connection.CreateFunction("cancel_ts_augmentation", () =>
+        {
+            cancellation.Cancel();
+            return 0;
+        });
+        using (var trigger = _db.Connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TEMP TRIGGER cancel_ts_augmentation_delete
+                BEFORE DELETE ON symbol_references
+                WHEN OLD.reference_kind = 'augmentation'
+                BEGIN
+                    SELECT cancel_ts_augmentation();
+                END
+                """;
+            trigger.ExecuteNonQuery();
+        }
+
+        var exception = Assert.Throws<OperationCanceledException>(() =>
+            _writer.RebuildTypeScriptAugmentationReferences(
+                ".",
+                ["InterruptedMerge"],
+                cancellation.Token));
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        var sqliteException = Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.Equal(9, sqliteException.SqliteErrorCode);
+
+        using var count = _db.Connection.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+        Assert.Equal(2L, (long)count.ExecuteScalar()!);
+        Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = $"interface {name} {{ value: number }}",
+        };
+    }
+
+    [Fact]
+    public void TypeScriptAugmentationDirtyNameTracking_MixedSymbolBatchTracksOnlyTypeScriptInterfaces()
+    {
+        using var dirtyNames = _writer.BeginTypeScriptAugmentationDirtyNameTracking();
+        var csharpFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/mixed.cs",
+            Lang = "csharp",
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var typeScriptFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/mixed.ts",
+            Lang = "typescript",
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = csharpFileId, Kind = "interface", Name = "CSharpInterface", Line = 1 },
+            new SymbolRecord { FileId = typeScriptFileId, Kind = "class", Name = "TypeScriptClass", Line = 1 },
+            new SymbolRecord { FileId = typeScriptFileId, Kind = "interface", Name = "TypeScriptInterface", Line = 2 },
+        ]);
+
+        Assert.True(dirtyNames.RequiresRefresh);
+        Assert.Equal(["TypeScriptInterface"], dirtyNames.DirtyNames);
+    }
+
+    [Fact]
+    public void TypeScriptAugmentationDirtyNameTracking_ReadinessOnlyModeSkipsInterfaceNames()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/readiness-only.ts",
+            Lang = "typescript",
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = "ReadinessOnlyInterface",
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = "interface ReadinessOnlyInterface { value: number }",
+        }]);
+        Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences("."));
+
+        using var readiness = _writer.BeginTypeScriptAugmentationDirtyNameTracking(collectDirtyNames: false);
+        using (var transaction = _writer.BeginTransaction())
+        {
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/readiness-only.ts",
+                Lang = "csharp",
+                Modified = new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc),
+            });
+            transaction.Commit();
+        }
+
+        Assert.True(readiness.RequiresRefresh);
+        Assert.Empty(readiness.DirtyNames);
+        Assert.False(_writer.TypeScriptAugmentationVersionMatchesCurrent());
     }
 
     [Fact]

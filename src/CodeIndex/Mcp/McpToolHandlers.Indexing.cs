@@ -298,11 +298,19 @@ public partial class McpServer
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
         var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
-        var typeScriptAugmentationNeedsRefresh = !projectRootWritten
+        var typeScriptAugmentationNeedsRefresh = rebuild
+            || !projectRootWritten
             || !typeScriptAugmentationVersionMatchesCurrent;
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
         var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
+        var useScopedTypeScriptAugmentationRefresh = !rebuild
+            && !startedWithNoIndexedFiles
+            && projectRootWritten;
+        using var typeScriptAugmentationDirtyNames = !rebuild
+            && typeScriptAugmentationVersionMatchesCurrent
+                ? writer.BeginTypeScriptAugmentationDirtyNameTracking(useScopedTypeScriptAugmentationRefresh)
+                : null;
 
         void InsertIssuesForIndexedFile(long fileId, IReadOnlyList<FileIssue> issues)
         {
@@ -948,7 +956,8 @@ public partial class McpServer
                 csharpMetadataTargetReadyAfter = true;
             }
             sqlGraphContractReadyAfter = true;
-            if (typeScriptAugmentationNeedsRefresh)
+            if (typeScriptAugmentationNeedsRefresh
+                || typeScriptAugmentationDirtyNames?.RequiresRefresh == true)
             {
                 if (startedWithNoIndexedFiles && !hasTypeScriptTargets)
                 {
@@ -957,7 +966,12 @@ public partial class McpServer
                 else
                 {
                     McpIndexTypeScriptAugmentationRebuildForTesting?.Invoke();
-                    var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(projectPath);
+                    var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(
+                        projectPath,
+                        useScopedTypeScriptAugmentationRefresh
+                            ? typeScriptAugmentationDirtyNames?.DirtyNames
+                            : null,
+                        requestToken);
                     if (startedWithNoIndexedFiles)
                         freshCountReferences += augmentationReferences;
                 }

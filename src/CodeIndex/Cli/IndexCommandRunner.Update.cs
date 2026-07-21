@@ -166,6 +166,10 @@ public static partial class IndexCommandRunner
         var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
             && (!projectRootWritten || !typeScriptAugmentationVersionMatchesCurrent);
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
+        var useScopedTypeScriptAugmentationRefresh = !options.SymbolsOnly && projectRootWritten;
+        using var typeScriptAugmentationDirtyNames = typeScriptAugmentationVersionMatchesCurrent
+                ? writer.BeginTypeScriptAugmentationDirtyNameTracking(useScopedTypeScriptAugmentationRefresh)
+                : null;
         var ftsMutated = false;
         var referenceIdentityContractMatchedBeforeMutation = writer.ReferenceIdentityContractMatchesCurrent();
         var mutualRecursionRefreshNeeded = !options.SymbolsOnly
@@ -1335,10 +1339,17 @@ public static partial class IndexCommandRunner
             // family_key/container_qualified_name state as authoritative (#1488).
             using (var hotspotFamilyTxn = writer.BeginTransaction(cancellationToken, "update hotspot-family restamp"))
             {
-                if (typeScriptAugmentationNeedsRefresh)
+                if (!options.SymbolsOnly
+                    && (typeScriptAugmentationNeedsRefresh
+                        || typeScriptAugmentationDirtyNames?.RequiresRefresh == true))
                 {
                     UpdateTypeScriptAugmentationRebuildForTesting?.Invoke();
-                    writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                    writer.RebuildTypeScriptAugmentationReferences(
+                        projectRoot,
+                        useScopedTypeScriptAugmentationRefresh
+                            ? typeScriptAugmentationDirtyNames?.DirtyNames
+                            : null,
+                        cancellationToken);
                 }
                 RestampHotspotFamilyTrustForUpdate(
                     writer,

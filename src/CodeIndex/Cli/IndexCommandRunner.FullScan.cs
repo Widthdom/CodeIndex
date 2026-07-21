@@ -1078,6 +1078,16 @@ public static partial class IndexCommandRunner
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
         var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
+        var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
+        var useScopedTypeScriptAugmentationRefresh = !options.SymbolsOnly
+            && !startedWithNoIndexedFiles
+            && projectRootWritten
+            && !forceJavaScriptTypeScriptRefresh
+            && !forceExtractorRefresh;
+        using var typeScriptAugmentationDirtyNames = !options.Rebuild
+            && typeScriptAugmentationVersionMatchesCurrent
+                ? writer.BeginTypeScriptAugmentationDirtyNameTracking(useScopedTypeScriptAugmentationRefresh)
+                : null;
         var retainedPaths = startedWithNoIndexedFiles
             ? null
             : new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
@@ -1194,7 +1204,6 @@ public static partial class IndexCommandRunner
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
         var extractionParallelism = Math.Max(1, options.Parallelism);
-        var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
         var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
             && (options.Rebuild
                 || startedWithNoIndexedFiles
@@ -2414,7 +2423,8 @@ public static partial class IndexCommandRunner
             csharpSymbolNameReadyAfter = true;
             if (!options.SymbolsOnly)
             {
-                if (typeScriptAugmentationNeedsRefresh)
+                if (typeScriptAugmentationNeedsRefresh
+                    || typeScriptAugmentationDirtyNames?.RequiresRefresh == true)
                 {
                     if (startedWithNoIndexedFiles && !languageCounts.ContainsKey("typescript"))
                     {
@@ -2423,7 +2433,12 @@ public static partial class IndexCommandRunner
                     else
                     {
                         FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
-                        var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                        var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(
+                            projectRoot,
+                            useScopedTypeScriptAugmentationRefresh
+                                ? typeScriptAugmentationDirtyNames?.DirtyNames
+                                : null,
+                            cancellationToken);
                         if (startedWithNoIndexedFiles)
                             freshCountReferences += augmentationReferences;
                     }

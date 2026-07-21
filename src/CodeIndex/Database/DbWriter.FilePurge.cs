@@ -34,6 +34,7 @@ public partial class DbWriter
             transaction?.Commit();
             return false;
         }
+        _typeScriptAugmentationDirtyNameScope?.TrackDeletedFiles([existingFileId]);
         if (HasReferenceIdentityRowsForFile(existingFileId))
             InvalidateReferenceIdentityContractForMutation();
         if (_deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
@@ -200,6 +201,13 @@ public partial class DbWriter
         int batchCount)
     {
         SqliteDynamicSql.EnsureParameterBudget(batchCount, "file id delete batch");
+        if (_typeScriptAugmentationDirtyNameScope != null)
+        {
+            var trackedFileIds = new long[batchCount];
+            for (var index = 0; index < batchCount; index++)
+                trackedFileIds[index] = fileIds[offset + index];
+            _typeScriptAugmentationDirtyNameScope.TrackDeletedFiles(trackedFileIds);
+        }
         var parameterList = SqliteDynamicSql.BuildParameterList("id", batchCount);
         var deleteCmd = RentCommand(
             $"DELETE FROM files WHERE id IN ({parameterList})",

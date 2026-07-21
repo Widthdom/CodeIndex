@@ -363,6 +363,7 @@ public partial class DbWriter
                 _writer.EndDeferredHotspotReferenceTransactionFrame(
                     _deferredHotspotReferenceFrame,
                     committed: false);
+                _writer.NotifyTypeScriptAugmentationTransactionRolledBack();
                 SetState(StateRolledBack);
                 // Same rationale as Commit: drop the stale reference so cached commands
                 // re-bind correctly after the transaction boundary.
@@ -421,6 +422,7 @@ public partial class DbWriter
                         _writer.EndDeferredHotspotReferenceTransactionFrame(
                             _deferredHotspotReferenceFrame,
                             committed: false);
+                        _writer.NotifyTypeScriptAugmentationTransactionRolledBack();
                     }
                     break;
                 }

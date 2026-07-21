@@ -1587,6 +1587,8 @@ public partial class IndexCommandRunnerTests
     public void Run_UpdateMode_DeleteTypeScriptFile_RebuildsAugmentationReferences()
     {
         var projectRoot = CreateTempProject();
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
         try
         {
             var sourcePath = Path.Combine(projectRoot, "types.ts");
@@ -1598,6 +1600,11 @@ public partial class IndexCommandRunnerTests
             File.Delete(sourcePath);
             var rebuiltTypeScriptAugmentation = false;
             IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
 
             var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "types.ts", "--json"]);
 
@@ -1605,10 +1612,67 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.True(rebuiltTypeScriptAugmentation);
+            Assert.NotNull(groupingStats);
+            Assert.Equal(0, groupingStats!.DeclarationCount);
+            Assert.Equal(1, groupingStats.ScopedNameCount);
         }
         finally
         {
             IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_TypeScriptToCSharpLanguageTransitionRemovesAugmentation()
+    {
+        var projectRoot = CreateTempProject();
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var changedPath = Path.Combine(projectRoot, "changed.cs");
+            File.WriteAllText(changedPath, "public interface SharedTransition { int Changed { get; } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "peer.ts"),
+                "interface SharedTransition { peer: number }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(
+                2,
+                TestProjectHelper.ReclassifyIndexedFileAsTypeScriptAndRebuildAugmentations(
+                    dbPath,
+                    projectRoot,
+                    "changed.cs"));
+
+            File.WriteAllText(changedPath, "public class Changed { }\n");
+            File.SetLastWriteTimeUtc(changedPath, DateTime.UtcNow.AddSeconds(2));
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "changed.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.NotNull(groupingStats);
+            Assert.Equal(1, groupingStats!.DeclarationCount);
+            Assert.Equal(1, groupingStats.ScopedNameCount);
+            using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            connection.Open();
+            using var count = connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(0L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

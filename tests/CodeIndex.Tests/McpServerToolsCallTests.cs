@@ -7032,6 +7032,56 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_PreviouslyEmptyFailedFirstWriteInvalidatesTypeScriptAugmentationReadiness()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_empty_ts_rollback_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_empty_ts_rollback");
+        try
+        {
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var emptyResponse = CallIndex(server, fixtureDir);
+            Assert.False(emptyResponse["result"]?["isError"]?.GetValue<bool>() ?? false, emptyResponse.ToJsonString());
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                connection.Open();
+                using var trigger = connection.CreateCommand();
+                trigger.CommandText = """
+                    CREATE TRIGGER fail_first_typescript_file
+                    BEFORE INSERT ON files
+                    WHEN NEW.path = 'a.ts'
+                    BEGIN
+                        SELECT RAISE(FAIL, 'fail first TypeScript file');
+                    END;
+                    """;
+                trigger.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(Path.Combine(fixtureDir, "a.ts"), "interface FailedFirst { value: number }\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "b.ts"), "interface CommittedSecond { value: number }\n");
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.True(response["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>() > 0);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.TryMigrateForRead();
+            Assert.NotEqual(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+            using var fileCount = db.Connection.CreateCommand();
+            fileCount.CommandText = "SELECT COUNT(*) FROM files WHERE path = 'b.ts'";
+            Assert.Equal(1L, (long)fileCount.ExecuteScalar()!);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_NoOpSkipsUnchangedFinalizers()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_noop_ts_augmentation_{Guid.NewGuid():N}");
@@ -7082,6 +7132,146 @@ public partial class McpServerTests
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.ReusableStatSnapshotReadForTesting = null;
             DbWriter.FoldBackfillVerificationForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_IncrementalScopesTypeScriptAugmentationToDirtyNames()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_ts_dirty_names_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_ts_dirty_names");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var changedPath = Path.Combine(fixtureDir, "changed.ts");
+            File.WriteAllText(changedPath, "interface OldMerge { changed: number }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "peer.ts"),
+                "interface OldMerge { oldPeer: number }\ninterface NewMerge { newPeer: number }\n");
+            var singletonSource = new StringBuilder();
+            for (var index = 0; index < 1_000; index++)
+                singletonSource.Append("interface Unchanged").Append(index).Append(" { value: number }\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "singletons.ts"), singletonSource.ToString());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstResponse = CallIndex(server, fixtureDir);
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+
+            File.WriteAllText(changedPath, "interface NewMerge { changed: number }\n");
+            File.SetLastWriteTimeUtc(changedPath, DateTime.UtcNow.AddSeconds(2));
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            var secondResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false, secondResponse.ToJsonString());
+            Assert.NotNull(groupingStats);
+            Assert.Equal(3, groupingStats!.DeclarationCount);
+            Assert.Equal(2, groupingStats.GroupCount);
+            Assert.Equal(1, groupingStats.MergedGroupCount);
+            Assert.Equal(2, groupingStats.ScopedNameCount);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RebuildUsesFullTypeScriptAugmentationPath()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_ts_rebuild_full_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_ts_rebuild_full");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "first.ts"), "interface RebuiltMerge { first: number }\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "second.ts"), "interface RebuiltMerge { second: number }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstResponse = CallIndex(server, fixtureDir);
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            var rebuildResponse = CallIndex(server, fixtureDir, args => args["rebuild"] = true);
+
+            Assert.False(rebuildResponse["result"]?["isError"]?.GetValue<bool>() ?? false, rebuildResponse.ToJsonString());
+            Assert.NotNull(groupingStats);
+            Assert.Equal(2, groupingStats!.DeclarationCount);
+            Assert.Null(groupingStats.ScopedNameCount);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_TypeScriptToCSharpLanguageTransitionRemovesAugmentation()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_ts_language_transition_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_ts_language_transition");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var changedPath = Path.Combine(fixtureDir, "changed.cs");
+            File.WriteAllText(changedPath, "public interface SharedTransition { int Changed { get; } }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "peer.ts"),
+                "interface SharedTransition { peer: number }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstResponse = CallIndex(server, fixtureDir);
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+            Assert.Equal(
+                2,
+                TestProjectHelper.ReclassifyIndexedFileAsTypeScriptAndRebuildAugmentations(
+                    dbPath,
+                    fixtureDir,
+                    "changed.cs"));
+
+            File.WriteAllText(changedPath, "public class Changed { }\n");
+            File.SetLastWriteTimeUtc(changedPath, DateTime.UtcNow.AddSeconds(2));
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            var secondResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false, secondResponse.ToJsonString());
+            Assert.NotNull(groupingStats);
+            Assert.Equal(1, groupingStats!.DeclarationCount);
+            Assert.Equal(1, groupingStats.ScopedNameCount);
+            using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            connection.Open();
+            using var count = connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(0L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
