@@ -68,6 +68,78 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_MultiLanguagePersistenceUsesNewAndUpdateReferenceLinePaths()
+    {
+        var projectRoot = CreateTempProject();
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        try
+        {
+            var pythonPath = Path.Combine(projectRoot, "app.py");
+            var typeScriptPath = Path.Combine(projectRoot, "app.ts");
+            File.WriteAllText(
+                pythonPath,
+                "def py_target():\n    return 1\n\ndef py_caller():\n    return py_target()\n");
+            File.WriteAllText(
+                typeScriptPath,
+                "function tsTarget() { return 1; }\nfunction tsCaller() { return tsTarget(); }\n");
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            var (fullExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            Assert.Contains(statements, statement => statement.Operation == "insert_reference_lines");
+            Assert.Contains(statements, statement => statement.Operation == "insert_references");
+
+            statements.Clear();
+            File.WriteAllText(
+                pythonPath,
+                "def py_target():\n    return 2\n\ndef py_caller():\n    return py_target() + py_target()\n");
+            File.WriteAllText(
+                typeScriptPath,
+                "function tsTarget() { return 2; }\nfunction tsCaller() { return tsTarget() + tsTarget(); }\n");
+            File.SetLastWriteTimeUtc(pythonPath, DateTime.UtcNow.AddSeconds(2));
+            File.SetLastWriteTimeUtc(typeScriptPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Contains(statements, statement => statement.Operation == "upsert_reference_lines");
+            Assert.Contains(statements, statement => statement.Operation == "lookup_reference_lines");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = """
+                SELECT f.lang, COUNT(sr.id), COUNT(DISTINCT sr.reference_line_id)
+                FROM files AS f
+                JOIN symbol_references AS sr ON sr.file_id = f.id
+                WHERE f.path IN ('app.py', 'app.ts')
+                GROUP BY f.lang
+                """;
+            var languageCounts = new Dictionary<string, (long References, long Lines)>(StringComparer.Ordinal);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                languageCounts[reader.GetString(0)] = (reader.GetInt64(1), reader.GetInt64(2));
+
+            Assert.True(languageCounts["python"].References >= 2);
+            Assert.True(languageCounts["python"].Lines >= 1);
+            Assert.True(languageCounts["typescript"].References >= 2);
+            Assert.True(languageCounts["typescript"].Lines >= 1);
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MemoryTrace_ReportsFullScanAndUpdatePhaseBoundaries()
     {
         var projectRoot = CreateTempProject();

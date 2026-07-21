@@ -8315,6 +8315,63 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_MultiLanguagePersistenceKeepsReferencesAndLinesLinked()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_batch_languages_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_batch_languages");
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Service.cs"),
+                "public static class Service { public static int Target() => 1; public static int Run() => Target() + Target(); }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "service.py"),
+                "def target():\n    return 1\n\ndef run():\n    return target() + target()\n");
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.Contains(statements, statement => statement.Operation == "insert_reference_lines");
+            Assert.Contains(statements, statement => statement.Operation == "insert_references");
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.TryMigrateForRead();
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = """
+                SELECT f.lang, COUNT(sr.id), COUNT(DISTINCT sr.reference_line_id)
+                FROM files AS f
+                JOIN symbol_references AS sr ON sr.file_id = f.id
+                WHERE f.path IN ('Service.cs', 'service.py')
+                GROUP BY f.lang
+                """;
+            var languageCounts = new Dictionary<string, (long References, long Lines)>(StringComparer.Ordinal);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                languageCounts[reader.GetString(0)] = (reader.GetInt64(1), reader.GetInt64(2));
+
+            Assert.True(languageCounts["csharp"].References >= 2);
+            Assert.True(languageCounts["csharp"].Lines >= 1);
+            Assert.True(languageCounts["python"].References >= 2);
+            Assert.True(languageCounts["python"].Lines >= 1);
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_BackfillFold_StampsFoldReady()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;

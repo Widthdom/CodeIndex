@@ -7,6 +7,7 @@ public partial class DbWriter
 {
     internal static Action? HotspotAggregateRefreshExecutingForTesting { get; set; }
     private const string NonTypeReceiverQualifierPrefix = "\u001freceiver:";
+    private const int MaxReferenceLineWindowBatchCount = 32;
 
     private const string MutualRecursionValueSql = """
         CASE
@@ -547,66 +548,44 @@ public partial class DbWriter
             ? new Dictionary<(long FileId, int Line, string Context), long>()
             : null;
         int referenceBatchCount = GetReferenceBatchCount(references.Count, rowsPerStatement);
-        for (int batchIndex = 0; batchIndex < referenceBatchCount; batchIndex++)
+        if (batchesAreAtomicInCaller)
         {
-            int i = batchIndex * rowsPerStatement;
-            CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
-            int end = Math.Min(i + rowsPerStatement, references.Count);
+            InsertAtomicReferenceBatches(
+                references,
+                referenceLinesAreNew,
+                newReferenceLineIds,
+                foldedNameCache,
+                rowsPerStatement,
+                referenceBatchCount,
+                cancellationToken);
+        }
+        else
+        {
             // Public APIs always retain the #1518 chunk transaction/SAVEPOINT contract.
-            // Only explicit atomic-file APIs delegate this rollback boundary to their
-            // required caller-owned file transaction, avoiding one SAVEPOINT per 71 refs.
+            // The explicit atomic-file APIs alone aggregate reference-line work under
+            // their required caller-owned file transaction.
             // public APIは#1518のchunk transaction/SAVEPOINT契約を常に維持する。
-            // 明示atomic-file APIだけが必須の呼出元file transactionへrollback境界を委譲する。
-            using var transaction = batchesAreAtomicInCaller
-                ? null
-                : BeginReferenceBatchTransaction(cancellationToken);
-            var referenceLineIds = referenceLinesAreNew
-                ? InsertNewReferenceLines(references, i, end, newReferenceLineIds!, cancellationToken)
-                : UpsertReferenceLines(references, i, end, cancellationToken);
-
-            var rowsInBatch = end - i;
-            var sql = ReferenceInsertSqlCache.GetOrAdd(rowsInBatch, static count => BuildReferenceInsertSql(count));
-            var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
-            try
+            // 明示atomic-file APIだけが必須の呼出元file transaction配下で参照行処理を集約する。
+            for (int batchIndex = 0; batchIndex < referenceBatchCount; batchIndex++)
             {
-                var parameterIndex = 0;
-                (long FileId, int Line, string Context)? previousReferenceLineKey = null;
-                var previousReferenceLineId = 0L;
-                for (int j = i; j < end; j++)
-                {
-                    var reference = references[j];
-                    ValidateReferenceKinds(reference);
-                    var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
-                    if (previousReferenceLineKey is not { } previousKey
-                        || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
-                    {
-                        previousReferenceLineId = referenceLineIds[referenceLineKey];
-                        previousReferenceLineKey = referenceLineKey;
-                    }
-
-                    cmd.Parameters[parameterIndex++].Value = reference.FileId;
-                    cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
-                    cmd.Parameters[parameterIndex++].Value = reference.ReferenceKind;
-                    cmd.Parameters[parameterIndex++].Value = reference.Line;
-                    cmd.Parameters[parameterIndex++].Value = reference.Column;
-                    cmd.Parameters[parameterIndex++].Value = DBNull.Value;
-                    cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
-                    cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
-                    cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
-                    cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
-                    cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
-                    cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
-                    cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
-                    cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
-                }
-
-                cmd.ExecuteNonQuery();
+                int start = batchIndex * rowsPerStatement;
+                int end = Math.Min(start + rowsPerStatement, references.Count);
+                CheckBatchCancellationAndReportProgress(
+                    "insert_references",
+                    start,
+                    references.Count,
+                    cancellationToken);
+                using var transaction = BeginReferenceBatchTransaction(cancellationToken);
+                var referenceLineIds = MaterializeReferenceLines(
+                    references,
+                    start,
+                    end,
+                    referenceLinesAreNew,
+                    newReferenceLineIds,
+                    cancellationToken);
+                InsertReferenceBatch(references, start, end, referenceLineIds, foldedNameCache);
+                transaction.Commit();
             }
-            finally
-            {
-                ReleaseCommand(cmd);
-            }
-            transaction?.Commit();
         }
 
         CheckBatchCancellationAndReportProgress("insert_references", references.Count, references.Count, cancellationToken);
@@ -616,6 +595,149 @@ public partial class DbWriter
         {
             cancellationToken.ThrowIfCancellationRequested();
             RefreshMutualRecursionFlags(cancellationToken);
+        }
+    }
+
+    private void InsertAtomicReferenceBatches(
+        IReadOnlyList<ReferenceRecord> references,
+        bool referenceLinesAreNew,
+        Dictionary<(long FileId, int Line, string Context), long>? newReferenceLineIds,
+        Dictionary<string, string?> foldedNameCache,
+        int rowsPerStatement,
+        int referenceBatchCount,
+        CancellationToken cancellationToken)
+    {
+        for (int windowStartBatch = 0; windowStartBatch < referenceBatchCount;)
+        {
+            int windowStart = windowStartBatch * rowsPerStatement;
+            CheckBatchCancellationAndReportProgress(
+                "insert_references",
+                windowStart,
+                references.Count,
+                cancellationToken);
+            int windowEndBatch = GetAtomicReferenceLineWindowEndBatch(
+                references,
+                windowStartBatch,
+                referenceBatchCount,
+                rowsPerStatement);
+            int windowEnd = Math.Min(windowEndBatch * rowsPerStatement, references.Count);
+            var referenceLineIds = MaterializeReferenceLines(
+                references,
+                windowStart,
+                windowEnd,
+                referenceLinesAreNew,
+                newReferenceLineIds,
+                cancellationToken);
+
+            for (int batchIndex = windowStartBatch; batchIndex < windowEndBatch; batchIndex++)
+            {
+                int start = batchIndex * rowsPerStatement;
+                if (batchIndex != windowStartBatch)
+                {
+                    CheckBatchCancellationAndReportProgress(
+                        "insert_references",
+                        start,
+                        references.Count,
+                        cancellationToken);
+                }
+                int end = Math.Min(start + rowsPerStatement, references.Count);
+                InsertReferenceBatch(references, start, end, referenceLineIds, foldedNameCache);
+            }
+
+            windowStartBatch = windowEndBatch;
+        }
+    }
+
+    private static int GetAtomicReferenceLineWindowEndBatch(
+        IReadOnlyList<ReferenceRecord> references,
+        int windowStartBatch,
+        int referenceBatchCount,
+        int rowsPerStatement)
+    {
+        int maxReferenceLines = GetRowsPerInsertStatement(columnCount: 3);
+        var windowKeys = new HashSet<(long FileId, int Line, string Context)>(maxReferenceLines);
+        int windowEndBatch = windowStartBatch;
+        while (windowEndBatch < referenceBatchCount
+               && windowEndBatch - windowStartBatch < MaxReferenceLineWindowBatchCount)
+        {
+            int batchStart = windowEndBatch * rowsPerStatement;
+            int batchEnd = Math.Min(batchStart + rowsPerStatement, references.Count);
+            for (int index = batchStart; index < batchEnd; index++)
+            {
+                var reference = references[index];
+                var key = (reference.FileId, reference.Line, reference.Context);
+                windowKeys.Add(key);
+            }
+
+            if (windowKeys.Count > maxReferenceLines && windowEndBatch > windowStartBatch)
+                break;
+
+            windowEndBatch++;
+        }
+
+        return windowEndBatch;
+    }
+
+    private Dictionary<(long FileId, int Line, string Context), long> MaterializeReferenceLines(
+        IReadOnlyList<ReferenceRecord> references,
+        int start,
+        int end,
+        bool referenceLinesAreNew,
+        Dictionary<(long FileId, int Line, string Context), long>? newReferenceLineIds,
+        CancellationToken cancellationToken)
+        => referenceLinesAreNew
+            ? InsertNewReferenceLines(references, start, end, newReferenceLineIds!, cancellationToken)
+            : UpsertReferenceLines(references, start, end, cancellationToken);
+
+    private void InsertReferenceBatch(
+        IReadOnlyList<ReferenceRecord> references,
+        int start,
+        int end,
+        Dictionary<(long FileId, int Line, string Context), long> referenceLineIds,
+        Dictionary<string, string?> foldedNameCache)
+    {
+        var rowsInBatch = end - start;
+        var sql = ReferenceInsertSqlCache.GetOrAdd(rowsInBatch, static count => BuildReferenceInsertSql(count));
+        var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
+        try
+        {
+            var parameterIndex = 0;
+            (long FileId, int Line, string Context)? previousReferenceLineKey = null;
+            var previousReferenceLineId = 0L;
+            for (int index = start; index < end; index++)
+            {
+                var reference = references[index];
+                ValidateReferenceKinds(reference);
+                var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
+                if (previousReferenceLineKey is not { } previousKey
+                    || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
+                {
+                    previousReferenceLineId = referenceLineIds[referenceLineKey];
+                    previousReferenceLineKey = referenceLineKey;
+                }
+
+                cmd.Parameters[parameterIndex++].Value = reference.FileId;
+                cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
+                cmd.Parameters[parameterIndex++].Value = reference.ReferenceKind;
+                cmd.Parameters[parameterIndex++].Value = reference.Line;
+                cmd.Parameters[parameterIndex++].Value = reference.Column;
+                cmd.Parameters[parameterIndex++].Value = DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
+                cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
+                cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
+                cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
+            }
+
+            ReportBatchStatementForTesting("insert_references", rowsInBatch, rowsInBatch);
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
     }
 
@@ -756,6 +878,7 @@ public partial class DbWriter
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
+                ReportBatchStatementForTesting("upsert_reference_lines", statementRowCount, statementRowCount);
                 cmd.ExecuteNonQuery();
             }
             finally
@@ -778,6 +901,7 @@ public partial class DbWriter
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, keyEnd);
+                ReportBatchStatementForTesting("lookup_reference_lines", statementRowCount, statementRowCount);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -842,6 +966,7 @@ public partial class DbWriter
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
+                ReportBatchStatementForTesting("insert_reference_lines", statementRowCount, statementRowCount);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {

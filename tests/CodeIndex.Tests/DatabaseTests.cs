@@ -3838,6 +3838,105 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceBatchStatements_EightFiveOneInputsUseExactRowCounts()
+    {
+        var writer = new DbWriter(_db);
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        var fileIds = new List<long>();
+        try
+        {
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            foreach (var rowCount in new[] { 8, 5, 1 })
+            {
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = $"src/reference-batch-{rowCount}.cs",
+                    Lang = "csharp",
+                    Size = rowCount * 10,
+                    Lines = rowCount,
+                    Checksum = $"reference-batch-{rowCount}",
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                fileIds.Add(fileId);
+                writer.InsertReferencesForNewFiles(
+                    Enumerable.Range(0, rowCount)
+                        .Select(index => new ReferenceRecord
+                        {
+                            FileId = fileId,
+                            SymbolName = $"Target_{rowCount}_{index}",
+                            ReferenceKind = "call",
+                            Line = index + 1,
+                            Column = index + 1,
+                            Context = $"Target_{rowCount}_{index}();",
+                            ContainerKind = "function",
+                            ContainerName = "caller",
+                        })
+                        .ToArray(),
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+        }
+
+        Assert.Equal(
+            [(8, 8), (5, 5), (1, 1)],
+            statements.Where(statement => statement.Operation == "insert_reference_lines")
+                .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                .ToArray());
+        Assert.Equal(
+            [(8, 8), (5, 5), (1, 1)],
+            statements.Where(statement => statement.Operation == "insert_references")
+                .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                .ToArray());
+        using var countCommand = _db.Connection.CreateCommand();
+        countCommand.Parameters.Add("@fileId", SqliteType.Integer);
+        foreach (var (fileId, expectedRowCount) in fileIds.Zip(new[] { 8, 5, 1 }))
+        {
+            countCommand.Parameters["@fileId"].Value = fileId;
+            countCommand.CommandText = """
+                SELECT (SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId),
+                       (SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId)
+                """;
+            using var reader = countCommand.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(expectedRowCount, reader.GetInt32(0));
+            Assert.Equal(expectedRowCount, reader.GetInt32(1));
+        }
+    }
+
+    [Fact]
+    public void ReferenceLineLookup_BatchedInputUsesUniqueAutoIndexPlan()
+    {
+        const int StatementRowCount = 5;
+        var sql = DbWriter.BuildReferenceLineLookupSqlForTesting(StatementRowCount);
+
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        for (var parameterIndex = 0; parameterIndex < StatementRowCount * 3; parameterIndex++)
+            command.Parameters.AddWithValue($"@p{parameterIndex}", DBNull.Value);
+
+        var plan = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            plan.Add(reader.GetString(3));
+
+        Assert.Contains(
+            plan,
+            detail => detail.Contains(
+                "sqlite_autoindex_reference_lines_1",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void InsertSymbols_ChunksLargeInputUnderSqlVariableLimit()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -4636,6 +4735,177 @@ public class DatabaseTests : IDisposable
             DbWriter.ReferenceBatchTransactionOpeningForTesting = previousBatchHook;
             DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InsertReferences_AtomicFileScopeGroupsWholeBatchesWithoutMovingReferenceBoundaries(
+        bool referenceLinesAreNew)
+    {
+        const int ReferenceCount = (71 * 5) + 1;
+        var publicFileId = UpsertTestFile(
+            $"src/public-reference-window-{referenceLinesAreNew}.cs",
+            checksum: $"public-reference-window-{referenceLinesAreNew}");
+        var atomicFileId = UpsertTestFile(
+            $"src/atomic-reference-window-{referenceLinesAreNew}.cs",
+            checksum: $"atomic-reference-window-{referenceLinesAreNew}");
+        var publicReferences = BuildAtomicScopeReferences(publicFileId, ReferenceCount);
+        var atomicReferences = BuildAtomicScopeReferences(atomicFileId, ReferenceCount);
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        var progressRows = new List<int>();
+        var transactionCount = 0;
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        var previousProgressHook = DbWriter.BatchProgressCheckpointForTesting;
+        var previousTransactionHook = DbWriter.ReferenceBatchTransactionOpeningForTesting;
+        try
+        {
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (progress.Operation == "insert_references")
+                    progressRows.Add(progress.RowsProcessed);
+                previousProgressHook?.Invoke(progress);
+            };
+            DbWriter.ReferenceBatchTransactionOpeningForTesting = () =>
+            {
+                transactionCount++;
+                previousTransactionHook?.Invoke();
+            };
+
+            if (referenceLinesAreNew)
+            {
+                _writer.InsertReferencesForNewFiles(
+                    publicReferences,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+            else
+            {
+                _writer.InsertReferences(
+                    publicReferences,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+
+            Assert.Equal(6, transactionCount);
+            Assert.Equal([0, 71, 142, 213, 284, 355, 356], progressRows);
+            Assert.Equal(
+                [(71, 71), (71, 71), (71, 71), (71, 71), (71, 71), (1, 1)],
+                statements.Where(statement => statement.Operation == "insert_references")
+                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                    .ToArray());
+            var lineWriteOperation = referenceLinesAreNew
+                ? "insert_reference_lines"
+                : "upsert_reference_lines";
+            Assert.Equal(
+                [(71, 71), (71, 71), (71, 71), (71, 71), (71, 71), (1, 1)],
+                statements.Where(statement => statement.Operation == lineWriteOperation)
+                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                    .ToArray());
+            Assert.Equal(
+                referenceLinesAreNew ? 0 : 6,
+                statements.Count(statement => statement.Operation == "lookup_reference_lines"));
+
+            statements.Clear();
+            progressRows.Clear();
+            transactionCount = 0;
+            using (var transaction = _writer.BeginTransaction())
+            {
+                if (referenceLinesAreNew)
+                {
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        atomicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                else
+                {
+                    _writer.InsertReferencesInAtomicFileScope(
+                        atomicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                transaction.Commit();
+            }
+
+            Assert.Equal(0, transactionCount);
+            Assert.Equal([0, 71, 142, 213, 284, 355, 356], progressRows);
+            Assert.Equal(
+                [(71, 71), (71, 71), (71, 71), (71, 71), (71, 71), (1, 1)],
+                statements.Where(statement => statement.Operation == "insert_references")
+                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                    .ToArray());
+            Assert.Equal(
+                [(284, 284), (72, 72)],
+                statements.Where(statement => statement.Operation == lineWriteOperation)
+                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                    .ToArray());
+            Assert.Equal(
+                referenceLinesAreNew ? 0 : 2,
+                statements.Count(statement => statement.Operation == "lookup_reference_lines"));
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+            DbWriter.BatchProgressCheckpointForTesting = previousProgressHook;
+            DbWriter.ReferenceBatchTransactionOpeningForTesting = previousTransactionHook;
+        }
+    }
+
+    [Fact]
+    public void InsertReferences_AtomicFileScopeCapsReferenceLineWindowAtThirtyTwoBatches()
+    {
+        const int ReferenceCount = 71 * 33;
+        var fileId = UpsertTestFile(
+            "src/atomic-reference-window-cap.cs",
+            checksum: "atomic-reference-window-cap");
+        var references = Enumerable.Range(0, ReferenceCount)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"callee_{index}",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = index + 1,
+                Context = "shared context",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        try
+        {
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            using var transaction = _writer.BeginTransaction();
+            _writer.InsertReferencesInAtomicFileScope(
+                references,
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+        }
+
+        Assert.Equal(33, statements.Count(statement => statement.Operation == "insert_references"));
+        Assert.Equal(
+            [(1, 1), (1, 1)],
+            statements.Where(statement => statement.Operation == "upsert_reference_lines")
+                .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                .ToArray());
+        Assert.Equal(2, statements.Count(statement => statement.Operation == "lookup_reference_lines"));
     }
 
     [Theory]
