@@ -564,6 +564,9 @@ public partial class SymbolExtractorTests
                     tempDir,
                     "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n");
                 ExtractorPluginRegistry.ReloadForTests();
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(tempDir);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", tempDir, out var registeredExtractor));
+                var extractor = Assert.IsType<ConfiguredSymbolExtractor>(registeredExtractor);
                 const int extractionCount = 3;
                 var slowLine = new string('a', 10_000) + "!";
 
@@ -572,7 +575,10 @@ public partial class SymbolExtractorTests
                 {
                     for (var i = 0; i < extractionCount; i++)
                     {
-                        var symbols = SymbolExtractor.Extract(2, "toydsl", slowLine, $"demo{i}.toy", tempDir);
+                        var symbols = extractor.Extract(
+                            2,
+                            slowLine,
+                            new ExtractionContext("toydsl", $"demo{i}.toy"));
                         Assert.Empty(symbols);
                     }
                 });

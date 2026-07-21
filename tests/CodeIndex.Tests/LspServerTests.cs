@@ -914,30 +914,30 @@ public class LspServerTests
             Assert.NotNull(before);
             Assert.Empty(before!["result"]!.AsArray());
 
-            using (var writerDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            // Keep a source connection alive through the comparison so SQLite cannot
+            // perform last-connection WAL cleanup independently of the query request.
+            using var writerDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(writerDb.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
             {
-                var writer = new DbWriter(writerDb.Connection);
-                var fileId = writer.UpsertFile(new FileRecord
+                Path = "src/AddedAfterLspStart.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "issue4557-lsp-refresh",
+            });
+            writer.InsertSymbols([
+                new SymbolRecord
                 {
-                    Path = "src/AddedAfterLspStart.cs",
-                    Lang = "csharp",
-                    Size = 1,
-                    Lines = 1,
-                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                    Checksum = "issue4557-lsp-refresh",
-                });
-                writer.InsertSymbols([
-                    new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = "class",
-                        Name = "AddedAfterLspStart",
-                        Line = 1,
-                        StartLine = 1,
-                        EndLine = 1,
-                    },
-                ]);
-            }
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = "AddedAfterLspStart",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                },
+            ]);
 
             var expectedArtifacts = CaptureDatabaseArtifactsForLsp(dbPath);
             var after = server.HandleMessage(request);
