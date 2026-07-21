@@ -286,6 +286,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   launches the isolated symbol worker to prove legacy worker environment variables are ignored. Its callback budget includes process startup and is intentionally wider than ordinary in-process checks so local process load does not turn the legacy-env regression check into a timeout flake (#3863).
 - `IndexCommandRunnerTests.SymbolExtractionWorker_Utf8RequestsPreserveUnicodeAcrossLanguages`
   reuses one isolated worker for C#, Java, TypeScript, Python, Go, and Rust requests whose content and paths contain Japanese text. It keeps direct UTF-8 request framing language-neutral and protects Unicode fidelity without creating a large fixture.
+- `IndexCommandRunnerTests.SymbolExtractionWorker_StreamResponseWritesBomlessUtf8Frame`
+  exercises the production stream-response overload with a Japanese C# symbol and verifies one BOM-less, newline-terminated UTF-8 JSON frame. Keep the `StringWriter` protocol tests as the in-process diagnostic path while this test protects process stdout framing.
 - `IndexCommandRunnerTests` and `FileIndexerTests` also cover `CSharpStaticInterfacePrepass` text, raw-byte, chunked raw-token, and streaming file contract probes. Keep byte-array, chunked, and file-level probe coverage aligned so the prepass can avoid whole-file allocation without losing UTF-8 / UTF-16 static-interface contract candidates.
 - Project-marker budget integration coverage overrides the directory budget to its smallest boundary and enumerates one child; do not materialize the production 8,192-directory cap merely to prove warning propagation.
 - Search-guard and LSP candidate/materialization cap coverage crosses each active limit with exactly one sentinel. Reuse exposed production constants where available, and do not retain hundreds of extra rows or symbols after the boundary is observable.
@@ -1030,6 +1032,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   isolated symbol worker を起動し、legacy worker 環境変数が無視されることを検証します。この callback budget はプロセス起動時間も含むため、通常の in-process チェックより意図的に広く取り、ローカル負荷で legacy-env 回帰テストが timeout flake にならないようにします（#3863）。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_Utf8RequestsPreserveUnicodeAcrossLanguages`
   1つの isolated worker を再利用し、日本語の content と path を含む C#、Java、TypeScript、Python、Go、Rust の request を順に送ります。大規模 fixture を作らず、direct UTF-8 request framing の言語非依存性と Unicode fidelity を固定します。
+- `IndexCommandRunnerTests.SymbolExtractionWorker_StreamResponseWritesBomlessUtf8Frame`
+  日本語の C# symbol で本番用 stream-response overload を実行し、BOM なし・改行終端の UTF-8 JSON frame が1件出ることを検証します。`StringWriter` の protocol tests は in-process diagnostic 経路として維持し、このテストで process stdout framing を固定します。
 - `IndexCommandRunnerTests` と `FileIndexerTests` は `CSharpStaticInterfacePrepass` のテキスト判定、raw-byte、chunked raw-token、streaming file 契約 probe も扱います。prepass がファイル全体の割り当てを避けても UTF-8 / UTF-16 の static-interface 契約候補を落とさないよう、byte-array、chunked、file-level probe のカバレッジを揃えてください。
 - project-marker budget の integration coverage は directory budget を最小境界に override し、child を 1 件だけ列挙します。warning 伝播の検証だけのために本番の 8,192-directory cap を実体化しないでください。
 - search guard と LSP の candidate/materialization cap coverage は、各 active limit を sentinel 1 件だけで超えます。利用可能な production constant は再利用し、境界を観測できた後に数百件の余分な row や symbol を残さないでください。

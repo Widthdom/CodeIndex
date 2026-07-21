@@ -413,7 +413,41 @@ internal static class SymbolExtractionWorker
             return false;
         }
 
-        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes, cancellationToken);
+        exitCode = RunCommand(
+            args,
+            input,
+            response => WriteResponse(output, response),
+            error,
+            maxProtocolLineCharacters,
+            maxProtocolLineUtf8Bytes,
+            cancellationToken);
+        return true;
+    }
+
+    internal static bool TryRunCommand(
+        string[] args,
+        TextReader input,
+        Stream output,
+        TextWriter error,
+        out int exitCode,
+        int maxProtocolLineCharacters = WorkerProtocolLineLimits.MaxLineCharacters,
+        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+        CancellationToken cancellationToken = default)
+    {
+        if (args.Length == 0 || !StringComparer.Ordinal.Equals(args[0], CommandName))
+        {
+            exitCode = 0;
+            return false;
+        }
+
+        exitCode = RunCommand(
+            args,
+            input,
+            response => WriteResponse(output, response),
+            error,
+            maxProtocolLineCharacters,
+            maxProtocolLineUtf8Bytes,
+            cancellationToken);
         return true;
     }
 
@@ -495,7 +529,7 @@ internal static class SymbolExtractionWorker
     private static int RunCommand(
         string[] args,
         TextReader input,
-        TextWriter output,
+        Action<WorkerResponse> writeResponse,
         TextWriter error,
         int maxProtocolLineCharacters,
         int maxProtocolLineUtf8Bytes,
@@ -531,8 +565,7 @@ internal static class SymbolExtractionWorker
                 catch (BoundedLineLengthException ex)
                 {
                     response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex), null);
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
-                    output.Flush();
+                    writeResponse(response);
                     return 1;
                 }
 
@@ -542,8 +575,7 @@ internal static class SymbolExtractionWorker
                 if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
                 {
                     response = new WorkerResponse(null, validationError, null);
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
-                    output.Flush();
+                    writeResponse(response);
                     continue;
                 }
 
@@ -555,8 +587,7 @@ internal static class SymbolExtractionWorker
                 catch (Exception ex)
                 {
                     response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex), null);
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
-                    output.Flush();
+                    writeResponse(response);
                     continue;
                 }
 
@@ -573,8 +604,7 @@ internal static class SymbolExtractionWorker
                     response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex), null);
                 }
 
-                output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
-                output.Flush();
+                writeResponse(response);
             }
 
             return 0;
@@ -588,6 +618,19 @@ internal static class SymbolExtractionWorker
             error.WriteLine(SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
             return 1;
         }
+    }
+
+    private static void WriteResponse(TextWriter output, WorkerResponse response)
+    {
+        output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+        output.Flush();
+    }
+
+    private static void WriteResponse(Stream output, WorkerResponse response)
+    {
+        JsonSerializer.Serialize(output, response, JsonOptions);
+        output.WriteByte((byte)'\n');
+        output.Flush();
     }
 
     private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options, CancellationToken cancellationToken)

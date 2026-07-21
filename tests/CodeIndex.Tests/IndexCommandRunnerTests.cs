@@ -458,6 +458,46 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_StreamResponseWritesBomlessUtf8Frame()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var request = new SymbolExtractionWorker.WorkerRequest(
+                0,
+                "csharp",
+                "public class 顧客 { }\n",
+                Path.Combine(projectRoot, "顧客.cs"),
+                projectRoot);
+            using var input = new StringReader(
+                JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + "\n");
+            using var output = new MemoryStream();
+            using var error = new StringWriter();
+
+            var handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName],
+                input,
+                output,
+                error,
+                out var exitCode);
+
+            Assert.True(handled);
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+            var responseUtf8 = output.ToArray();
+            Assert.Equal((byte)'{', responseUtf8[0]);
+            Assert.Equal((byte)'\n', responseUtf8[^1]);
+            using var document = JsonDocument.Parse(responseUtf8.AsMemory(0, responseUtf8.Length - 1));
+            var symbols = document.RootElement.GetProperty("Symbols");
+            Assert.Contains(symbols.EnumerateArray(), symbol => symbol.GetProperty("Name").GetString() == "顧客");
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_CapturesStdoutAndForwardsStderrDiagnostics()
     {
         var projectRoot = CreateTempProject();

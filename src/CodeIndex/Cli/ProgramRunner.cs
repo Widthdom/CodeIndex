@@ -124,8 +124,18 @@ internal static partial class ProgramRunner
         Action? beforeDispatchForTesting = null,
         CancellationToken cancellationToken = default)
     {
-        if (SymbolExtractionWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var symbolWorkerExitCode, cancellationToken: cancellationToken))
+        if (args.Length > 0 && StringComparer.Ordinal.Equals(args[0], SymbolExtractionWorker.CommandName))
+        {
+            using var symbolWorkerOutput = Console.OpenStandardOutput();
+            _ = SymbolExtractionWorker.TryRunCommand(
+                args,
+                Console.In,
+                symbolWorkerOutput,
+                Console.Error,
+                out var symbolWorkerExitCode,
+                cancellationToken: cancellationToken);
             return symbolWorkerExitCode;
+        }
 
         if (ExtractorPluginWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var pluginWorkerExitCode))
             return pluginWorkerExitCode;
