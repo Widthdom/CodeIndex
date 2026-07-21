@@ -111,12 +111,11 @@ internal static class CSharpStaticInterfacePrepass
                 pendingSymbols.AddRange(extracted);
         }
 
+        var hadPendingContracts = false;
         var symbols = includeExistingSymbols
-            ? writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths!)
+            ? writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths!, out hadPendingContracts)
             : [];
         symbols.AddRange(pendingSymbols);
-        var hadPendingContracts = includeExistingSymbols
-            && writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths!);
         var hasStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts;
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,

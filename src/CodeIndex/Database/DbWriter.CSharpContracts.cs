@@ -20,7 +20,13 @@ public partial class DbWriter
               )";
 
     public List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(IReadOnlySet<string>? excludedPaths = null)
+        => LoadCSharpStaticInterfaceContractSymbols(excludedPaths, out _);
+
+    internal List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(
+        IReadOnlySet<string>? excludedPaths,
+        out bool excludedPathsHaveContracts)
     {
+        excludedPathsHaveContracts = false;
         var symbols = new List<SymbolRecord>();
         const string sql = @"
             SELECT
@@ -37,6 +43,7 @@ public partial class DbWriter
             FROM symbols s
             JOIN files f ON f.id = s.file_id" + CSharpStaticInterfaceContractWhereSql;
 
+        CSharpContractWorkspaceReadForTesting?.Invoke();
         var cmd = RentCommand(sql, static _ => { });
         try
         {
@@ -44,13 +51,18 @@ public partial class DbWriter
             while (reader.Read())
             {
                 var path = reader.GetString(0);
+                var kind = reader.GetString(2);
                 if (excludedPaths?.Contains(path) == true)
+                {
+                    if (kind != "interface")
+                        excludedPathsHaveContracts = true;
                     continue;
+                }
 
                 symbols.Add(new SymbolRecord
                 {
                     FileId = reader.GetInt64(1),
-                    Kind = reader.GetString(2),
+                    Kind = kind,
                     Name = reader.GetString(3),
                     Line = reader.GetInt32(4),
                     StartLine = reader.GetInt32(5),
@@ -126,6 +138,7 @@ public partial class DbWriter
               AND s.signature LIKE '%static%'
               AND (s.signature LIKE '%abstract%' OR s.signature LIKE '%virtual%')";
 
+        CSharpContractWorkspaceReadForTesting?.Invoke();
         var cmd = RentCommand(sql, static _ => { });
         try
         {

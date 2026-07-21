@@ -35,6 +35,7 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractPreflightForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedCSharpContractWorkspaceReadForTesting = new();
     private static readonly AsyncLocal<Action<bool>?> ScopedAtomicFileReferenceInsertForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedReferenceBatchTransactionOpeningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchStatement>?> ScopedBatchStatementExecutingForTesting = new();
@@ -84,6 +85,12 @@ public partial class DbWriter
     {
         get => ScopedCSharpContractPreflightForTesting.Value;
         set => ScopedCSharpContractPreflightForTesting.Value = value;
+    }
+
+    internal static Action? CSharpContractWorkspaceReadForTesting
+    {
+        get => ScopedCSharpContractWorkspaceReadForTesting.Value;
+        set => ScopedCSharpContractWorkspaceReadForTesting.Value = value;
     }
 
     internal static Action<bool>? AtomicFileReferenceInsertForTesting

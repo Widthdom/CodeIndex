@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -742,7 +743,7 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
-    public void DbWriter_WithCache_CSharpStaticInterfaceContractQueriesReuseCacheAcrossCalls()
+    public void DbWriter_WithCache_CSharpStaticInterfaceContractQueriesReuseCacheAndOneWorkspaceRead()
     {
         var writer = new DbWriter(_db);
         var fileId = writer.UpsertFile(new FileRecord
@@ -781,22 +782,52 @@ public class PreparedCommandCacheTests : IDisposable
             },
         });
 
+        var contractPaths = new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" };
         var first = writer.LoadCSharpStaticInterfaceContractSymbols();
         Assert.Contains(first, s => s.Kind == "interface" && s.Name == "IShape");
         Assert.Contains(first, s => s.Kind == "function" && s.Name == "Create");
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
-        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
-            new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(contractPaths));
+        var retained = writer.LoadCSharpStaticInterfaceContractSymbols(
+            contractPaths,
+            out var excludedPathsHaveContracts);
+        Assert.Empty(retained);
+        Assert.True(excludedPathsHaveContracts);
 
         var hitsBefore = _db.PreparedCommands.HitCount;
 
         var second = writer.LoadCSharpStaticInterfaceContractSymbols();
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
-        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
-            new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(contractPaths));
 
         Assert.Equal(first.Count, second.Count);
         Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
+
+        var previousWorkspaceReadHook = DbWriter.CSharpContractWorkspaceReadForTesting;
+        var workspaceReadCount = 0;
+        try
+        {
+            DbWriter.CSharpContractWorkspaceReadForTesting = () => workspaceReadCount++;
+            var indexer = new FileIndexer(_dbDir, ignoreCase: false);
+            var target = CSharpStaticInterfacePrepass.FileTarget.Create(
+                _dbDir,
+                Path.Combine(_dbDir, "src", "IShape.cs"),
+                "csharp");
+
+            var workspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                writer,
+                indexer,
+                [target],
+                canReuseExistingSymbolsWithoutRead: static _ => true);
+
+            Assert.Empty(workspace.Symbols);
+            Assert.True(workspace.HasStaticInterfaceContracts);
+            Assert.Equal(1, workspaceReadCount);
+        }
+        finally
+        {
+            DbWriter.CSharpContractWorkspaceReadForTesting = previousWorkspaceReadHook;
+        }
     }
 
     [Fact]
