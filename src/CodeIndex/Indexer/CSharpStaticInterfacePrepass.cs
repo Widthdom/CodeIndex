@@ -122,9 +122,11 @@ internal static class CSharpStaticInterfacePrepass
         symbols.AddRange(pendingSymbols);
         var hadPendingContracts = includeExistingSymbols
             && writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths!);
+        var hasStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts;
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
-            HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts);
+            hasStaticInterfaceContracts,
+            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols));
     }
 
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
@@ -695,4 +697,5 @@ internal static class CSharpStaticInterfacePrepass
 
 internal sealed record CSharpStaticInterfaceWorkspaceSymbols(
         IReadOnlyList<SymbolRecord> Symbols,
-        bool HasStaticInterfaceContracts);
+        bool HasStaticInterfaceContracts,
+        ReferenceExtractor.CSharpStaticInterfaceMemberLookups? StaticInterfaceMemberLookups = null);

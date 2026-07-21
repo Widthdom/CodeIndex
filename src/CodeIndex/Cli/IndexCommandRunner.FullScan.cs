@@ -1753,7 +1753,8 @@ public static partial class IndexCommandRunner
                                             extractionCancellationToken,
                                             maxReferenceCount: options.MaxReferencesPerFile + 1,
                                             conflictMarkerLine: loaded.ConflictMarkerLine,
-                                            workspaceRoot: projectRoot);
+                                            workspaceRoot: projectRoot,
+                                            csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups);
                                         references = referenceExtraction.References;
                                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                     }
@@ -2185,7 +2186,8 @@ public static partial class IndexCommandRunner
                                     cancellationToken,
                                     maxReferenceCount: options.MaxReferencesPerFile + 1,
                                     conflictMarkerLine: item.ConflictMarkerLine,
-                                    workspaceRoot: projectRoot);
+                                    workspaceRoot: projectRoot,
+                                    csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups);
                                 references = referenceExtraction.References;
                                 regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                             }

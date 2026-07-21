@@ -1111,7 +1111,8 @@ public static partial class ReferenceExtractor
             workspaceSymbols,
             cancellationToken,
             maxReferenceCount,
-            workspaceRoot: null);
+            workspaceRoot: null,
+            csharpStaticInterfaceMemberLookups: null);
 
     internal static ReferenceExtractionResult ExtractDetailedNormalized(
         long fileId,
@@ -1124,7 +1125,8 @@ public static partial class ReferenceExtractor
         CancellationToken cancellationToken = default,
         int? maxReferenceCount = null,
         int? conflictMarkerLine = null,
-        string? workspaceRoot = null)
+        string? workspaceRoot = null,
+        CSharpStaticInterfaceMemberLookups? csharpStaticInterfaceMemberLookups = null)
         => ExtractDetailedCore(
             fileId,
             lang,
@@ -1137,7 +1139,8 @@ public static partial class ReferenceExtractor
             workspaceSymbols,
             cancellationToken,
             maxReferenceCount,
-            workspaceRoot);
+            workspaceRoot,
+            csharpStaticInterfaceMemberLookups);
 
     private static ReferenceExtractionResult ExtractDetailedCore(
         long fileId,
@@ -1151,7 +1154,8 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols,
         CancellationToken cancellationToken,
         int? maxReferenceCount,
-        string? workspaceRoot)
+        string? workspaceRoot,
+        CSharpStaticInterfaceMemberLookups? csharpStaticInterfaceMemberLookups)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
@@ -1191,7 +1195,7 @@ public static partial class ReferenceExtractor
         void ReportDiagnostic(ReferenceExtractionDiagnostic diagnostic)
             => (builtInDiagnostics ??= []).Add(diagnostic);
 
-        var builtInReferences = extractor.Extract(new ReferenceExtractionContext(
+        var extractionContext = new ReferenceExtractionContext(
             fileId,
             language,
             content,
@@ -1204,7 +1208,11 @@ public static partial class ReferenceExtractor
             ReportDiagnostic,
             contentIsNormalized,
             hasOversizeLine,
-            conflictMarkerLine));
+            conflictMarkerLine)
+        {
+            CSharpStaticInterfaceMemberLookups = csharpStaticInterfaceMemberLookups,
+        };
+        var builtInReferences = extractor.Extract(extractionContext);
         return new ReferenceExtractionResult(
             builtInReferences,
             builtInDiagnostics ?? (IReadOnlyList<ReferenceExtractionDiagnostic>)Array.Empty<ReferenceExtractionDiagnostic>());

@@ -1174,25 +1174,42 @@ public partial class IndexCommandRunnerTests
     [Fact]
     public void Run_FullScan_ParallelCsharpStaticInterfacePrepass_IndexesImplicitImplementationReference()
     {
+        const int implementationFileCount = 64;
         var projectRoot = CreateTempProject();
+        var previousLookupHook = ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting;
+        var matchingLookupBuilds = 0;
         try
         {
+            ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = symbols =>
+            {
+                if (symbols.Any(symbol =>
+                    symbol.Kind == "interface"
+                    && symbol.Name == "IPrecomputedLookupFixture"))
+                {
+                    matchingLookupBuilds++;
+                }
+                previousLookupHook?.Invoke(symbols);
+            };
             File.WriteAllText(
                 Path.Combine(projectRoot, "IParseable.cs"),
                 """
-                public interface IParseable<T>
+                public interface IPrecomputedLookupFixture<T>
                 {
                     static abstract T Parse(string s);
                 }
                 """);
-            File.WriteAllText(
-                Path.Combine(projectRoot, "Money.cs"),
-                """
-                public readonly struct Money : IParseable<Money>
-                {
-                    public static Money Parse(string s) => new();
-                }
-                """);
+            for (var fileIndex = 0; fileIndex < implementationFileCount; fileIndex++)
+            {
+                var typeName = $"Money{fileIndex:D3}";
+                File.WriteAllText(
+                    Path.Combine(projectRoot, typeName + ".cs"),
+                    $$"""
+                    public readonly struct {{typeName}} : IPrecomputedLookupFixture<{{typeName}}>
+                    {
+                        public static {{typeName}} Parse(string s) => new();
+                    }
+                    """);
+            }
 
             var exitCode = IndexCommandRunner.Run(
                 [projectRoot, "--parallelism", "4", "--json", "--quiet"],
@@ -1207,15 +1224,17 @@ public partial class IndexCommandRunnerTests
                 FROM symbol_references r
                 JOIN files f ON f.id = r.file_id
                 JOIN reference_lines rl ON rl.id = r.reference_line_id
-                WHERE f.path = 'Money.cs'
+                WHERE f.path = 'Money000.cs'
                   AND r.symbol_name = 'Parse'
                   AND r.reference_kind = 'implicit_implementation'
-                  AND rl.context = 'public static Money Parse(string s) => new();'";
+                  AND rl.context = 'public static Money000 Parse(string s) => new();'";
             var count = Convert.ToInt32(cmd.ExecuteScalar());
             Assert.Equal(1, count);
+            Assert.Equal(1, matchingLookupBuilds);
         }
         finally
         {
+            ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = previousLookupHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }

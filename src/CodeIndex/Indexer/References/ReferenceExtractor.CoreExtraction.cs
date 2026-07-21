@@ -1091,6 +1091,7 @@ public static partial class ReferenceExtractor
                 structuralLines,
                 symbols,
                 workspaceSymbols ?? symbols,
+                request.CSharpStaticInterfaceMemberLookups,
                 references,
                 seen);
         }

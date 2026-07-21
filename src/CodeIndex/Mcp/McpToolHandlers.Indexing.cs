@@ -756,7 +756,8 @@ public partial class McpServer
                             requestToken,
                             maxReferenceCount: maxReferencesPerFile + 1,
                             conflictMarkerLine: loaded.ConflictMarkerLine,
-                            workspaceRoot: projectPath);
+                            workspaceRoot: projectPath,
+                            csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups);
                         references = referenceExtraction.References;
                         regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }

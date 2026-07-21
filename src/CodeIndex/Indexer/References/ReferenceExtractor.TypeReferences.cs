@@ -12,8 +12,23 @@ public static partial class ReferenceExtractor
     private static readonly string[] CSharpLeadingParameterModifiers = ["this", "scoped"];
 
     private const string CSharpImplicitImplementationReferenceKind = "implicit_implementation";
-    private sealed record CSharpStaticInterfaceMemberContract(string Name, string Kind, string? ParameterShape, string? ReturnTypeShape);
+    internal sealed record CSharpStaticInterfaceMemberContract(string Name, string Kind, string? ParameterShape, string? ReturnTypeShape);
     private sealed record CSharpImplementedInterface(string Name, IReadOnlyDictionary<string, string> TypeArguments);
+    internal sealed class CSharpStaticInterfaceMemberLookups
+    {
+        internal readonly Dictionary<string, List<CSharpStaticInterfaceMemberContract>> ContractsByType;
+        internal readonly Dictionary<string, List<string>> InterfaceGenericParameters;
+
+        internal CSharpStaticInterfaceMemberLookups(
+            Dictionary<string, List<CSharpStaticInterfaceMemberContract>> contractsByType,
+            Dictionary<string, List<string>> interfaceGenericParameters)
+        {
+            ContractsByType = contractsByType;
+            InterfaceGenericParameters = interfaceGenericParameters;
+        }
+    }
+
+    internal static Action<IReadOnlyList<SymbolRecord>>? CSharpStaticInterfaceMemberLookupsBuiltForTesting { get; set; }
 
     private static void EmitCSharpAsyncIteratorReferences(
         long fileId,
@@ -99,10 +114,12 @@ public static partial class ReferenceExtractor
         string[] structuralLines,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlyList<SymbolRecord> workspaceSymbols,
+        CSharpStaticInterfaceMemberLookups? precomputedLookups,
         List<ReferenceRecord> references,
         ReferenceDedupeSet seen)
     {
-        var staticInterfaceMemberLookups = BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
+        var staticInterfaceMemberLookups = precomputedLookups
+            ?? BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
         var interfaceMembersByType = staticInterfaceMemberLookups.ContractsByType;
         if (interfaceMembersByType.Count == 0)
             return;
@@ -159,11 +176,10 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static (
-        Dictionary<string, List<CSharpStaticInterfaceMemberContract>> ContractsByType,
-        Dictionary<string, List<string>> InterfaceGenericParameters) BuildCSharpStaticInterfaceMemberLookups(
+    internal static CSharpStaticInterfaceMemberLookups BuildCSharpStaticInterfaceMemberLookups(
         IReadOnlyList<SymbolRecord> workspaceSymbols)
     {
+        CSharpStaticInterfaceMemberLookupsBuiltForTesting?.Invoke(workspaceSymbols);
         var contractsByType = new Dictionary<string, List<CSharpStaticInterfaceMemberContract>>(StringComparer.Ordinal);
         var interfaceGenericParameters = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         List<(string Name, string Signature)>? interfaceGenericParameterCandidates = null;
@@ -199,7 +215,7 @@ public static partial class ReferenceExtractor
                 AddCSharpInterfaceGenericParameters(interfaceGenericParameters, candidate.Name, candidate.Signature);
         }
 
-        return (contractsByType, interfaceGenericParameters);
+        return new CSharpStaticInterfaceMemberLookups(contractsByType, interfaceGenericParameters);
     }
 
     private static void AddCSharpInterfaceGenericParameters(
