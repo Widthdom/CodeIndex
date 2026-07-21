@@ -272,6 +272,53 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void CSharpStaticInterfaceLookup_UnrelatedInterfacesStayWithinAllocationBudget()
+    {
+        const int unrelatedInterfaceCount = 20_000;
+        var workspaceSymbols = new List<SymbolRecord>(unrelatedInterfaceCount + 2);
+        for (var index = 0; index < unrelatedInterfaceCount; index++)
+        {
+            workspaceSymbols.Add(new SymbolRecord
+            {
+                Kind = "interface",
+                Name = $"IUnrelated{index}",
+                Signature = $"public interface IUnrelated{index}<T>",
+            });
+        }
+
+        workspaceSymbols.Add(new SymbolRecord
+        {
+            Kind = "interface",
+            Name = "IContract",
+            Signature = "public interface IContract<T>",
+        });
+        workspaceSymbols.Add(new SymbolRecord
+        {
+            Kind = "function",
+            Name = "Create",
+            Signature = "static abstract T Create();",
+            ReturnType = "T",
+            ContainerKind = "interface",
+            ContainerName = "IContract",
+        });
+
+        _ = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
+        ReferenceExtractor.CSharpStaticInterfaceMemberLookups? lookups = null;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => lookups = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols));
+
+        Assert.True(
+            allocatedBytes < 64_000,
+            $"C# static-interface lookup allocated {allocatedBytes:N0} bytes for unrelated interfaces");
+        Assert.Single(lookups!.ContractsByType);
+        Assert.Single(lookups.InterfaceGenericParameters);
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void SymbolExtraction_JavaScriptTypeScriptDenseIdentifiers_StaysWithinAllocationBudget()
     {
         var content = BuildJavaScriptTypeScriptDenseIdentifierFixture(functionCount: 180);

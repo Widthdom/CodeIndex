@@ -367,6 +367,62 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void BuildCSharpStaticInterfaceMemberLookups_ScopesGenericParsingToContractTypes()
+    {
+        List<SymbolRecord> workspaceSymbols =
+        [
+            new()
+            {
+                Kind = "function",
+                Name = "Parse",
+                Signature = "static abstract T Parse(string value);",
+                ReturnType = "T",
+                ContainerKind = "interface",
+                ContainerName = "IParseable",
+            },
+            new()
+            {
+                Kind = "interface",
+                Name = "IParseable",
+                Signature = "public partial interface IParseable<TInitial>",
+            },
+            new()
+            {
+                Kind = "interface",
+                Name = "IUnrelated",
+                Signature = "public interface IUnrelated<TUnrelated>",
+            },
+            new()
+            {
+                Kind = "interface",
+                Name = "IParseable",
+                Signature = "public partial interface IParseable<TFinal>",
+            },
+            new()
+            {
+                Kind = "property",
+                Name = "Zero",
+                Signature = "static virtual T Zero => default!;",
+                ReturnType = "T",
+                ContainerKind = "interface",
+                ContainerName = "IParseable",
+            },
+        ];
+
+        var lookups = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
+
+        var contracts = Assert.Single(lookups.ContractsByType);
+        Assert.Equal("IParseable", contracts.Key);
+        Assert.Collection(
+            contracts.Value,
+            contract => Assert.Equal("Parse", contract.Name),
+            contract => Assert.Equal("Zero", contract.Name));
+        var genericParameters = Assert.Single(lookups.InterfaceGenericParameters);
+        Assert.Equal("IParseable", genericParameters.Key);
+        Assert.Equal(["TFinal"], genericParameters.Value);
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their

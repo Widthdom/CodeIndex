@@ -182,16 +182,8 @@ public static partial class ReferenceExtractor
         CSharpStaticInterfaceMemberLookupsBuiltForTesting?.Invoke(workspaceSymbols);
         var contractsByType = new Dictionary<string, List<CSharpStaticInterfaceMemberContract>>(StringComparer.Ordinal);
         var interfaceGenericParameters = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        List<(string Name, string Signature)>? interfaceGenericParameterCandidates = null;
         foreach (var symbol in workspaceSymbols)
         {
-            if (symbol.Kind == "interface"
-                && !string.IsNullOrWhiteSpace(symbol.Name)
-                && !string.IsNullOrWhiteSpace(symbol.Signature))
-            {
-                (interfaceGenericParameterCandidates ??= new List<(string Name, string Signature)>(4)).Add((symbol.Name, symbol.Signature!));
-            }
-
             if (!IsCSharpStaticInterfaceMemberContract(symbol))
                 continue;
 
@@ -209,10 +201,30 @@ public static partial class ReferenceExtractor
                 NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)));
         }
 
-        if (contractsByType.Count > 0 && interfaceGenericParameterCandidates is not null)
+        if (contractsByType.Count > 0)
         {
-            foreach (var candidate in interfaceGenericParameterCandidates)
-                AddCSharpInterfaceGenericParameters(interfaceGenericParameters, candidate.Name, candidate.Signature);
+            // Generic declarations only matter for interfaces that own a static contract.
+            // Scan after contract discovery so declaration/member ordering, partial types,
+            // and duplicate-name last-write semantics remain unchanged without retaining
+            // every unrelated interface signature in a large workspace.
+            // generic宣言はstatic contractを持つinterfaceだけに必要。contract検出後に
+            // 再走査し、宣言/member順・partial type・同名の後勝ちを維持したまま、巨大な
+            // workspaceの無関係なinterface signatureを保持しない。
+            foreach (var symbol in workspaceSymbols)
+            {
+                if (symbol.Kind != "interface"
+                    || string.IsNullOrWhiteSpace(symbol.Name)
+                    || string.IsNullOrWhiteSpace(symbol.Signature)
+                    || !contractsByType.ContainsKey(symbol.Name))
+                {
+                    continue;
+                }
+
+                AddCSharpInterfaceGenericParameters(
+                    interfaceGenericParameters,
+                    symbol.Name,
+                    symbol.Signature!);
+            }
         }
 
         return new CSharpStaticInterfaceMemberLookups(contractsByType, interfaceGenericParameters);
