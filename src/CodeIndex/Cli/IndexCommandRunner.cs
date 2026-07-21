@@ -819,13 +819,8 @@ public static partial class IndexCommandRunner
 
     private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(
         FileIndexer indexer,
-        CancellationToken cancellationToken = default)
-    {
-        var values = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = indexer.GetProjectMarkerFingerprintResult(lang, cancellationToken);
-        return values;
-    }
+        CancellationToken cancellationToken = default) =>
+        indexer.GetProjectMarkerFingerprintResults(cancellationToken);
 
     private static int AddProjectMarkerFingerprintWarnings(
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints,

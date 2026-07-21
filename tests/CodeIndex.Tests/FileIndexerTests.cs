@@ -1395,32 +1395,247 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void GetProjectMarkerFingerprint_UsesJoinedSortedMarkerPaths()
+    public void GetProjectMarkerFingerprintResults_UsesKnownHashesAndSingleLanguageApiDelegates()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_exact");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
         File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Library.vbproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Tools.fsproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Directory.Build.targets"), "<Project />");
 
         var indexer = new FileIndexer(tempDir);
-        var expectedPayload = "App.csproj\nDirectory.Build.props";
-        var expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(expectedPayload))).ToLowerInvariant();
+        var results = indexer.GetProjectMarkerFingerprintResults();
 
-        Assert.Equal(expected, indexer.GetProjectMarkerFingerprint("msbuild"));
+        Assert.Equal(FileIndexer.GetHotspotFamilyMarkerLanguages(), results.Keys);
+        Assert.Equal("2e18211a956f0514a6ed2c7e5ba4f90b99c9910b37932c5c4f05faab42d56c15", results["csharp"].Fingerprint);
+        Assert.Equal("5468decb0f22c9efc117ce5fd6907feb3c15bf9255a644995977ee214d36c95f", results["vb"].Fingerprint);
+        Assert.Equal("43fd0eb67433addec02c0f48e376d69b7891d7223cdc60b0da45bc35bbb8175e", results["fsharp"].Fingerprint);
+        Assert.Equal("88dbe811de43e74ce7605fe7c9362d171b75e2727c3fb72ca2ca88875444e5bd", results["msbuild"].Fingerprint);
+        foreach (var language in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            Assert.True(results[language].IsComplete);
+            Assert.Empty(results[language].Warnings);
+            Assert.Equal(results[language].Fingerprint, indexer.GetProjectMarkerFingerprint(language));
+        }
     }
 
     [Fact]
-    public void GetProjectMarkerFingerprint_CancelledToken_ThrowsBeforeTraversal()
+    public void GetProjectMarkerFingerprintResults_EnumeratesEachDirectoryOnceForAllLanguages()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_count");
+        var tempDir = project.Root;
+        Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "tests"));
+        File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        try
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = directory =>
+            {
+                var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(tempDir, directory));
+                enumerationCounts.TryGetValue(relativePath, out var count);
+                enumerationCounts[relativePath] = count + 1;
+                return Directory.EnumerateDirectories(directory);
+            };
+
+            var results = new FileIndexer(tempDir, ignoreCase: false).GetProjectMarkerFingerprintResults();
+
+            Assert.Equal(4, results.Count);
+            Assert.Equal(3, enumerationCounts.Count);
+            Assert.All(enumerationCounts.Values, count => Assert.Equal(1, count));
+            Assert.Contains(".", enumerationCounts.Keys);
+            Assert.Contains("src", enumerationCounts.Keys);
+            Assert.Contains("tests", enumerationCounts.Keys);
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_LanguageBudgetsTruncateIndependently()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_budgets");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Extra.csproj"), "<Project />");
+        var nestedDir = Path.Combine(tempDir, "nested");
+        Directory.CreateDirectory(nestedDir);
+        File.WriteAllText(Path.Combine(nestedDir, "Library.vbproj"), "<Project />");
+        File.WriteAllText(Path.Combine(nestedDir, "Tools.fsproj"), "<Project />");
+        var budgets = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintBudget>(StringComparer.Ordinal)
+        {
+            ["csharp"] = new(MaxDirectories: 100, MaxMarkerFiles: 1),
+            ["vb"] = new(MaxDirectories: 1, MaxMarkerFiles: 100),
+            ["fsharp"] = new(MaxDirectories: 100, MaxMarkerFiles: 100),
+            ["msbuild"] = new(MaxDirectories: 100, MaxMarkerFiles: 100),
+        };
+
+        var indexer = new FileIndexer(tempDir);
+        var results = indexer.GetProjectMarkerFingerprintResultsForTesting(budgets);
+
+        Assert.False(results["csharp"].IsComplete);
+        Assert.Contains(results["csharp"].Warnings, warning =>
+            warning.Message.Contains("marker file budget 1", StringComparison.Ordinal));
+        Assert.False(results["vb"].IsComplete);
+        Assert.Contains(results["vb"].Warnings, warning =>
+            warning.Message.Contains("directory budget 1", StringComparison.Ordinal));
+        Assert.True(results["fsharp"].IsComplete);
+        Assert.Empty(results["fsharp"].Warnings);
+        Assert.True(results["msbuild"].IsComplete);
+        Assert.Empty(results["msbuild"].Warnings);
+        Assert.Equal(indexer.GetProjectMarkerFingerprint("fsharp"), results["fsharp"].Fingerprint);
+        Assert.Equal(indexer.GetProjectMarkerFingerprint("msbuild"), results["msbuild"].Fingerprint);
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_PreservesPerLanguageWarningOrder()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_warning_order");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[z-a].tmp\n");
+        Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+        var budgets = FileIndexer.GetHotspotFamilyMarkerLanguages().ToDictionary(
+            language => language,
+            _ => new FileIndexer.ProjectMarkerFingerprintBudget(MaxDirectories: 1, MaxMarkerFiles: 100),
+            StringComparer.Ordinal);
+
+        var results = new FileIndexer(tempDir).GetProjectMarkerFingerprintResultsForTesting(budgets);
+
+        foreach (var result in results.Values)
+        {
+            Assert.False(result.IsComplete);
+            Assert.Collection(
+                result.Warnings,
+                warning => Assert.Contains("Invalid ignore rule skipped", warning.Message, StringComparison.Ordinal),
+                warning => Assert.Contains("directory budget 1", warning.Message, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_HonorIgnoreNestedRepositoryAndSubmoduleBoundaries()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_boundaries");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "ignored/\n",
+                [".gitmodules"] = "[submodule \"lib\"]\n\tpath = modules/lib\n\turl = https://example.invalid/lib.git\n",
+                ["App.csproj"] = "<Project />",
+                ["Directory.Build.props"] = "<Project />",
+                ["ignored/Ignored.csproj"] = "<Project />",
+                ["nested/.git/HEAD"] = "ref: refs/heads/main\n",
+                ["nested/Nested.vbproj"] = "<Project />",
+                ["modules/lib/.git"] = "gitdir: ../../.git/modules/lib\n",
+                ["modules/lib/Submodule.fsproj"] = "<Project />",
+            });
+
+        var results = new FileIndexer(tempDir).GetProjectMarkerFingerprintResults();
+
+        Assert.Equal(ExpectedProjectMarkerFingerprint("App.csproj"), results["csharp"].Fingerprint);
+        Assert.Equal(ExpectedProjectMarkerFingerprint(), results["vb"].Fingerprint);
+        Assert.Equal(ExpectedProjectMarkerFingerprint("modules/lib/Submodule.fsproj"), results["fsharp"].Fingerprint);
+        Assert.Equal(
+            ExpectedProjectMarkerFingerprint("App.csproj", "Directory.Build.props", "modules/lib/Submodule.fsproj"),
+            results["msbuild"].Fingerprint);
+        Assert.All(results.Values, result => Assert.True(result.IsComplete));
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_PreservesPlatformPatternCasing()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_casing");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "Upper.CSPROJ"), "<Project />");
+        var expectedMarkerPaths = FileSystemTraversalPolicy
+            .EnumerateFiles(tempDir, "*.csproj")
+            .Select(path => Path.GetFileName(path)!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var results = new FileIndexer(tempDir).GetProjectMarkerFingerprintResults();
+        var expectedFingerprint = ExpectedProjectMarkerFingerprint(expectedMarkerPaths);
+
+        Assert.Equal(expectedFingerprint, results["csharp"].Fingerprint);
+        Assert.Equal(expectedFingerprint, results["msbuild"].Fingerprint);
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_CancelledToken_ThrowsBeforeTraversal()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_cancel");
         var tempDir = project.Root;
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
-        var indexer = new FileIndexer(tempDir);
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        var enumerationCount = 0;
+        try
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = directory =>
+            {
+                enumerationCount++;
+                return Directory.EnumerateDirectories(directory);
+            };
 
-        Assert.Throws<OperationCanceledException>(() =>
-            indexer.GetProjectMarkerFingerprint("msbuild", cancellation.Token));
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Throws<OperationCanceledException>(() =>
+                indexer.GetProjectMarkerFingerprintResults(cancellation.Token));
+            Assert.Equal(0, enumerationCount);
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_CancellationDuringSharedTraversal_Propagates()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_cancel_mid_walk");
+        var tempDir = project.Root;
+        var childDirectory = Path.Combine(tempDir, "src");
+        Directory.CreateDirectory(childDirectory);
+        using var cancellation = new CancellationTokenSource();
+
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        var enumerationCount = 0;
+        try
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => EnumerateAndCancel();
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+
+            Assert.Throws<OperationCanceledException>(() =>
+                indexer.GetProjectMarkerFingerprintResults(cancellation.Token));
+            Assert.Equal(1, enumerationCount);
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+        }
+
+        IEnumerable<string> EnumerateAndCancel()
+        {
+            enumerationCount++;
+            cancellation.Cancel();
+            yield return childDirectory;
+        }
+    }
+
+    private static string ExpectedProjectMarkerFingerprint(params string[] markerPaths)
+    {
+        Array.Sort(markerPaths, StringComparer.Ordinal);
+        return Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', markerPaths))))
+            .ToLowerInvariant();
     }
 
     [Fact]
@@ -1474,7 +1689,7 @@ public partial class FileIndexerTests
 
     [Theory]
     [MemberData(nameof(ProjectMarkerTraversalFailures))]
-    public void GetProjectMarkerFingerprint_TraversalFailureReportsWarning_Issue3473(Exception exception)
+    public void GetProjectMarkerFingerprintResults_TraversalFailureReportsWarningForEveryLanguage_Issue3473(Exception exception)
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_warning");
         var tempDir = project.Root;
@@ -1484,13 +1699,17 @@ public partial class FileIndexerTests
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => throw exception;
             var indexer = new FileIndexer(tempDir, ignoreCase: false);
 
-            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 10, maxMarkerFiles: 100);
+            var results = indexer.GetProjectMarkerFingerprintResults();
 
-            Assert.False(result.IsComplete);
-            var warning = Assert.Single(result.Warnings);
-            Assert.Equal(".", warning.Path);
-            Assert.Contains("Project marker discovery skipped this subtree", warning.Message, StringComparison.Ordinal);
-            Assert.Contains(exception.GetType().Name, warning.Message, StringComparison.Ordinal);
+            Assert.Equal(4, results.Count);
+            foreach (var result in results.Values)
+            {
+                Assert.False(result.IsComplete);
+                var warning = Assert.Single(result.Warnings);
+                Assert.Equal(".", warning.Path);
+                Assert.Contains("Project marker discovery skipped this subtree", warning.Message, StringComparison.Ordinal);
+                Assert.Contains(exception.GetType().Name, warning.Message, StringComparison.Ordinal);
+            }
         }
         finally
         {

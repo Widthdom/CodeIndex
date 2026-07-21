@@ -111,10 +111,26 @@ public partial class FileIndexer
             PathFilterKind.OutsideProjectRoot;
     }
 
-    private sealed class ProjectMarkerFingerprintTraversalState
+    internal readonly record struct ProjectMarkerFingerprintBudget(
+        int MaxDirectories,
+        int MaxMarkerFiles);
+
+    private sealed class ProjectMarkerFingerprintTraversalState(
+        string language,
+        IReadOnlyList<string> patterns,
+        int maxDirectories,
+        int maxMarkerFiles)
     {
+        public string Language { get; } = language;
+        public IReadOnlyList<string> Patterns { get; } = patterns;
+        public int MaxDirectories { get; } = maxDirectories;
+        public int MaxMarkerFiles { get; } = maxMarkerFiles;
+        public List<string> ProjectMarkers { get; } = [];
+        public List<ScanError> Errors { get; } = [];
         public int DirectoriesVisited { get; set; }
+        public int PendingDirectories { get; set; }
         public int MarkerFilesCollected { get; set; }
+        public bool TraversalStopped { get; set; }
         public bool Truncated { get; set; }
         public string TruncationReason { get; set; } = "unknown";
     }
@@ -123,7 +139,8 @@ public partial class FileIndexer
         string Path,
         string RelativePath,
         IgnoreRuleSet IgnoreRules,
-        bool IsProjectRoot);
+        bool IsProjectRoot,
+        int LanguageMask);
 
     internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete)
     {

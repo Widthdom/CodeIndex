@@ -1359,13 +1359,8 @@ public partial class McpServer
 
     private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(
         FileIndexer indexer,
-        CancellationToken cancellationToken)
-    {
-        var values = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = indexer.GetProjectMarkerFingerprintResult(lang, cancellationToken);
-        return values;
-    }
+        CancellationToken cancellationToken) =>
+        indexer.GetProjectMarkerFingerprintResults(cancellationToken);
 
     private static void RestampHotspotFamilyTrust(
         DbWriter writer,

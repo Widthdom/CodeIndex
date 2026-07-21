@@ -47,75 +47,137 @@ public partial class FileIndexer
 
     internal ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResult(
         string? lang,
-        CancellationToken cancellationToken = default) =>
-        GetProjectMarkerFingerprintResult(
-            lang,
-            ProjectMarkerFingerprintDirectoryBudgetForTesting ?? MaxProjectMarkerFingerprintDirectories,
-            MaxProjectMarkerFingerprintFiles,
-            cancellationToken);
-
-    internal string? GetProjectMarkerFingerprintForTesting(
-        string? lang,
-        int maxDirectories,
-        int maxMarkerFiles,
-        CancellationToken cancellationToken = default) =>
-        GetProjectMarkerFingerprintResult(lang, maxDirectories, maxMarkerFiles, cancellationToken).Fingerprint;
-
-    internal ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResultForTesting(
-        string? lang,
-        int maxDirectories,
-        int maxMarkerFiles,
-        CancellationToken cancellationToken = default) =>
-        GetProjectMarkerFingerprintResult(lang, maxDirectories, maxMarkerFiles, cancellationToken);
-
-    private ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResult(
-        string? lang,
-        int maxDirectories,
-        int maxMarkerFiles,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
         if (projectMarkerPatterns == null)
             return new ProjectMarkerFingerprintResult(null, IsComplete: true);
 
-        var projectMarkers = new List<string>();
-        var traversalState = new ProjectMarkerFingerprintTraversalState();
-        var errors = new List<ScanError>();
+        var language = lang!;
+        var budgets = new Dictionary<string, ProjectMarkerFingerprintBudget>(1, StringComparer.Ordinal)
+        {
+            [language] = new ProjectMarkerFingerprintBudget(
+                ProjectMarkerFingerprintDirectoryBudgetForTesting ?? MaxProjectMarkerFingerprintDirectories,
+                MaxProjectMarkerFingerprintFiles),
+        };
+        return GetProjectMarkerFingerprintResults(budgets, cancellationToken)[language];
+    }
+
+    internal Dictionary<string, ProjectMarkerFingerprintResult> GetProjectMarkerFingerprintResults(
+        CancellationToken cancellationToken = default)
+    {
+        var budgets = new Dictionary<string, ProjectMarkerFingerprintBudget>(
+            HotspotFamilyMarkerLanguages.Length,
+            StringComparer.Ordinal);
+        foreach (var language in HotspotFamilyMarkerLanguages)
+        {
+            budgets.Add(
+                language,
+                new ProjectMarkerFingerprintBudget(
+                    ProjectMarkerFingerprintDirectoryBudgetForTesting ?? MaxProjectMarkerFingerprintDirectories,
+                    MaxProjectMarkerFingerprintFiles));
+        }
+
+        return GetProjectMarkerFingerprintResults(budgets, cancellationToken);
+    }
+
+    internal string? GetProjectMarkerFingerprintForTesting(
+        string? lang,
+        int maxDirectories,
+        int maxMarkerFiles,
+        CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprintResultForTesting(lang, maxDirectories, maxMarkerFiles, cancellationToken).Fingerprint;
+
+    internal ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResultForTesting(
+        string? lang,
+        int maxDirectories,
+        int maxMarkerFiles,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (GetProjectMarkerPatterns(lang) == null)
+            return new ProjectMarkerFingerprintResult(null, IsComplete: true);
+
+        var language = lang!;
+        var budgets = new Dictionary<string, ProjectMarkerFingerprintBudget>(1, StringComparer.Ordinal)
+        {
+            [language] = new ProjectMarkerFingerprintBudget(maxDirectories, maxMarkerFiles),
+        };
+        return GetProjectMarkerFingerprintResults(budgets, cancellationToken)[language];
+    }
+
+    internal Dictionary<string, ProjectMarkerFingerprintResult> GetProjectMarkerFingerprintResultsForTesting(
+        IReadOnlyDictionary<string, ProjectMarkerFingerprintBudget> budgets,
+        CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprintResults(budgets, cancellationToken);
+
+    private Dictionary<string, ProjectMarkerFingerprintResult> GetProjectMarkerFingerprintResults(
+        IReadOnlyDictionary<string, ProjectMarkerFingerprintBudget> budgets,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var traversalStates = new List<ProjectMarkerFingerprintTraversalState>(budgets.Count);
+        foreach (var language in HotspotFamilyMarkerLanguages)
+        {
+            if (!budgets.TryGetValue(language, out var budget))
+                continue;
+
+            traversalStates.Add(new ProjectMarkerFingerprintTraversalState(
+                language,
+                GetProjectMarkerPatterns(language)!,
+                Math.Max(1, budget.MaxDirectories),
+                Math.Max(1, budget.MaxMarkerFiles)));
+        }
+
+        var results = new Dictionary<string, ProjectMarkerFingerprintResult>(
+            traversalStates.Count,
+            StringComparer.Ordinal);
+        if (traversalStates.Count == 0)
+            return results;
+
+        var preloadErrors = new List<ScanError>();
         var fullyScanned = true;
-        var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
+        var preloadResult = LoadAncestorIgnoreRules(preloadErrors, ref fullyScanned);
+        CopyProjectMarkerErrors(preloadErrors, traversalStates, (1 << traversalStates.Count) - 1);
         if (preloadResult.IgnoreRulesAvailable)
         {
             CollectProjectMarkerFiles(
                 _projectRoot,
                 preloadResult.Rules,
-                projectMarkerPatterns,
-                projectMarkers,
-                Math.Max(1, maxDirectories),
-                Math.Max(1, maxMarkerFiles),
-                traversalState,
-                errors,
+                traversalStates,
                 cancellationToken);
         }
         else
         {
-            traversalState.Truncated = true;
+            foreach (var traversalState in traversalStates)
+            {
+                traversalState.Truncated = true;
+                traversalState.TraversalStopped = true;
+            }
         }
 
-        if (traversalState.Truncated)
+        foreach (var traversalState in traversalStates)
         {
-            projectMarkers.Add(
-                $"__cdidx_project_marker_fingerprint_truncated__:reason={traversalState.TruncationReason};directories={traversalState.DirectoriesVisited};markers={traversalState.MarkerFilesCollected}");
+            if (traversalState.Truncated)
+            {
+                traversalState.ProjectMarkers.Add(
+                    $"__cdidx_project_marker_fingerprint_truncated__:reason={traversalState.TruncationReason};directories={traversalState.DirectoriesVisited};markers={traversalState.MarkerFilesCollected}");
+            }
+
+            traversalState.ProjectMarkers.Sort(StringComparer.Ordinal);
+
+            results.Add(
+                traversalState.Language,
+                new ProjectMarkerFingerprintResult(
+                    ComputeProjectMarkerFingerprint(traversalState.ProjectMarkers),
+                    !traversalState.Truncated)
+                {
+                    Warnings = GetNonFatalScanErrors(traversalState.Errors),
+                });
         }
 
-        projectMarkers.Sort(StringComparer.Ordinal);
-
-        return new ProjectMarkerFingerprintResult(
-            ComputeProjectMarkerFingerprint(projectMarkers),
-            !traversalState.Truncated)
-        {
-            Warnings = GetNonFatalScanErrors(errors),
-        };
+        return results;
     }
 
     private static string ComputeProjectMarkerFingerprint(IReadOnlyList<string> projectMarkers)
@@ -304,24 +366,29 @@ public partial class FileIndexer
     private void CollectProjectMarkerFiles(
         string dir,
         IgnoreRuleSet inheritedIgnoreRules,
-        IReadOnlyList<string> patterns,
-        List<string> projectMarkers,
-        int maxDirectories,
-        int maxMarkerFiles,
-        ProjectMarkerFingerprintTraversalState traversalState,
-        List<ScanError> errors,
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
         CancellationToken cancellationToken)
     {
         var pendingDirectories = new Stack<ProjectMarkerFingerprintDirectory>();
+        var directoryErrors = new List<ScanError>();
+        var allLanguagesMask = (1 << traversalStates.Count) - 1;
+        foreach (var traversalState in traversalStates)
+            traversalState.PendingDirectories = 1;
         pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(
             dir,
             ToRelativePath(dir),
             inheritedIgnoreRules,
-            IsProjectRoot: true));
+            IsProjectRoot: true,
+            allLanguagesMask));
         while (pendingDirectories.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var current = pendingDirectories.Pop();
+            DecrementProjectMarkerPendingDirectories(traversalStates, current.LanguageMask);
+            var activeLanguageMask = GetActiveProjectMarkerLanguageMask(traversalStates, current.LanguageMask);
+            if (activeLanguageMask == 0)
+                continue;
+
             try
             {
                 _pathAccessValidator?.Invoke(current.Path);
@@ -329,44 +396,95 @@ public partial class FileIndexer
             catch (IOException ex)
             {
                 var exceptionType = FileSystemTraversalFailure.ExceptionTypeName(ex);
-                AddProjectMarkerTraversalWarning(errors, current.Path, exceptionType);
-                MarkProjectMarkerTraversalTruncated(
-                    traversalState,
-                    $"traversal failed with {exceptionType}");
+                MarkProjectMarkerTraversalFailure(
+                    traversalStates,
+                    activeLanguageMask,
+                    current.Path,
+                    exceptionType);
                 continue;
             }
             if (GetDirectoryFilterKind(current.Path, current.RelativePath, current.IgnoreRules, current.IsProjectRoot) != PathFilterKind.None)
                 continue;
 
-            if (traversalState.DirectoriesVisited >= maxDirectories)
+            for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
             {
-                TruncateProjectMarkerTraversal(
-                    traversalState,
-                    errors,
-                    current.Path,
-                    $"directory budget {maxDirectories:N0} exhausted after visiting {traversalState.DirectoriesVisited:N0} directories");
-                return;
-            }
+                var languageBit = 1 << stateIndex;
+                if ((activeLanguageMask & languageBit) == 0)
+                    continue;
 
-            var currentDirectory = current.Path;
-            traversalState.DirectoriesVisited++;
-            try
-            {
-                var fullyScanned = true;
-                var loadResult = LoadIgnoreRulesForDirectory(currentDirectory, current.IgnoreRules, errors, ref fullyScanned);
-                if (!loadResult.IgnoreRulesAvailable)
+                var traversalState = traversalStates[stateIndex];
+                if (traversalState.DirectoriesVisited >= traversalState.MaxDirectories)
                 {
                     TruncateProjectMarkerTraversal(
                         traversalState,
-                        errors,
-                        currentDirectory,
-                        "ignore-rule loading failed");
-                    return;
+                        traversalState.Errors,
+                        current.Path,
+                        $"directory budget {traversalState.MaxDirectories:N0} exhausted after visiting {traversalState.DirectoriesVisited:N0} directories");
+                    traversalState.TraversalStopped = true;
+                    activeLanguageMask &= ~languageBit;
+                    continue;
                 }
 
-                var activeIgnoreRules = loadResult.Rules;
-                var prefixedCurrentDirectory = LongPath.EnsureWindowsPrefix(currentDirectory);
-                foreach (var pattern in patterns)
+                traversalState.DirectoriesVisited++;
+            }
+
+            if (activeLanguageMask == 0)
+                continue;
+
+            var currentDirectory = current.Path;
+            IgnoreRuleLoadResult loadResult;
+            directoryErrors.Clear();
+            try
+            {
+                var fullyScanned = true;
+                loadResult = LoadIgnoreRulesForDirectory(currentDirectory, current.IgnoreRules, directoryErrors, ref fullyScanned);
+            }
+            catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
+            {
+                CopyProjectMarkerErrors(directoryErrors, traversalStates, activeLanguageMask);
+                var exceptionType = FileSystemTraversalFailure.ExceptionTypeName(ex);
+                MarkProjectMarkerTraversalFailure(
+                    traversalStates,
+                    activeLanguageMask,
+                    currentDirectory,
+                    exceptionType);
+                continue;
+            }
+
+            CopyProjectMarkerErrors(directoryErrors, traversalStates, activeLanguageMask);
+            if (!loadResult.IgnoreRulesAvailable)
+            {
+                for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
+                {
+                    var languageBit = 1 << stateIndex;
+                    if ((activeLanguageMask & languageBit) == 0)
+                        continue;
+
+                    var traversalState = traversalStates[stateIndex];
+                    TruncateProjectMarkerTraversal(
+                        traversalState,
+                        traversalState.Errors,
+                        currentDirectory,
+                        "ignore-rule loading failed");
+                    traversalState.TraversalStopped = true;
+                }
+
+                continue;
+            }
+
+            var activeIgnoreRules = loadResult.Rules;
+            var descendLanguageMask = activeLanguageMask;
+            var prefixedCurrentDirectory = LongPath.EnsureWindowsPrefix(currentDirectory);
+            foreach (var pattern in MsbuildProjectMarkerPatterns)
+            {
+                var interestedLanguageMask = GetProjectMarkerPatternLanguageMask(
+                    traversalStates,
+                    descendLanguageMask,
+                    pattern);
+                if (interestedLanguageMask == 0)
+                    continue;
+
+                try
                 {
                     foreach (var enumeratedMarkerFile in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedCurrentDirectory, pattern))
                     {
@@ -376,21 +494,62 @@ public partial class FileIndexer
                         if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules))
                             continue;
 
-                        if (traversalState.MarkerFilesCollected >= maxMarkerFiles)
+                        var normalizedMarkerPath = NormalizeScopeKey(ToRelativePath(markerFile));
+                        for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
                         {
-                            TruncateProjectMarkerTraversal(
-                                traversalState,
-                                errors,
-                                currentDirectory,
-                                $"marker file budget {maxMarkerFiles:N0} exhausted after collecting {traversalState.MarkerFilesCollected:N0} marker files");
-                            return;
+                            var languageBit = 1 << stateIndex;
+                            if ((interestedLanguageMask & languageBit) == 0)
+                                continue;
+
+                            var traversalState = traversalStates[stateIndex];
+                            if (traversalState.TraversalStopped)
+                            {
+                                interestedLanguageMask &= ~languageBit;
+                                descendLanguageMask &= ~languageBit;
+                                continue;
+                            }
+
+                            if (traversalState.MarkerFilesCollected >= traversalState.MaxMarkerFiles)
+                            {
+                                TruncateProjectMarkerTraversal(
+                                    traversalState,
+                                    traversalState.Errors,
+                                    currentDirectory,
+                                    $"marker file budget {traversalState.MaxMarkerFiles:N0} exhausted after collecting {traversalState.MarkerFilesCollected:N0} marker files");
+                                traversalState.TraversalStopped = true;
+                                interestedLanguageMask &= ~languageBit;
+                                descendLanguageMask &= ~languageBit;
+                                continue;
+                            }
+
+                            traversalState.ProjectMarkers.Add(normalizedMarkerPath);
+                            traversalState.MarkerFilesCollected++;
                         }
 
-                        projectMarkers.Add(NormalizeScopeKey(ToRelativePath(markerFile)));
-                        traversalState.MarkerFilesCollected++;
+                        if (interestedLanguageMask == 0)
+                            break;
                     }
                 }
+                catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
+                {
+                    interestedLanguageMask = GetActiveProjectMarkerLanguageMask(
+                        traversalStates,
+                        interestedLanguageMask);
+                    var exceptionType = FileSystemTraversalFailure.ExceptionTypeName(ex);
+                    MarkProjectMarkerTraversalFailure(
+                        traversalStates,
+                        interestedLanguageMask,
+                        currentDirectory,
+                        exceptionType);
+                    descendLanguageMask &= ~interestedLanguageMask;
+                }
+            }
 
+            if (descendLanguageMask == 0)
+                continue;
+
+            try
+            {
                 var passthrough = IsSubmoduleAncestorPassthrough(current.RelativePath);
                 foreach (var enumeratedSubDir in EnumerateProjectMarkerDirectories(currentDirectory))
                 {
@@ -406,31 +565,142 @@ public partial class FileIndexer
                     if (GetDirectoryFilterKind(subDir, subRelativePath, activeIgnoreRules) != PathFilterKind.None)
                         continue;
 
-                    if (traversalState.DirectoriesVisited + pendingDirectories.Count >= maxDirectories)
+                    var childLanguageMask = 0;
+                    for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
                     {
-                        TruncateProjectMarkerTraversal(
-                            traversalState,
-                            errors,
-                            currentDirectory,
-                            $"directory budget {maxDirectories:N0} would be exceeded while queuing subdirectories after visiting {traversalState.DirectoriesVisited:N0} directories");
-                        return;
+                        var languageBit = 1 << stateIndex;
+                        if ((descendLanguageMask & languageBit) == 0)
+                            continue;
+
+                        var traversalState = traversalStates[stateIndex];
+                        if (traversalState.TraversalStopped)
+                        {
+                            descendLanguageMask &= ~languageBit;
+                            continue;
+                        }
+
+                        if (traversalState.DirectoriesVisited + traversalState.PendingDirectories >= traversalState.MaxDirectories)
+                        {
+                            TruncateProjectMarkerTraversal(
+                                traversalState,
+                                traversalState.Errors,
+                                currentDirectory,
+                                $"directory budget {traversalState.MaxDirectories:N0} would be exceeded while queuing subdirectories after visiting {traversalState.DirectoriesVisited:N0} directories");
+                            traversalState.TraversalStopped = true;
+                            descendLanguageMask &= ~languageBit;
+                            continue;
+                        }
+
+                        traversalState.PendingDirectories++;
+                        childLanguageMask |= languageBit;
                     }
+
+                    if (childLanguageMask == 0)
+                        continue;
 
                     pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(
                         subDir,
                         subRelativePath,
                         activeIgnoreRules,
-                        IsProjectRoot: false));
+                        IsProjectRoot: false,
+                        childLanguageMask));
                 }
             }
             catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
             {
                 var exceptionType = FileSystemTraversalFailure.ExceptionTypeName(ex);
-                AddProjectMarkerTraversalWarning(errors, currentDirectory, exceptionType);
-                MarkProjectMarkerTraversalTruncated(
-                    traversalState,
-                    $"traversal failed with {exceptionType}");
+                MarkProjectMarkerTraversalFailure(
+                    traversalStates,
+                    GetActiveProjectMarkerLanguageMask(traversalStates, descendLanguageMask),
+                    currentDirectory,
+                    exceptionType);
             }
+        }
+    }
+
+    private static int GetProjectMarkerPatternLanguageMask(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        int languageMask,
+        string pattern)
+    {
+        var patternLanguageMask = 0;
+        for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
+        {
+            var languageBit = 1 << stateIndex;
+            if ((languageMask & languageBit) == 0)
+                continue;
+
+            var patterns = traversalStates[stateIndex].Patterns;
+            for (var patternIndex = 0; patternIndex < patterns.Count; patternIndex++)
+            {
+                if (!string.Equals(patterns[patternIndex], pattern, StringComparison.Ordinal))
+                    continue;
+
+                patternLanguageMask |= languageBit;
+                break;
+            }
+        }
+
+        return patternLanguageMask;
+    }
+
+    private static int GetActiveProjectMarkerLanguageMask(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        int languageMask)
+    {
+        var activeLanguageMask = 0;
+        for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
+        {
+            var languageBit = 1 << stateIndex;
+            if ((languageMask & languageBit) != 0 && !traversalStates[stateIndex].TraversalStopped)
+                activeLanguageMask |= languageBit;
+        }
+
+        return activeLanguageMask;
+    }
+
+    private static void DecrementProjectMarkerPendingDirectories(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        int languageMask)
+    {
+        for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
+        {
+            if ((languageMask & (1 << stateIndex)) != 0)
+                traversalStates[stateIndex].PendingDirectories--;
+        }
+    }
+
+    private static void CopyProjectMarkerErrors(
+        IReadOnlyList<ScanError> errors,
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        int languageMask)
+    {
+        if (errors.Count == 0)
+            return;
+
+        for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
+        {
+            if ((languageMask & (1 << stateIndex)) != 0)
+                traversalStates[stateIndex].Errors.AddRange(errors);
+        }
+    }
+
+    private void MarkProjectMarkerTraversalFailure(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        int languageMask,
+        string directory,
+        string exceptionType)
+    {
+        for (var stateIndex = 0; stateIndex < traversalStates.Count; stateIndex++)
+        {
+            if ((languageMask & (1 << stateIndex)) == 0)
+                continue;
+
+            var traversalState = traversalStates[stateIndex];
+            AddProjectMarkerTraversalWarning(traversalState.Errors, directory, exceptionType);
+            MarkProjectMarkerTraversalTruncated(
+                traversalState,
+                $"traversal failed with {exceptionType}");
         }
     }
 

@@ -6385,6 +6385,53 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_ProjectMarkerSnapshotPropagatesIgnoreAuthorizationFailure()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_marker_ignore_swap_{Guid.NewGuid():N}");
+        var ignorePath = Path.Combine(fixtureDir, ".gitignore");
+        var originalPath = ignorePath + ".original";
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_marker_ignore_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(ignorePath, "ignored/\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(fixtureDir, "Allowed.cs"), "public class Allowed { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, ignorePath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                File.Move(ignorePath, originalPath);
+                File.WriteAllText(ignorePath, "replacement/\n");
+            };
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.Equal(1, swapped);
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("entry_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+            Assert.StartsWith(
+                "fsid:v1:",
+                structured["checked_root_identity"]!.GetValue<string>(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_RejectsAmbiguousLanguageFileReplacementAtAuthorizedOpenBoundary_Issue4606()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_ambiguous_file_swap_{Guid.NewGuid():N}");
@@ -8712,6 +8759,10 @@ public partial class McpServerTests
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(fixtureDir, "Library.vbproj"), "<Project />");
+            File.WriteAllText(Path.Combine(fixtureDir, "Tools.fsproj"), "<Project />");
+            File.WriteAllText(Path.Combine(fixtureDir, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(fixtureDir, "Directory.Build.targets"), "<Project />");
             File.WriteAllText(Path.Combine(srcDir, "Api.Part1.cs"),
                 """
                 public partial class Api
@@ -8782,7 +8833,14 @@ public partial class McpServerTests
             Assert.Equal(
                 DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
-            Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"))));
+            var expectedFingerprints = new FileIndexer(fixtureDir).GetProjectMarkerFingerprintResults();
+            foreach (var language in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            {
+                Assert.True(expectedFingerprints[language].IsComplete);
+                Assert.Equal(
+                    expectedFingerprints[language].Fingerprint,
+                    verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(language)));
+            }
         }
         finally
         {
