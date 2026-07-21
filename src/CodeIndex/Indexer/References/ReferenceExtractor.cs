@@ -1962,15 +1962,63 @@ public static partial class ReferenceExtractor
         string referenceKind,
         string name,
         SymbolRecord? container)
+        => CreateReferenceDedupeKey(
+            fileId,
+            language,
+            lineNumber,
+            column,
+            referenceKind,
+            name,
+            container?.Kind,
+            container?.Name);
+
+    internal static ReferenceDedupeKey CreateReferenceDedupeKey(
+        long fileId,
+        string? language,
+        int lineNumber,
+        int column,
+        string referenceKind,
+        string name,
+        string? containerKind,
+        string? containerName)
         => new(
             fileId,
             string.IsNullOrWhiteSpace(language) ? "-" : language,
             lineNumber,
             column,
             referenceKind,
-            string.IsNullOrWhiteSpace(container?.Kind) ? "-" : container.Kind,
-            string.IsNullOrWhiteSpace(container?.Name) ? "-" : container.Name,
+            string.IsNullOrWhiteSpace(containerKind) ? "-" : containerKind,
+            string.IsNullOrWhiteSpace(containerName) ? "-" : containerName,
             name);
+
+    internal static void CompactCSharpUsingAliasReferences(List<ReferenceRecord> references, string language)
+    {
+        var referenceCount = references.Count;
+        var deduped = new HashSet<ReferenceDedupeKey>(referenceCount);
+        var writeIndex = 0;
+        for (var readIndex = 0; readIndex < referenceCount; readIndex++)
+        {
+            var reference = references[readIndex];
+            var key = CreateReferenceDedupeKey(
+                reference.FileId,
+                language,
+                reference.Line,
+                reference.Column,
+                reference.ReferenceKind,
+                reference.SymbolName,
+                reference.ContainerKind,
+                reference.ContainerName);
+            if (!deduped.Add(key))
+                continue;
+
+            if (writeIndex != readIndex)
+                references[writeIndex] = reference;
+            writeIndex++;
+        }
+
+        if (writeIndex < referenceCount)
+            references.RemoveRange(writeIndex, referenceCount - writeIndex);
+    }
 
     private static void EmitCSharpLambdaCaptureReferences(
         string preparedLine,
@@ -2078,9 +2126,10 @@ public static partial class ReferenceExtractor
     private static string GetCSharpContainerLocalScopeKey(SymbolRecord container)
         => $"{container.Kind}:{container.ContainerQualifiedName}:{container.ContainerKind}:{container.ContainerName}:{container.Name}:{container.StartLine}:{container.EndLine}:{container.BodyStartLine}:{container.BodyEndLine}:{container.StartColumn}";
 
-    private static void MarkMutualRecursionReferences(List<ReferenceRecord> references)
+    internal static void MarkMutualRecursionReferences(List<ReferenceRecord> references)
     {
         var edges = new HashSet<(string Caller, string Callee)>();
+        Dictionary<string, string>? normalizedNames = null;
         foreach (var reference in references)
         {
             if (!IsCallGraphLikeReferenceKind(reference.ReferenceKind)
@@ -2091,7 +2140,9 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            edges.Add((NormalizeReferenceCycleName(reference.ContainerName), NormalizeReferenceCycleName(reference.SymbolName)));
+            edges.Add((
+                GetCachedNormalizedReferenceCycleName(reference.ContainerName, ref normalizedNames),
+                GetCachedNormalizedReferenceCycleName(reference.SymbolName, ref normalizedNames)));
         }
 
         if (edges.Count == 0)
@@ -2107,11 +2158,27 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            var caller = NormalizeReferenceCycleName(reference.ContainerName);
-            var callee = NormalizeReferenceCycleName(reference.SymbolName);
+            var caller = GetCachedNormalizedReferenceCycleName(reference.ContainerName, ref normalizedNames);
+            var callee = GetCachedNormalizedReferenceCycleName(reference.SymbolName, ref normalizedNames);
             if (edges.Contains((callee, caller)))
                 reference.IsMutualRecursion = true;
         }
+    }
+
+    private static string GetCachedNormalizedReferenceCycleName(
+        string name,
+        ref Dictionary<string, string>? normalizedNames)
+    {
+        if (normalizedNames != null && normalizedNames.TryGetValue(name, out var normalizedName))
+            return normalizedName;
+
+        normalizedName = NormalizeReferenceCycleName(name);
+        if (ReferenceEquals(normalizedName, name))
+            return normalizedName;
+
+        normalizedNames ??= new Dictionary<string, string>(StringComparer.Ordinal);
+        normalizedNames.Add(name, normalizedName);
+        return normalizedName;
     }
 
     private static bool IsCallGraphLikeReferenceKind(string referenceKind)
