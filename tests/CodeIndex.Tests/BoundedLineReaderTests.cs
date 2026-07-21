@@ -19,6 +19,47 @@ public class BoundedLineReaderTests
     }
 
     [Fact]
+    public async Task ReadUtf8LineAsync_BuffersFramesWithoutDecoding()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("α\r\nsecond\nlast"));
+
+        var first = await BoundedLineReader.ReadUtf8LineAsync(stream, 100, CancellationToken.None);
+        var second = await BoundedLineReader.ReadUtf8LineAsync(stream, 100, CancellationToken.None);
+        var third = await BoundedLineReader.ReadUtf8LineAsync(stream, 100, CancellationToken.None);
+        var end = await BoundedLineReader.ReadUtf8LineAsync(stream, 100, CancellationToken.None);
+
+        Assert.Equal("α", Encoding.UTF8.GetString(first!.Value.Span));
+        Assert.Equal("second", Encoding.UTF8.GetString(second!.Value.Span));
+        Assert.Equal("last", Encoding.UTF8.GetString(third!.Value.Span));
+        Assert.Null(end);
+    }
+
+    [Fact]
+    public async Task ReadUtf8LineAsync_EnforcesByteLimitBeforeGrowth()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("é\n"));
+
+        var exception = await Assert.ThrowsAsync<BoundedLineLengthException>(
+            () => BoundedLineReader.ReadUtf8LineAsync(stream, 1, CancellationToken.None));
+
+        Assert.Equal(2, exception.Utf8BytesRead);
+        Assert.Equal(1, exception.MaxUtf8Bytes);
+    }
+
+    [Fact]
+    public async Task ReadUtf8LineAsync_HandlesCrLfAcrossBufferBoundary()
+    {
+        var prefix = new string('a', 4095);
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(prefix + "\r\nnext\n"));
+
+        var first = await BoundedLineReader.ReadUtf8LineAsync(stream, 5000, CancellationToken.None);
+        var second = await BoundedLineReader.ReadUtf8LineAsync(stream, 5000, CancellationToken.None);
+
+        Assert.Equal(prefix, Encoding.UTF8.GetString(first!.Value.Span));
+        Assert.Equal("next", Encoding.UTF8.GetString(second!.Value.Span));
+    }
+
+    [Fact]
     public void TryReadUtf8File_EnforcesStreamingByteLimit_Issue4114()
     {
         var ok = BoundedLineReader.TryReadUtf8File(

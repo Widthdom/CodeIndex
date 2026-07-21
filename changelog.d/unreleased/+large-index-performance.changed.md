@@ -1,6 +1,7 @@
 ---
 category: changed
 affected:
+  - src/CodeIndex/BoundedLineReader.cs
   - src/CodeIndex/Cli/IndexCommandRunner.Parse.cs
   - src/CodeIndex/Cli/ProgramRunner.cs
   - src/CodeIndex/Cli/ConsoleUi.cs
@@ -12,6 +13,7 @@ affected:
   - src/CodeIndex/Cli/IndexCommandRunner.Update.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerFullScanTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerTests.cs
+  - tests/CodeIndex.Tests/BoundedLineReaderTests.cs
   - USER_GUIDE.md
   - DEVELOPER_GUIDE.md
   - TESTING_GUIDE.md
@@ -25,6 +27,7 @@ affected:
 - **Unique symbol families are shared across graph fallbacks** — non-C#, C#, and C# attribute resolution now reuse one connection-local language/name aggregation instead of grouping the complete symbol table three times per graph refresh.
 - **Source files cross the symbol-worker boundary once** — requests are serialized directly to UTF-8 bytes instead of materializing a UTF-16 JSON string and encoding it again for every file, with Unicode coverage across C#, Java, TypeScript, Python, Go, and Rust.
 - **Symbol-worker responses stream as UTF-8** — extracted symbol batches are serialized directly to the worker stdout stream, removing the matching UTF-16 JSON allocation and re-encoding pass on the return path.
+- **Worker responses stay as bytes in the parent** — a bounded, buffered UTF-8 frame reader now feeds response bytes directly to JSON deserialization while preserving frame limits, CRLF handling, cancellation, and persistent-worker remainder buffering.
 
 ## 日本語
 
@@ -34,3 +37,4 @@ affected:
 - **unique symbol family を graph fallback 間で共有しました** — non-C#、C#、C# attribute resolution は connection-local な language/name 集約を再利用し、graph refresh ごとに symbol table 全体を3回 group化しなくなりました。
 - **source file の symbol-worker 境界通過を1回にしました** — file ごとに UTF-16 JSON string を作って再 encode せず、request を直接 UTF-8 byte へ serialize します。C#、Java、TypeScript、Python、Go、Rust を横断する Unicode coverage も追加しました。
 - **symbol-worker response を UTF-8 stream にしました** — 抽出済み symbol batch を worker stdout stream へ直接 serialize し、戻り経路に残っていた UTF-16 JSON allocation と再 encoding pass もなくしました。
+- **親 process 内でも worker response を byte のまま扱います** — bounded・buffered UTF-8 frame reader から response byte を JSON deserialize へ直接渡し、frame limit、CRLF、cancellation、persistent worker の remainder buffering を維持します。

@@ -91,13 +91,12 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 return TimedOutAfterKill(stopwatch);
             }
 
-            Task<string?> responseTask;
+            Task<ReadOnlyMemory<byte>?> responseTask;
             Task sendTask;
             try
             {
-                responseTask = BoundedLineReader.ReadLineAsync(
-                    process!.StandardOutput,
-                    maxProtocolLineBytes,
+                responseTask = BoundedLineReader.ReadUtf8LineAsync(
+                    process!.StandardOutput.BaseStream,
                     maxProtocolLineBytes,
                     cancellationToken);
                 sendTask = SendRequestAsync(process.StandardInput.BaseStream, requestUtf8);
@@ -142,8 +141,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             stopwatch.Stop();
             // WaitForTask already proved the async read completed within the worker budget;
             // GetResult only observes that completed protocol response on this sync API.
-            var responseJson = responseTask.GetAwaiter().GetResult();
-            if (responseJson == null)
+            var responseUtf8 = responseTask.GetAwaiter().GetResult();
+            if (responseUtf8 == null)
             {
                 var workerError = BuildWorkerExitError(process, stderr.GetCapturedText(), "worker exited before returning a response.");
                 ClearExitedWorker();
@@ -154,7 +153,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             try
             {
                 response = BoundedJson.Deserialize<SymbolExtractionWorker.WorkerResponse>(
-                    responseJson,
+                    responseUtf8.Value.Span,
                     maxProtocolLineBytes,
                     SymbolExtractionWorker.JsonOptions);
             }
