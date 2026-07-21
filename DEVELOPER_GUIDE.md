@@ -889,7 +889,11 @@ fall back to a same-name edge.
 Reference finalization computes candidate count, minimum symbol ID, distinct target-family
 count, and stable target key in one correlated aggregate per reference. Keep these four
 resolution fields on the row-value assignment path; separate scalar subqueries multiply the
-candidate-index and symbol/file lookup work on large graphs.
+candidate-index and symbol/file lookup work on large graphs. The language/name families that
+are globally unique are aggregated once into the connection-local
+`temp.reference_unique_symbol_families` table and reused by non-C#, C#, and C# attribute
+fallbacks. Create that temp table in a separate prepared command before preparing the refresh;
+SQLite resolves referenced tables while preparing every statement in a command batch.
 
 `inspect` / MCP `analyze_symbol` treats each returned definition as a separate identity
 bundle. Candidate selectors expose the persisted symbol ID plus qualified/container name,
@@ -3803,7 +3807,11 @@ resolution を再構築し、同じ transaction で marker を設定します。
 reference finalization は、candidate count、最小 symbol ID、distinct target-family count、安定 target
 key を reference ごとに1回の correlated aggregate で計算します。この4つの resolution field は
 row-value assignment のまま維持してください。scalar subquery を分けると、大規模 graph で
-candidate index と symbol/file lookup が重複します。
+candidate index と symbol/file lookup が重複します。global に一意な language/name family は
+connection-local な `temp.reference_unique_symbol_families` table へ1回だけ集約し、non-C#、C#、
+C# attribute fallback で共有します。この temp table は refresh command を prepare する前に別の
+prepared command で作成してください。SQLite は command batch の全statementをprepareする時点で
+参照tableを解決します。
 
 `inspect` / MCP `analyze_symbol` は返された各定義を別々の identity bundle として
 扱います。candidate selector は永続化した symbol ID に加え、qualified/container name、
