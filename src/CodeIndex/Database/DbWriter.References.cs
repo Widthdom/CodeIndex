@@ -359,47 +359,31 @@ public partial class DbWriter
 
     private const string RefreshReferenceResolutionSql = """
         UPDATE symbol_references AS r
-        SET target_symbol_id = (
-                SELECT MIN(c.symbol_id)
-                FROM symbol_reference_candidates AS c
-                WHERE c.reference_id = r.id
-                HAVING COUNT(*) = 1
-            ),
-            target_symbol_key = (
-                SELECT CASE WHEN COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
-                                               COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                                               COALESCE(target.name, '')) = 1
-                            THEN MIN(target_file.lang || char(31) || target_file.path || char(31) ||
-                                     COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                                     COALESCE(target.name, ''))
-                       END
-                FROM symbol_reference_candidates AS c
-                JOIN symbols AS target ON target.id = c.symbol_id
-                JOIN files AS target_file ON target_file.id = target.file_id
-                WHERE c.reference_id = r.id
-            ),
-            resolution_candidate_count = (
-                SELECT COUNT(*)
-                FROM symbol_reference_candidates AS c
-                WHERE c.reference_id = r.id
-            ),
-            resolution_state = CASE
-                WHEN NOT EXISTS (
-                    SELECT 1 FROM symbol_reference_candidates AS c WHERE c.reference_id = r.id
-                ) THEN 'unresolved'
-                WHEN (SELECT COUNT(*) FROM symbol_reference_candidates AS c WHERE c.reference_id = r.id) = 1
-                    THEN 'resolved'
-                WHEN (
-                    SELECT COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
-                                          COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                                          COALESCE(target.name, ''))
+        SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = (
+            SELECT CASE WHEN candidate_count = 1 THEN minimum_symbol_id END,
+                   CASE WHEN target_family_count = 1 THEN minimum_target_key END,
+                   candidate_count,
+                   CASE
+                       WHEN candidate_count = 0 THEN 'unresolved'
+                       WHEN candidate_count = 1 THEN 'resolved'
+                       WHEN target_family_count = 1 THEN 'resolved_group'
+                       ELSE 'ambiguous'
+                   END
+            FROM (
+                SELECT COUNT(*) AS candidate_count,
+                       MIN(c.symbol_id) AS minimum_symbol_id,
+                       COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
+                                              COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                                              COALESCE(target.name, '')) AS target_family_count,
+                       MIN(target_file.lang || char(31) || target_file.path || char(31) ||
+                           COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                           COALESCE(target.name, '')) AS minimum_target_key
                     FROM symbol_reference_candidates AS c
                     JOIN symbols AS target ON target.id = c.symbol_id
                     JOIN files AS target_file ON target_file.id = target.file_id
                     WHERE c.reference_id = r.id
-                ) = 1 THEN 'resolved_group'
-                ELSE 'ambiguous'
-            END;
+            ) AS resolution
+        );
 
         UPDATE symbol_references
         SET is_self_reference = CASE

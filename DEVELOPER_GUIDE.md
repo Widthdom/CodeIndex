@@ -886,6 +886,11 @@ unqualified name receive a global candidate only when that name is unique in the
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
 
+Reference finalization computes candidate count, minimum symbol ID, distinct target-family
+count, and stable target key in one correlated aggregate per reference. Keep these four
+resolution fields on the row-value assignment path; separate scalar subqueries multiply the
+candidate-index and symbol/file lookup work on large graphs.
+
 `inspect` / MCP `analyze_symbol` treats each returned definition as a separate identity
 bundle. Candidate selectors expose the persisted symbol ID plus qualified/container name,
 signature, language, kind, path, and line. Identity-scoped reference/caller/callee queries
@@ -3794,6 +3799,11 @@ identity-aware read は、`codeindex_meta` の `reference_identity_contract_vers
 resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+reference finalization は、candidate count、最小 symbol ID、distinct target-family count、安定 target
+key を reference ごとに1回の correlated aggregate で計算します。この4つの resolution field は
+row-value assignment のまま維持してください。scalar subquery を分けると、大規模 graph で
+candidate index と symbol/file lookup が重複します。
 
 `inspect` / MCP `analyze_symbol` は返された各定義を別々の identity bundle として
 扱います。candidate selector は永続化した symbol ID に加え、qualified/container name、
