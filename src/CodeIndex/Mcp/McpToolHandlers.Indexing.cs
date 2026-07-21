@@ -1019,7 +1019,7 @@ public partial class McpServer
                         mcpIndexDiagnostics,
                         authorizedRoot.EnsureAuthorizedEntry,
                         knownReadableFileSizes);
-            var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits();
+            var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(issuesStateAvailable: true);
             writer.SetMetaValues(
                 (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),
                 (DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),

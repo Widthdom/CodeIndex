@@ -1391,7 +1391,7 @@ public static partial class IndexCommandRunner
                 removed,
                 memoryTimelineForStamp,
                 indexRunDiagnostics,
-                writer.GetReferenceExtractionCapHits());
+                writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter));
         }
         stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(memorySamples);

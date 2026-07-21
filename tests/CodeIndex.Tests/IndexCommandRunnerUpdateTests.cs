@@ -3278,6 +3278,57 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_DegradedIssuesKeepsLastRunReferenceCapSnapshotUnavailable()
+    {
+        // A scoped update preserves readiness that existed before the run. Its lightweight
+        // finalization read must use that same snapshot: physical file_issues rows alone do
+        // not make reference-cap state authoritative when IssuesReady is absent.
+        // scoped update の lightweight finalize でも事前の IssuesReady を尊重し、物理 row の
+        // 存在だけで last-run reference-cap snapshot を authoritative に昇格させない。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var readVersion = connection.CreateCommand();
+                readVersion.CommandText = "PRAGMA user_version";
+                var userVersion = Convert.ToInt64(readVersion.ExecuteScalar(), CultureInfo.InvariantCulture);
+                using var clearIssuesReady = connection.CreateCommand();
+                clearIssuesReady.CommandText = $"PRAGMA user_version = {userVersion & ~DbContext.IssuesReadyFlag}";
+                clearIssuesReady.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.False(updateJson.GetProperty("issues_table_available").GetBoolean());
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            var lastRunCapHits = statusJson
+                .GetProperty("last_index_run")
+                .GetProperty("reference_extraction_cap_hits");
+            Assert.False(lastRunCapHits.GetProperty("state_available").GetBoolean());
+            Assert.Contains(
+                DegradationReasonCodes.ReferenceExtractionCapStateUnavailable,
+                lastRunCapHits.GetProperty("reasons").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_PreservesGraphAndIssuesOnPre86Db_WithoutStampingFold()
     {
         // Codex #86 second-pass regression: pre-#86 DB has user_version=3 (Graph|Issues).

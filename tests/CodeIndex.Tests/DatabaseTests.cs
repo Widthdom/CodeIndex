@@ -3107,7 +3107,7 @@ public class DatabaseTests : IDisposable
                 },
             ]);
 
-            var summary = _writer.GetReferenceExtractionCapHits();
+            var summary = _writer.GetReferenceExtractionCapHits(issuesStateAvailable: true);
 
             Assert.Equal(1, summary.HitCount);
             Assert.Equal(1, summary.AffectedFileCount);
@@ -3115,7 +3115,7 @@ public class DatabaseTests : IDisposable
             transaction.Commit();
         }
 
-        Assert.Equal(1, _writer.GetReferenceExtractionCapHits().HitCount);
+        Assert.Equal(1, _writer.GetReferenceExtractionCapHits(issuesStateAvailable: true).HitCount);
     }
 
     [Fact]

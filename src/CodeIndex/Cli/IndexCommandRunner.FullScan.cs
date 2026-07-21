@@ -2521,7 +2521,7 @@ public static partial class IndexCommandRunner
                 purged,
                 memoryTimelineForStamp,
                 indexRunDiagnostics,
-                writer.GetReferenceExtractionCapHits());
+                writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter));
         }
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();

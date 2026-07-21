@@ -658,7 +658,7 @@ Use the smallest change that reduces the expensive part of your run.
 
 On an actual full scan, the same timeline also separates `csharp_prepass`, `extraction`, `reference_graph`, `text_index`, `finalize`, and `commit`; file/commit-scoped updates report the shared extraction, graph, text-index, and finalization boundaries. Sample `elapsed_ms` values are cumulative, so subtract adjacent samples to attribute elapsed time without enabling a profiler.
 
-Index finalization reads reference-completeness metadata through the active writer transaction and validates cross-file hotspot-family readiness in one grouped pass over only the languages present in the index. Large mixed-language indexes therefore avoid repeated reader bootstraps and per-language correlated symbol scans before returning CLI or MCP completion output.
+Index finalization reads reference-completeness metadata through the active writer transaction while preserving the issue-readiness state already established for that run, and validates cross-file hotspot-family readiness in one grouped pass over only the languages present in the index. Large mixed-language indexes therefore avoid repeated reader bootstraps and per-language correlated symbol scans before returning CLI or MCP completion output without treating degraded issue data as authoritative.
 
 For very large repos, index from the repository root once, exclude generated
 trees early, then use scoped refreshes for daily work. If a branch switch,
@@ -3737,7 +3737,7 @@ cdidx index . --duration-format seconds
 
 実際の full scan では、同じ timeline が `csharp_prepass`、`extraction`、`reference_graph`、`text_index`、`finalize`、`commit` も分離します。file/commit-scoped update は共通の extraction、graph、text-index、finalize 境界を返します。sample の `elapsed_ms` は累積値なので、隣接 sample の差分から profiler なしで所要時間を帰属できます。
 
-index finalize は active writer transaction から reference completeness metadata を読み、cross-file hotspot-family readiness は index に実在する言語だけを対象に1回の grouped scan で検証します。これにより、大規模な mixed-language index でも CLI / MCP の完了出力前に reader bootstrap や言語ごとの correlated symbol scan を繰り返しません。
+index finalize は、その run で既に確定した issue-readiness state を維持しながら active writer transaction から reference completeness metadata を読み、cross-file hotspot-family readiness は index に実在する言語だけを対象に1回の grouped scan で検証します。これにより、degraded な issue data を authoritative と誤認せず、大規模な mixed-language index でも CLI / MCP の完了出力前に reader bootstrap や言語ごとの correlated symbol scan を繰り返しません。
 
 非常に大きい repo では、repo root で一度 index し、generated tree を早めに除外し、
 日々の作業は scoped refresh を使ってください。branch switch、rebase、reset、merge で

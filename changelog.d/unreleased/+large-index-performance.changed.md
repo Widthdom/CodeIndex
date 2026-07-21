@@ -40,7 +40,7 @@ affected:
 - **Worker responses stay as bytes in the parent** — a bounded, buffered UTF-8 frame reader now feeds response bytes directly to JSON deserialization while preserving frame limits, CRLF handling, cancellation, and persistent-worker remainder buffering.
 - **Graph-neutral updates skip repository-wide recursion work** — incremental full scans, scoped updates, and MCP indexing now distinguish cleanup that actually changes symbol/reference identity rows, so text-only source edits avoid a whole-graph pass while symbol and reference mutations still refresh once per batch.
 - **Small incremental runs batch FTS segment maintenance** — full scans, scoped updates, and MCP indexing now share the 25-run incremental optimize threshold, while fresh indexes and rebuilds continue to rebuild and optimize FTS5 immediately.
-- **Index completion avoids repeated whole-reader readiness work** — full scans, scoped updates, and MCP indexing read reference-cap metadata through the active writer transaction, while hotspot-family validation groups only indexed languages in one symbol pass instead of running a correlated scan for every supported language.
+- **Index completion avoids repeated whole-reader readiness work** — full scans, scoped updates, and MCP indexing read reference-cap metadata through the active writer transaction without promoting degraded issue state, while hotspot-family validation groups only indexed languages in one symbol pass instead of running a correlated scan for every supported language.
 
 ## 日本語
 
@@ -53,4 +53,4 @@ affected:
 - **親 process 内でも worker response を byte のまま扱います** — bounded・buffered UTF-8 frame reader から response byte を JSON deserialize へ直接渡し、frame limit、CRLF、cancellation、persistent worker の remainder buffering を維持します。
 - **graph-neutral な更新では repository 全体の再帰処理を省略します** — incremental full scan、scoped update、MCP indexing は symbol/reference identity 行を実際に変える cleanup を区別し、text-only な source 編集では全 graph pass を避けつつ、symbol/reference 変更時は batch ごとに1回だけ refresh します。
 - **小さな incremental run の FTS segment maintenance をbatch化します** — full scan、scoped update、MCP indexing で25 run の incremental optimize threshold を共有し、fresh index と rebuild は引き続き FTS5 を直ちに rebuild・optimize します。
-- **index completion で whole-reader readiness work を繰り返さないようにしました** — full scan、scoped update、MCP indexing は active writer transaction から reference-cap metadata を読み、hotspot-family validation は全対応言語ごとの correlated scan ではなく、index に実在する言語だけを1回の symbol group pass で検証します。
+- **index completion で whole-reader readiness work を繰り返さないようにしました** — full scan、scoped update、MCP indexing は degraded な issue state を昇格させずに active writer transaction から reference-cap metadata を読み、hotspot-family validation は全対応言語ごとの correlated scan ではなく、index に実在する言語だけを1回の symbol group pass で検証します。
