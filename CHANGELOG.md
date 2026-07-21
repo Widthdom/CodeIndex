@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.39.1] - 2026-07-21
+
+#### Fixed
+
+- **Release install verification now authenticates GitHub attestation checks** — the published-release smoke job supplies its read-only automatic GitHub token to the installer, so the default strict provenance policy can verify release assets instead of failing because GitHub CLI is unauthenticated.
+
 ### [1.39.0] - 2026-07-21
 
 #### Added
@@ -6058,6 +6064,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.39.1] - 2026-07-21
+
+#### 修正
+
+- **リリースのインストール検証で GitHub attestation を認証するようになりました** — 公開済みリリースの smoke job が read-only の自動 GitHub token を installer に渡すため、GitHub CLI の未認証エラーで失敗せず、既定の strict provenance policy で release asset を検証できます。
+
 ### [1.39.0] - 2026-07-21
 
 #### 追加
@@ -12083,7 +12095,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.39.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.39.1...HEAD
+[1.39.1]: https://github.com/Widthdom/CodeIndex/compare/v1.39.0...v1.39.1
 [1.39.0]: https://github.com/Widthdom/CodeIndex/compare/v1.38.0...v1.39.0
 [1.38.0]: https://github.com/Widthdom/CodeIndex/compare/v1.37.2...v1.38.0
 [1.37.2]: https://github.com/Widthdom/CodeIndex/compare/v1.37.1...v1.37.2
