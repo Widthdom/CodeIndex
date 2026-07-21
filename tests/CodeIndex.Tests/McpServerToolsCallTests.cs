@@ -8154,7 +8154,9 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_mutual_recursion_{Guid.NewGuid():N}");
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_mutual_recursion");
         var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var previousFtsOptimizeHook = McpServer.McpIndexFtsOptimizeForTesting;
         var refreshCount = 0;
+        var ftsOptimizeCount = 0;
         try
         {
             Directory.CreateDirectory(fixtureDir);
@@ -8214,21 +8216,34 @@ public partial class McpServerTests
             Assert.True((long)candidateCommand.ExecuteScalar()! > 0);
 
             refreshCount = 0;
+            McpServer.McpIndexFtsOptimizeForTesting = () =>
+            {
+                ftsOptimizeCount++;
+                previousFtsOptimizeHook?.Invoke();
+            };
             var graphNeutralPath = Path.Combine(fixtureDir, "graph-neutral.py");
             File.WriteAllText(graphNeutralPath, "# text-only source\n");
             var neutralInsertResponse = CallIndex(server, fixtureDir);
             Assert.False(neutralInsertResponse["result"]?["isError"]?.GetValue<bool>() ?? false, neutralInsertResponse.ToJsonString());
             Assert.Equal(0, refreshCount);
+            Assert.Equal(0, ftsOptimizeCount);
+            Assert.Equal(1, verificationWriter.GetFtsIncrementalWritesSinceOptimize());
 
+            verificationWriter.SetMeta(
+                DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+                (DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold - 1).ToString(CultureInfo.InvariantCulture));
             File.WriteAllText(graphNeutralPath, "# changed text-only source\n");
             File.SetLastWriteTimeUtc(graphNeutralPath, DateTime.UtcNow.AddSeconds(2));
             var neutralUpdateResponse = CallIndex(server, fixtureDir);
             Assert.False(neutralUpdateResponse["result"]?["isError"]?.GetValue<bool>() ?? false, neutralUpdateResponse.ToJsonString());
             Assert.Equal(0, refreshCount);
+            Assert.Equal(1, ftsOptimizeCount);
+            Assert.Equal(0, verificationWriter.GetFtsIncrementalWritesSinceOptimize());
         }
         finally
         {
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            McpServer.McpIndexFtsOptimizeForTesting = previousFtsOptimizeHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }

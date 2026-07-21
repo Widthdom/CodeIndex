@@ -2379,6 +2379,60 @@ public sealed class Caller
         }
     }
 
+    [Fact]
+    public void Run_IncrementalFullScan_DefersFtsOptimizeUntilWriteThreshold()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_threshold");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var sourcePath = Path.Combine(projectRoot, "app.py");
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var optimizeCount = 0;
+        try
+        {
+            File.WriteAllText(sourcePath, "def run():\n    return 1\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+            {
+                optimizeCount++;
+                previousOptimizeHook?.Invoke();
+            };
+            File.WriteAllText(sourcePath, "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (deferredExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, deferredExitCode);
+            Assert.Equal(0, optimizeCount);
+            using (var deferredDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Equal(1, new DbWriter(deferredDb).GetFtsIncrementalWritesSinceOptimize());
+            }
+
+            using (var thresholdDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                new DbWriter(thresholdDb).SetMeta(
+                    DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+                    (DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold - 1).ToString(CultureInfo.InvariantCulture));
+            }
+            File.WriteAllText(sourcePath, "def run():\n    return 3\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(4));
+
+            var (optimizedExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, optimizedExitCode);
+            Assert.Equal(1, optimizeCount);
+            using var optimizedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(0, new DbWriter(optimizedDb).GetFtsIncrementalWritesSinceOptimize());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
 
     [Fact]
     public void Run_NoOpUpdate_DoesNotStartExtractionWork()

@@ -9,6 +9,7 @@ affected:
   - src/CodeIndex/Cli/EnvironmentVariableInventory.cs
   - src/CodeIndex/Database/DbWriter.References.cs
   - src/CodeIndex/Database/DbWriter.Files.cs
+  - src/CodeIndex/Database/DbWriter.Fts.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractionWorker.cs
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
   - src/CodeIndex/Cli/IndexCommandRunner.Update.cs
@@ -34,6 +35,7 @@ affected:
 - **Symbol-worker responses stream as UTF-8** — extracted symbol batches are serialized directly to the worker stdout stream, removing the matching UTF-16 JSON allocation and re-encoding pass on the return path.
 - **Worker responses stay as bytes in the parent** — a bounded, buffered UTF-8 frame reader now feeds response bytes directly to JSON deserialization while preserving frame limits, CRLF handling, cancellation, and persistent-worker remainder buffering.
 - **Graph-neutral updates skip repository-wide recursion work** — incremental full scans, scoped updates, and MCP indexing now distinguish cleanup that actually changes symbol/reference identity rows, so text-only source edits avoid a whole-graph pass while symbol and reference mutations still refresh once per batch.
+- **Small incremental runs batch FTS segment maintenance** — full scans, scoped updates, and MCP indexing now share the 25-run incremental optimize threshold, while fresh indexes and rebuilds continue to rebuild and optimize FTS5 immediately.
 
 ## 日本語
 
@@ -45,3 +47,4 @@ affected:
 - **symbol-worker response を UTF-8 stream にしました** — 抽出済み symbol batch を worker stdout stream へ直接 serialize し、戻り経路に残っていた UTF-16 JSON allocation と再 encoding pass もなくしました。
 - **親 process 内でも worker response を byte のまま扱います** — bounded・buffered UTF-8 frame reader から response byte を JSON deserialize へ直接渡し、frame limit、CRLF、cancellation、persistent worker の remainder buffering を維持します。
 - **graph-neutral な更新では repository 全体の再帰処理を省略します** — incremental full scan、scoped update、MCP indexing は symbol/reference identity 行を実際に変える cleanup を区別し、text-only な source 編集では全 graph pass を避けつつ、symbol/reference 変更時は batch ごとに1回だけ refresh します。
+- **小さな incremental run の FTS segment maintenance をbatch化します** — full scan、scoped update、MCP indexing で25 run の incremental optimize threshold を共有し、fresh index と rebuild は引き続き FTS5 を直ちに rebuild・optimize します。

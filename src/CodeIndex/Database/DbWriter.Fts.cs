@@ -143,6 +143,28 @@ public partial class DbWriter
         return value;
     }
 
+    /// <summary>
+    /// Record one incremental indexing run and optimize only when the write threshold is reached.
+    /// incremental indexing runを1回記録し、write threshold到達時だけ最適化する。
+    /// </summary>
+    public bool RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
+        Action? beforeOptimize = null,
+        int threshold = DefaultFtsOptimizeIncrementalWriteThreshold,
+        CancellationToken cancellationToken = default)
+    {
+        if (threshold <= 0)
+            throw new ArgumentOutOfRangeException(nameof(threshold));
+
+        if (RecordFtsIncrementalWrite() < threshold)
+            return false;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        beforeOptimize?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+        OptimizeFts(cancellationToken);
+        return true;
+    }
+
     public void MarkBatchInProgress() => SetMeta(DbContext.BatchInProgressMetaKey, "true");
 
     public void ClearBatchInProgress() => SetMeta(DbContext.BatchInProgressMetaKey, "false");

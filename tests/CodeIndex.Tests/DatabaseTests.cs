@@ -1274,6 +1274,24 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RecordFtsIncrementalWriteAndOptimizeIfThresholdReached_BatchesMaintenance()
+    {
+        var optimizeCount = 0;
+
+        Assert.False(_writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
+            () => optimizeCount++,
+            threshold: 2));
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, optimizeCount);
+
+        Assert.True(_writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
+            () => optimizeCount++,
+            threshold: 2));
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(1, optimizeCount);
+    }
+
+    [Fact]
     public void DbContext_OpenWithBatchInProgress_Warns()
     {
         _writer.MarkBatchInProgress();

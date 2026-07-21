@@ -897,8 +897,9 @@ public partial class McpServer
         }
         else if (ftsMutated)
         {
-            McpIndexFtsOptimizeForTesting?.Invoke();
-            writer.OptimizeFts(requestToken);
+            writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
+                McpIndexFtsOptimizeForTesting,
+                cancellationToken: requestToken);
         }
         // MCP index now runs ValidateContent + InsertIssues per file (bdbb2bd) on par with CLI
         // index, so stamp both graph-ready and issues-ready on clean runs — the old "graph only"

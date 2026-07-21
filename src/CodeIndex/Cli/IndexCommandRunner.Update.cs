@@ -1205,8 +1205,7 @@ public static partial class IndexCommandRunner
         var ftsOptimizeRan = false;
         if (ftsMutated)
         {
-            writer.RecordFtsIncrementalWrite();
-            ftsOptimizeRan = writer.OptimizeFtsIfIncrementalWriteThresholdReached(
+            ftsOptimizeRan = writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
                 cancellationToken: cancellationToken);
         }
         if (options.MemoryTrace)

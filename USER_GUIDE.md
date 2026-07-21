@@ -2180,6 +2180,8 @@ Scoped updates use the same path filter as a full scan, including the same `.git
 
 Incremental full scans, scoped updates, and MCP indexing skip the repository-wide mutual-recursion refresh when every changed file has neither old nor new symbol/reference identity rows. Text-only source edits therefore do not pay a whole-graph pass; adding or removing symbols, references, dependent reference-line context, or stale indexed paths still refreshes the graph before readiness is restored.
 
+Fresh indexes and `--rebuild` still rebuild and optimize FTS5 immediately. Incremental full scans, scoped updates, and MCP indexing instead record one FTS maintenance write per mutating run and merge FTS segments after 25 such runs, avoiding repository-size `optimize` work after every small edit while keeping periodic query maintenance.
+
 Indexing commits file-by-file SQLite transactions. Other processes can query during a long refresh, but they may observe a transitional live snapshot until the indexing command finishes. For automation, run `cdidx status --check --json` after the refresh completes and require `index_matches_workspace: true` before trusting search, symbol, or graph results.
 
 Successful narrow update JSON reports `mode: "update"` with `summary.updated`, `summary.removed`, and `summary.skipped`. A promoted full scan uses the full-scan JSON shape: `mode` remains `"incremental"` unless `--rebuild` was passed, and the summary includes `files_scanned`, `files_skipped`, and `files_purged`. Branch-switch or history-moving workflows should use `--changed-between <old-ref> <new-ref>` when both refs are known; otherwise use `cdidx <projectPath> --json` for repo-wide stale-path cleanup.
@@ -5236,6 +5238,8 @@ index 時には `--include-symbol-kind` で一致する kind だけを保持し�
 部分更新はフルスキャンと同じ path filter を使い、同じ `.gitignore` から `.cdidxignore` への順序と `!` 再包含 semantics を適用します。commit ベースの更新で対象コミット内の `.gitignore` または `.cdidxignore` 変更を検出した場合、cdidx はその実行をフルインクリメンタルスキャンへ昇格し、新しく ignore されたファイルを purge し、新しく再包含されたファイルを index できるようにします。`--files` は渡した path だけを更新するため、ignore ルール変更後は、commit-scoped コマンドがその ignore ファイル変更を見られる場合を除き、`cdidx <projectPath> --json` を使ってください。
 
 incremental full scan、scoped update、MCP indexing は、変更ファイルの新旧どちらにも symbol/reference identity 行がない場合、repository 全体の mutual-recursion refresh を省略します。そのため text-only な source 編集は全 graph pass を負担しません。一方で symbol、reference、依存する reference-line context、または stale indexed path の追加・削除時は、readiness を復元する前に従来どおり graph を refresh します。
+
+fresh index と `--rebuild` は引き続き FTS5 を直ちに rebuild・optimize します。incremental full scan、scoped update、MCP indexing は、変更を伴う run ごとに FTS maintenance write を1回記録し、25回ごとに FTS segment を統合します。小さな編集のたびに repository-size の `optimize` を行わず、query 用の定期 maintenance は維持します。
 
 indexing はファイル単位の SQLite transaction を commit します。長い refresh 中も別プロセスから query できますが、indexing command が完了するまでは途中の live snapshot を観測する可能性があります。自動化では refresh 完了後に `cdidx status --check --json` を実行し、`index_matches_workspace: true` を確認してから search、symbol、graph の結果を信頼してください。
 

@@ -2304,16 +2304,21 @@ public static partial class IndexCommandRunner
         }
         else if (ftsMutated)
         {
-            WriteFullScanJsonLiveness(options, "optimizing index...");
-            var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");
-            try
+            var incrementalWrites = writer.RecordFtsIncrementalWrite();
+            if (incrementalWrites >= DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold)
             {
-                FullScanFtsOptimizeForTesting?.Invoke();
-                writer.OptimizeFts(cancellationToken);
-            }
-            finally
-            {
-                StopFullScanJsonPhaseHeartbeat(optimizeHeartbeat);
+                WriteFullScanJsonLiveness(options, "optimizing index...");
+                var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");
+                try
+                {
+                    FullScanFtsOptimizeForTesting?.Invoke();
+                    writer.OptimizeFtsIfIncrementalWriteThresholdReached(
+                        cancellationToken: cancellationToken);
+                }
+                finally
+                {
+                    StopFullScanJsonPhaseHeartbeat(optimizeHeartbeat);
+                }
             }
         }
         if (options.MemoryTrace)
