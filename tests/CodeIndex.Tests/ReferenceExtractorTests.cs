@@ -767,7 +767,7 @@ public partial class ReferenceExtractorTests
 #endif
     public void Extract_CSharpLargePlainCallFile_CompletesWithinPracticalBudget()
     {
-        const int callerCount = 1_000;
+        const int callerCount = 500;
         var builder = new StringBuilder();
         builder.AppendLine("class App {");
         builder.AppendLine("    void Target() { }");
@@ -783,7 +783,7 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == "Caller0");
         Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == $"Caller{callerCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(15);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large C# plain call reference extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
