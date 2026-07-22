@@ -143,7 +143,7 @@ jobs:
         run: dotnet tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll summarize --results-directory ./TestResults --top 10
 
       - name: Upload test results
-        if: always() && (steps.test.outputs.summarize == 'true' || failure())
+        if: always() && steps.test.outcome != 'skipped' && (steps.test.outputs.summarize == 'true' || failure())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}
@@ -156,7 +156,7 @@ jobs:
             TestResults/**/*.xml
 
       - name: Upload diagnostic dumps
-        if: failure()
+        if: failure() && steps.test.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         continue-on-error: true
         with:
@@ -170,7 +170,7 @@ jobs:
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports
-        if: always() && matrix.primary_lane
+        if: always() && matrix.primary_lane && steps.test.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}

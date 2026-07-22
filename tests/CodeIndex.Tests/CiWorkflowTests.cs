@@ -123,7 +123,7 @@ public class CiWorkflowTests
             "if: always() && matrix.primary_lane");
         AssertContainsAll(
             workflow,
-            "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
+            "- name: Upload test results\n        if: always() && steps.test.outcome != 'skipped' && (steps.test.outputs.summarize == 'true' || failure())",
             "- name: Publish\n        if: matrix.primary_lane\n        run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --no-restore --output publish",
             "- name: Upload build artifact\n        if: matrix.primary_lane");
         AssertDoesNotContainAny(
@@ -136,7 +136,13 @@ public class CiWorkflowTests
             workflow,
             "- name: Summarize TRX telemetry\n        if: always()\n",
             "- name: Summarize TRX telemetry\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
-            "- name: Upload test results\n        if: always()\n");
+            "- name: Upload test results\n        if: always()\n",
+            "- name: Upload diagnostic dumps\n        if: failure()\n",
+            "- name: Upload coverage reports\n        if: always() && matrix.primary_lane\n");
+        AssertContainsAll(
+            workflow,
+            "- name: Upload diagnostic dumps\n        if: failure() && steps.test.outcome != 'skipped'",
+            "- name: Upload coverage reports\n        if: always() && matrix.primary_lane && steps.test.outcome != 'skipped'");
         Assert.Contains("function Invoke-TestRun", testScript);
     }
 
