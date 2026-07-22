@@ -566,6 +566,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Unreadable-directory full-scan coverage keeps JSON and human diagnostics, purge protection, checkpoint non-creation, and successful rescan retry in one fixture so the shared partial scan setup is not rebuilt.
 - Legacy-checkpoint coverage proves the save hook is never called, manually seeds the old file, and covers both deletion after a stable-snapshot file-read failure and bounded delete-failure warnings so authoritative full scans cannot resume from HEAD-only state.
 - HEAD freshness coverage uses one two-commit fixture to prove a `--files` refresh remains stale before a `--commits HEAD` refresh marks the current head matched.
+- Hook timeout identity coverage uses the same short callback budget as the focused timeout tests; the fixture hook remains blocked far beyond that boundary, so using the production-sized five-second budget adds wall-clock delay without strengthening the contract.
 - When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
 - When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
@@ -1334,6 +1335,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - unreadable-directory の full-scan coverage は JSON/human diagnostics、purge protection、checkpoint 非作成、全体を再走査する successful retry を 1 fixture に保ち、共通の partial scan setup を再構築しないでください。
 - legacy checkpoint coverage は save hook が呼ばれないことを固定し、旧fileを手動で配置してstable-snapshotのfile read failure後にも削除される経路とboundedなdelete-failure warningの両方を扱い、authoritative full scanがHEADだけの状態から再開しないことを検証してください。
 - HEAD freshness coverage は 1 つの two-commit fixture で、`--files` refresh 後は stale のまま、`--commits HEAD` refresh 後は current head が matched になることを検証してください。
+- hook timeout の identity coverage は、focused timeout test と同じ短い callback budget を使います。fixture hook はその境界を十分に超えて停止し続けるため、本番相当の5秒budgetを使っても契約は強くならず wall-clock delay だけが増えます。
 - 同種の key/value 期待値を長い表で固定するテストでは、期待値をデータとして残し、繰り返しの lookup/assertion 形は helper に通してください。重複行を見つけやすくするためです。
 - extractor テストで `SymbolName` / `ReferenceKind` の同じ predicate 形を positive / negative reference assertion の両方に繰り返す場合は、semantic assertion helper を使い、各 call site には container name/kind、context、line、column、除外 symbol set など挙動差分だけを残してください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
