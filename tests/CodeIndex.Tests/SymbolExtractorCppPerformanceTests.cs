@@ -39,7 +39,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_Cpp_ManySameLineClasses_CompletesWithinPracticalBudget()
     {
-        const int classCount = 50_000;
+        const int classCount = 25_000;
         _ = SymbolExtractor.Extract(0, "cpp", "class Warmup { int run(); int unique(); };");
         var content = string.Join('\n', Enumerable.Range(0, classCount).Select(i =>
             $"class Item{i} {{ int shared(); int unique{i}(); }};"));
@@ -51,7 +51,7 @@ public partial class SymbolExtractorTests
         Assert.Equal(classCount * 2, symbols.Count(s => s.Kind == "function" && s.ContainerName?.StartsWith("Item", StringComparison.Ordinal) == true));
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shared" && s.ContainerName == "Item0");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"unique{classCount - 1}" && s.ContainerName == $"Item{classCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Dense C++ same-line class extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");

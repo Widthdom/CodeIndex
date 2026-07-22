@@ -7571,7 +7571,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_CppLargeSameLineClassBody_CompletesWithinPracticalBudget()
     {
-        const int methodCount = 1_000;
+        const int methodCount = 500;
         var members = string.Join(' ', Enumerable.Range(0, methodCount).Select(i => $"int method{i}();"));
         var content = $"class Big {{ {members} }};";
 
@@ -7581,7 +7581,7 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method0" && s.ContainerName == "Big");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"method{methodCount - 1}" && s.ContainerName == "Big");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large C++ same-line class body extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");

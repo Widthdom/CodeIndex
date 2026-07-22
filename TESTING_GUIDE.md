@@ -562,6 +562,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Dense C# primary-constructor and Java record runaway guards use 20,000 and 13,000 declarations respectively, assert every extracted member plus both endpoints, and share a five-second ceiling; larger arbitrary fixtures repeat the same linear path without covering another boundary.
 - TypeScript and Swift alias-expansion runaway guards use 500 alias uses, retain first/last expanded-reference assertions, and share a five-second ceiling; keep the paired language fixtures aligned.
 - JavaScript object-literal and TypeScript class-expression runaway guards use 500 exported targets, retain first/last nested-member assertions, and share a five-second ceiling.
+- C++ same-line runaway guards cover both 25,000 separate classes and 500 members in one class, retaining exact aggregate or endpoint assertions with a five-second ceiling.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
 - Batch independent file mutations into one `--files` update when a file-indexer test only needs to verify their normalized paths and outcomes after the same initial index.
 - Keep related index invalidation transitions in one fixture when every intermediate state is asserted; static-interface contract add, remove, restore, and delete coverage should not rebuild equivalent projects independently.
@@ -1338,6 +1339,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - denseなC# primary-constructorとJava recordのrunaway guardは、それぞれ20,000／13,000宣言を使い、全抽出memberと両endpointを検証して5秒上限を共有します。任意に大きいfixtureは新しい境界を覆わず同じ線形pathを反復するだけなので増やさないでください。
 - TypeScriptとSwiftのalias-expansion runaway guardは500件のalias useを使い、先頭・末尾のexpanded reference assertionと5秒上限を維持します。対応する言語fixtureは同期してください。
 - JavaScript object-literalとTypeScript class-expressionのrunaway guardは500件のexport targetを使い、先頭・末尾のnested-member assertionと5秒上限を維持します。
+- C++ same-line runaway guardは25,000個の独立classと1 class内500 memberの両方向を覆い、正確なaggregateまたはendpoint assertionと5秒上限を維持します。
 - file-indexer テストが同じ初回 index 後の normalized path と結果だけを検証する場合は、独立した file mutation を 1 回の `--files` update にまとめてください。
 - 関連する index invalidation の各中間状態を assertion する場合は 1 fixture にまとめてください。static-interface contract の追加、除去、復元、削除を同等の project 再構築へ分割しないでください。
 - cap issue lifecycle test は low/high boundary の変更ごとに issue を assertion する場合、full-scan と update の遷移で 1 つの indexed fixture を再利用してください。
