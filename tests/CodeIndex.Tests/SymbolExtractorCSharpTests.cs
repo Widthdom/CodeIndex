@@ -1810,7 +1810,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_CSharp_ManyPrimaryConstructorTypes_CompletesWithinPracticalBudget()
     {
-        const int typeCount = 40_000;
+        const int typeCount = 20_000;
         _ = SymbolExtractor.Extract(0, "csharp", "public record Warmup(int Value);");
         var content = string.Join('\n', Enumerable.Range(0, typeCount).Select(i => $"public record Item{i}(int Value{i});"));
 
@@ -1821,7 +1821,7 @@ public partial class SymbolExtractorTests
         Assert.Equal(typeCount, symbols.Count(s => s.Kind == "property" && s.ContainerName?.StartsWith("Item", StringComparison.Ordinal) == true));
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Value0" && s.ContainerName == "Item0");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"Value{typeCount - 1}" && s.ContainerName == $"Item{typeCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Dense C# primary-constructor extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");

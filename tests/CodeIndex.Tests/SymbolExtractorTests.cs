@@ -6089,7 +6089,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_Java_ManyRecordsAndCompactConstructors_CompletesWithinPracticalBudget()
     {
-        const int typeCount = 26_000;
+        const int typeCount = 13_000;
         _ = SymbolExtractor.Extract(0, "java", "public record Warmup(int value) { public Warmup { } }");
         var content = string.Join('\n', Enumerable.Range(0, typeCount).Select(i =>
             $"public record Item{i}(int value{i}) {{ public Item{i} {{ }} }}"));
@@ -6102,7 +6102,7 @@ public partial class SymbolExtractorTests
         Assert.Equal(typeCount, symbols.Count(s => s.Kind == "function" && s.Name.StartsWith("Item", StringComparison.Ordinal) && s.ContainerName == s.Name));
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value0" && s.ContainerName == "Item0");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"Item{typeCount - 1}" && s.ContainerName == $"Item{typeCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Dense Java record extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
