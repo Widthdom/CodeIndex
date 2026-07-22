@@ -5574,7 +5574,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_GoLargeGroupedDeclarations_CompletesWithinPracticalBudget()
     {
-        const int declarationCount = 1_000;
+        const int declarationCount = 500;
         var typeLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Type{i} struct {{ Embedded{i} }}"));
         var constLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Const{i} = {i}"));
         var varLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Var{i} Config"));
@@ -5603,7 +5603,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == $"Embedded{declarationCount - 1}");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Const0");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"Var{declarationCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large Go grouped declaration extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
