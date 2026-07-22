@@ -563,6 +563,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - TypeScript and Swift alias-expansion runaway guards use 500 alias uses, retain first/last expanded-reference assertions, and share a five-second ceiling; keep the paired language fixtures aligned.
 - JavaScript object-literal and TypeScript class-expression runaway guards use 500 exported targets, retain first/last nested-member assertions, and share a five-second ceiling.
 - JavaScript exported-object properties and TypeScript exported variables use 500 declarations, retain first/last signature or visibility assertions, and share a five-second ceiling.
+- Shell alias and Rust use-set runaway guards use 500 aliases and 1,000 imports respectively, retain first/last assertions, and share a five-second ceiling.
 - C++ same-line runaway guards cover both 25,000 separate classes and 500 members in one class, retaining exact aggregate or endpoint assertions with a five-second ceiling.
 - Java record and Kotlin primary-constructor runaway guards use 500 components in one type; Kotlin also covers 20,000 separate types. They retain endpoint or exact aggregate assertions with a five-second ceiling.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
@@ -1342,6 +1343,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - TypeScriptとSwiftのalias-expansion runaway guardは500件のalias useを使い、先頭・末尾のexpanded reference assertionと5秒上限を維持します。対応する言語fixtureは同期してください。
 - JavaScript object-literalとTypeScript class-expressionのrunaway guardは500件のexport targetを使い、先頭・末尾のnested-member assertionと5秒上限を維持します。
 - JavaScriptのexported-object propertyとTypeScriptのexported variableは500宣言を使い、先頭・末尾のsignatureまたはvisibility assertionと5秒上限を維持します。
+- Shell aliasとRust use-setのrunaway guardはそれぞれ500 aliasと1,000 importを使い、先頭・末尾のassertionと5秒上限を維持します。
 - C++ same-line runaway guardは25,000個の独立classと1 class内500 memberの両方向を覆い、正確なaggregateまたはendpoint assertionと5秒上限を維持します。
 - Java recordとKotlin primary-constructorのrunaway guardは1型内500 componentを使い、Kotlinでは20,000個の独立型も覆います。endpointまたは正確なaggregate assertionと5秒上限を維持します。
 - file-indexer テストが同じ初回 index 後の normalized path と結果だけを検証する場合は、独立した file mutation を 1 回の `--files` update にまとめてください。

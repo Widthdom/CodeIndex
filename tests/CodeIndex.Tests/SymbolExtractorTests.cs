@@ -4107,7 +4107,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_ShellLargeAliasSet_CompletesWithinPracticalBudget()
     {
-        const int aliasCount = 1_000;
+        const int aliasCount = 500;
         var builder = new StringBuilder();
         for (var i = 0; i < aliasCount; i++)
             builder.Append("alias a").Append(i).Append("='echo ").Append(i).AppendLine("'");
@@ -4118,7 +4118,7 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "a0");
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == $"a{aliasCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large shell alias extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
@@ -5430,7 +5430,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_RustLargeUseSet_CompletesWithinPracticalBudget()
     {
-        const int importCount = 2_000;
+        const int importCount = 1_000;
         var builder = new StringBuilder();
         for (var i = 0; i < importCount; i++)
             builder.Append("use crate::generated::Item").Append(i).AppendLine(";");
@@ -5441,7 +5441,7 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Item0");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == $"Item{importCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large Rust use extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
