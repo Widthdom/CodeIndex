@@ -560,6 +560,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
 - For cross-language extractor budget tests, exceed the shared boundary by the smallest value that triggers truncation; do not add arbitrary padding independently per language.
 - Dense C# primary-constructor and Java record runaway guards use 20,000 and 13,000 declarations respectively, assert every extracted member plus both endpoints, and share a five-second ceiling; larger arbitrary fixtures repeat the same linear path without covering another boundary.
+- TypeScript and Swift alias-expansion runaway guards use 500 alias uses, retain first/last expanded-reference assertions, and share a five-second ceiling; keep the paired language fixtures aligned.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
 - Batch independent file mutations into one `--files` update when a file-indexer test only needs to verify their normalized paths and outcomes after the same initial index.
 - Keep related index invalidation transitions in one fixture when every intermediate state is asserted; static-interface contract add, remove, restore, and delete coverage should not rebuild equivalent projects independently.
@@ -1334,6 +1335,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
 - denseなC# primary-constructorとJava recordのrunaway guardは、それぞれ20,000／13,000宣言を使い、全抽出memberと両endpointを検証して5秒上限を共有します。任意に大きいfixtureは新しい境界を覆わず同じ線形pathを反復するだけなので増やさないでください。
+- TypeScriptとSwiftのalias-expansion runaway guardは500件のalias useを使い、先頭・末尾のexpanded reference assertionと5秒上限を維持します。対応する言語fixtureは同期してください。
 - file-indexer テストが同じ初回 index 後の normalized path と結果だけを検証する場合は、独立した file mutation を 1 回の `--files` update にまとめてください。
 - 関連する index invalidation の各中間状態を assertion する場合は 1 fixture にまとめてください。static-interface contract の追加、除去、復元、削除を同等の project 再構築へ分割しないでください。
 - cap issue lifecycle test は low/high boundary の変更ごとに issue を assertion する場合、full-scan と update の遷移で 1 つの indexed fixture を再利用してください。
