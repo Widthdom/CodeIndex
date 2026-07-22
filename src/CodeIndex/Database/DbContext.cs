@@ -2007,6 +2007,7 @@ public class DbContext : IDisposable
         => HotspotFamilyIncompleteMarkerFingerprintPrefix + (string.IsNullOrWhiteSpace(fingerprint) ? "unknown" : fingerprint);
     public const int CSharpSymbolNameContractVersion = 2;
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
+    public const string CSharpStaticInterfaceSourceEvidenceMetaKey = "csharp_static_interface_source_evidence";
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const int ReferenceIdentityContractVersion = 1;
@@ -2520,9 +2521,12 @@ public class DbContext : IDisposable
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_generated ON files(generated)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_checksum ON files(checksum)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_files_path_nocase ON files(path COLLATE NOCASE)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_file_issues_file_kind ON file_issues(file_id, kind)");
-                // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
-                // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
+                // The UNIQUE path constraint supplies the BINARY exact index. The separate
+                // NOCASE index is only for bounded ASCII case-alias candidate lookups.
+                // path の UNIQUE 制約が BINARY exact index を作り、別の NOCASE index は
+                // bounded ASCII case-alias candidate lookup 専用に使う。
                 Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_end_start_nonnull ON chunks(file_id, end_line, start_line, chunk_index) WHERE content IS NOT NULL");
                 Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_start_chunk_nonnull ON chunks(file_id, start_line, chunk_index, end_line) WHERE content IS NOT NULL");

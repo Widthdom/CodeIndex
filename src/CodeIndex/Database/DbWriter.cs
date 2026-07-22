@@ -39,6 +39,10 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractPreflightForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractWorkspaceReadForTesting = new();
+    private static readonly AsyncLocal<Action<CSharpContractWorkspaceReadStats>?>
+        ScopedCSharpContractWorkspaceReadStatsForTesting = new();
+    private static readonly AsyncLocal<Action<int>?>
+        ScopedCSharpFilePathLookupBatchCompletedForTesting = new();
     private static readonly AsyncLocal<Action<bool>?> ScopedAtomicFileReferenceInsertForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedReferenceBatchTransactionOpeningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchStatement>?> ScopedBatchStatementExecutingForTesting = new();
@@ -94,6 +98,18 @@ public partial class DbWriter
     {
         get => ScopedCSharpContractWorkspaceReadForTesting.Value;
         set => ScopedCSharpContractWorkspaceReadForTesting.Value = value;
+    }
+
+    internal static Action<CSharpContractWorkspaceReadStats>? CSharpContractWorkspaceReadStatsForTesting
+    {
+        get => ScopedCSharpContractWorkspaceReadStatsForTesting.Value;
+        set => ScopedCSharpContractWorkspaceReadStatsForTesting.Value = value;
+    }
+
+    internal static Action<int>? CSharpFilePathLookupBatchCompletedForTesting
+    {
+        get => ScopedCSharpFilePathLookupBatchCompletedForTesting.Value;
+        set => ScopedCSharpFilePathLookupBatchCompletedForTesting.Value = value;
     }
 
     internal static Action<bool>? AtomicFileReferenceInsertForTesting

@@ -50,6 +50,10 @@ public partial class FileIndexer
     internal static string ComputeChecksum(byte[] bytes)
         => FileContentLoader.ComputeChecksum(bytes);
 
-    internal static bool TryComputeChecksum(string filePath, long maxBytes, out string checksum)
-        => FileContentLoader.TryComputeChecksum(filePath, maxBytes, out checksum);
+    internal static bool TryComputeChecksum(
+        string filePath,
+        long maxBytes,
+        out string checksum,
+        CancellationToken cancellationToken = default)
+        => FileContentLoader.TryComputeChecksum(filePath, maxBytes, out checksum, cancellationToken);
 }

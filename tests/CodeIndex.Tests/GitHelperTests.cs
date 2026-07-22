@@ -519,6 +519,34 @@ public class GitHelperTests : IDisposable
     }
 
     [ExternalProcessFact]
+    public void ChangedFileHelpers_NullDelimitedRenamePreservesTabAndNewlinePaths()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = CreateGitRepo();
+        const string oldPath = "old\tname.txt";
+        const string newPath = "new\nname.txt";
+        File.WriteAllText(Path.Combine(repoDir, oldPath), "unchanged rename payload\n");
+        RunGit(repoDir, "add", oldPath);
+        RunGit(repoDir, "commit", "-m", "initial control path");
+        var oldRef = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        File.Move(Path.Combine(repoDir, oldPath), Path.Combine(repoDir, newPath));
+        RunGit(repoDir, "add", "-A");
+        RunGit(repoDir, "commit", "-m", "rename control path");
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var commitPaths = GitHelper.GetChangedFilesFromCommit(repoDir, commitId);
+        var rangePaths = GitHelper.GetChangedFilesBetweenRefs(repoDir, oldRef, commitId);
+
+        Assert.Contains(oldPath, commitPaths);
+        Assert.Contains(newPath, commitPaths);
+        Assert.Contains(oldPath, rangePaths);
+        Assert.Contains(newPath, rangePaths);
+    }
+
+    [ExternalProcessFact]
     public async Task GetChangedFilesFromCommit_DrainsLargeStderrWithoutDeadlock()
     {
         if (OperatingSystem.IsWindows())

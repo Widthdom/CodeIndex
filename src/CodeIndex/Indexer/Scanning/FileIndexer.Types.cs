@@ -89,6 +89,41 @@ public partial class FileIndexer
         }
     }
 
+    internal readonly record struct ScanFilesWithDirectoryListingSnapshotsResult(
+        ScanFilesResult ScanResult,
+        ScanInputSnapshot InputSnapshot);
+
+    internal sealed record ScanInputSnapshot(
+        IReadOnlyList<DirectoryListingSnapshot> DirectoryListings,
+        IReadOnlyList<ConfigurationInputSnapshot> ConfigurationInputs,
+        bool IsComplete,
+        string? IncompletePath,
+        string? IncompleteReason,
+        long ConfigurationGeneration);
+
+    internal readonly record struct DirectoryListingSnapshot(
+        string Path,
+        DateTime ModifiedUtc);
+
+    internal enum ConfigurationInputKind
+    {
+        MissingFile,
+        MissingDirectory,
+        File,
+        Directory,
+        MarkerFile,
+        MarkerDirectory,
+        RejectedOversizeFile,
+    }
+
+    internal sealed record ConfigurationInputSnapshot(
+        string Path,
+        ConfigurationInputKind Kind,
+        long Length,
+        DateTime ModifiedUtc,
+        FileIdentity? Identity,
+        byte[]? ContentHash);
+
     internal enum PathFilterKind
     {
         None,

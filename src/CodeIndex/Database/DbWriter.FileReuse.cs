@@ -412,7 +412,8 @@ public partial class DbWriter
         CancellationToken cancellationToken = default,
         int initialCapacity = 0,
         IReadOnlySet<string>? includedPaths = null,
-        IReadOnlyList<long>? excludedFileIds = null)
+        IReadOnlyList<long>? excludedFileIds = null,
+        Action<string>? persistedCSharpPathObserver = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ReusableStatSnapshotReadForTesting?.Invoke();
@@ -516,6 +517,9 @@ public partial class DbWriter
                 var fileId = reader.GetInt64(0);
                 var path = reader.GetString(1);
                 ReusableStatSnapshotCandidateRowForTesting?.Invoke(path);
+                var language = reader.IsDBNull(4) ? null : reader.GetString(4);
+                if (language == "csharp")
+                    persistedCSharpPathObserver?.Invoke(path);
                 var rawSize = reader.GetValue(3);
                 var sizeKnown = rawSize is long && (long)rawSize >= 0;
                 var persistedSize = sizeKnown ? (long)rawSize : 0;
@@ -525,11 +529,12 @@ public partial class DbWriter
                     continue;
                 }
 
-                var language = reader.GetString(4);
-                if (!currentVersionByLanguage.TryGetValue(language, out var versionCurrent))
+                // reusable_eligible guarantees a non-null language.
+                var reusableLanguage = language!;
+                if (!currentVersionByLanguage.TryGetValue(reusableLanguage, out var versionCurrent))
                 {
-                    versionCurrent = SymbolExtractorVersionMatchesCurrent(language);
-                    currentVersionByLanguage.Add(language, versionCurrent);
+                    versionCurrent = SymbolExtractorVersionMatchesCurrent(reusableLanguage);
+                    currentVersionByLanguage.Add(reusableLanguage, versionCurrent);
                 }
 
                 if (!versionCurrent
@@ -543,7 +548,7 @@ public partial class DbWriter
                     fileId,
                     modifiedUtc,
                     persistedSize,
-                    language,
+                    reusableLanguage,
                     reader.GetInt64(5) != 0));
             }
             cancellationToken.ThrowIfCancellationRequested();

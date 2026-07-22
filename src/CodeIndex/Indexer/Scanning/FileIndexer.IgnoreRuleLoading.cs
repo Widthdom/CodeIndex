@@ -40,6 +40,7 @@ public partial class FileIndexer
         ref bool fullyScanned)
     {
         var configIgnorePath = Path.Combine(_projectRoot, ".codeindex", ".cdidxignore");
+        RecordConfigurationFileProbe(configIgnorePath);
         return LoadIgnoreRulesFile(
             sourceDirectory: _projectRoot,
             ignorePath: configIgnorePath,
@@ -54,6 +55,7 @@ public partial class FileIndexer
         var activeIgnoreRules = IgnoreRuleSet.Empty;
         foreach (var dir in _ancestorIgnoreDirectories)
         {
+            RecordConfigurationDirectoryProbe(dir);
             if (!CanReadDirectory(dir, out var reason))
             {
                 errors?.Add(new ScanError(ToRelativePath(dir), $"Could not read ancestor ignore directory: {reason}."));
@@ -62,6 +64,7 @@ public partial class FileIndexer
             }
 
             var loadResult = LoadIgnoreRulesForDirectory(dir, activeIgnoreRules, errors, ref fullyScanned);
+            RecordConfigurationDirectoryProbe(dir);
             activeIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
                 return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: false);

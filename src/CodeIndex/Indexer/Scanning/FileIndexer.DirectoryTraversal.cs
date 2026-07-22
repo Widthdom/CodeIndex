@@ -99,7 +99,11 @@ public partial class FileIndexer
         int depth,
         ref bool fullyScanned)
     {
-        if (TryRecordNonRecursiveSubdirectory(subDir, scanState, passthrough))
+        if (TryRecordPassthroughSubdirectory(subDir, scanState, passthrough))
+            return true;
+
+        var subRelative = ToRelativePath(subDir);
+        if (scanState.CheckpointedDirectories.Contains(subRelative))
             return true;
 
         // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
@@ -119,28 +123,58 @@ public partial class FileIndexer
             return true;
         }
 
+        if (GetDirectoryFilterKind(subDir, subRelative, activeIgnoreRules) != PathFilterKind.None)
+        {
+            scanState.ListedDirectories.Add(subRelative);
+            scanState.FullyScannedDirectories.Add(subRelative);
+            return true;
+        }
+
+        // Bind the child listing before probing its .git marker. A marker created after
+        // a negative probe can otherwise become the baseline seen by child traversal.
+        // childの.git判定より先にlistingを固定し、negative probe直後のmarker生成を
+        // child走査側の新baselineとして取り込んでしまうraceを防ぐ。
+        var childListingModifiedBeforeUtc = scanState.CaptureDirectoryListingSnapshots
+            ? ReadDirectoryModifiedUtc(subDir)
+            : (DateTime?)null;
+        if (childListingModifiedBeforeUtc.HasValue)
+            scanState.RecordDirectoryListingSnapshot(subDir, childListingModifiedBeforeUtc.Value);
+        NestedRepositoryListingCapturedBeforeProbeForTesting?.Invoke(Path.Combine(subDir, ".git"));
+
+        if (TryRecordNestedRepository(subDir, scanState))
+            return true;
+
         var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir, knownAttributes));
         if (!scanState.VisitedDirectories.Add(resolvedSubDir))
         {
-            var subRelative = ToRelativePath(subDir);
             scanState.Errors.Add(new ScanError(subRelative, "Skipped symlinked directory because its resolved target was already scanned.", ScanIssueSeverity.Warning));
             RecordPrunedDirectory(subDir, scanState);
             return true;
         }
 
-        var childFullyScanned = ScanDirectory(subDir, scanState, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken, depth: depth + 1);
+        var childFullyScanned = ScanDirectory(
+            subDir,
+            scanState,
+            activeIgnoreRules,
+            continueOnError: continueOnError,
+            cancellationToken: cancellationToken,
+            depth: depth + 1,
+            listingModifiedBeforeUtc: childListingModifiedBeforeUtc,
+            listingSnapshotAlreadyRecorded: childListingModifiedBeforeUtc.HasValue);
         fullyScanned &= childFullyScanned;
         return continueOnError || childFullyScanned;
     }
 
-    private bool TryRecordNonRecursiveSubdirectory(string subDir, DirectoryScanState scanState, bool passthrough)
+    private bool TryRecordNestedRepository(string subDir, DirectoryScanState scanState)
     {
-        string? subRelative = null;
         if (IsNestedGitRepository(subDir))
         {
-            subRelative = ToRelativePath(subDir);
+            var subRelative = ToRelativePath(subDir);
             if (!IsSubmoduleOrAncestor(subRelative))
             {
+                var markerPath = Path.Combine(subDir, ".git");
+                NestedRepositoryDetectedBeforeSnapshotForTesting?.Invoke(markerPath);
+                RecordObservedNestedRepositoryMarker(markerPath);
                 scanState.ListedDirectories.Add(subRelative);
                 scanState.FullyScannedDirectories.Add(subRelative);
                 scanState.RecordNestedRepository(subRelative);
@@ -148,6 +182,14 @@ public partial class FileIndexer
             }
         }
 
+        return false;
+    }
+
+    private bool TryRecordPassthroughSubdirectory(
+        string subDir,
+        DirectoryScanState scanState,
+        bool passthrough)
+    {
         // In passthrough mode, only descend into subdirectories that are themselves
         // submodules or submodule ancestors. Treat siblings the same way SkipDirs
         // would have treated them at this point.
@@ -155,7 +197,7 @@ public partial class FileIndexer
         // サブディレクトリのみ降りる。その他は本来 SkipDirs で止まっていた扱いに戻す。
         if (passthrough)
         {
-            subRelative ??= ToRelativePath(subDir);
+            var subRelative = ToRelativePath(subDir);
             if (!IsSubmoduleOrAncestor(subRelative))
             {
                 scanState.ListedDirectories.Add(subRelative);

@@ -16,8 +16,17 @@ public static partial class ExtractorPluginRegistry
         PatternWorkspaceState state,
         string path,
         string source,
-        Func<string, Stream>? openFile = null)
+        Func<string, Stream>? openFile = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
+        var inputObserved = false;
+        Action<string, ReadOnlyMemory<byte>?, long?>? trackedObserver = observeInput == null
+            ? null
+            : (observedPath, content, observedLength) =>
+            {
+                inputObserved = true;
+                observeInput(observedPath, content, observedLength);
+            };
         try
         {
             path = Path.GetFullPath(path);
@@ -27,7 +36,7 @@ public static partial class ExtractorPluginRegistry
                     return;
             }
 
-            var configText = TryReadPatternConfigText(state, path, openFile);
+            var configText = TryReadPatternConfigText(state, path, openFile, trackedObserver);
             if (configText == null)
                 return;
 
@@ -103,6 +112,8 @@ public static partial class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is not IFileSystemAuthorizationFailure)
         {
+            if (!inputObserved)
+                observeInput?.Invoke(path, null, null);
             ReportPatternConfigRejected(state, path, "could not parse pattern config");
         }
     }
@@ -243,17 +254,19 @@ public static partial class ExtractorPluginRegistry
     private static string? TryReadPatternConfigText(
         PatternWorkspaceState state,
         string path,
-        Func<string, Stream>? openFile)
+        Func<string, Stream>? openFile,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput)
     {
         if (openFile != null)
         {
             using var stream = openFile(path);
-            return TryReadBoundedPatternConfigText(state, path, stream);
+            return TryReadBoundedPatternConfigText(state, path, stream, observeInput);
         }
 
         var fileInfo = new FileInfo(path);
         if (!fileInfo.Exists)
         {
+            observeInput?.Invoke(path, null, null);
             ReportPatternConfigRejected(state, path, "file does not exist");
             return null;
         }
@@ -273,13 +286,14 @@ public static partial class ExtractorPluginRegistry
 
         if (fileInfo.Length > MaxPatternConfigBytes)
         {
+            observeInput?.Invoke(path, null, fileInfo.Length);
             ReportPatternConfigRejected(state, path, $"file is too large ({fileInfo.Length} bytes; maximum {MaxPatternConfigBytes})");
             return null;
         }
 
         return OperatingSystem.IsWindows()
-            ? TryReadWindowsPatternConfigText(state, path)
-            : TryReadUnixPatternConfigText(state, path);
+            ? TryReadWindowsPatternConfigText(state, path, observeInput)
+            : TryReadUnixPatternConfigText(state, path, observeInput);
     }
 
     private static bool TryReadNextPatternConfigLine(ref ReadOnlySpan<char> remaining, out ReadOnlySpan<char> line)
@@ -313,7 +327,10 @@ public static partial class ExtractorPluginRegistry
         return line.Trim();
     }
 
-    private static string? TryReadWindowsPatternConfigText(PatternWorkspaceState state, string path)
+    private static string? TryReadWindowsPatternConfigText(
+        PatternWorkspaceState state,
+        string path,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput)
     {
         using var handle = CreateFile(
             path,
@@ -325,12 +342,14 @@ public static partial class ExtractorPluginRegistry
             templateFile: IntPtr.Zero);
         if (handle.IsInvalid)
         {
+            observeInput?.Invoke(path, null, null);
             ReportPatternConfigRejected(state, path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
 
         if (!GetFileInformationByHandle(handle, out var info))
         {
+            observeInput?.Invoke(path, null, null);
             ReportPatternConfigRejected(state, path, $"could not inspect file handle (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
@@ -338,6 +357,7 @@ public static partial class ExtractorPluginRegistry
         var attributes = (FileAttributes)info.FileAttributes;
         if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
         {
+            observeInput?.Invoke(path, null, null);
             ReportPatternConfigRejected(state, path, "path is not a regular file");
             return null;
         }
@@ -345,19 +365,24 @@ public static partial class ExtractorPluginRegistry
         var size = ((long)info.FileSizeHigh << 32) | info.FileSizeLow;
         if (size > MaxPatternConfigBytes)
         {
+            observeInput?.Invoke(path, null, size);
             ReportPatternConfigRejected(state, path, $"file is too large ({size} bytes; maximum {MaxPatternConfigBytes})");
             return null;
         }
 
         using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 8192, isAsync: false);
-        return TryReadBoundedPatternConfigText(state, path, stream);
+        return TryReadBoundedPatternConfigText(state, path, stream, observeInput, size);
     }
 
-    private static string? TryReadUnixPatternConfigText(PatternWorkspaceState state, string path)
+    private static string? TryReadUnixPatternConfigText(
+        PatternWorkspaceState state,
+        string path,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput)
     {
         var fd = UnixOpen(path, GetUnixOpenFlags());
         if (fd < 0)
         {
+            observeInput?.Invoke(path, null, null);
             ReportPatternConfigRejected(state, path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
@@ -366,6 +391,7 @@ public static partial class ExtractorPluginRegistry
         {
             if (!TryGetUnixFileType(fd, out var mode) || !IsRegularUnixFile(mode))
             {
+                observeInput?.Invoke(path, null, null);
                 ReportPatternConfigRejected(state, path, "path is not a regular file");
                 return null;
             }
@@ -383,6 +409,7 @@ public static partial class ExtractorPluginRegistry
                     break;
                 if (bytesRead < 0)
                 {
+                    observeInput?.Invoke(path, null, null);
                     ReportPatternConfigRejected(state, path, $"could not read safely (errno {Marshal.GetLastPInvokeError()})");
                     return null;
                 }
@@ -390,7 +417,12 @@ public static partial class ExtractorPluginRegistry
                 stream.Write(buffer, 0, (int)bytesRead);
             }
 
-            return ValidatePatternConfigText(state, path, stream);
+            return ValidatePatternConfigText(
+                state,
+                path,
+                stream,
+                observeInput,
+                observedLength: null);
         }
         finally
         {
@@ -398,7 +430,12 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
-    private static string? TryReadBoundedPatternConfigText(PatternWorkspaceState state, string path, Stream stream)
+    private static string? TryReadBoundedPatternConfigText(
+        PatternWorkspaceState state,
+        string path,
+        Stream stream,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput,
+        long? observedLength = null)
     {
         using var output = new MemoryStream(MaxPatternConfigBytes + 1);
         var buffer = new byte[Math.Min(8192, MaxPatternConfigBytes + 1)];
@@ -415,14 +452,44 @@ public static partial class ExtractorPluginRegistry
             output.Write(buffer, 0, bytesRead);
         }
 
-        return ValidatePatternConfigText(state, path, output);
+        if (!observedLength.HasValue && stream.CanSeek)
+        {
+            try
+            {
+                observedLength = stream.Length;
+            }
+            catch (Exception ex) when (ex is IOException or NotSupportedException or ObjectDisposedException)
+            {
+                // The bounded bytes still make a successful small read observable.
+            }
+        }
+
+        return ValidatePatternConfigText(state, path, output, observeInput, observedLength);
     }
 
-    private static string? ValidatePatternConfigText(PatternWorkspaceState state, string path, MemoryStream stream)
+    private static string? ValidatePatternConfigText(
+        PatternWorkspaceState state,
+        string path,
+        MemoryStream stream,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput,
+        long? observedLength)
     {
         if (stream.Length <= MaxPatternConfigBytes)
+        {
+            if (observeInput != null)
+            {
+                if (stream.TryGetBuffer(out var segment) && segment.Array is { } buffer)
+                    observeInput(path, new ReadOnlyMemory<byte>(buffer, segment.Offset, segment.Count), segment.Count);
+                else
+                {
+                    var content = stream.ToArray();
+                    observeInput(path, content, content.Length);
+                }
+            }
             return DecodePatternConfigText(stream);
+        }
 
+        observeInput?.Invoke(path, null, observedLength ?? stream.Length);
         ReportPatternConfigRejected(state, path, $"file is too large (more than {MaxPatternConfigBytes} bytes)");
         return null;
     }

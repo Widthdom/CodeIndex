@@ -25,6 +25,57 @@ public partial class DbWriter
         }
     }
 
+    /// <summary>
+    /// Return the persisted checksum only when the indexed row still matches a fresh
+    /// filesystem stat snapshot. Scoped cleanup planning can then reuse the checksum
+    /// without opening unchanged caller-selected files.
+    /// filesystem stat が永続 row と一致する場合だけ checksum を返し、scoped cleanup
+    /// planning が未変更 file を開かずに再利用できるようにする。
+    /// </summary>
+    internal bool TryGetFileChecksumByStat(
+        string relativePath,
+        long size,
+        DateTime modifiedUtc,
+        out string? checksum,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        checksum = null;
+        var command = RentCommand(
+            "SELECT checksum FROM files WHERE path = @path AND size = @size AND modified = @modified LIMIT 1",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@modified", SqliteType.Text);
+            });
+        try
+        {
+            command.Parameters["@path"].Value = relativePath;
+            command.Parameters["@size"].Value = size;
+            command.Parameters["@modified"].Value = modifiedUtc;
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return false;
+
+            checksum = reader.IsDBNull(0) ? null : reader.GetString(0);
+            cancellationToken.ThrowIfCancellationRequested();
+            return true;
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            throw new OperationCanceledException(
+                "File checksum stat lookup was interrupted.",
+                ex,
+                cancellationToken);
+        }
+        finally
+        {
+            ReleaseCommand(command);
+        }
+    }
+
     public IReadOnlyList<string> GetIndexedJavaScriptTypeScriptConfigPaths()
     {
         var cmd = RentCommand(

@@ -26,6 +26,44 @@ public class PostExtractionHookTests
     private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(400);
     private static readonly TimeSpan DuplicateHookCallbackBudget = TimeSpan.FromSeconds(5);
 
+    [Fact]
+    public void OnSymbolsExtractedAfterSourceObservation_PreservesEvidenceWithoutSecondSymbolScan()
+    {
+        using var runner = PostExtractionHookRunner.Discover(hooksDirectory: null);
+        var context = new FileContext("project", "Contract.cs", "/project/Contract.cs", "csharp");
+        var symbols = new EnumerationCountingSymbolList(
+        [
+            new SymbolRecord
+            {
+                Kind = "function",
+                Name = "Parse",
+                ContainerKind = "interface",
+                Signature = "static abstract T Parse(string value)",
+            },
+        ]);
+
+        runner.ObserveCSharpStaticInterfaceSourceSymbols(context, symbols);
+        runner.OnSymbolsExtractedAfterSourceObservation(context, symbols);
+
+        var laterCSharpSymbols = new EnumerationCountingSymbolList(
+        [
+            new SymbolRecord { Kind = "class", Name = "Unrelated" },
+        ]);
+        runner.ObserveCSharpStaticInterfaceSourceSymbols(context, laterCSharpSymbols);
+        var nonCSharpSymbols = new EnumerationCountingSymbolList(
+        [
+            new SymbolRecord { Kind = "function", Name = "unrelated" },
+        ]);
+        runner.ObserveCSharpStaticInterfaceSourceSymbols(
+            context with { Language = "python" },
+            nonCSharpSymbols);
+
+        Assert.True(runner.SawCSharpStaticInterfaceSourceContract);
+        Assert.Equal(1, symbols.EnumerationCount);
+        Assert.Equal(0, laterCSharpSymbols.EnumerationCount);
+        Assert.Equal(0, nonCSharpSymbols.EnumerationCount);
+    }
+
     [ProductionRuntimeFact]
     public void Discover_LoadsHooksAndAllowsSymbolAndReferenceMutation()
     {
@@ -1028,6 +1066,34 @@ public class PostExtractionHookTests
         {
             // The discovery worker normally removed the descendant already.
         }
+    }
+
+    private sealed class EnumerationCountingSymbolList(IReadOnlyList<SymbolRecord> values)
+        : IList<SymbolRecord>
+    {
+        private readonly List<SymbolRecord> inner = [.. values];
+
+        public int EnumerationCount { get; private set; }
+        public SymbolRecord this[int index] { get => inner[index]; set => inner[index] = value; }
+        public int Count => inner.Count;
+        public bool IsReadOnly => false;
+        public void Add(SymbolRecord item) => inner.Add(item);
+        public void Clear() => inner.Clear();
+        public bool Contains(SymbolRecord item) => inner.Contains(item);
+        public void CopyTo(SymbolRecord[] array, int arrayIndex) => inner.CopyTo(array, arrayIndex);
+        public int IndexOf(SymbolRecord item) => inner.IndexOf(item);
+        public void Insert(int index, SymbolRecord item) => inner.Insert(index, item);
+        public bool Remove(SymbolRecord item) => inner.Remove(item);
+        public void RemoveAt(int index) => inner.RemoveAt(index);
+
+        public IEnumerator<SymbolRecord> GetEnumerator()
+        {
+            EnumerationCount++;
+            return inner.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
     }
 }
 

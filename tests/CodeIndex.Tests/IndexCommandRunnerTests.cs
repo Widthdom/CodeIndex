@@ -2248,6 +2248,22 @@ public sealed class Caller
         Assert.Null(options.SymbolKindFilter.ParseError);
     }
 
+    [Theory]
+    [InlineData("include=;exclude=", true)]
+    [InlineData("include=class,FUNCTION,operator,property;exclude=", true)]
+    [InlineData("include=interface,operator,property;exclude=", false)]
+    [InlineData("include=;exclude=function", false)]
+    [InlineData(null, false)]
+    [InlineData("include=;exclude=;malformed", false)]
+    public void SymbolKindFilter_ContractMemberRetentionSignatureIsConservative(
+        string? signature,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            SymbolKindFilter.SignatureRetainsCSharpStaticInterfaceContractMembers(signature));
+    }
+
     [Fact]
     public void ParseArgs_SymbolKindFilterRejectsOverlongCsv_Issue2906()
     {
@@ -7387,7 +7403,7 @@ public sealed class Caller
 
 
     [Fact]
-    public void Run_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
+    public void Run_Rebuild_UnreadableDirectoryPreservesPriorRowsAndTrust()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -7401,6 +7417,17 @@ public sealed class Caller
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
             Directory.CreateDirectory(unreadableDir);
             File.WriteAllText(Path.Combine(unreadableDir, "Hidden.csproj"), "<Project />");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var priorTrust = ReadFullScanTrustSnapshot(dbPath);
+            var priorAppChecksum = ReadIndexedChecksum(dbPath, "app.cs");
+
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { public void Changed() { } }");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "app.cs"), DateTime.UtcNow.AddSeconds(3));
             originalMode = File.GetUnixFileMode(unreadableDir);
             File.SetUnixFileMode(unreadableDir, UnixFileMode.None);
 
@@ -7408,8 +7435,11 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
 
-            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(priorTrust, ReadFullScanTrustSnapshot(dbPath));
+            Assert.Equal(priorAppChecksum, ReadIndexedChecksum(dbPath, "app.cs"));
+            var indexedPaths = ReadIndexedPaths(dbPath);
             Assert.Contains("app.cs", indexedPaths);
         }
         finally

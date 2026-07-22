@@ -8090,7 +8090,16 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_scan_error");
         try
         {
-            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "IParseable.cs"),
+                "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+            var moneyPath = Path.Combine(fixtureDir, "Money.cs");
+            File.WriteAllText(
+                moneyPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = new JsonObject
             {
@@ -8109,6 +8118,7 @@ public partial class McpServerTests
 
             var firstResponse = server.HandleMessage(request)!;
             Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.Equal(1L, CountOldImplicitReference());
 
             using (var readyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
@@ -8117,7 +8127,15 @@ public partial class McpServerTests
                 Assert.NotEqual(0, userVersion & DbContext.IssuesReadyFlag);
             }
 
-            File.WriteAllText(Path.Combine(fixtureDir, ".gitignore"), new string('a', 256 * 1024 + 1));
+            File.WriteAllText(
+                moneyPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string text) => new();\n"
+                + "}\n");
+            File.SetLastWriteTimeUtc(moneyPath, DateTime.UtcNow.AddSeconds(2));
+            var oversizedIgnorePath = Path.Combine(fixtureDir, ".gitignore");
+            File.WriteAllText(oversizedIgnorePath, new string('a', 256 * 1024 + 1));
             request["id"] = 2;
 
             var secondResponse = server.HandleMessage(request)!;
@@ -8144,11 +8162,38 @@ public partial class McpServerTests
             Assert.Equal("scan", diagnostic["stage"]!.GetValue<string>());
             Assert.Equal(nameof(FileIndexer.ScanError), diagnostic["exception_type"]!.GetValue<string>());
             Assert.DoesNotContain(fixtureDir, diagnostic["message"]!.GetValue<string>());
+            Assert.Equal(1L, CountOldImplicitReference());
 
-            using var failedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
-            var failedUserVersion = failedDb.GetUserVersion();
-            Assert.Equal(0, failedUserVersion & DbContext.GraphReadyFlag);
-            Assert.Equal(0, failedUserVersion & DbContext.IssuesReadyFlag);
+            using (var failedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var failedUserVersion = failedDb.GetUserVersion();
+                Assert.Equal(0, failedUserVersion & DbContext.GraphReadyFlag);
+                Assert.Equal(0, failedUserVersion & DbContext.IssuesReadyFlag);
+                Assert.Null(new DbWriter(failedDb).GetCSharpStaticInterfaceSourceEvidence());
+            }
+
+            File.Delete(oversizedIgnorePath);
+            request["id"] = 3;
+            var recoveryResponse = server.HandleMessage(request)!;
+            Assert.False(recoveryResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.Equal(0L, CountOldImplicitReference());
+
+            long CountOldImplicitReference()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references r
+                    JOIN files f ON f.id = r.file_id
+                    JOIN reference_lines rl ON rl.id = r.reference_line_id
+                    WHERE f.path = 'Money.cs'
+                      AND r.symbol_name = 'Parse'
+                      AND r.reference_kind = 'implicit_implementation'
+                      AND rl.context = 'public static Money Parse(string s) => new();'
+                    """;
+                return (long)command.ExecuteScalar()!;
+            }
         }
         finally
         {
@@ -8291,6 +8336,72 @@ public partial class McpServerTests
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_KnownRootSwitchRejectsPositiveCsharpStatReuse()
+    {
+        var projectRootA = TestProjectHelper.CreateTempProject("cdidx_mcp_csharp_root_a");
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_root_b_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_root_switch");
+        var contractSource =
+            "public interface IParseable<T> { static abstract T Parse(string s); }\n";
+        var plainPrefix = "public interface IParseable<T> { }\n";
+        var plainSource = plainPrefix.TrimEnd('\n').PadRight(contractSource.Length - 1) + "\n";
+        var implementationSource =
+            "public readonly struct Money : IParseable<Money>\n"
+            + "{\n"
+            + "    public static Money Parse(string s) => new();\n"
+            + "}\n";
+        var sharedModified = DateTime.UtcNow.AddMinutes(-5);
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            foreach (var projectRoot in new[] { projectRootA, fixtureDir })
+                File.WriteAllText(Path.Combine(projectRoot, "Money.cs"), implementationSource);
+            File.WriteAllText(Path.Combine(projectRootA, "IParseable.cs"), contractSource);
+            File.WriteAllText(Path.Combine(fixtureDir, "IParseable.cs"), plainSource);
+            foreach (var projectRoot in new[] { projectRootA, fixtureDir })
+            {
+                File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "IParseable.cs"), sharedModified);
+                File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "Money.cs"), sharedModified);
+            }
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRootA, "--db", dbPath, "--json", "--quiet"],
+                    new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }));
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.Equal(
+                0,
+                response["result"]!["structuredContent"]!["summary"]!["skipped"]!.GetValue<int>());
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(Path.GetFullPath(fixtureDir), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            Assert.Equal(false, new DbWriter(db).GetCSharpStaticInterfaceSourceEvidence());
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT(*)
+                FROM symbol_references r
+                JOIN files f ON f.id = r.file_id
+                WHERE f.path = 'Money.cs'
+                  AND r.symbol_name = 'Parse'
+                  AND r.reference_kind = 'implicit_implementation'
+                """;
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRootA);
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
@@ -8637,7 +8748,17 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_deleted_static_contract_{Guid.NewGuid():N}");
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_deleted_static_contract");
         var previousPreflightHook = DbWriter.CSharpContractPreflightForTesting;
+        var previousLookupHook = ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting;
+        var previousCSharpPrepassHook = McpServer.McpIndexCSharpPrepassForTesting;
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+            "cdidx_mcp_csharp_source_evidence_hook");
+        using var env = EnvironmentVariableScope.Capture(
+            PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
         var preflightCount = 0;
+        var matchingLookupBuilds = 0;
+        var noOpCSharpPrepassCount = 0;
+        var noOpContentLoadCount = 0;
         try
         {
             DbWriter.CSharpContractPreflightForTesting = () =>
@@ -8645,7 +8766,25 @@ public partial class McpServerTests
                 preflightCount++;
                 previousPreflightHook?.Invoke();
             };
+            ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = symbols =>
+            {
+                if (symbols.Any(symbol => symbol.Kind == "interface" && symbol.Name == "IParseable"))
+                    matchingLookupBuilds++;
+                previousLookupHook?.Invoke(symbols);
+            };
+            var hooksDir = Path.Combine(extensionProject.Root, "hooks");
+            Directory.CreateDirectory(hooksDir);
+            File.Copy(
+                typeof(CodeIndex.HookIsolationFixture.PathSelectivePostExtractionHook).Assembly.Location,
+                Path.Combine(hooksDir, "CodeIndex.HookIsolationFixture.dll"));
+            env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
             Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(
+                    fixtureDir,
+                    CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                        .RemoveCSharpStaticInterfaceMemberMarkerFileName),
+                string.Empty);
             var interfacePath = Path.Combine(fixtureDir, "IParseable.cs");
             File.WriteAllText(
                 interfacePath,
@@ -8667,19 +8806,42 @@ public partial class McpServerTests
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var initialResponse = CallIndex(server, fixtureDir);
             Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
-            Assert.Equal(1L, CountImplicitImplementationReferences());
+            Assert.Equal(1, matchingLookupBuilds);
+            Assert.Equal(0L, CountPersistedContractMembers());
+            Assert.True(ReadSourceEvidence());
             Assert.Equal(0, preflightCount);
+            Assert.Equal(1L, CountImplicitImplementationReferences());
+            InstallCSharpEvidenceWriteAudit();
+
+            McpServer.McpIndexCSharpPrepassForTesting = () => noOpCSharpPrepassCount++;
+            McpServer.McpIndexFileContentLoadForTesting = _ => noOpContentLoadCount++;
+            var noOpResponse = CallIndex(server, fixtureDir);
+            Assert.False(noOpResponse["result"]?["isError"]?.GetValue<bool>() ?? false, noOpResponse.ToJsonString());
+            Assert.Equal(1L, CountImplicitImplementationReferences());
+            Assert.Equal(0L, CountPersistedContractMembers());
+            Assert.True(ReadSourceEvidence());
+            Assert.Equal(0, preflightCount);
+            Assert.Equal(1, matchingLookupBuilds);
+            Assert.Equal(0, noOpCSharpPrepassCount);
+            Assert.Equal(0, noOpContentLoadCount);
+            Assert.Equal(0L, CountCSharpEvidenceWrites());
+            var noOpSummary = noOpResponse["result"]!["structuredContent"]!["summary"]!;
+            Assert.Equal(2L, noOpSummary["files"]!.GetValue<long>());
+            Assert.Equal(2, noOpSummary["skipped"]!.GetValue<int>());
+            McpServer.McpIndexCSharpPrepassForTesting = previousCSharpPrepassHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
 
             File.Delete(interfacePath);
 
             var updateResponse = CallIndex(server, fixtureDir);
             Assert.False(updateResponse["result"]?["isError"]?.GetValue<bool>() ?? false, updateResponse.ToJsonString());
             Assert.Equal(0L, CountImplicitImplementationReferences());
-            Assert.Equal(1, preflightCount);
+            Assert.False(ReadSourceEvidence());
+            Assert.Equal(0, preflightCount);
 
             var noStaleResponse = CallIndex(server, fixtureDir);
             Assert.False(noStaleResponse["result"]?["isError"]?.GetValue<bool>() ?? false, noStaleResponse.ToJsonString());
-            Assert.Equal(1, preflightCount);
+            Assert.Equal(0, preflightCount);
 
             using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var command = verificationDb.Connection.CreateCommand();
@@ -8702,17 +8864,1173 @@ public partial class McpServerTests
                     """;
                 return (long)countCommand.ExecuteScalar()!;
             }
+
+            long CountPersistedContractMembers()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var countCommand = db.Connection.CreateCommand();
+                countCommand.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
+                    WHERE f.path = 'IParseable.cs'
+                      AND s.container_kind = 'interface'
+                      AND s.name = 'Parse'
+                    """;
+                return (long)countCommand.ExecuteScalar()!;
+            }
+
+            bool ReadSourceEvidence()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                return bool.Parse(
+                    db.GetMetaString(DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey)!);
+            }
+
+            void InstallCSharpEvidenceWriteAudit()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = $"""
+                    CREATE TABLE csharp_evidence_write_audit(operation TEXT NOT NULL);
+                    CREATE TRIGGER csharp_evidence_write_audit_insert
+                    AFTER INSERT ON codeindex_meta
+                    WHEN NEW.key = '{DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey}'
+                    BEGIN
+                        INSERT INTO csharp_evidence_write_audit(operation) VALUES ('insert');
+                    END;
+                    CREATE TRIGGER csharp_evidence_write_audit_update
+                    AFTER UPDATE ON codeindex_meta
+                    WHEN NEW.key = '{DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey}'
+                    BEGIN
+                        INSERT INTO csharp_evidence_write_audit(operation) VALUES ('update');
+                    END;
+                    CREATE TRIGGER csharp_evidence_write_audit_delete
+                    AFTER DELETE ON codeindex_meta
+                    WHEN OLD.key = '{DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey}'
+                    BEGIN
+                        INSERT INTO csharp_evidence_write_audit(operation) VALUES ('delete');
+                    END;
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            long CountCSharpEvidenceWrites()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM csharp_evidence_write_audit";
+                return (long)command.ExecuteScalar()!;
+            }
         }
         finally
         {
             DbWriter.CSharpContractPreflightForTesting = previousPreflightHook;
+            ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = previousLookupHook;
+            McpServer.McpIndexCSharpPrepassForTesting = previousCSharpPrepassHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ToolsCall_Index_AuthoritativeScanAbsencePurgesStaticContractAndRefreshesImplementer(
+        bool excludeWithIgnoreRule)
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_scan_absent_static_contract_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_scan_absent_static_contract");
+        var previousPlanHook = McpServer.McpIndexStaleFilePurgePlannedForTesting;
+        var plannedCounts = new List<int>();
+        var contractDeletedByHook = 0;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var interfacePath = Path.Combine(fixtureDir, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
+                "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initialResponse.ToJsonString());
+            AssertPersistedState(
+                expectedContractFiles: 1,
+                expectedContractMembers: 1,
+                expectedImplicitReferences: 1,
+                expectedSourceEvidence: true);
+
+            if (excludeWithIgnoreRule)
+            {
+                File.WriteAllText(Path.Combine(fixtureDir, ".gitignore"), "IParseable.cs\n");
+            }
+            else
+            {
+                McpServer.McpIndexStaleFilePurgePlannedForTesting = plannedCount =>
+                {
+                    plannedCounts.Add(plannedCount);
+                    previousPlanHook?.Invoke(plannedCount);
+                    if (Interlocked.Exchange(ref contractDeletedByHook, 1) == 0)
+                        File.Delete(interfacePath);
+                };
+            }
+
+            var updateResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(
+                updateResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                updateResponse.ToJsonString());
+            var summary = updateResponse["result"]!["structuredContent"]!["summary"]!;
+            Assert.Equal(0, summary["errors"]!.GetValue<int>());
+            Assert.Equal(1, summary["purged"]!.GetValue<int>());
+            AssertPersistedState(
+                expectedContractFiles: 0,
+                expectedContractMembers: 0,
+                expectedImplicitReferences: 0,
+                expectedSourceEvidence: false);
+            if (excludeWithIgnoreRule)
+            {
+                Assert.True(File.Exists(interfacePath));
+            }
+            else
+            {
+                Assert.Equal(new[] { 0 }, plannedCounts);
+                Assert.Equal(1, contractDeletedByHook);
+            }
+
+            void AssertPersistedState(
+                long expectedContractFiles,
+                long expectedContractMembers,
+                long expectedImplicitReferences,
+                bool expectedSourceEvidence)
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT
+                        (SELECT COUNT(*) FROM files WHERE path = 'IParseable.cs'),
+                        (SELECT COUNT(*)
+                         FROM symbols s
+                         JOIN files f ON f.id = s.file_id
+                         WHERE f.path = 'IParseable.cs'
+                           AND s.container_kind = 'interface'
+                           AND s.name = 'Parse'),
+                        (SELECT COUNT(*)
+                         FROM symbol_references r
+                         JOIN files f ON f.id = r.file_id
+                         WHERE f.path = 'Money.cs'
+                           AND r.symbol_name = 'Parse'
+                           AND r.reference_kind = 'implicit_implementation')
+                    """;
+                using var row = command.ExecuteReader();
+                Assert.True(row.Read());
+                Assert.Equal(expectedContractFiles, row.GetInt64(0));
+                Assert.Equal(expectedContractMembers, row.GetInt64(1));
+                Assert.Equal(expectedImplicitReferences, row.GetInt64(2));
+                Assert.Equal(
+                    expectedSourceEvidence,
+                    new DbWriter(db).GetCSharpStaticInterfaceSourceEvidence());
+                var status = new DbReader(db.Connection).GetStatus();
+                Assert.True(status.IndexComplete);
+                Assert.True(status.GraphDataCurrent);
+                Assert.True(status.CSharpSymbolNameReady);
+                Assert.True(status.CSharpMetadataTargetReady);
+            }
+        }
+        finally
+        {
+            McpServer.McpIndexStaleFilePurgePlannedForTesting = previousPlanHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
     [Fact]
-    public void ToolsCall_Index_ScanErrorAfterStaticInterfacePurgeRepairsImplicitReferencesOnRetry()
+    public void ToolsCall_Index_DeletedPlainCsharpInterfaceKeepsUnchangedFilesReusable()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_deleted_plain_interface_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_deleted_plain_interface");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var plainInterfacePath = Path.Combine(fixtureDir, "IPlain.cs");
+            File.WriteAllText(plainInterfacePath, "public interface IPlain { void Run(); }\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "Stable.cs"), "public sealed class Stable { }\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+
+            File.Delete(plainInterfacePath);
+
+            var refreshResponse = CallIndex(server, fixtureDir);
+            Assert.False(refreshResponse["result"]?["isError"]?.GetValue<bool>() ?? false, refreshResponse.ToJsonString());
+            var summary = refreshResponse["result"]!["structuredContent"]!["summary"]!;
+            Assert.Equal(1, summary["purged"]!.GetValue<int>());
+            Assert.Equal(1, summary["skipped"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_PositiveCsharpNoOpLateRemovalRefreshesEveryCsharpReference()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_late_removal_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_late_removal");
+        var stalePath = Path.Combine(fixtureDir, "obsolete.py");
+        var previousRevalidationHook = McpServer.McpIndexCSharpFinalStatRevalidationForTesting;
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var loadedPaths = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var interfacePath = Path.Combine(fixtureDir, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
+                "public interface IParseable<T>\n"
+                + "{\n"
+                + "    static abstract T Parse(string s);\n"
+                + "}\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(stalePath, "print('obsolete')\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+            Assert.Equal(1L, CountImplicitReferences());
+            File.Delete(stalePath);
+
+            McpServer.McpIndexCSharpFinalStatRevalidationForTesting = () =>
+            {
+                File.WriteAllText(interfacePath, "public interface IParseable<T> { }\n");
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(2));
+            };
+            McpServer.McpIndexFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var refreshResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(refreshResponse["result"]?["isError"]?.GetValue<bool>() ?? false, refreshResponse.ToJsonString());
+            Assert.Equal(["IParseable.cs", "Money.cs"], loadedPaths.Order(StringComparer.Ordinal));
+            Assert.Equal(0L, CountImplicitReferences());
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(false, new DbWriter(db).GetCSharpStaticInterfaceSourceEvidence());
+
+            long CountImplicitReferences()
+            {
+                using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = verificationDb.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references r
+                    JOIN files f ON f.id = r.file_id
+                    WHERE f.path = 'Money.cs'
+                      AND r.symbol_name = 'Parse'
+                      AND r.reference_kind = 'implicit_implementation'
+                    """;
+                return (long)command.ExecuteScalar()!;
+            }
+        }
+        finally
+        {
+            McpServer.McpIndexCSharpFinalStatRevalidationForTesting = previousRevalidationHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_KnownNegativeNoOpSkipsWorkspaceUntilGraphReadinessIsDegraded()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_negative_noop_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_negative_noop");
+        var previousPrepassHook = McpServer.McpIndexCSharpPrepassForTesting;
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var prepassCalls = 0;
+        var loadedPaths = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "IPlain.cs"),
+                "public interface IPlain { void Run(); }\n");
+
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion()))
+            {
+                var initialResponse = CallIndex(server, fixtureDir);
+                Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+
+                McpServer.McpIndexCSharpPrepassForTesting = () => prepassCalls++;
+                McpServer.McpIndexFileContentLoadForTesting = path => loadedPaths.Add(path);
+                var noOpResponse = CallIndex(server, fixtureDir);
+                Assert.False(noOpResponse["result"]?["isError"]?.GetValue<bool>() ?? false, noOpResponse.ToJsonString());
+                Assert.Equal(0, prepassCalls);
+                Assert.Empty(loadedPaths);
+            }
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.ClearReadyFlags();
+
+            using (var recoveryServer = new McpServer(dbPath, ConsoleUi.LoadVersion()))
+            {
+                var recoveryResponse = CallIndex(recoveryServer, fixtureDir);
+                Assert.False(recoveryResponse["result"]?["isError"]?.GetValue<bool>() ?? false, recoveryResponse.ToJsonString());
+            }
+            Assert.Equal(1, prepassCalls);
+        }
+        finally
+        {
+            McpServer.McpIndexCSharpPrepassForTesting = previousPrepassHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_ReadinessBoundaryNewCsharpFileLeavesPartialUntilCleanRetry()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_readiness_drift_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_readiness_drift");
+        var previousValidationHook = McpServer.McpIndexCSharpReadinessValidationForTesting;
+        var addedPath = Path.Combine(fixtureDir, "INewContract.cs");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(Path.Combine(fixtureDir, "Plain.cs"), "public sealed class Plain { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+
+            McpServer.McpIndexCSharpReadinessValidationForTesting = () =>
+            {
+                File.WriteAllText(
+                    addedPath,
+                    "public interface INewContract<T> { static abstract T Create(); }\n");
+                File.SetLastWriteTimeUtc(addedPath, DateTime.UtcNow.AddSeconds(2));
+            };
+            var partialResponse = CallIndex(server, fixtureDir);
+            Assert.False(partialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, partialResponse.ToJsonString());
+            var partialStructured = partialResponse["result"]!["structuredContent"]!;
+            Assert.Equal(1, partialStructured["summary"]!["errors"]!.GetValue<int>());
+            Assert.Contains(
+                partialStructured["failures"]!.AsArray(),
+                failure => failure!["stage"]!.GetValue<string>() == "csharp_workspace_validation");
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+
+            McpServer.McpIndexCSharpReadinessValidationForTesting = previousValidationHook;
+            var recoveryResponse = CallIndex(server, fixtureDir);
+            Assert.False(recoveryResponse["result"]?["isError"]?.GetValue<bool>() ?? false, recoveryResponse.ToJsonString());
+            Assert.Equal(0, recoveryResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+            using var recoveryDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(true, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+        }
+        finally
+        {
+            McpServer.McpIndexCSharpReadinessValidationForTesting = previousValidationHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ToolsCall_Index_ValidatesScanInputExactlyBeforeWriteAndReadiness(bool includeCSharp)
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_snapshot_barriers_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_snapshot_barriers");
+        var previousBarrierHook = McpServer.McpIndexInputSnapshotBarrierForTesting;
+        var phases = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(Path.Combine(fixtureDir, "app.py"), "def run():\n    return 1\n");
+            if (includeCSharp)
+                File.WriteAllText(Path.Combine(fixtureDir, "Plain.cs"), "public sealed class Plain { }\n");
+            McpServer.McpIndexInputSnapshotBarrierForTesting = phases.Add;
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.Equal(0, response["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+            Assert.Equal(["before_write", "before_readiness"], phases);
+        }
+        finally
+        {
+            McpServer.McpIndexInputSnapshotBarrierForTesting = previousBarrierHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_FirstSnapshotBarrierDriftPreservesRowsTrustAndRecoveryMarker()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_snapshot_first_barrier_drift_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_snapshot_first_barrier_drift");
+        var previousBarrierHook = McpServer.McpIndexInputSnapshotBarrierForTesting;
+        var ignorePath = Path.Combine(fixtureDir, ".cdidxignore");
+        var appPath = Path.Combine(fixtureDir, "app.py");
+        var obsoletePath = Path.Combine(fixtureDir, "obsolete.md");
+        var phases = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(ignorePath, "# snapshot-a\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "IParseable.cs"),
+                "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(appPath, "def run():\n    return 1\n");
+            File.WriteAllText(obsoletePath, "# Obsolete\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initialResponse.ToJsonString());
+
+            int priorReadiness;
+            string? priorIndexComplete;
+            string? priorAppChecksum;
+            bool? priorSourceEvidence;
+            string? priorFtsRecoveryMarker;
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                priorReadiness = db.GetUserVersion();
+                priorIndexComplete = db.GetMetaString(DbContext.IndexCompletenessMetaKey);
+                priorAppChecksum = new DbReader(db.Connection).GetFileByPath("app.py")?.Checksum;
+                var priorWriter = new DbWriter(db);
+                priorSourceEvidence = priorWriter.GetCSharpStaticInterfaceSourceEvidence();
+                priorWriter.MarkFtsBulkLoadRecoveryNeeded();
+                priorFtsRecoveryMarker = db.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey);
+            }
+
+            File.WriteAllText(appPath, "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(appPath, DateTime.UtcNow.AddSeconds(3));
+            File.Delete(obsoletePath);
+            var ignoreModifiedUtc = File.GetLastWriteTimeUtc(ignorePath);
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(fixtureDir);
+            McpServer.McpIndexInputSnapshotBarrierForTesting = phase =>
+            {
+                phases.Add(phase);
+                if (phase != "before_write")
+                    return;
+                File.WriteAllText(ignorePath, "# snapshot-b\n");
+                File.SetLastWriteTimeUtc(ignorePath, ignoreModifiedUtc);
+                Directory.SetLastWriteTimeUtc(fixtureDir, rootModifiedUtc);
+            };
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(1, structured["summary"]!["errors"]!.GetValue<int>());
+            Assert.Equal(0, structured["summary"]!["purged"]!.GetValue<int>());
+            Assert.Equal(["before_write"], phases);
+            Assert.Contains(
+                structured["failures"]!.AsArray(),
+                failure => failure!["stage"]!.GetValue<string>() == "csharp_workspace_validation");
+            Assert.NotNull(structured["reference_extraction_limits"]);
+            Assert.NotNull(structured["reference_graph_complete"]);
+            Assert.NotNull(structured["reference_extraction_cap_hits"]);
+            using var preservedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(priorReadiness, preservedDb.GetUserVersion());
+            Assert.Equal(priorIndexComplete, preservedDb.GetMetaString(DbContext.IndexCompletenessMetaKey));
+            Assert.Equal(
+                priorFtsRecoveryMarker,
+                preservedDb.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(priorAppChecksum, new DbReader(preservedDb.Connection).GetFileByPath("app.py")?.Checksum);
+            Assert.NotNull(new DbReader(preservedDb.Connection).GetFileByPath("obsolete.md"));
+            Assert.Equal(
+                priorSourceEvidence,
+                new DbWriter(preservedDb).GetCSharpStaticInterfaceSourceEvidence());
+            var status = new DbReader(preservedDb.Connection).GetStatus();
+            Assert.True(status.IndexComplete);
+            Assert.True(status.GraphDataCurrent);
+        }
+        finally
+        {
+            McpServer.McpIndexInputSnapshotBarrierForTesting = previousBarrierHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_ReadinessBoundaryInPlaceCdidxIgnoreChangeLeavesPartialUntilCleanRetry()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_ignore_input_drift_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_ignore_input_drift");
+        var previousValidationHook = McpServer.McpIndexCSharpReadinessValidationForTesting;
+        var ignoreChanged = 0;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var ignorePath = Path.Combine(fixtureDir, ".cdidxignore");
+            File.WriteAllText(ignorePath, "# snapshot-a\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "IParseable.cs"),
+                "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initialResponse.ToJsonString());
+
+            var originalRootModified = Directory.GetLastWriteTimeUtc(fixtureDir);
+            var originalIgnoreModified = File.GetLastWriteTimeUtc(ignorePath);
+            McpServer.McpIndexCSharpReadinessValidationForTesting = () =>
+            {
+                previousValidationHook?.Invoke();
+                if (Interlocked.Exchange(ref ignoreChanged, 1) != 0)
+                    return;
+
+                // Keep both metadata timestamps stable so only the snapshotted configuration
+                // bytes reveal this in-place edit.
+                File.WriteAllText(ignorePath, "# snapshot-b\n");
+                File.SetLastWriteTimeUtc(ignorePath, originalIgnoreModified);
+                Directory.SetLastWriteTimeUtc(fixtureDir, originalRootModified);
+            };
+
+            var partialResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(
+                partialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                partialResponse.ToJsonString());
+            Assert.Equal(1, ignoreChanged);
+            Assert.Equal(originalRootModified, Directory.GetLastWriteTimeUtc(fixtureDir));
+            var partialStructured = partialResponse["result"]!["structuredContent"]!;
+            Assert.Equal(1, partialStructured["summary"]!["errors"]!.GetValue<int>());
+            var failure = Assert.Single(partialStructured["failures"]!.AsArray());
+            Assert.Equal(".cdidxignore", failure!["path"]!.GetValue<string>());
+            Assert.Equal("csharp_workspace_validation", failure["stage"]!.GetValue<string>());
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+                var partialStatus = new DbReader(partialDb.Connection).GetStatus();
+                Assert.False(partialStatus.IndexComplete);
+                Assert.False(partialStatus.GraphDataCurrent);
+                Assert.False(partialStatus.CSharpMetadataTargetReady);
+            }
+
+            McpServer.McpIndexCSharpReadinessValidationForTesting = previousValidationHook;
+            var recoveryResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                recoveryResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                recoveryResponse.ToJsonString());
+            Assert.Equal(
+                0,
+                recoveryResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+            using var recoveryDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(true, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+            var recoveryStatus = new DbReader(recoveryDb.Connection).GetStatus();
+            Assert.True(recoveryStatus.IndexComplete);
+            Assert.True(recoveryStatus.GraphDataCurrent);
+            Assert.True(recoveryStatus.CSharpSymbolNameReady);
+            Assert.True(recoveryStatus.CSharpMetadataTargetReady);
+        }
+        finally
+        {
+            McpServer.McpIndexCSharpReadinessValidationForTesting = previousValidationHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RawCsharpPrepassMemberRemovalPreservesRowsUntilCleanRetry()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_raw_prepass_drift_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_raw_prepass_drift");
+        var previousPrepassHook = McpServer.McpIndexCSharpPrepassForTesting;
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var loadedPaths = new HashSet<string>(StringComparer.Ordinal);
+        var contractRemoved = false;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var interfacePath = Path.Combine(fixtureDir, "IParseable.cs");
+            var implementationPath = Path.Combine(fixtureDir, "Money.cs");
+            WriteInterface(hasStaticContract: true);
+            File.WriteAllText(
+                implementationPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+            Assert.Equal(1L, CountImplicitReferences());
+            var interfaceChecksumBefore = ReadIndexedChecksum("IParseable.cs");
+            var implementationChecksumBefore = ReadIndexedChecksum("Money.cs");
+
+            File.AppendAllText(implementationPath, "// force raw workspace prepass\n");
+            File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(2));
+            McpServer.McpIndexCSharpPrepassForTesting = () =>
+            {
+                Assert.False(contractRemoved);
+                WriteInterface(hasStaticContract: false);
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+                contractRemoved = true;
+            };
+            McpServer.McpIndexFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var partialResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(partialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, partialResponse.ToJsonString());
+            Assert.True(contractRemoved);
+            Assert.Empty(loadedPaths);
+            var partialStructured = partialResponse["result"]!["structuredContent"]!;
+            var partialSummary = partialStructured["summary"]!;
+            Assert.Equal(1, partialSummary["errors"]!.GetValue<int>());
+            Assert.Equal(2, partialSummary["skipped"]!.GetValue<int>());
+            var failure = Assert.Single(partialStructured["failures"]!.AsArray());
+            Assert.Equal("IParseable.cs", failure!["path"]!.GetValue<string>());
+            Assert.Equal("csharp_prepass", failure["stage"]!.GetValue<string>());
+            Assert.Equal(interfaceChecksumBefore, ReadIndexedChecksum("IParseable.cs"));
+            Assert.Equal(implementationChecksumBefore, ReadIndexedChecksum("Money.cs"));
+            Assert.Equal(1L, CountImplicitReferences());
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+            }
+
+            McpServer.McpIndexCSharpPrepassForTesting = previousPrepassHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            var recoveryResponse = CallIndex(server, fixtureDir);
+            Assert.False(recoveryResponse["result"]?["isError"]?.GetValue<bool>() ?? false, recoveryResponse.ToJsonString());
+            Assert.Equal(0, recoveryResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+            Assert.Equal(0L, CountImplicitReferences());
+            using var recoveryDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(false, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+
+            void WriteInterface(bool hasStaticContract)
+            {
+                File.WriteAllText(
+                    interfacePath,
+                    hasStaticContract
+                        ? "public interface IParseable<T> { static abstract T Parse(string s); }\n"
+                        : "public interface IParseable<T> { }\n");
+            }
+
+            long CountImplicitReferences()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references r
+                    JOIN files f ON f.id = r.file_id
+                    WHERE f.path = 'Money.cs'
+                      AND r.symbol_name = 'Parse'
+                      AND r.reference_kind = 'implicit_implementation'
+                    """;
+                return (long)command.ExecuteScalar()!;
+            }
+
+            string ReadIndexedChecksum(string path)
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = "SELECT checksum FROM files WHERE path = $path";
+                command.Parameters.AddWithValue("$path", path);
+                return Assert.IsType<string>(command.ExecuteScalar());
+            }
+        }
+        finally
+        {
+            McpServer.McpIndexCSharpPrepassForTesting = previousPrepassHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_AfterCliSymbolsOnlyRebuildsCsharpGraphBeforeReady()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_after_cli_symbols_only_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_after_cli_symbols_only");
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var loadedPaths = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "IParseable.cs"),
+                "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            var jsonOptions = new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            };
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [fixtureDir, "--db", dbPath, "--json", "--quiet"],
+                    jsonOptions));
+            Assert.Equal(1L, CountImplicitReferences());
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [fixtureDir, "--db", dbPath, "--symbols-only", "--json", "--quiet"],
+                    jsonOptions));
+            Assert.Equal(0L, CountImplicitReferences());
+            using (var symbolsOnlyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Equal(
+                    "true",
+                    symbolsOnlyDb.GetMetaString(DbContext.SymbolsOnlyGraphOmittedMetaKey));
+                Assert.Equal(true, new DbWriter(symbolsOnlyDb).GetCSharpStaticInterfaceSourceEvidence());
+            }
+
+            McpServer.McpIndexFileContentLoadForTesting = path => loadedPaths.Add(path);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.Equal(["IParseable.cs", "Money.cs"], loadedPaths.Order(StringComparer.Ordinal));
+            Assert.Equal(1L, CountImplicitReferences());
+            using var refreshedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Null(refreshedDb.GetMetaString(DbContext.SymbolsOnlyGraphOmittedMetaKey));
+            var status = new DbReader(refreshedDb.Connection).GetStatus();
+            Assert.True(status.GraphDataCurrent);
+            Assert.True(status.IndexComplete);
+
+            long CountImplicitReferences()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references r
+                    JOIN files f ON f.id = r.file_id
+                    WHERE f.path = 'Money.cs'
+                      AND r.symbol_name = 'Parse'
+                      AND r.reference_kind = 'implicit_implementation'
+                    """;
+                return (long)command.ExecuteScalar()!;
+            }
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_PositiveCsharpNoOpLateOversizeContractRefreshesEveryCsharpReference()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_incomplete_late_prepass_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_incomplete_late_prepass");
+        var stalePath = Path.Combine(fixtureDir, "obsolete.py");
+        var previousRevalidationHook = McpServer.McpIndexCSharpFinalStatRevalidationForTesting;
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var loadedPaths = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var interfacePath = Path.Combine(fixtureDir, "IParseable.cs");
+            WriteInterface(hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(stalePath, "print('obsolete')\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+            Assert.Equal(1L, CountImplicitReferences());
+            File.Delete(stalePath);
+            McpServer.McpIndexCSharpFinalStatRevalidationForTesting = () =>
+            {
+                File.WriteAllText(interfacePath, new string('x', 2048));
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(2));
+            };
+            McpServer.McpIndexFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var refreshResponse = CallIndex(
+                server,
+                fixtureDir,
+                args => args["maxFileBytes"] = JsonNode.Parse("1024"));
+
+            Assert.False(refreshResponse["result"]?["isError"]?.GetValue<bool>() ?? false, refreshResponse.ToJsonString());
+            var refreshStructured = refreshResponse["result"]!["structuredContent"]!;
+            Assert.Equal(0, refreshStructured["summary"]!["errors"]!.GetValue<int>());
+            Assert.Equal(["IParseable.cs", "Money.cs"], loadedPaths.Order(StringComparer.Ordinal));
+            Assert.Equal(0L, CountImplicitReferences());
+            using var refreshDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(false, new DbWriter(refreshDb).GetCSharpStaticInterfaceSourceEvidence());
+            var refreshStatus = new DbReader(refreshDb.Connection).GetStatus();
+            Assert.True(refreshStatus.IndexComplete);
+            Assert.True(refreshStatus.GraphDataCurrent);
+
+            void WriteInterface(bool hasStaticContract)
+            {
+                File.WriteAllText(
+                    interfacePath,
+                    hasStaticContract
+                        ? "public interface IParseable<T> { static abstract T Parse(string s); }\n"
+                        : "public interface IParseable<T> { }\n");
+            }
+
+            long CountImplicitReferences()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references r
+                    JOIN files f ON f.id = r.file_id
+                    WHERE f.path = 'Money.cs'
+                      AND r.symbol_name = 'Parse'
+                      AND r.reference_kind = 'implicit_implementation'
+                    """;
+                return (long)command.ExecuteScalar()!;
+            }
+
+        }
+        finally
+        {
+            McpServer.McpIndexCSharpFinalStatRevalidationForTesting = previousRevalidationHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_PositiveCsharpNoOpActualSkipRaceDefersCsharpUntilCleanRetry()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_actual_skip_race_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_actual_skip_race");
+        var previousRevalidationHook = McpServer.McpIndexCSharpFinalStatRevalidationForTesting;
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var loadedPaths = new HashSet<string>(StringComparer.Ordinal);
+        var finalRevalidationCompleted = false;
+        var interfaceRewritten = false;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var interfacePath = Path.Combine(fixtureDir, "IParseable.cs");
+            var earlierNonCSharpPath = Path.Combine(fixtureDir, "A.py");
+            WriteInterface(hasStaticContract: true);
+            File.WriteAllText(earlierNonCSharpPath, "print('initial')\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+            Assert.Equal(1L, CountImplicitReferences());
+            var indexedChecksumBefore = ReadIndexedChecksum("IParseable.cs");
+
+            File.WriteAllText(earlierNonCSharpPath, "print('changed')\n");
+            File.SetLastWriteTimeUtc(earlierNonCSharpPath, DateTime.UtcNow.AddSeconds(2));
+            McpServer.McpIndexCSharpFinalStatRevalidationForTesting = () =>
+                finalRevalidationCompleted = true;
+            McpServer.McpIndexFileContentLoadForTesting = path =>
+            {
+                loadedPaths.Add(path);
+                if (path != "A.py" || interfaceRewritten)
+                    return;
+
+                Assert.True(finalRevalidationCompleted);
+                WriteInterface(hasStaticContract: false);
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+                interfaceRewritten = true;
+            };
+
+            var partialResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(partialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, partialResponse.ToJsonString());
+            Assert.True(interfaceRewritten);
+            Assert.Equal(["A.py"], loadedPaths.Order(StringComparer.Ordinal));
+            var partialStructured = partialResponse["result"]!["structuredContent"]!;
+            var partialSummary = partialStructured["summary"]!;
+            Assert.Equal(1, partialSummary["errors"]!.GetValue<int>());
+            Assert.Equal(2, partialSummary["skipped"]!.GetValue<int>());
+            var failure = Assert.Single(partialStructured["failures"]!.AsArray());
+            Assert.Equal("IParseable.cs", failure!["path"]!.GetValue<string>());
+            Assert.Equal("csharp_stat_revalidation", failure["stage"]!.GetValue<string>());
+            Assert.Equal(indexedChecksumBefore, ReadIndexedChecksum("IParseable.cs"));
+            Assert.Equal(1L, CountImplicitReferences());
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+                var partialStatus = new DbReader(partialDb.Connection).GetStatus();
+                Assert.False(partialStatus.IndexComplete);
+                Assert.False(partialStatus.GraphDataCurrent);
+            }
+
+            McpServer.McpIndexCSharpFinalStatRevalidationForTesting = previousRevalidationHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            var recoveryResponse = CallIndex(server, fixtureDir);
+            Assert.False(recoveryResponse["result"]?["isError"]?.GetValue<bool>() ?? false, recoveryResponse.ToJsonString());
+            Assert.Equal(0, recoveryResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+            Assert.Equal(0L, CountImplicitReferences());
+            using var recoveryDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(false, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+
+            void WriteInterface(bool hasStaticContract)
+            {
+                File.WriteAllText(
+                    interfacePath,
+                    hasStaticContract
+                        ? "public interface IParseable<T> { static abstract T Parse(string s); }\n"
+                        : "public interface IParseable<T> { }\n");
+            }
+
+            long CountImplicitReferences()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references r
+                    JOIN files f ON f.id = r.file_id
+                    WHERE f.path = 'Money.cs'
+                      AND r.symbol_name = 'Parse'
+                      AND r.reference_kind = 'implicit_implementation'
+                    """;
+                return (long)command.ExecuteScalar()!;
+            }
+
+            string ReadIndexedChecksum(string path)
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = "SELECT checksum FROM files WHERE path = $path";
+                command.Parameters.AddWithValue("$path", path);
+                return Assert.IsType<string>(command.ExecuteScalar());
+            }
+        }
+        finally
+        {
+            McpServer.McpIndexCSharpFinalStatRevalidationForTesting = previousRevalidationHook;
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_PostPrepassCsharpContractLeavesReadinessPartialUntilCleanRetry()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_csharp_post_prepass_contract_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_post_prepass_contract");
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var interfaceRewritten = false;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var interfacePath = Path.Combine(fixtureDir, "IParseable.cs");
+            File.WriteAllText(interfacePath, "public interface IParseable<T> { }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            McpServer.McpIndexFileContentLoadForTesting = path =>
+            {
+                if (path != "IParseable.cs" || interfaceRewritten)
+                    return;
+
+                File.WriteAllText(
+                    interfacePath,
+                    "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+                interfaceRewritten = true;
+            };
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var partialResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(partialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, partialResponse.ToJsonString());
+            Assert.True(interfaceRewritten);
+            var partialStructured = partialResponse["result"]!["structuredContent"]!;
+            Assert.Equal(1, partialStructured["summary"]!["errors"]!.GetValue<int>());
+            Assert.False(partialStructured["csharp_symbol_name_ready"]!.GetValue<bool>());
+            var failure = Assert.Single(partialStructured["failures"]!.AsArray());
+            Assert.Equal("csharp_workspace_validation", failure!["stage"]!.GetValue<string>());
+            Assert.Equal(0L, CountImplicitReferences());
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+                var partialStatus = new DbReader(partialDb.Connection).GetStatus();
+                Assert.False(partialStatus.IndexComplete);
+                Assert.False(partialStatus.GraphDataCurrent);
+            }
+
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            var recoveryResponse = CallIndex(server, fixtureDir);
+            Assert.False(recoveryResponse["result"]?["isError"]?.GetValue<bool>() ?? false, recoveryResponse.ToJsonString());
+            Assert.Equal(0, recoveryResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+            Assert.Equal(1L, CountImplicitReferences());
+            using var recoveryDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(true, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+            var recoveryStatus = new DbReader(recoveryDb.Connection).GetStatus();
+            Assert.True(recoveryStatus.IndexComplete);
+            Assert.True(recoveryStatus.GraphDataCurrent);
+
+            long CountImplicitReferences()
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references r
+                    JOIN files f ON f.id = r.file_id
+                    WHERE f.path = 'Money.cs'
+                      AND r.symbol_name = 'Parse'
+                      AND r.reference_kind = 'implicit_implementation'
+                    """;
+                return (long)command.ExecuteScalar()!;
+            }
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_DeletedNonCsharpFileKeepsPositiveCsharpSnapshotReusable()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_deleted_non_csharp_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_deleted_non_csharp");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "IParseable.cs"),
+                "public interface IParseable<T>\n"
+                + "{\n"
+                + "    static abstract T Parse(string s);\n"
+                + "}\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            var stalePythonPath = Path.Combine(fixtureDir, "stale.py");
+            File.WriteAllText(stalePythonPath, "print('stale')\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initialResponse.ToJsonString());
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Equal(
+                    bool.TrueString,
+                    db.GetMetaString(DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey));
+            }
+
+            File.Delete(stalePythonPath);
+
+            var refreshResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(
+                refreshResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                refreshResponse.ToJsonString());
+            var summary = refreshResponse["result"]!["structuredContent"]!["summary"]!;
+            Assert.Equal(1, summary["purged"]!.GetValue<int>());
+            Assert.Equal(2, summary["skipped"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_ScanErrorBeforeStaticInterfacePurgePreservesReferencesUntilRetry()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_static_contract_recovery_{Guid.NewGuid():N}");
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_static_contract_recovery");
@@ -8765,10 +10083,13 @@ public partial class McpServerTests
             Assert.Equal(1L, CountImplicitImplementationReferences());
             using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
-                Assert.Null(partialDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+                Assert.Equal(
+                    DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    partialDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
                 using var command = partialDb.Connection.CreateCommand();
                 command.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'IParseable'";
-                Assert.Equal(0L, (long)command.ExecuteScalar()!);
+                Assert.Equal(1L, (long)command.ExecuteScalar()!);
             }
 
             McpServer.McpIndexDirectoryEnumerationBoundaryForTesting = previousEnumerationHook;
@@ -8808,7 +10129,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Index_ScanErrorAfterInPlaceStaticInterfaceContractRemovalRepairsImplicitReferencesOnRetry()
+    public void ToolsCall_Index_ScanErrorAfterInPlaceContractRemovalPreservesReferencesUntilRetry()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_changed_static_contract_recovery_{Guid.NewGuid():N}");
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_changed_static_contract_recovery");
@@ -8861,7 +10182,10 @@ public partial class McpServerTests
             Assert.Equal(1L, CountImplicitImplementationReferences());
             using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
-                Assert.Null(partialDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+                Assert.Equal(
+                    DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    partialDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
                 using var command = partialDb.Connection.CreateCommand();
                 command.CommandText = """
                     SELECT COUNT(*)
@@ -8870,7 +10194,7 @@ public partial class McpServerTests
                     WHERE f.path = 'IParseable.cs'
                       AND s.name = 'Parse'
                     """;
-                Assert.Equal(0L, (long)command.ExecuteScalar()!);
+                Assert.Equal(1L, (long)command.ExecuteScalar()!);
             }
 
             McpServer.McpIndexDirectoryEnumerationBoundaryForTesting = previousEnumerationHook;
@@ -9876,7 +11200,11 @@ public partial class McpServerTests
             using (var seededDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
-            WriteOversizedAsciiFile(Path.Combine(fixtureDir, "app.cs"));
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "app.cs"),
+                "public class App { public void Changed() { } }");
+            McpServer.McpIndexFileContentLoadForTesting = _ =>
+                throw new IOException("simulated MCP index read failure");
 
             var secondIndex = new JsonObject
             {
@@ -9901,6 +11229,7 @@ public partial class McpServerTests
         }
         finally
         {
+            McpServer.McpIndexFileContentLoadForTesting = null;
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }

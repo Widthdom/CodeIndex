@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 
 namespace CodeIndex.Indexer;
@@ -383,7 +384,14 @@ public partial class FileIndexer
             openReadForIndexContent: _openReadForIndexContent,
             allowPatternConfigDiscovery: !_bindConfigurationReadsToFileSystemIdentity,
             fileNameIgnoreCase: DirectoryUsesIgnoreCase(Path.GetDirectoryName(filePath) ?? _projectRoot),
-            enumerateFileSystemEntries: _enumerateFileSystemEntries);
+            enumerateFileSystemEntries: _enumerateFileSystemEntries,
+            openPatternConfig: _bindConfigurationReadsToFileSystemIdentity
+                ? OpenObservedPatternConfigurationFileForRead
+                : null,
+            patternConfigDirectoryExists: _suppressConfigurationInputObservation
+                ? null
+                : ObservePatternConfigurationDirectoryExists,
+            patternConfigInputObserver: ObservePatternConfigurationInput);
 
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
@@ -404,10 +412,33 @@ public partial class FileIndexer
                 ? LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithinScope(
                     startDirectory,
                     _projectRoot,
-                    _openReadForIndexContent)
-                : LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
+                    OpenObservedConfigurationFileForRead,
+                    RecordLanguageMapConfigurationProbe)
+                : LanguageMapOverrides.LoadEffectiveMapFromDirectoryForIndexing(
+                    startDirectory,
+                    OpenObservedConfigurationFileForRead,
+                    RecordLanguageMapConfigurationProbe);
             _languageMapOverrideCache[startDirectory] = loaded;
             return CacheLastLanguageMapOverrideLookup(startDirectory, loaded);
+        }
+    }
+
+    private void RecordLanguageMapConfigurationProbe(
+        string path,
+        LanguageMapOverrides.ConfigProbeStatus status,
+        bool isUserConfiguration)
+    {
+        if (status == LanguageMapOverrides.ConfigProbeStatus.ProbeFailed)
+        {
+            MarkConfigurationInputSnapshotsIncomplete(path);
+            return;
+        }
+
+        if (status == LanguageMapOverrides.ConfigProbeStatus.Missing
+            && (isUserConfiguration
+                || !PathCasing.IsFullPathEqualOrParent(_projectRoot, Path.GetFullPath(path))))
+        {
+            RecordConfigurationFileProbe(path);
         }
     }
 
@@ -482,7 +513,10 @@ public partial class FileIndexer
         Func<string, FileStream>? openReadForIndexContent = null,
         bool allowPatternConfigDiscovery = true,
         bool fileNameIgnoreCase = true,
-        Func<string, IEnumerable<string>>? enumerateFileSystemEntries = null)
+        Func<string, IEnumerable<string>>? enumerateFileSystemEntries = null,
+        Func<string, Stream>? openPatternConfig = null,
+        Func<string, bool, bool>? patternConfigDirectoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? patternConfigInputObserver = null)
     {
         var fileName = Path.GetFileName(filePath);
         var ext = Path.GetExtension(fileName);
@@ -583,7 +617,12 @@ public partial class FileIndexer
         if (!string.IsNullOrEmpty(ext))
         {
             if (allowPatternConfigDiscovery)
-                ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(
+                    filePath,
+                    projectRoot,
+                    openFile: openPatternConfig,
+                    directoryExists: patternConfigDirectoryExists,
+                    observeInput: patternConfigInputObserver);
             if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, projectRoot, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 

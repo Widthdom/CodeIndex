@@ -68,6 +68,8 @@ public partial class McpServer
     internal static Func<CancellationToken, Task>? McpIndexStaleFilePurgedForTesting { get; set; }
     internal static Action? McpIndexReferencePurgeForTesting { get; set; }
     internal static Action? McpIndexCSharpPrepassForTesting { get; set; }
+    internal static Action? McpIndexCSharpFinalStatRevalidationForTesting { get; set; }
+    internal static Action? McpIndexCSharpReadinessValidationForTesting { get; set; }
     internal static Action? McpIndexCSharpMetadataResolveForTesting { get; set; }
     internal static Action? McpIndexTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Func<string, CancellationToken, UpdateCheckResult>? StatusUpdateCheckForTesting { get; set; }

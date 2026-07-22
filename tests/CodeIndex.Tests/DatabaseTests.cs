@@ -1004,6 +1004,380 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ScopedFileCleanupPlan_CombinesKeysAndMergesSortedDeduplicatedIds()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-plan-overlap");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.py"), "# retained");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "live.cs"), "// live duplicate");
+
+            _ = UpsertTestFileWithLanguage("src/target.py", "python", "shared-checksum");
+            var overlapId = UpsertTestFile("src/target.cs", "shared-checksum");
+            var checksumOnlyId = UpsertTestFile("legacy/renamed.cs", "shared-checksum");
+            var stemOnlyId = UpsertTestFileWithLanguage("src/target.ts", "typescript", "stem-only");
+            _ = UpsertTestFile("src/live.cs", "shared-checksum");
+
+            var combinedPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/target.py",
+                "shared-checksum",
+                includeDirectoryAndStem: true);
+            var checksumPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/target.py",
+                "shared-checksum",
+                includeDirectoryAndStem: false);
+            var stemPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/target.py",
+                checksum: null,
+                includeDirectoryAndStem: true);
+            var mergedPlan = FilePurgePlan.Merge([checksumPlan, stemPlan]);
+            var expectedIds = new[] { overlapId, checksumOnlyId, stemOnlyId };
+            Array.Sort(expectedIds);
+
+            Assert.Equal(expectedIds, combinedPlan.FileIds);
+            Assert.Equal(expectedIds, mergedPlan.FileIds);
+            Assert.Equal(expectedIds.Length, combinedPlan.FileIds.Distinct().Count());
+            Assert.Equal(300L, combinedPlan.DeletedBytes);
+            Assert.True(combinedPlan.ByteEstimateComplete);
+            Assert.True(_writer.HasCSharpFilesInFileIds(combinedPlan.FileIds));
+            Assert.False(_writer.HasCSharpFilesInFileIds([stemOnlyId]));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void CSharpScopedFileCleanupPlan_CommonChecksumQueriesOnceAndVisitsOnlyCSharpRows()
+    {
+        const int targetCount = 16;
+        const string sharedChecksum = "shared-csharp-cleanup-checksum";
+        var projectRoot = TestProjectHelper.CreateTempProject("csharp-scoped-cleanup-common-checksum");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var targets = new List<(
+                string RetainedRelativePath,
+                string? Checksum,
+                bool IncludeDirectoryAndStem)>(targetCount + 1);
+            for (var index = 0; index < targetCount; index++)
+            {
+                var relativePath = $"src/live-{index:D2}.cs";
+                File.WriteAllText(
+                    Path.Combine(projectRoot, "src", $"live-{index:D2}.cs"),
+                    "public class Shared { }\n");
+                _ = UpsertTestFile(relativePath, sharedChecksum);
+                targets.Add((relativePath, sharedChecksum, false));
+
+                _ = UpsertTestFileWithLanguage(
+                    $"legacy/non-csharp-{index:D2}.py",
+                    "python",
+                    sharedChecksum);
+            }
+
+            const string unicodeRetainedPath = "src/Å.cs";
+            const string unicodeAliasPath = "src/å.cs";
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Å.cs"), "// retained alias\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "å.cs"), "// old alias\n");
+            _ = UpsertTestFile(unicodeRetainedPath, sharedChecksum);
+            targets.Add((unicodeRetainedPath, sharedChecksum, false));
+            var unicodeAliasId = UpsertTestFile(unicodeAliasPath, sharedChecksum);
+            var staleCSharpId = UpsertTestFile("legacy/stale.cs", sharedChecksum);
+
+            FilePurgePlan plan;
+            List<QueryProfileEntry> profile;
+            DbDebug.BeginProfile();
+            try
+            {
+                plan = _writer.PlanStaleCSharpFilesSharingCleanupKeys(
+                    projectRoot,
+                    targets,
+                    retainedPathComparison: StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                profile = DbDebug.EndProfile();
+            }
+
+            var expectedIds = new List<long> { staleCSharpId };
+            var unicodeRetainedAbsolutePath = Path.Combine(projectRoot, "src", "Å.cs");
+            var unicodeAliasAbsolutePath = Path.Combine(projectRoot, "src", "å.cs");
+            if (FileIndexer.TryGetFileIdentity(unicodeRetainedAbsolutePath, out var retainedIdentity)
+                && FileIndexer.TryGetFileIdentity(unicodeAliasAbsolutePath, out var aliasIdentity)
+                && retainedIdentity == aliasIdentity)
+            {
+                expectedIds.Add(unicodeAliasId);
+            }
+            expectedIds.Sort();
+            Assert.Equal(expectedIds, plan.FileIds);
+            var checksumQuery = Assert.Single(
+                profile.Where(entry => entry.Sql == DbWriter.StaleCSharpChecksumCandidateSql));
+            Assert.Equal(targetCount + 2, checksumQuery.RowsScanned);
+            Assert.Contains(
+                checksumQuery.QueryPlan,
+                row => row.Detail.Contains("idx_files_checksum", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                checksumQuery.QueryPlan,
+                row => row.Detail.Contains("SCAN files", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                profile,
+                entry => entry.Sql == DbWriter.StaleChecksumCandidateSql);
+
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.PlanStaleCSharpFilesSharingCleanupKeys(
+                    projectRoot,
+                    targets,
+                    cancelled.Token,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            _ = DbDebug.EndProfile();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupPlan_ApplyDeletesOnlyIdsCapturedBeforeLaterMatchingRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-plan-snapshot");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.py"), "# retained");
+            var plannedId = UpsertTestFile("src/target.cs", "shared-checksum");
+
+            var plan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/target.py",
+                "shared-checksum",
+                includeDirectoryAndStem: true);
+            var laterId = UpsertTestFileWithLanguage("src/target.fs", "fsharp", "shared-checksum");
+
+            Assert.Equal([plannedId], plan.FileIds);
+            Assert.DoesNotContain(laterId, plan.FileIds);
+            Assert.Equal(1, _writer.ApplyScopedFileCleanupPlan(plan));
+            Assert.False(_writer.HasFileAtPath("src/target.cs"));
+            Assert.True(_writer.HasFileAtPath("src/target.fs"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupPlan_FileIdentityTreatsOnlyRetainedCaseAliasAsStale()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-case-alias");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Target.cs"), "// retained");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "live.cs"), "// live duplicate");
+
+            var aliasId = UpsertTestFile("src/target.cs", "shared-checksum");
+            var liveId = UpsertTestFile("src/live.cs", "shared-checksum");
+
+            var caseInsensitivePlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/Target.cs",
+                "shared-checksum",
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.OrdinalIgnoreCase);
+            var ordinalPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/Target.cs",
+                "shared-checksum",
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.Ordinal);
+
+            Assert.Equal([aliasId], caseInsensitivePlan.FileIds);
+            Assert.Equal([aliasId], ordinalPlan.FileIds);
+            Assert.DoesNotContain(liveId, caseInsensitivePlan.FileIds);
+            Assert.DoesNotContain(liveId, ordinalPlan.FileIds);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupPlan_AsciiCaseAliasDoesNotRequireMatchingChecksum()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-case-alias-changed");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Target.cs"), "// retained and changed");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "live.cs"), "// unrelated live row");
+
+            var aliasId = UpsertTestFile("src/target.cs", "old-checksum");
+            var liveId = UpsertTestFile("src/live.cs", "new-checksum");
+
+            var caseInsensitivePlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/Target.cs",
+                checksum: null,
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.OrdinalIgnoreCase);
+            var ordinalPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/Target.cs",
+                checksum: null,
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.Ordinal);
+
+            Assert.Equal([aliasId], caseInsensitivePlan.FileIds);
+            Assert.Equal([aliasId], ordinalPlan.FileIds);
+            Assert.DoesNotContain(liveId, caseInsensitivePlan.FileIds);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("src/target.cs", "src/Target.cs")]
+    [InlineData("src/A.cs", "Src/A.cs")]
+    [InlineData("src/é.cs", "src/É.cs")]
+    public void ScopedFileCleanupPlan_CaseFoldedDistinctLiveFilesAreNotAliases(
+        string persistedPath,
+        string retainedPath)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-distinct-identities");
+        try
+        {
+            var persistedAbsolutePath = Path.Combine(
+                projectRoot,
+                persistedPath.Replace('/', Path.DirectorySeparatorChar));
+            var retainedAbsolutePath = Path.Combine(
+                projectRoot,
+                retainedPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(persistedAbsolutePath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(retainedAbsolutePath)!);
+            File.WriteAllText(persistedAbsolutePath, "// persisted distinct file\n");
+            File.WriteAllText(retainedAbsolutePath, "// retained distinct file\n");
+
+            if (!FileIndexer.TryGetFileIdentity(persistedAbsolutePath, out var persistedIdentity)
+                || !FileIndexer.TryGetFileIdentity(retainedAbsolutePath, out var retainedIdentity)
+                || persistedIdentity == retainedIdentity)
+            {
+                return;
+            }
+
+            var persistedId = UpsertTestFile(persistedPath, "shared-case-fold-checksum");
+            var plan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                retainedPath,
+                "shared-case-fold-checksum",
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.OrdinalIgnoreCase);
+
+            Assert.DoesNotContain(persistedId, plan.FileIds);
+            Assert.True(_writer.HasFileAtPath(persistedPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupReappearance_FoldBucketsDoNotCrossMatchTargetIdentities()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-fold-identity-buckets");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var candidateAbsolutePath = Path.Combine(projectRoot, "src", "target.cs");
+            var otherAbsolutePath = Path.Combine(projectRoot, "src", "other.cs");
+            File.WriteAllText(candidateAbsolutePath, "// candidate identity\n");
+            File.WriteAllText(otherAbsolutePath, "// other target identity\n");
+            Assert.True(FileIndexer.TryGetFileIdentity(candidateAbsolutePath, out var candidateIdentity));
+            Assert.True(FileIndexer.TryGetFileIdentity(otherAbsolutePath, out var otherIdentity));
+            Assert.NotEqual(candidateIdentity, otherIdentity);
+
+            var candidateId = UpsertTestFile("src/target.cs", "cross-target-checksum");
+            var retainedPathsExact = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "src/source.cs",
+                "src/Target.cs",
+            };
+            var retainedFileIdentitiesByCaseFold = new Dictionary<
+                string,
+                HashSet<FileIndexer.FileIdentity>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["src/source.cs"] = [candidateIdentity],
+                ["src/Target.cs"] = [otherIdentity],
+            };
+
+            var crossTargetMatch = _writer.FindReappearedFileInScopedCleanupPlan(
+                projectRoot,
+                [candidateId],
+                retainedPathsExact,
+                retainedFileIdentitiesByCaseFold);
+
+            Assert.Equal("src/target.cs", crossTargetMatch);
+
+            retainedFileIdentitiesByCaseFold["src/Target.cs"].Add(candidateIdentity);
+            var sameBucketMatch = _writer.FindReappearedFileInScopedCleanupPlan(
+                projectRoot,
+                [candidateId],
+                retainedPathsExact,
+                retainedFileIdentitiesByCaseFold);
+
+            Assert.Null(sameBucketMatch);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void StaleFilePlan_ExcludingCsharpRetainsLegacyNullLanguageRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("stale-plan-non-csharp");
+        try
+        {
+            var legacyId = _writer.UpsertFile(
+                new FileRecord
+                {
+                    Path = "legacy/unknown.ext",
+                    Lang = null,
+                    Size = 10,
+                    Lines = 1,
+                    Checksum = "legacy-null-language",
+                    Modified = DateTime.UtcNow,
+                },
+                out _);
+            var csharpId = UpsertTestFile("src/stale.cs", "stale-csharp");
+
+            var plan = _writer.PlanStaleFilesExcludingLanguage(
+                projectRoot,
+                preservedMissingPaths: null,
+                excludedLanguage: "csharp");
+
+            Assert.Contains(legacyId, plan.FileIds);
+            Assert.DoesNotContain(csharpId, plan.FileIds);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void InsertSymbols_UnknownKind_ThrowsBeforePersisting()
     {
         var ex = Assert.Throws<ArgumentException>(() => _writer.InsertSymbols(
@@ -2653,9 +3027,11 @@ public class DatabaseTests : IDisposable
     public void InitializeSchema_CreatesBoundedMaintenanceLookupIndexes()
     {
         Assert.Contains("idx_files_checksum", ReadIndexNames(_db.Connection, "files"));
+        Assert.Contains("idx_files_path_nocase", ReadIndexNames(_db.Connection, "files"));
         Assert.Contains("idx_file_issues_file_kind", ReadIndexNames(_db.Connection, "file_issues"));
 
         AssertIndexColumns(_db.Connection, "idx_files_checksum", [("checksum", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_files_path_nocase", [("path", "NOCASE")]);
         AssertIndexColumns(
             _db.Connection,
             "idx_file_issues_file_kind",
@@ -2667,12 +3043,39 @@ public class DatabaseTests : IDisposable
     {
         var checksumPlan = ReadQueryPlanDetails(
             _db.Connection,
-            "SELECT id, path FROM files WHERE checksum = @checksum AND path <> @path",
+            DbWriter.StaleChecksumCandidateSql,
             ("@checksum", "same-checksum"),
             ("@path", "src/current.cs"));
         Assert.Contains(checksumPlan, detail =>
             detail.Contains("SEARCH files USING INDEX idx_files_checksum", StringComparison.Ordinal));
         Assert.DoesNotContain(checksumPlan, detail => detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var csharpChecksumPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleCSharpChecksumCandidateSql,
+            ("@checksum", "same-checksum"),
+            ("@path", "src/current.cs"));
+        Assert.Contains(csharpChecksumPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX idx_files_checksum", StringComparison.Ordinal));
+        Assert.DoesNotContain(csharpChecksumPlan, detail =>
+            detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var pathAliasPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleRetainedPathAliasCandidateSql,
+            ("@path", "src/Target.cs"));
+        Assert.Contains(pathAliasPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX idx_files_path_nocase", StringComparison.Ordinal));
+        Assert.DoesNotContain(pathAliasPlan, detail => detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var csharpPathAliasPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleCSharpRetainedPathAliasCandidateSql,
+            ("@path", "src/Target.cs"));
+        Assert.Contains(csharpPathAliasPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX idx_files_path_nocase", StringComparison.Ordinal));
+        Assert.DoesNotContain(csharpPathAliasPlan, detail =>
+            detail.Contains("SCAN files", StringComparison.Ordinal));
 
         var issuePlan = ReadQueryPlanDetails(
             _db.Connection,
@@ -2698,8 +3101,190 @@ public class DatabaseTests : IDisposable
             ("@base_dot_lower_bound", "src/target."),
             ("@base_dot_upper_bound", "src/target/"));
         Assert.Contains(directoryStemPlan, detail =>
-            detail.Contains("SEARCH files USING COVERING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+            detail.Contains("SEARCH files USING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
         Assert.DoesNotContain(directoryStemPlan, detail => detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var csharpDirectoryStemPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleCSharpDirectoryStemCandidateSql,
+            ("@path", "src/target.py"),
+            ("@base_path", "src/target"),
+            ("@base_dot_lower_bound", "src/target."),
+            ("@base_dot_upper_bound", "src/target/"));
+        Assert.Contains(csharpDirectoryStemPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+        Assert.DoesNotContain(csharpDirectoryStemPlan, detail =>
+            detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var contractPathPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.BuildCSharpStaticInterfaceContractPathPreflightSql(
+                batchCount: 1,
+                includeInterfaceDeclarationsAsConservativeEvidence: false),
+            ("@path0", "src/target.cs"));
+        Assert.Contains(contractPathPlan, detail =>
+            detail.Contains("SEARCH f USING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+        Assert.Contains(contractPathPlan, detail =>
+            detail.Contains("SEARCH s USING INDEX idx_symbols_file_kind", StringComparison.Ordinal));
+        Assert.DoesNotContain(contractPathPlan, detail =>
+            detail.Contains("SCAN f", StringComparison.Ordinal)
+            || detail.Contains("SCAN s", StringComparison.Ordinal));
+
+        var csharpFilePathPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.BuildCSharpFilePathLookupSql(batchCount: 1),
+            ("@path0", "src/target.cs"));
+        Assert.Contains(csharpFilePathPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+        Assert.DoesNotContain(csharpFilePathPlan, detail =>
+            detail.Contains("SCAN files", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CSharpContractWorkspaceQueries_UseFileKindThenBoundedInterfaceNamePlans()
+    {
+        var memberPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.CSharpStaticInterfaceContractMemberWorkspaceSql);
+        Assert.Contains(memberPlan, detail =>
+            detail.Contains("SEARCH f USING INDEX idx_files_lang", StringComparison.Ordinal));
+        Assert.Contains(memberPlan, detail =>
+            detail.Contains("SEARCH s USING INDEX idx_symbols_file_kind", StringComparison.Ordinal)
+            && detail.Contains("file_id=? AND kind=?", StringComparison.Ordinal));
+        Assert.DoesNotContain(memberPlan, detail =>
+            detail.Contains("SCAN f", StringComparison.Ordinal)
+            || detail.Contains("SCAN s", StringComparison.Ordinal));
+
+        var interfacePlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.BuildCSharpStaticInterfaceDeclarationWorkspaceSql(batchCount: 1),
+            ("@containerName0", "IContract"));
+        Assert.Contains(interfacePlan, detail =>
+            detail.Contains("SEARCH s USING INDEX idx_symbols_name", StringComparison.Ordinal)
+            && detail.Contains("name=?", StringComparison.Ordinal));
+        Assert.Contains(interfacePlan, detail =>
+            detail.Contains("SEARCH f USING INTEGER PRIMARY KEY", StringComparison.Ordinal));
+        Assert.DoesNotContain(interfacePlan, detail =>
+            detail.Contains("SCAN f", StringComparison.Ordinal)
+            || detail.Contains("SCAN s", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void LoadCSharpContractWorkspace_MaterializesOnlyCandidatesAndMatchingInterfaces()
+    {
+        const int FillerCount = 64;
+        var contractFileId = UpsertTestFile("src/IContract.cs", "contract");
+        var duplicateInterfaceFileId = UpsertTestFile("src/Partials/IContract.cs", "contract-partial");
+        var symbols = new List<SymbolRecord>(FillerCount * 2 + 3)
+        {
+            new()
+            {
+                FileId = contractFileId,
+                Kind = "interface",
+                Name = "IContract",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 8,
+                Signature = "public partial interface IContract<T>",
+            },
+            new()
+            {
+                FileId = duplicateInterfaceFileId,
+                Kind = "interface",
+                Name = "IContract",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public partial interface IContract<T>",
+            },
+            new()
+            {
+                FileId = contractFileId,
+                Kind = "function",
+                Name = "Create",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public static abstract T Create();",
+                ContainerKind = "interface",
+                ContainerName = "IContract",
+                ReturnType = "T",
+            },
+        };
+        for (var index = 0; index < FillerCount; index++)
+        {
+            var fileId = UpsertTestFile($"src/Filler{index:D2}.cs", $"filler-{index:D2}");
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "interface",
+                Name = $"IPlain{index:D2}",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = $"public interface IPlain{index:D2}",
+            });
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = $"CreatevirtualNode{index:D2}",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                Signature = $"public static AbstractFactory CreatevirtualNode{index:D2}();",
+                ContainerKind = "interface",
+                ContainerName = $"IPlain{index:D2}",
+            });
+        }
+        _writer.InsertSymbols(symbols);
+
+        var previousStatsHook = DbWriter.CSharpContractWorkspaceReadStatsForTesting;
+        var reads = new List<DbWriter.CSharpContractWorkspaceReadStats>();
+        try
+        {
+            DbWriter.CSharpContractWorkspaceReadStatsForTesting = reads.Add;
+
+            var loaded = _writer.LoadCSharpStaticInterfaceContractSymbols();
+
+            Assert.Contains(loaded, symbol => symbol.Kind == "function" && symbol.Name == "Create");
+            Assert.Equal(2, loaded.Count(symbol => symbol.Kind == "interface" && symbol.Name == "IContract"));
+            Assert.DoesNotContain(loaded, symbol => symbol.Name.StartsWith("IPlain", StringComparison.Ordinal));
+            var read = Assert.Single(reads);
+            Assert.Equal(FillerCount + 1, read.MemberCandidateRowsRead);
+            Assert.Equal(1, read.ExactMembersRetained);
+            Assert.Equal(2, read.InterfaceDeclarationRowsRead);
+            Assert.Equal(1, read.InterfaceDeclarationBatchQueries);
+
+            reads.Clear();
+            var retained = _writer.LoadCSharpStaticInterfaceContractSymbols(
+                new HashSet<string>(["src/IContract.cs"], StringComparer.Ordinal),
+                out var excludedPathsHaveContracts);
+
+            Assert.Empty(retained);
+            Assert.True(excludedPathsHaveContracts);
+            var excludedRead = Assert.Single(reads);
+            Assert.Equal(FillerCount + 1, excludedRead.MemberCandidateRowsRead);
+            Assert.Equal(0, excludedRead.ExactMembersRetained);
+            Assert.Equal(0, excludedRead.InterfaceDeclarationRowsRead);
+            Assert.Equal(0, excludedRead.InterfaceDeclarationBatchQueries);
+
+            Assert.True(_writer.DeleteFileByPath("src/IContract.cs"));
+            reads.Clear();
+
+            var negative = _writer.LoadCSharpStaticInterfaceContractSymbols();
+
+            Assert.Empty(negative);
+            var negativeRead = Assert.Single(reads);
+            Assert.Equal(FillerCount, negativeRead.MemberCandidateRowsRead);
+            Assert.Equal(0, negativeRead.ExactMembersRetained);
+            Assert.Equal(0, negativeRead.InterfaceDeclarationRowsRead);
+            Assert.Equal(0, negativeRead.InterfaceDeclarationBatchQueries);
+        }
+        finally
+        {
+            DbWriter.CSharpContractWorkspaceReadStatsForTesting = previousStatsHook;
+        }
     }
 
     [Fact]
@@ -2741,9 +3326,11 @@ public class DatabaseTests : IDisposable
 
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
+            var fileIndexes = ReadIndexNames(db.Connection, "files");
             var symbolIndexes = ReadIndexNames(db.Connection, "symbols");
             var indexes = ReadIndexNames(db.Connection, "symbol_references");
 
+            Assert.DoesNotContain("idx_files_path_nocase", fileIndexes);
             Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
             Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
             Assert.Contains("idx_symbols_name_folded_container_name_nocase", symbolIndexes);
@@ -4076,10 +4663,12 @@ public class DatabaseTests : IDisposable
             command.ExecuteNonQuery();
         }
 
+        var observedPersistedCSharpPaths = new List<string>();
         var reusableStats = _writer.LoadReusableIndexedFileStats(
             maxSymbolsPerFile: 10,
             maxReferencesPerFile: 10,
-            initialCapacity: fixtures.Length);
+            initialCapacity: fixtures.Length,
+            persistedCSharpPathObserver: observedPersistedCSharpPaths.Add);
 
         var valid = Assert.Single(reusableStats);
         Assert.Equal("src/valid.cs", valid.Key);
@@ -4098,6 +4687,12 @@ public class DatabaseTests : IDisposable
         Assert.Equal(
             new PersistedIndexedFileSize(Exists: true, SizeKnown: true, 20),
             reusableStats.GetPersistedSize("src/invalid-modified.cs"));
+        Assert.Equal(
+            fixtures
+                .Where(fixture => fixture.Language == "csharp")
+                .Select(fixture => fixture.Path)
+                .Order(StringComparer.Ordinal),
+            observedPersistedCSharpPaths.Order(StringComparer.Ordinal));
     }
 
     [Fact]

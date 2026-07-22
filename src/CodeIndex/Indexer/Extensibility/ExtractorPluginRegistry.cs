@@ -47,6 +47,8 @@ public static partial class ExtractorPluginRegistry
     internal static int? TypeInspectionLimitForTesting { get; set; }
     internal static TimeSpan? WorkerOperationBudgetForTesting { get; set; }
     internal static string? UserPluginDirectoryForTesting { get; set; }
+    internal static Func<string, string, IEnumerable<string>>? EnumeratePatternFilesForTesting { get; set; }
+    internal static Action<string>? InspectPatternDirectoryForTesting { get; set; }
     private static bool suppressDefaultPluginDiscoveryForTesting;
     private static readonly AsyncLocal<bool> AuthorizedConfigurationScope = new();
 
@@ -235,6 +237,8 @@ public static partial class ExtractorPluginRegistry
             WorkerOperationBudgetForTesting = null;
             ExtractorPluginWorkerClient.ProcessStartedForTesting = null;
             UserPluginDirectoryForTesting = null;
+            EnumeratePatternFilesForTesting = null;
+            InspectPatternDirectoryForTesting = null;
             suppressDefaultPluginDiscoveryForTesting = true;
             UserPatternDirectoryOverrideForTests = null;
             WorkspacePluginLoadedBeforeCommitForTesting = null;
@@ -263,6 +267,8 @@ public static partial class ExtractorPluginRegistry
             WorkerOperationBudgetForTesting = null;
             ExtractorPluginWorkerClient.ProcessStartedForTesting = null;
             UserPluginDirectoryForTesting = null;
+            EnumeratePatternFilesForTesting = null;
+            InspectPatternDirectoryForTesting = null;
             suppressDefaultPluginDiscoveryForTesting = false;
             UserPatternDirectoryOverrideForTests = null;
             WorkspacePluginLoadedBeforeCommitForTesting = null;
@@ -280,7 +286,11 @@ public static partial class ExtractorPluginRegistry
         => EnumeratePluginAssemblyPaths(directories).ToArray();
 
     internal static IReadOnlyList<string> EnumeratePatternConfigPathsFromDirectoryForTests(string directory)
-        => EnumeratePatternConfigPathsFromDirectory(DefaultPatternWorkspace, directory, workspaceRoot: null).ToArray();
+        => EnumeratePatternConfigPathsFromDirectory(
+            DefaultPatternWorkspace,
+            directory,
+            workspaceRoot: null,
+            isUserConfiguration: false).ToArray();
 
     internal static int PluginWorkerCountForTests()
     {
@@ -376,7 +386,11 @@ public static partial class ExtractorPluginRegistry
         LoadPatternConfigsForProjectRoot(state, fullRoot);
     }
 
-    internal static void ReloadPatternConfigsForProjectRoot(string? projectRoot)
+    internal static void ReloadPatternConfigsForProjectRoot(
+        string? projectRoot,
+        Func<string, Stream>? openFile = null,
+        Func<string, bool, bool>? directoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
         EnsurePluginsLoaded();
         if (string.IsNullOrWhiteSpace(projectRoot))
@@ -388,7 +402,12 @@ public static partial class ExtractorPluginRegistry
         try
         {
             LoadWorkspacePlugins(state, fullRoot);
-            LoadPatternConfigsForProjectRoot(state, fullRoot);
+            LoadPatternConfigsForProjectRoot(
+                state,
+                fullRoot,
+                openFile,
+                directoryExists,
+                observeInput);
             committed = TryReplacePatternWorkspace(state);
         }
         finally
@@ -401,7 +420,9 @@ public static partial class ExtractorPluginRegistry
     internal static void ReloadAuthorizedPatternConfigsForProjectRoot(
         string projectRoot,
         Func<string, IEnumerable<string>> enumerateFileSystemEntries,
-        Func<string, FileStream> openFile)
+        Func<string, Stream> openFile,
+        Func<string, bool, bool>? directoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         ArgumentNullException.ThrowIfNull(enumerateFileSystemEntries);
@@ -416,7 +437,9 @@ public static partial class ExtractorPluginRegistry
                 state,
                 fullRoot,
                 enumerateFileSystemEntries,
-                openFile);
+                openFile,
+                directoryExists,
+                observeInput);
 
             committed = TryReplacePatternWorkspace(state);
         }
@@ -431,7 +454,9 @@ public static partial class ExtractorPluginRegistry
         string projectRoot,
         string directory,
         Func<string, IEnumerable<string>> enumerateFileSystemEntries,
-        Func<string, FileStream> openFile)
+        Func<string, Stream> openFile,
+        Func<string, bool, bool>? directoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
         var fullRoot = Path.GetFullPath(projectRoot);
         var fullDirectory = Path.GetFullPath(directory);
@@ -453,17 +478,21 @@ public static partial class ExtractorPluginRegistry
             state,
             fullDirectory,
             enumerateFileSystemEntries,
-            openFile);
+            openFile,
+            directoryExists,
+            observeInput);
     }
 
     private static void LoadAuthorizedPatternConfigsFromDirectory(
         PatternWorkspaceState state,
         string directory,
         Func<string, IEnumerable<string>> enumerateFileSystemEntries,
-        Func<string, FileStream> openFile)
+        Func<string, Stream> openFile,
+        Func<string, bool, bool>? directoryExists,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput)
     {
         var patternDirectory = Path.Combine(directory, ".cdidx", "patterns");
-        if (!Directory.Exists(patternDirectory))
+        if (!(directoryExists?.Invoke(patternDirectory, false) ?? Directory.Exists(patternDirectory)))
             return;
 
         var candidateCount = 0;
@@ -486,7 +515,7 @@ public static partial class ExtractorPluginRegistry
             }
 
             candidateCount++;
-            TryLoadPatternConfig(state, path, "workspace", openFile);
+            TryLoadPatternConfig(state, path, "workspace", openFile, observeInput);
         }
     }
 
@@ -526,19 +555,37 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
-    private static void LoadPatternConfigsForProjectRoot(PatternWorkspaceState state, string fullRoot)
+    private static void LoadPatternConfigsForProjectRoot(
+        PatternWorkspaceState state,
+        string fullRoot,
+        Func<string, Stream>? openFile = null,
+        Func<string, bool, bool>? directoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
-        foreach (var patternPath in EnumerateUserPatternConfigPaths(state))
-            TryLoadPatternConfig(state, patternPath, "user");
+        foreach (var patternPath in EnumerateUserPatternConfigPaths(
+                     state,
+                     directoryExists,
+                     observeInput))
+            TryLoadPatternConfig(state, patternPath, "user", openFile, observeInput);
 
-        foreach (var patternPath in EnumeratePatternConfigPaths(state, fullRoot, includeUserDirectory: false))
-            TryLoadPatternConfig(state, patternPath, "workspace");
+        foreach (var patternPath in EnumeratePatternConfigPaths(
+                     state,
+                     fullRoot,
+                     includeUserDirectory: false,
+                     directoryExists,
+                     observeInput))
+        {
+            TryLoadPatternConfig(state, patternPath, "workspace", openFile, observeInput);
+        }
     }
 
     internal static void LoadPatternConfigsForPath(
         string? path,
         string? workspaceRoot,
-        bool includeWorkspaceRoot = true)
+        bool includeWorkspaceRoot = true,
+        Func<string, Stream>? openFile = null,
+        Func<string, bool, bool>? directoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
         EnsurePluginsLoaded();
         if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(workspaceRoot))
@@ -553,16 +600,26 @@ public static partial class ExtractorPluginRegistry
             return;
 
         var state = GetOrCreatePatternWorkspace(fullRoot);
-        foreach (var patternPath in EnumerateUserPatternConfigPaths(state))
-            TryLoadPatternConfig(state, patternPath, "user");
+        foreach (var patternPath in EnumerateUserPatternConfigPaths(
+                     state,
+                     directoryExists,
+                     observeInput))
+            TryLoadPatternConfig(state, patternPath, "user", openFile, observeInput);
 
         while (PathCasing.IsFullPathEqualOrParent(fullRoot, directory))
         {
             if (!includeWorkspaceRoot && PathCasing.PathsEqual(directory, fullRoot))
                 break;
 
-            foreach (var patternPath in EnumeratePatternConfigPaths(state, directory, includeUserDirectory: false))
-                TryLoadPatternConfig(state, patternPath, "workspace");
+            foreach (var patternPath in EnumeratePatternConfigPaths(
+                         state,
+                         directory,
+                         includeUserDirectory: false,
+                         directoryExists,
+                         observeInput))
+            {
+                TryLoadPatternConfig(state, patternPath, "workspace", openFile, observeInput);
+            }
 
             if (PathCasing.PathsEqual(directory, fullRoot))
                 break;

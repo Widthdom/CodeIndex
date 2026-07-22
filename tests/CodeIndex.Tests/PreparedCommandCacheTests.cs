@@ -693,6 +693,15 @@ public class PreparedCommandCacheTests : IDisposable
             Assert.Equal(0, writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target.py"));
 
             Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+
+            (string RetainedRelativePath, string? Checksum, bool IncludeDirectoryAndStem)[]
+                csharpTargets = [("src/target.py", "current", true)];
+            _ = writer.PlanStaleCSharpFilesSharingCleanupKeys(projectRoot, csharpTargets);
+            var csharpHitsBefore = _db.PreparedCommands.HitCount;
+
+            _ = writer.PlanStaleCSharpFilesSharingCleanupKeys(projectRoot, csharpTargets);
+
+            Assert.Equal(csharpHitsBefore + 3, _db.PreparedCommands.HitCount);
         }
         finally
         {
@@ -786,6 +795,9 @@ public class PreparedCommandCacheTests : IDisposable
         var first = writer.LoadCSharpStaticInterfaceContractSymbols();
         Assert.Contains(first, s => s.Kind == "interface" && s.Name == "IShape");
         Assert.Contains(first, s => s.Kind == "function" && s.Name == "Create");
+        var workspaceCommandCountAfterFirstRead = _db.PreparedCommands.Count;
+        _ = writer.LoadCSharpStaticInterfaceContractSymbols();
+        Assert.Equal(workspaceCommandCountAfterFirstRead, _db.PreparedCommands.Count);
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(contractPaths));
         var retained = writer.LoadCSharpStaticInterfaceContractSymbols(
@@ -801,7 +813,10 @@ public class PreparedCommandCacheTests : IDisposable
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(contractPaths));
 
         Assert.Equal(first.Count, second.Count);
-        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
+        // The persisted member phase and global presence query reuse fixed cached commands.
+        // Path-transition and matching-interface batches remain cache-neutral because their
+        // SQL shapes change with the batch tail.
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 2);
 
         var previousWorkspaceReadHook = DbWriter.CSharpContractWorkspaceReadForTesting;
         var workspaceReadCount = 0;
@@ -820,13 +835,235 @@ public class PreparedCommandCacheTests : IDisposable
                 [target],
                 canReuseExistingSymbolsWithoutRead: static _ => true);
 
-            Assert.Empty(workspace.Symbols);
+            Assert.Contains(workspace.Symbols, symbol => symbol.Kind == "interface" && symbol.Name == "IShape");
+            Assert.Contains(workspace.Symbols, symbol => symbol.Kind == "function" && symbol.Name == "Create");
             Assert.True(workspace.HasStaticInterfaceContracts);
+            Assert.NotNull(workspace.StaticInterfaceMemberLookups);
+            Assert.NotEmpty(workspace.StaticInterfaceMemberLookups.ContractsByType);
             Assert.Equal(1, workspaceReadCount);
+
+            var transitionedWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                writer,
+                indexer,
+                [target with { Language = "python" }]);
+
+            Assert.Empty(transitionedWorkspace.Symbols);
+            Assert.True(transitionedWorkspace.HasStaticInterfaceContracts);
+            Assert.Equal(2, workspaceReadCount);
         }
         finally
         {
             DbWriter.CSharpContractWorkspaceReadForTesting = previousWorkspaceReadHook;
+        }
+    }
+
+    [Fact]
+    public void DbWriter_CSharpStaticInterfaceContractMemberPreflightsAreExactBatchedAndCancellable()
+    {
+        const string NonCSharpPath = "src/not-csharp.py";
+        var writer = new DbWriter(_db);
+        var fileIds = new List<long>(501);
+        using (var transaction = writer.BeginTransaction())
+        {
+            for (var index = 0; index < 500; index++)
+            {
+                fileIds.Add(writer.UpsertFile(new FileRecord
+                {
+                    Path = $"src/Filler{index:D3}.cs",
+                    Lang = "csharp",
+                    Size = 80,
+                    Lines = 4,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, index % 60, DateTimeKind.Utc),
+                }));
+            }
+
+            var contractFileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/IContract.cs",
+                Lang = "csharp",
+                Size = 160,
+                Lines = 8,
+                Modified = new DateTime(2025, 1, 1, 0, 1, 0, DateTimeKind.Utc),
+            });
+            fileIds.Add(contractFileId);
+            writer.UpsertFile(new FileRecord
+            {
+                Path = NonCSharpPath,
+                Lang = "python",
+                Size = 40,
+                Lines = 2,
+                Modified = new DateTime(2025, 1, 1, 0, 2, 0, DateTimeKind.Utc),
+            });
+
+            writer.InsertSymbols(
+            [
+                new SymbolRecord
+                {
+                    FileId = fileIds[0],
+                    Kind = "interface",
+                    Name = "IPlain",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 4,
+                    Signature = "public interface IPlain",
+                    ContainerQualifiedName = "Demo.IPlain",
+                },
+                new SymbolRecord
+                {
+                    FileId = fileIds[0],
+                    Kind = "function",
+                    Name = "CreatevirtualNode",
+                    Line = 2,
+                    StartLine = 2,
+                    EndLine = 2,
+                    Signature = "public static AbstractFactory CreatevirtualNode();",
+                    ContainerKind = "interface",
+                    ContainerName = "IPlain",
+                    ContainerQualifiedName = "Demo.IPlain",
+                },
+                new SymbolRecord
+                {
+                    FileId = fileIds[0],
+                    Kind = "property",
+                    Name = "UpperCount",
+                    Line = 3,
+                    StartLine = 3,
+                    EndLine = 3,
+                    Signature = "public STATIC ABSTRACT int UpperCount { get; }",
+                    ContainerKind = "interface",
+                    ContainerName = "IPlain",
+                    ContainerQualifiedName = "Demo.IPlain",
+                },
+                new SymbolRecord
+                {
+                    FileId = contractFileId,
+                    Kind = "interface",
+                    Name = "IContract",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 8,
+                    Signature = "public interface IContract",
+                    ContainerQualifiedName = "Demo.IContract",
+                },
+                new SymbolRecord
+                {
+                    FileId = contractFileId,
+                    Kind = "property",
+                    Name = "Count",
+                    Line = 4,
+                    StartLine = 4,
+                    EndLine = 4,
+                    Signature = "public static abstract int Count { get; }",
+                    ContainerKind = "interface",
+                    ContainerName = "IContract",
+                    ContainerQualifiedName = "Demo.IContract",
+                },
+            ]);
+            transaction.Commit();
+        }
+
+        Assert.False(writer.HasCSharpStaticInterfaceContractMembersInFileIds([]));
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
+        Assert.True(writer.HasCSharpStaticInterfaceContractMembers());
+        var cachedCommandCountBeforeFileIdPreflights = _db.PreparedCommands.Count;
+        Assert.False(writer.HasCSharpStaticInterfaceContractMembersInFileIds([fileIds[0]]));
+        Assert.False(writer.HasCSharpStaticInterfaceContractMembersInFileIds(fileIds.Take(500).ToArray()));
+        Assert.True(writer.HasCSharpStaticInterfaceContractMembersInFileIds(fileIds));
+        Assert.True(writer.HasCSharpStaticInterfaceContractMembersInFileIds(
+            fileIds.Take(500).ToArray(),
+            includeInterfaceDeclarationsAsConservativeEvidence: true));
+        Assert.False(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
+            new HashSet<string>(["src/Filler000.cs"], StringComparer.Ordinal)));
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
+            new HashSet<string>(["src/IContract.cs"], StringComparer.Ordinal)));
+        var allPaths = Enumerable.Range(0, 500)
+            .Select(index => $"src/Filler{index:D3}.cs")
+            .Append("src/IContract.cs")
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(allPaths));
+
+        var candidatePaths = allPaths
+            .Append(NonCSharpPath)
+            .Append("src/missing.cs")
+            .ToHashSet(StringComparer.Ordinal);
+        var previousPathLookupHook = DbWriter.CSharpFilePathLookupBatchCompletedForTesting;
+        var completedPathLookupBatches = new List<int>();
+        try
+        {
+            DbWriter.CSharpFilePathLookupBatchCompletedForTesting = completedPathLookupBatches.Add;
+            var cacheCountBeforePathLookup = _db.PreparedCommands.Count;
+
+            var resolvedCSharpPaths = writer.ResolveCSharpFilePaths(candidatePaths);
+
+            Assert.True(resolvedCSharpPaths.SetEquals(allPaths));
+            Assert.Equal([500, 503], completedPathLookupBatches);
+            completedPathLookupBatches.Clear();
+
+            var csharpFilePlan = writer.PlanCSharpFilesInPaths(candidatePaths);
+
+            Assert.Equal(fileIds, csharpFilePlan.FileIds);
+            Assert.Equal(40_160, csharpFilePlan.DeletedBytes);
+            Assert.True(csharpFilePlan.ByteEstimateComplete);
+            Assert.Equal(0, csharpFilePlan.RemainingFileCount);
+            Assert.Equal([500, 503], completedPathLookupBatches);
+            Assert.Equal(cacheCountBeforePathLookup, _db.PreparedCommands.Count);
+        }
+        finally
+        {
+            DbWriter.CSharpFilePathLookupBatchCompletedForTesting = previousPathLookupHook;
+        }
+        Assert.Equal(cachedCommandCountBeforeFileIdPreflights, _db.PreparedCommands.Count);
+
+        var loaded = writer.LoadCSharpStaticInterfaceContractSymbols();
+        Assert.DoesNotContain(loaded, symbol => symbol.Name is "CreatevirtualNode" or "UpperCount");
+        Assert.Contains(loaded, symbol => symbol.Name == "Count");
+
+        var previousPreflightHook = DbWriter.CSharpContractPreflightForTesting;
+        var previousWorkspaceReadHook = DbWriter.CSharpContractWorkspaceReadForTesting;
+        previousPathLookupHook = DbWriter.CSharpFilePathLookupBatchCompletedForTesting;
+        using var cancellation = new CancellationTokenSource();
+        using var pathCancellation = new CancellationTokenSource();
+        using var pathLookupCancellation = new CancellationTokenSource();
+        var preflightCalls = 0;
+        var workspaceReadCalls = 0;
+        completedPathLookupBatches.Clear();
+        try
+        {
+            DbWriter.CSharpContractPreflightForTesting = () =>
+            {
+                preflightCalls++;
+                cancellation.Cancel();
+            };
+            Assert.Throws<OperationCanceledException>(() =>
+                writer.HasCSharpStaticInterfaceContractMembersInFileIds(fileIds, cancellation.Token));
+            Assert.Equal(1, preflightCalls);
+
+            DbWriter.CSharpContractWorkspaceReadForTesting = () =>
+            {
+                workspaceReadCalls++;
+                pathCancellation.Cancel();
+            };
+            Assert.Throws<OperationCanceledException>(() =>
+                writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
+                    allPaths,
+                    includeInterfaceDeclarationsAsConservativeEvidence: false,
+                    pathCancellation.Token));
+            Assert.Equal(1, workspaceReadCalls);
+
+            DbWriter.CSharpFilePathLookupBatchCompletedForTesting = rowsProcessed =>
+            {
+                completedPathLookupBatches.Add(rowsProcessed);
+                pathLookupCancellation.Cancel();
+            };
+            Assert.Throws<OperationCanceledException>(() =>
+                writer.ResolveCSharpFilePaths(candidatePaths, pathLookupCancellation.Token));
+            Assert.Equal([500], completedPathLookupBatches);
+        }
+        finally
+        {
+            DbWriter.CSharpContractPreflightForTesting = previousPreflightHook;
+            DbWriter.CSharpContractWorkspaceReadForTesting = previousWorkspaceReadHook;
+            DbWriter.CSharpFilePathLookupBatchCompletedForTesting = previousPathLookupHook;
         }
     }
 

@@ -488,6 +488,57 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_UnrelatedHardlinkIsNotTreatedAsCaseAliasCleanup()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var retainedPath = Path.Combine(projectRoot, "target.py");
+            var hardlinkPath = Path.Combine(projectRoot, "unrelated.py");
+            File.WriteAllText(retainedPath, "print('retained')\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            CreateHardLink(retainedPath, hardlinkPath);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var checksum = Assert.IsType<string>(ReadIndexedChecksum(dbPath, "target.py"));
+            var fileInfo = new FileInfo(retainedPath);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db);
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = "unrelated.py",
+                    Lang = "python",
+                    Size = fileInfo.Length,
+                    Lines = 1,
+                    Checksum = checksum,
+                    Modified = fileInfo.LastWriteTimeUtc,
+                });
+            }
+            File.SetLastWriteTimeUtc(retainedPath, DateTime.UtcNow.AddSeconds(2));
+
+            var updateExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--files", "target.py", "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.Contains("target.py", indexedPaths);
+            Assert.Contains("unrelated.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateFiles_JsonWritesLivenessToStderrWithoutPollutingStdout()
     {
         var projectRoot = CreateTempProject();
@@ -1399,10 +1450,1628 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void Run_UpdateFiles_CsharpContractPreflightAvoidsRedundantWorkspacePasses()
+    {
+        var projectRoot = CreateTempProject();
+        var previousPreflightHook = DbWriter.CSharpContractPreflightForTesting;
+        var previousWorkspaceReadHook = DbWriter.CSharpContractWorkspaceReadForTesting;
+        var previousUpdatePrepassHook = IndexCommandRunner.UpdateCSharpPrepassForTesting;
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: false);
+            var implementationPath = Path.Combine(projectRoot, "Money.cs");
+            File.WriteAllText(
+                implementationPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            var preflightCount = 0;
+            var workspaceReadCount = 0;
+            var prepassCount = 0;
+            DbWriter.CSharpContractPreflightForTesting = () => preflightCount++;
+            DbWriter.CSharpContractWorkspaceReadForTesting = () => workspaceReadCount++;
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = () => prepassCount++;
+            File.AppendAllText(implementationPath, "// touched\n");
+            File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, scopedUpdateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "Money.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(1, scopedUpdateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0, preflightCount);
+            Assert.Equal(1, prepassCount);
+            Assert.Equal(0, workspaceReadCount);
+
+            preflightCount = 0;
+            workspaceReadCount = 0;
+            prepassCount = 0;
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+
+            updateExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--files", "IParseable.cs", "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0, preflightCount);
+            Assert.Equal(2, prepassCount);
+            Assert.Equal(1, workspaceReadCount);
+
+            preflightCount = 0;
+            workspaceReadCount = 0;
+            prepassCount = 0;
+            File.AppendAllText(implementationPath, "// persisted contract update\n");
+            File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(4));
+
+            updateExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--files", "Money.cs", "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0, preflightCount);
+            Assert.Equal(1, prepassCount);
+            Assert.Equal(1, workspaceReadCount);
+        }
+        finally
+        {
+            DbWriter.CSharpContractPreflightForTesting = previousPreflightHook;
+            DbWriter.CSharpContractWorkspaceReadForTesting = previousWorkspaceReadHook;
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousUpdatePrepassHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_InPlaceCdidxignoreChangeDuringExpandedPrepassDefersUntilCleanRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var previousPrepassHook = IndexCommandRunner.UpdateCSharpPrepassForTesting;
+        var ignorePath = Path.Combine(projectRoot, ".cdidxignore");
+        try
+        {
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            var moneyPath = Path.Combine(projectRoot, "Money.cs");
+            File.WriteAllText(
+                moneyPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "IHidden.cs"),
+                "public interface IHidden<T> { static abstract T Create(); }\n");
+            File.WriteAllText(ignorePath, "IHidden.cs\n");
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var moneyChecksumBefore = ReadIndexedChecksum(dbPath, "Money.cs");
+            Assert.False(IndexedFileExists(projectRoot, "IHidden.cs"));
+
+            File.AppendAllText(moneyPath, "// scoped update\n");
+            File.SetLastWriteTimeUtc(moneyPath, DateTime.UtcNow.AddSeconds(2));
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(projectRoot);
+            var prepassCalls = 0;
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = () =>
+            {
+                Assert.Equal(1, Interlocked.Increment(ref prepassCalls));
+                File.WriteAllText(ignorePath, "XHidden.cs\n");
+                Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
+            };
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "Money.cs", "--json"]);
+
+            Assert.Equal(rootModifiedUtc, Directory.GetLastWriteTimeUtc(projectRoot));
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.False(partialJson.GetProperty("index_complete").GetBoolean());
+            Assert.False(partialJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.True(partialJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, prepassCalls);
+            Assert.Equal(moneyChecksumBefore, ReadIndexedChecksum(dbPath, "Money.cs"));
+            Assert.False(IndexedFileExists(projectRoot, "IHidden.cs"));
+            // The config mutation invalidates the expanded scan snapshot at its first
+            // barrier, before any index-data mutation, so prior authoritative trust remains.
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
+            var recoveryExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.True(IndexedFileExists(projectRoot, "IHidden.cs"));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("IParseable.py")]
+    [InlineData("renamed/contract.py")]
+    public void Run_UpdateFiles_PreHookSourceEvidencePreservesHiddenStaticInterfaceReferences(
+        string transitionRelativePath)
+    {
+        var projectRoot = CreateTempProject();
+        using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+            "cdidx_csharp_source_evidence_hook");
+        using var env = EnvironmentVariableScope.Capture(
+            PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+        try
+        {
+            var hooksDir = Path.Combine(extensionProject.Root, "hooks");
+            Directory.CreateDirectory(hooksDir);
+            File.Copy(
+                typeof(CodeIndex.HookIsolationFixture.PathSelectivePostExtractionHook).Assembly.Location,
+                Path.Combine(hooksDir, "CodeIndex.HookIsolationFixture.dll"));
+            env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+            File.WriteAllText(
+                Path.Combine(
+                    projectRoot,
+                    CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                        .RemoveCSharpStaticInterfaceMemberMarkerFileName),
+                string.Empty);
+
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            var implementationPath = Path.Combine(projectRoot, "Money.cs");
+            File.WriteAllText(
+                implementationPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0L, ReadPersistedContractMemberCount());
+            Assert.True(ReadSourceEvidence());
+
+            File.AppendAllText(implementationPath, "// implementation-only update\n");
+            File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(2));
+
+            var implementationUpdateExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--files", "Money.cs", "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, implementationUpdateExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0L, ReadPersistedContractMemberCount());
+            Assert.True(ReadSourceEvidence());
+
+            File.AppendAllText(implementationPath, "// full refresh update\n");
+            File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(3));
+
+            var fullRefreshExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, fullRefreshExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0L, ReadPersistedContractMemberCount());
+            Assert.True(ReadSourceEvidence());
+
+            var transitionPath = Path.Combine(
+                projectRoot,
+                FileIndexer.NormalizeRelativePathForCurrentPlatform(transitionRelativePath));
+            Directory.CreateDirectory(Path.GetDirectoryName(transitionPath)!);
+            File.Move(interfacePath, transitionPath);
+
+            var transitionExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--files", transitionRelativePath, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, transitionExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.False(ReadSourceEvidence());
+
+            long ReadPersistedContractMemberCount()
+            {
+                using var db = new DbContext(
+                    DbOpenIntent.WriteIndex,
+                    Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
+                    WHERE f.path = 'IParseable.cs'
+                      AND s.container_kind = 'interface'
+                      AND s.name = 'Parse'
+                    """;
+                return (long)command.ExecuteScalar()!;
+            }
+
+            bool ReadSourceEvidence()
+            {
+                using var db = new DbContext(
+                    DbOpenIntent.WriteIndex,
+                    Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+                return bool.Parse(
+                    db.GetMetaString(DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey)!);
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("IParseable.py")]
+    [InlineData("renamed/contract.py")]
+    public void Run_UpdateFiles_OneSidedCsharpContractRenameRefreshesVisibleReferences(
+        string retainedRelativePath)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            var retainedPath = Path.Combine(
+                projectRoot,
+                FileIndexer.NormalizeRelativePathForCurrentPlatform(retainedRelativePath));
+            Directory.CreateDirectory(Path.GetDirectoryName(retainedPath)!);
+            File.Move(interfacePath, retainedPath);
+
+            var updateExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--files", retainedRelativePath, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM files WHERE path = 'IParseable.cs'";
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+            Assert.Equal(
+                bool.FalseString,
+                db.GetMetaString(DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_ChangedExistingRetainedTargetPreplansMatchingCsharpAlias()
+    {
+        var projectRoot = CreateTempProject();
+        var previousCleanupChecksumHook = IndexCommandRunner.UpdateCleanupChecksumReadForTesting;
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            var contractContent = File.ReadAllText(interfacePath);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            var retainedPath = Path.Combine(projectRoot, "retained.py");
+            File.WriteAllText(retainedPath, "print('before')\n");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            File.Delete(interfacePath);
+            File.WriteAllText(retainedPath, contractContent);
+            File.SetLastWriteTimeUtc(retainedPath, DateTime.UtcNow.AddSeconds(2));
+            var cleanupChecksumReads = 0;
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = path =>
+            {
+                Assert.Equal("retained.py", path);
+                cleanupChecksumReads++;
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "retained.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, cleanupChecksumReads);
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.False(IndexedFileExists(projectRoot, "IParseable.cs"));
+            Assert.True(IndexedFileExists(projectRoot, "retained.py"));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.False(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_CommonChecksumPreWorkspaceCleanupQueriesCSharpCandidatesOnce()
+    {
+        const int targetCount = 16;
+        var projectRoot = CreateTempProject();
+        try
+        {
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            var relativePaths = new string[targetCount];
+            for (var index = 0; index < targetCount; index++)
+            {
+                var relativePath = $"shared-{index:D2}.cs";
+                relativePaths[index] = relativePath;
+                File.WriteAllText(
+                    Path.Combine(projectRoot, relativePath),
+                    "// identical C# cleanup target\n");
+            }
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            var updateArgs = new List<string>(targetCount + 5)
+            {
+                projectRoot,
+                "--files",
+            };
+            updateArgs.AddRange(relativePaths);
+            updateArgs.Add("--json");
+            updateArgs.Add("--quiet");
+
+            int updateExitCode;
+            List<QueryProfileEntry> profile;
+            DbDebug.BeginProfile();
+            try
+            {
+                updateExitCode = IndexCommandRunner.Run([.. updateArgs], _jsonOptions);
+            }
+            finally
+            {
+                profile = DbDebug.EndProfile();
+            }
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            var checksumQuery = Assert.Single(
+                profile.Where(entry => entry.Sql == DbWriter.StaleCSharpChecksumCandidateSql));
+            Assert.Equal(targetCount - 1, checksumQuery.RowsScanned);
+            Assert.Contains(
+                checksumQuery.QueryPlan,
+                row => row.Detail.Contains("idx_files_checksum", StringComparison.Ordinal));
+        }
+        finally
+        {
+            _ = DbDebug.EndProfile();
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_ChangedContentAsciiCaseOnlyRenameRemovesOldAlias()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            if (PathCasing.ComparisonFor(projectRoot) != StringComparison.OrdinalIgnoreCase)
+                return;
+
+            var sourceDirectory = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(sourceDirectory);
+            var oldPath = Path.Combine(sourceDirectory, "target.cs");
+            var temporaryPath = Path.Combine(sourceDirectory, "rename.tmp");
+            var retainedPath = Path.Combine(sourceDirectory, "Target.cs");
+            File.WriteAllText(oldPath, "public class Target { public int Before => 1; }\n");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var oldChecksum = ReadIndexedChecksum(dbPath, "src/target.cs");
+
+            File.Move(oldPath, temporaryPath);
+            File.WriteAllText(temporaryPath, "public class Target { public int After => 222; }\n");
+            File.Move(temporaryPath, retainedPath);
+
+            var updateExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--files", "src/Target.cs", "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.False(IndexedFileExists(projectRoot, "src/target.cs"));
+            Assert.True(IndexedFileExists(projectRoot, "src/Target.cs"));
+            Assert.NotEqual(oldChecksum, ReadIndexedChecksum(dbPath, "src/Target.cs"));
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM files WHERE path = 'src/Target.cs' COLLATE NOCASE";
+            Assert.Equal(1L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("日本", "target.cs", "Target.cs")]
+    [InlineData("src", "é.cs", "É.cs")]
+    public void Run_UpdateCommits_CaseOnlyRenameUsesExactGitSourceWithoutChecksumRead(
+        string relativeDirectory,
+        string oldFileName,
+        string retainedFileName)
+    {
+        var projectRoot = CreateTempProject();
+        var previousCleanupChecksumHook = IndexCommandRunner.UpdateCleanupChecksumReadForTesting;
+        try
+        {
+            if (PathCasing.ComparisonFor(projectRoot) != StringComparison.OrdinalIgnoreCase)
+                return;
+
+            RunGit(projectRoot, "init");
+            var sourceDirectory = Path.Combine(projectRoot, relativeDirectory);
+            Directory.CreateDirectory(sourceDirectory);
+            var oldPath = Path.Combine(sourceDirectory, oldFileName);
+            var retainedPath = Path.Combine(sourceDirectory, retainedFileName);
+            File.WriteAllText(oldPath, "public class Target { public int Value => 1; }\n");
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial casing");
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var oldIndexPath = FileIndexer.NormalizeRelativePathForCurrentPlatform(
+                $"{relativeDirectory}/{oldFileName}");
+            var retainedIndexPath = FileIndexer.NormalizeRelativePathForCurrentPlatform(
+                $"{relativeDirectory}/{retainedFileName}");
+            var oldChecksum = ReadIndexedChecksum(dbPath, oldIndexPath);
+
+            var temporaryGitPath = $"{relativeDirectory}/rename.tmp";
+            RunGit(projectRoot, "mv", oldIndexPath, temporaryGitPath);
+            RunGit(projectRoot, "mv", temporaryGitPath, retainedIndexPath);
+            File.WriteAllText(retainedPath, "public class Target { public int Value => 222; }\n");
+            // Some generally case-insensitive filesystems do not alias every Unicode case
+            // pair. The ASCII filename case below a non-ASCII directory always exercises
+            // this contract; skip only the optional Unicode-pair row when it is distinct.
+            if (!File.Exists(oldPath))
+                return;
+            RunGit(projectRoot, "add", "-A");
+            RunGit(projectRoot, "commit", "-m", "rename casing");
+            var commitId = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            var changedPaths = GitHelper.GetChangedFilesFromCommit(projectRoot, commitId);
+            Assert.Contains(oldIndexPath, changedPaths);
+            Assert.Contains(retainedIndexPath, changedPaths);
+            var cleanupChecksumReads = new List<string>();
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = cleanupChecksumReads.Add;
+
+            var updateExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--commits", commitId, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Empty(cleanupChecksumReads);
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.DoesNotContain(oldIndexPath, indexedPaths);
+            Assert.Contains(retainedIndexPath, indexedPaths);
+            Assert.NotEqual(oldChecksum, ReadIndexedChecksum(dbPath, retainedIndexPath));
+            var indexedAliases = indexedPaths
+                .Where(path => string.Equals(path, retainedIndexPath, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            Assert.Equal(new[] { retainedIndexPath }, indexedAliases);
+            using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
+                dbPath);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM files WHERE path = @old OR path = @retained";
+            command.Parameters.AddWithValue("@old", oldIndexPath);
+            command.Parameters.AddWithValue("@retained", retainedIndexPath);
+            Assert.Equal(1L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateCommits_CaseFoldedDistinctLiveFilesPreserveBothExactRows()
+    {
+        var projectRoot = CreateTempProject();
+        var previousCleanupChecksumHook = IndexCommandRunner.UpdateCleanupChecksumReadForTesting;
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourceDirectory = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(sourceDirectory);
+            var persistedPath = Path.Combine(sourceDirectory, "é.cs");
+            var retainedPath = Path.Combine(sourceDirectory, "É.cs");
+            File.WriteAllText(persistedPath, "public class LowerAccent { public int Value => 1; }\n");
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial folded path");
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            File.WriteAllText(persistedPath, "public class LowerAccent { public int Value => 22; }\n");
+            File.WriteAllText(retainedPath, "public class UpperAccent { public int Value => 333; }\n");
+            if (!FileIndexer.TryGetFileIdentity(persistedPath, out var persistedIdentity)
+                || !FileIndexer.TryGetFileIdentity(retainedPath, out var retainedIdentity)
+                || persistedIdentity == retainedIdentity)
+            {
+                return;
+            }
+
+            RunGit(projectRoot, "add", "-A");
+            RunGit(projectRoot, "commit", "-m", "retain distinct folded paths");
+            var commitId = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            var cleanupChecksumReads = new List<string>();
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = cleanupChecksumReads.Add;
+
+            var updateExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--commits", commitId, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Empty(cleanupChecksumReads);
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("src/é.cs", indexedPaths);
+            Assert.Contains("src/É.cs", indexedPaths);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_FatalCsharpExpansionScanPreservesHookHiddenContractWorkspace()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var previousExtractionHook = IndexCommandRunner.UpdateExtractionWorkStartedForTesting;
+        using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+            "cdidx_csharp_incomplete_expansion_hook");
+        using var env = EnvironmentVariableScope.Capture(
+            PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+        var unreadableDirectory = Path.Combine(projectRoot, "unreadable");
+        try
+        {
+            var hooksDir = Path.Combine(extensionProject.Root, "hooks");
+            Directory.CreateDirectory(hooksDir);
+            File.Copy(
+                typeof(CodeIndex.HookIsolationFixture.PathSelectivePostExtractionHook).Assembly.Location,
+                Path.Combine(hooksDir, "CodeIndex.HookIsolationFixture.dll"));
+            env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+            File.WriteAllText(
+                Path.Combine(
+                    projectRoot,
+                    CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                        .RemoveCSharpStaticInterfaceMemberMarkerFileName),
+                string.Empty);
+
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            var implementationPath = Path.Combine(projectRoot, "Money.cs");
+            File.WriteAllText(
+                implementationPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            var stalePythonPath = Path.Combine(projectRoot, "legacy.py");
+            var retainedPythonPath = Path.Combine(projectRoot, "retained.py");
+            File.WriteAllText(stalePythonPath, "print('retained during C# deferral')\n");
+            Directory.CreateDirectory(unreadableDirectory);
+            File.WriteAllText(
+                Path.Combine(unreadableDirectory, "Blocked.cs"),
+                "public class Blocked { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var originalChecksum = ReadIndexedChecksum(dbPath, "Money.cs");
+            Assert.NotNull(originalChecksum);
+
+            File.AppendAllText(implementationPath, "// must remain pending\n");
+            File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(2));
+            File.Move(stalePythonPath, retainedPythonPath);
+            File.SetUnixFileMode(unreadableDirectory, UnixFileMode.None);
+            var extractionStarts = 0;
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () => extractionStarts++;
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "Money.cs", "retained.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.False(updateJson.GetProperty("index_complete").GetBoolean());
+            Assert.Equal(0, extractionStarts);
+            Assert.Equal(originalChecksum, ReadIndexedChecksum(dbPath, "Money.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.True(IndexedFileExists(projectRoot, "legacy.py"));
+            Assert.False(IndexedFileExists(projectRoot, "retained.py"));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = previousExtractionHook;
+            if (Directory.Exists(unreadableDirectory))
+            {
+                File.SetUnixFileMode(
+                    unreadableDirectory,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            SqliteConnection.ClearAllPools();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_ExpandedScanValidatesInputExactlyBeforeWriteAndReadiness()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var previousBarrierHook = IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting;
+        var phases = new List<string>();
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            File.AppendAllText(interfacePath, "// selected update\n");
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = phases.Add;
+
+            var exitCode = IndexCommandRunner.Run(
+                [projectRoot, "--files", "IParseable.cs", "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(["before_write", "before_readiness"], phases);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_FirstExpandedSnapshotBarrierDriftPreservesAllRowsAndTrust()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var toolPath = Path.Combine(projectRoot, "tool.py");
+        var obsoletePath = Path.Combine(projectRoot, "obsolete.md");
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousBarrierHook = IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting;
+        var phases = new List<string>();
+        try
+        {
+            File.WriteAllText(ignorePath, "never-match-a\n");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(toolPath, "def run():\n    return 1\n");
+            File.WriteAllText(obsoletePath, "# Obsolete\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            var priorInterfaceChecksum = ReadIndexedChecksum(dbPath, "IParseable.cs");
+            var priorToolChecksum = ReadIndexedChecksum(dbPath, "tool.py");
+            int priorReadiness;
+            string? priorIndexComplete;
+            string? priorFtsRecoveryMarker;
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                priorReadiness = db.GetUserVersion();
+                priorIndexComplete = db.GetMetaString(DbContext.IndexCompletenessMetaKey);
+                var priorWriter = new DbWriter(db);
+                priorWriter.MarkFtsBulkLoadRecoveryNeeded();
+                priorFtsRecoveryMarker = db.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey);
+            }
+
+            File.AppendAllText(interfacePath, "// selected update\n");
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+            File.WriteAllText(toolPath, "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(3));
+            File.Delete(obsoletePath);
+            var ignoreModifiedUtc = File.GetLastWriteTimeUtc(ignorePath);
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(projectRoot);
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = phase =>
+            {
+                phases.Add(phase);
+                if (phase != "before_write")
+                    return;
+                File.WriteAllText(ignorePath, "never-match-b\n");
+                File.SetLastWriteTimeUtc(ignorePath, ignoreModifiedUtc);
+                Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", "IParseable.cs", "tool.py", "obsolete.md", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(["before_write"], phases);
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            using var preservedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(priorReadiness, preservedDb.GetUserVersion());
+            Assert.Equal(priorIndexComplete, preservedDb.GetMetaString(DbContext.IndexCompletenessMetaKey));
+            Assert.Equal(
+                priorFtsRecoveryMarker,
+                preservedDb.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(priorInterfaceChecksum, ReadIndexedChecksum(dbPath, "IParseable.cs"));
+            Assert.Equal(priorToolChecksum, ReadIndexedChecksum(dbPath, "tool.py"));
+            Assert.True(IndexedFileExists(projectRoot, "obsolete.md"));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_FinalExpandedSnapshotBarrierDriftPersistsFilesButBlocksReadiness()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var toolPath = Path.Combine(projectRoot, "tool.py");
+        var stablePath = Path.Combine(projectRoot, "stable.md");
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousBarrierHook = IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting;
+        var phases = new List<string>();
+        try
+        {
+            File.WriteAllText(ignorePath, "never-match-a\n");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(toolPath, "def run():\n    return 1\n");
+            File.WriteAllText(stablePath, "# Stable\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            var priorInterfaceChecksum = ReadIndexedChecksum(dbPath, "IParseable.cs");
+            var priorToolChecksum = ReadIndexedChecksum(dbPath, "tool.py");
+            var priorStableChecksum = ReadIndexedChecksum(dbPath, "stable.md");
+            File.AppendAllText(interfacePath, "// selected update\n");
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+            File.WriteAllText(toolPath, "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(3));
+            var ignoreModifiedUtc = File.GetLastWriteTimeUtc(ignorePath);
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(projectRoot);
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = phase =>
+            {
+                phases.Add(phase);
+                if (phase != "before_readiness")
+                    return;
+                File.WriteAllText(ignorePath, "never-match-b\n");
+                File.SetLastWriteTimeUtc(ignorePath, ignoreModifiedUtc);
+                Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", "IParseable.cs", "tool.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(["before_write", "before_readiness"], phases);
+            Assert.Equal(3, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.True(json.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
+            Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+            Assert.NotEqual(priorInterfaceChecksum, ReadIndexedChecksum(dbPath, "IParseable.cs"));
+            Assert.NotEqual(priorToolChecksum, ReadIndexedChecksum(dbPath, "tool.py"));
+            Assert.Equal(priorStableChecksum, ReadIndexedChecksum(dbPath, "stable.md"));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.NotEqual(0, db.GetUserVersion() & DbContext.GraphReadyFlag);
+            Assert.Equal(0, db.GetUserVersion() & DbContext.IssuesReadyFlag);
+            Assert.Equal("incomplete", db.GetMetaString(DbContext.IndexCompletenessMetaKey));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_UpdateFiles_CsharpTargetDriftAfterWorkspaceReadPreservesRowsUntilCleanRetry(
+        bool deleteImplementation)
+    {
+        var projectRoot = CreateTempProject();
+        var previousWorkspaceReadHook = DbWriter.CSharpContractWorkspaceReadForTesting;
+        try
+        {
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            var implementationPath = Path.Combine(projectRoot, "Money.cs");
+            File.WriteAllText(
+                implementationPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var originalChecksum = ReadIndexedChecksum(dbPath, "Money.cs");
+            Assert.NotNull(originalChecksum);
+
+            File.AppendAllText(implementationPath, "// selected update\n");
+            File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(2));
+            var workspaceReadCount = 0;
+            DbWriter.CSharpContractWorkspaceReadForTesting = () =>
+            {
+                if (Interlocked.Increment(ref workspaceReadCount) != 1)
+                    return;
+
+                if (deleteImplementation)
+                {
+                    File.Delete(implementationPath);
+                    return;
+                }
+
+                File.AppendAllText(implementationPath, "// changed after workspace read\n");
+                File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(4));
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "Money.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, workspaceReadCount);
+            Assert.Equal(originalChecksum, ReadIndexedChecksum(dbPath, "Money.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            if (deleteImplementation)
+            {
+                // Deletion changes directory membership, so the first scan-input barrier
+                // preserves prior trust before mutation. In-place content drift leaves the
+                // directory snapshot stable and is demoted later in the mutation phase.
+                Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            }
+            else
+            {
+                Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            }
+
+            DbWriter.CSharpContractWorkspaceReadForTesting = null;
+            var retryExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, retryExitCode);
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            if (deleteImplementation)
+            {
+                Assert.False(IndexedFileExists(projectRoot, "Money.cs"));
+                Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            }
+            else
+            {
+                Assert.True(IndexedFileExists(projectRoot, "Money.cs"));
+                Assert.NotEqual(originalChecksum, ReadIndexedChecksum(dbPath, "Money.cs"));
+                Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            }
+        }
+        finally
+        {
+            DbWriter.CSharpContractWorkspaceReadForTesting = previousWorkspaceReadHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_CsharpExpandedScanLateContractInEnumeratedDirectoryDefersUntilRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var lateContractPath = Path.Combine(projectRoot, "LateContract.cs");
+        var previousPrepassHook = IndexCommandRunner.UpdateCSharpPrepassForTesting;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var indexedChecksumBefore = ReadIndexedChecksum(dbPath, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: false);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+            var prepassCount = 0;
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = () =>
+            {
+                if (Interlocked.Increment(ref prepassCount) != 1)
+                    return;
+
+                File.WriteAllText(
+                    lateContractPath,
+                    "public interface ILateContract<T>\n"
+                    + "{\n"
+                    + "    static abstract T Parse(string value);\n"
+                    + "}\n");
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "IParseable.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, prepassCount);
+            Assert.Equal(indexedChecksumBefore, ReadIndexedChecksum(dbPath, "IParseable.cs"));
+            Assert.False(IndexedFileExists(projectRoot, "LateContract.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.True(IndexedFileExists(projectRoot, "LateContract.cs"));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_CsharpExpandedScanLateContractDuringTargetLoopRefusesFinalStamp()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var lateContractPath = Path.Combine(projectRoot, "LateContract.cs");
+        var previousCommittedHook = IndexCommandRunner.UpdateFileCommittedForTesting;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            WriteParseableInterface(interfacePath, hasStaticContract: false);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+            var hookCount = 0;
+            IndexCommandRunner.UpdateFileCommittedForTesting = (_, _) =>
+            {
+                if (Interlocked.Increment(ref hookCount) != 1)
+                    return;
+
+                File.WriteAllText(
+                    lateContractPath,
+                    "public interface ILateContract<T>\n"
+                    + "{\n"
+                    + "    static abstract T Parse(string value);\n"
+                    + "}\n");
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "IParseable.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.True(hookCount > 0);
+            Assert.False(IndexedFileExists(projectRoot, "LateContract.cs"));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            IndexCommandRunner.UpdateFileCommittedForTesting = previousCommittedHook;
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.True(IndexedFileExists(projectRoot, "LateContract.cs"));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateFileCommittedForTesting = previousCommittedHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_CsharpExpandedScanIgnoresChurnInsideSkippedDirectory()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var ignoredDirectory = Path.Combine(projectRoot, "ignored");
+        var previousPrepassHook = IndexCommandRunner.UpdateCSharpPrepassForTesting;
+        try
+        {
+            Directory.CreateDirectory(ignoredDirectory);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored/\n");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            WriteParseableInterface(interfacePath, hasStaticContract: false);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+            var prepassCount = 0;
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = () =>
+            {
+                if (Interlocked.Increment(ref prepassCount) == 1)
+                {
+                    File.WriteAllText(
+                        Path.Combine(ignoredDirectory, "IgnoredLateContract.cs"),
+                        "public interface IIgnored<T> { static abstract T Parse(string value); }\n");
+                }
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "IParseable.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, prepassCount);
+            Assert.False(IndexedFileExists(projectRoot, "ignored/IgnoredLateContract.cs"));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.False(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_IgnoredContractIsExcludedFromExpandedCsharpWorkspace()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "IParseable.cs\n");
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "IParseable.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.False(IndexedFileExists(projectRoot, "IParseable.cs"));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.False(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_UpdateFiles_CsharpIntentionalSkipAfterPrepassDefersChangedContractUntilRetry(
+        bool oversized)
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var previousContentLoadHook = IndexCommandRunner.UpdateFileContentLoadForTesting;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var indexedChecksumBefore = ReadIndexedChecksum(dbPath, "IParseable.cs");
+            var mutationCount = 0;
+            IndexCommandRunner.UpdateFileContentLoadForTesting = path =>
+            {
+                if (!string.Equals(path, "IParseable.cs", StringComparison.Ordinal)
+                    || Interlocked.Increment(ref mutationCount) != 1)
+                {
+                    return;
+                }
+
+                if (oversized)
+                    File.WriteAllText(interfacePath, new string('x', 2048));
+                else
+                    File.WriteAllBytes(interfacePath, [0, 1, 2, 3]);
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+            };
+
+            string[] updateArgs = oversized
+                ? [projectRoot, "--files", "Money.cs", "--max-file-bytes", "1024", "--json"]
+                : [projectRoot, "--files", "Money.cs", "--json"];
+            var (updateExitCode, updateJson) = RunAndCaptureJson(updateArgs);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, mutationCount);
+            Assert.Equal(indexedChecksumBefore, ReadIndexedChecksum(dbPath, "IParseable.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                Assert.NotEqual(
+                    bool.TrueString,
+                    partialDb.GetMetaString(DbContext.BatchInProgressMetaKey));
+
+            IndexCommandRunner.UpdateFileContentLoadForTesting = previousContentLoadHook;
+            string[] retryArgs = oversized
+                ? [projectRoot, "--max-file-bytes", "1024", "--json", "--quiet"]
+                : [projectRoot, "--json", "--quiet"];
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(retryArgs, _jsonOptions));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.False(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateFileContentLoadForTesting = previousContentLoadHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_UpdateFiles_CsharpIntentionalSkipRecordDriftRollsBackBeforeUpsert(
+        bool oversized)
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var previousSkippedRecordHook = IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var indexedChecksumBefore = ReadIndexedChecksum(dbPath, "IParseable.cs");
+            if (oversized)
+                File.WriteAllText(interfacePath, new string('x', 2048));
+            else
+                File.WriteAllBytes(interfacePath, [0, 1, 2, 3]);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+
+            var mutationCount = 0;
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = path =>
+            {
+                if (!string.Equals(path, "IParseable.cs", StringComparison.Ordinal)
+                    || Interlocked.Increment(ref mutationCount) != 1)
+                {
+                    return;
+                }
+
+                WriteParseableInterface(interfacePath, hasStaticContract: true);
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(6));
+            };
+
+            string[] updateArgs = oversized
+                ? [projectRoot, "--files", "IParseable.cs", "--max-file-bytes", "1024", "--json"]
+                : [projectRoot, "--files", "IParseable.cs", "--json"];
+            var (updateExitCode, updateJson) = RunAndCaptureJson(updateArgs);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, mutationCount);
+            Assert.Equal(indexedChecksumBefore, ReadIndexedChecksum(dbPath, "IParseable.cs"));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                Assert.NotEqual(
+                    bool.TrueString,
+                    partialDb.GetMetaString(DbContext.BatchInProgressMetaKey));
+
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = previousSkippedRecordHook;
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = previousSkippedRecordHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_UpdateFiles_IntentionalSkipUnexpectedWriteFailureClearsBatchMarker(
+        bool oversized)
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var previousSkippedRecordHook = IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var indexedChecksumBefore = ReadIndexedChecksum(dbPath, "IParseable.cs");
+            if (oversized)
+                File.WriteAllText(interfacePath, new string('x', 2048));
+            else
+                File.WriteAllBytes(interfacePath, [0, 1, 2, 3]);
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+
+            var hookCount = 0;
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = path =>
+            {
+                Assert.Equal("IParseable.cs", path);
+                Interlocked.Increment(ref hookCount);
+                throw new InvalidOperationException("injected skipped-record write failure");
+            };
+
+            string[] updateArgs = oversized
+                ? [projectRoot, "--files", "IParseable.cs", "--max-file-bytes", "1024", "--json"]
+                : [projectRoot, "--files", "IParseable.cs", "--json"];
+            var (updateExitCode, updateJson) = RunAndCaptureJson(updateArgs);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, hookCount);
+            Assert.Equal(indexedChecksumBefore, ReadIndexedChecksum(dbPath, "IParseable.cs"));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            using var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.NotEqual(
+                bool.TrueString,
+                partialDb.GetMetaString(DbContext.BatchInProgressMetaKey));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = previousSkippedRecordHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_UpdateFiles_IntentionalSkipCleanupDriftClearsBatchMarkerAndPreservesContract(
+        bool oversized)
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var retainedPath = Path.Combine(projectRoot, "IParseable.py");
+        var previousPrepassHook = IndexCommandRunner.UpdateCSharpPrepassForTesting;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            if (oversized)
+                File.WriteAllText(retainedPath, new string('x', 2048));
+            else
+                File.WriteAllBytes(retainedPath, [0, 1, 2, 3]);
+
+            var prepassCount = 0;
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = () =>
+            {
+                if (Interlocked.Increment(ref prepassCount) == 1)
+                    File.Delete(interfacePath);
+            };
+
+            string[] updateArgs = oversized
+                ? [projectRoot, "--files", "Money.cs", "IParseable.py", "--max-file-bytes", "1024", "--json"]
+                : [projectRoot, "--files", "Money.cs", "IParseable.py", "--json"];
+            var (updateExitCode, updateJson) = RunAndCaptureJson(updateArgs);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, prepassCount);
+            Assert.True(IndexedFileExists(projectRoot, "IParseable.cs"));
+            Assert.False(IndexedFileExists(projectRoot, "IParseable.py"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            // Removing the interface changes directory membership and fails the first
+            // scan-input barrier, so no batch/evidence mutation precedes the retry.
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                Assert.NotEqual(
+                    bool.TrueString,
+                    partialDb.GetMetaString(DbContext.BatchInProgressMetaKey));
+
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
+            string[] retryArgs = oversized
+                ? [projectRoot, "--max-file-bytes", "1024", "--json", "--quiet"]
+                : [projectRoot, "--json", "--quiet"];
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(retryArgs, _jsonOptions));
+            Assert.False(IndexedFileExists(projectRoot, "IParseable.cs"));
+            Assert.True(IndexedFileExists(projectRoot, "IParseable.py"));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.False(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("stable.py", "print('stable')\n")]
+    [InlineData("stable.js", "export const stable = true;\n")]
+    public void Run_UpdateFiles_UnchangedNonCsharpTargetWithPositiveContractEvidenceNeedsNoContentRead(
+        string relativePath,
+        string content)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var previousExtractionHook = IndexCommandRunner.UpdateExtractionWorkStartedForTesting;
+        var previousCleanupChecksumHook = IndexCommandRunner.UpdateCleanupChecksumReadForTesting;
+        var targetPath = Path.Combine(projectRoot, relativePath);
+        try
+        {
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(targetPath, content);
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var originalChecksum = ReadIndexedChecksum(dbPath, relativePath);
+            Assert.NotNull(originalChecksum);
+
+            File.SetUnixFileMode(targetPath, UnixFileMode.None);
+            var extractionStarts = 0;
+            var cleanupChecksumReads = 0;
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () => extractionStarts++;
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = _ => cleanupChecksumReads++;
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", relativePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, extractionStarts);
+            Assert.Equal(0, cleanupChecksumReads);
+            Assert.Equal(originalChecksum, ReadIndexedChecksum(dbPath, relativePath));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = previousExtractionHook;
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
+            if (File.Exists(targetPath))
+                File.SetUnixFileMode(targetPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static bool? ReadCSharpStaticInterfaceSourceEvidence(string projectRoot)
+    {
+        using var db = new DbContext(
+            DbOpenIntent.WriteIndex,
+            Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+        var raw = db.GetMetaString(DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey);
+        return bool.TryParse(raw, out var value) ? value : null;
+    }
+
     private static void WriteParseableInterface(string path, bool hasStaticContract)
     {
         var contract = hasStaticContract ? "    static abstract T Parse(string s);\n" : string.Empty;
-        File.WriteAllText(path, $"public interface IParseable<T>\n{{\n{contract}}}\n");
+        var decoys = hasStaticContract
+            ? string.Empty
+            : "    AbstractFactory StaticValue();\n"
+              + "    static AbstractFactory CreatevirtualNode();\n";
+        File.WriteAllText(path, $"public interface IParseable<T>\n{{\n{contract}{decoys}}}\n");
     }
 
     [Fact]
@@ -2663,6 +4332,7 @@ public partial class IndexCommandRunnerTests
     public void Run_UpdateMode_WithCommits_PurgesOldRenamePath()
     {
         var projectRoot = CreateTempProject();
+        var previousCleanupChecksumHook = IndexCommandRunner.UpdateCleanupChecksumReadForTesting;
         try
         {
             RunGit(projectRoot, "init");
@@ -2672,6 +4342,9 @@ public partial class IndexCommandRunnerTests
             var newPath = Path.Combine(srcDir, "NewName.cs");
 
             File.WriteAllText(oldPath, "public class OldName { }\n");
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "initial");
 
@@ -2683,11 +4356,14 @@ public partial class IndexCommandRunnerTests
             RunGit(projectRoot, "add", "-A");
             RunGit(projectRoot, "commit", "-m", "rename");
             var commitId = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            var cleanupChecksumReads = 0;
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = _ => cleanupChecksumReads++;
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, cleanupChecksumReads);
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.DoesNotContain("src/OldName.cs", indexedPaths);
@@ -2695,6 +4371,7 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -2703,6 +4380,7 @@ public partial class IndexCommandRunnerTests
     public void Run_UpdateMode_WithChangedBetween_UpdatesNewPathAndRemovesRenamedOldPath()
     {
         var projectRoot = CreateTempProject();
+        var previousCleanupChecksumHook = IndexCommandRunner.UpdateCleanupChecksumReadForTesting;
         try
         {
             RunGit(projectRoot, "init");
@@ -2712,6 +4390,9 @@ public partial class IndexCommandRunnerTests
             var newPath = Path.Combine(srcDir, "NewName.cs");
 
             File.WriteAllText(oldPath, "public class SameName { }\n");
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "initial");
             RunGit(projectRoot, "branch", "before-switch");
@@ -2723,13 +4404,16 @@ public partial class IndexCommandRunnerTests
             RunGit(projectRoot, "add", "-A");
             RunGit(projectRoot, "commit", "-m", "rename");
             RunGit(projectRoot, "branch", "after-switch");
+            var cleanupChecksumReads = 0;
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = _ => cleanupChecksumReads++;
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "before-switch", "after-switch", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(2, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(0, cleanupChecksumReads);
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.DoesNotContain("src/OldName.cs", indexedPaths);
@@ -2737,6 +4421,208 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithChangedBetween_StaleCsharpContractOutsideRangeRefreshesReferences()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            var unrelatedPath = Path.Combine(projectRoot, "unrelated.py");
+            File.WriteAllText(unrelatedPath, "print('before')\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "base without contract");
+            RunGit(projectRoot, "branch", "without-contract");
+
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            var staleNonCsharpPath = Path.Combine(projectRoot, "outside-range.py");
+            File.WriteAllText(staleNonCsharpPath, "print('indexed branch only')\n");
+            RunGit(projectRoot, "add", "IParseable.cs", "outside-range.py");
+            RunGit(projectRoot, "commit", "-m", "add indexed branch files");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            RunGit(projectRoot, "checkout", "without-contract");
+            RunGit(projectRoot, "branch", "range-before");
+            File.WriteAllText(unrelatedPath, "print('after')\n");
+            RunGit(projectRoot, "add", "unrelated.py");
+            RunGit(projectRoot, "commit", "-m", "unrelated range change");
+            RunGit(projectRoot, "branch", "range-after");
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--changed-between", "range-before", "range-after", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.DoesNotContain("IParseable.cs", ReadIndexedPaths(dbPath));
+            Assert.Contains("outside-range.py", ReadIndexedPaths(dbPath));
+            Assert.False(File.Exists(staleNonCsharpPath));
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(
+                bool.FalseString,
+                db.GetMetaString(DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithChangedBetween_CleanupPathReappearingAfterScanIsDeferredUntilRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var previousPrepassHook = IndexCommandRunner.UpdateCSharpPrepassForTesting;
+        try
+        {
+            RunGit(projectRoot, "init");
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            var unrelatedPath = Path.Combine(projectRoot, "unrelated.py");
+            File.WriteAllText(unrelatedPath, "print('before')\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "base with contract");
+            RunGit(projectRoot, "branch", "range-before");
+
+            File.WriteAllText(unrelatedPath, "print('after')\n");
+            RunGit(projectRoot, "add", "unrelated.py");
+            RunGit(projectRoot, "commit", "-m", "unrelated range change");
+            RunGit(projectRoot, "branch", "range-after");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var originalContractChecksum = ReadIndexedChecksum(dbPath, "IParseable.cs");
+            Assert.NotNull(originalContractChecksum);
+
+            File.Delete(interfacePath);
+            var prepassCalls = 0;
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = () =>
+            {
+                if (Interlocked.Increment(ref prepassCalls) == 1)
+                    WriteParseableInterface(interfacePath, hasStaticContract: true);
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--changed-between", "range-before", "range-after", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.False(updateJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, prepassCalls);
+            Assert.Equal(originalContractChecksum, ReadIndexedChecksum(dbPath, "IParseable.cs"));
+            Assert.True(IndexedFileExists(projectRoot, "IParseable.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            // Reappearance changes the directory listing captured by expanded discovery;
+            // the first barrier rejects it without replacing prior authoritative evidence.
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = null;
+            var retryExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, retryExitCode);
+            Assert.True(IndexedFileExists(projectRoot, "IParseable.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateCommits_ExactCleanupPathReappearingAfterSnapshotBarrierPreservesPriorRow()
+    {
+        var projectRoot = CreateTempProject();
+        var previousBarrierHook = IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting;
+        try
+        {
+            RunGit(projectRoot, "init");
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "base with contract");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var originalContractChecksum = ReadIndexedChecksum(dbPath, "IParseable.cs");
+            Assert.NotNull(originalContractChecksum);
+
+            File.Delete(interfacePath);
+            RunGit(projectRoot, "add", "IParseable.cs");
+            RunGit(projectRoot, "commit", "-m", "delete contract");
+            var reappearanceHookCalls = 0;
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = phase =>
+            {
+                if (phase != "before_cleanup_apply")
+                    return;
+
+                Assert.Equal(1, Interlocked.Increment(ref reappearanceHookCalls));
+                WriteParseableInterface(interfacePath, hasStaticContract: true);
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.False(updateJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, reappearanceHookCalls);
+            Assert.True(File.Exists(interfacePath));
+            Assert.Equal(originalContractChecksum, ReadIndexedChecksum(dbPath, "IParseable.cs"));
+            Assert.True(IndexedFileExists(projectRoot, "IParseable.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }

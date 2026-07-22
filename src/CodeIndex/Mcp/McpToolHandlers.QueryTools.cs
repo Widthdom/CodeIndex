@@ -1313,8 +1313,12 @@ public partial class McpServer
     }
 
     private void AddReferenceGraphCompletenessSignal(JsonObject payload, DbReader reader)
+        => AddReferenceGraphCompletenessSignal(payload, reader.GetReferenceExtractionCapHits());
+
+    private void AddReferenceGraphCompletenessSignal(
+        JsonObject payload,
+        ReferenceExtractionCapHitSummary capHits)
     {
-        var capHits = reader.GetReferenceExtractionCapHits();
         var complete = capHits.StateAvailable && capHits.HitCount == 0;
         payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
             ReferenceExtractor.GetSafetyLimits(),

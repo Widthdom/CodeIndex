@@ -23,6 +23,7 @@ internal static class CSharpStaticInterfacePrepass
         Action<int, string?>? reportCandidateFile = null,
         int parallelism = 1,
         IReadOnlyList<long>? excludedExistingFileIds = null,
+        Func<string, bool>? isExistingSymbolPathExcluded = null,
         CancellationToken cancellationToken = default)
     {
         var targetCount = fileTargets.TryGetNonEnumeratedCount(out var count) ? count : 0;
@@ -35,24 +36,39 @@ internal static class CSharpStaticInterfacePrepass
             cancellationToken.ThrowIfCancellationRequested();
             var absolutePath = target.FilePath;
             var relativePath = target.DisplayRelativePath;
-            if (includeExistingSymbols && !IsOutsideProjectRoot(relativePath))
-                pendingPaths!.Add(target.IndexPath);
+            var canExcludeExistingPath = includeExistingSymbols && !IsOutsideProjectRoot(relativePath);
 
             var language = target.Language;
             if (language == null)
             {
                 var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
                 if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+                {
+                    if (canExcludeExistingPath)
+                        pendingPaths!.Add(target.IndexPath);
                     continue;
+                }
 
                 language = detection.Language;
             }
 
             if (language != "csharp")
+            {
+                if (canExcludeExistingPath)
+                    pendingPaths!.Add(target.IndexPath);
                 continue;
+            }
 
+            // An unchanged reusable C# row remains authoritative for the workspace
+            // lookup. Only paths whose current extraction will replace or suppress
+            // that row belong to pendingPaths.
+            // 再利用可能な未変更C#行はworkspace lookupに保持し、今回の抽出で置換・
+            // suppressionされるpathだけをpendingPathsへ入れる。
             if (includeExistingSymbols && canReuseExistingSymbolsWithoutRead?.Invoke(target) == true)
                 continue;
+
+            if (canExcludeExistingPath)
+                pendingPaths!.Add(target.IndexPath);
 
             var generatedExtractionSuppressed = isGeneratedCodeExtractionSuppressed?.Invoke(target)
                 ?? target.GeneratedExtractionSuppressed
@@ -62,6 +78,8 @@ internal static class CSharpStaticInterfacePrepass
         }
 
         var extractedByCandidate = new List<SymbolRecord>?[candidates.Count];
+        var sourceEvidenceComplete = 1;
+        string? firstIncompleteSourcePath = null;
         var parallelOptions = new ParallelOptions
         {
             CancellationToken = cancellationToken,
@@ -88,10 +106,23 @@ internal static class CSharpStaticInterfacePrepass
                             target.IndexPath,
                             cancellationToken: cancellationToken);
                 }
+                catch (Exception ex) when (ex is FileIndexer.BinaryFileSkippedException
+                                           or FileIndexer.FileTooLargeSkippedException)
+                {
+                    // The authoritative indexing pass persists these files with no symbols,
+                    // so their empty source evidence is complete rather than an I/O gap.
+                    // main pass が symbol なしで確定保存する intentional skip は、read failure
+                    // ではなく complete な negative source evidence として扱う。
+                }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
                 {
-                    // The real indexing pass reports file failures; this pre-pass only supplies
-                    // workspace symbols for cross-file static interface member matching.
+                    // Keep one actionable path for the caller's bounded partial-run diagnostic.
+                    // A workspace-wide permission failure must not retain and sort every path.
+                    Interlocked.Exchange(ref sourceEvidenceComplete, 0);
+                    Interlocked.CompareExchange(
+                        ref firstIncompleteSourcePath,
+                        target.DisplayRelativePath,
+                        null);
                 }
                 finally
                 {
@@ -112,19 +143,28 @@ internal static class CSharpStaticInterfacePrepass
                 pendingSymbols.AddRange(extracted);
         }
 
+        var hasSourceStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(pendingSymbols);
         var hadPendingContracts = false;
         var symbols = includeExistingSymbols
             ? writer.LoadCSharpStaticInterfaceContractSymbols(
                 pendingPaths!,
                 excludedExistingFileIds,
-                out hadPendingContracts)
+                isExistingSymbolPathExcluded,
+                out hadPendingContracts,
+                cancellationToken)
             : [];
         symbols.AddRange(pendingSymbols);
         var hasStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts;
+        IReadOnlyList<string> incompletePaths = firstIncompleteSourcePath == null
+            ? []
+            : [firstIncompleteSourcePath];
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
             hasStaticInterfaceContracts,
-            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols));
+            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols),
+            hasSourceStaticInterfaceContracts,
+            sourceEvidenceComplete != 0,
+            incompletePaths);
     }
 
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
@@ -150,7 +190,7 @@ internal static class CSharpStaticInterfacePrepass
             cancellationToken: cancellationToken);
     }
 
-    private static bool HasCSharpStaticInterfaceContractSymbol(IReadOnlyList<SymbolRecord> symbols)
+    internal static bool HasCSharpStaticInterfaceContractSymbol(IEnumerable<SymbolRecord> symbols)
     {
         foreach (var symbol in symbols)
         {
@@ -593,10 +633,272 @@ internal static class CSharpStaticInterfacePrepass
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
         => symbol.Kind is "function" or "operator" or "property"
            && symbol.ContainerKind == "interface"
-           && !string.IsNullOrWhiteSpace(symbol.Signature)
-           && ContainsCSharpWord(symbol.Signature!, "static")
-           && (ContainsCSharpWord(symbol.Signature!, "abstract")
-               || ContainsCSharpWord(symbol.Signature!, "virtual"));
+           && IsCSharpStaticInterfaceContractSignature(symbol.Signature);
+
+    internal static bool IsCSharpStaticInterfaceContractSignature(string? signature)
+        => !string.IsNullOrWhiteSpace(signature)
+           && ContainsCSharpWord(signature!, "static")
+           && (ContainsCSharpWord(signature!, "abstract")
+               || ContainsCSharpWord(signature!, "virtual"));
+
+    internal static bool TryCaptureFileStatSnapshots(
+        IReadOnlyList<FileTarget> targets,
+        out Dictionary<string, FileStatSnapshot> snapshots,
+        out string? failedPath,
+        CancellationToken cancellationToken = default,
+        Action<FileTarget>? validateTarget = null)
+    {
+        snapshots = new Dictionary<string, FileStatSnapshot>(targets.Count, StringComparer.Ordinal);
+        failedPath = null;
+        foreach (var target in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                validateTarget?.Invoke(target);
+                var info = new FileInfo(LongPath.EnsureWindowsPrefix(target.FilePath));
+                info.Refresh();
+                if (!info.Exists)
+                {
+                    failedPath = target.DisplayRelativePath;
+                    return false;
+                }
+
+                snapshots[target.IndexPath] = new FileStatSnapshot(info.Length, info.LastWriteTimeUtc);
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException
+                                       or ArgumentException)
+            {
+                failedPath = target.DisplayRelativePath;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static bool FileStatSnapshotsMatch(
+        IReadOnlyDictionary<string, FileStatSnapshot> before,
+        IReadOnlyDictionary<string, FileStatSnapshot> after,
+        out string? changedPath)
+    {
+        foreach (var (path, snapshot) in before)
+        {
+            if (!after.TryGetValue(path, out var current) || current != snapshot)
+            {
+                changedPath = path;
+                return false;
+            }
+        }
+
+        if (before.Count != after.Count)
+        {
+            changedPath = after.Keys.FirstOrDefault(path => !before.ContainsKey(path));
+            return false;
+        }
+
+        changedPath = null;
+        return true;
+    }
+
+    internal static bool TryValidateFileStatSnapshots(
+        IReadOnlyList<FileTarget> targets,
+        IReadOnlyDictionary<string, FileStatSnapshot> snapshots,
+        out string? changedPath,
+        CancellationToken cancellationToken = default,
+        Action<FileTarget>? validateTarget = null)
+    {
+        if (targets.Count != snapshots.Count)
+        {
+            changedPath = "<csharp_workspace>";
+            return false;
+        }
+
+        foreach (var target in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                validateTarget?.Invoke(target);
+                var info = new FileInfo(LongPath.EnsureWindowsPrefix(target.FilePath));
+                info.Refresh();
+                if (!info.Exists
+                    || !snapshots.TryGetValue(target.IndexPath, out var snapshot)
+                    || info.Length != snapshot.Size
+                    || info.LastWriteTimeUtc != snapshot.ModifiedUtc)
+                {
+                    changedPath = target.DisplayRelativePath;
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException
+                                       or ArgumentException)
+            {
+                changedPath = target.DisplayRelativePath;
+                return false;
+            }
+        }
+
+        changedPath = null;
+        return true;
+    }
+
+    internal static bool TryValidateLoadedFileStatSnapshot(
+        string filePath,
+        string indexPath,
+        string displayPath,
+        long loadedSize,
+        DateTime loadedModifiedUtc,
+        IReadOnlyDictionary<string, FileStatSnapshot> snapshots,
+        out string? changedPath,
+        CancellationToken cancellationToken = default,
+        Action<string>? validatePath = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!snapshots.TryGetValue(indexPath, out var snapshot)
+            || loadedSize != snapshot.Size
+            || loadedModifiedUtc != snapshot.ModifiedUtc)
+        {
+            changedPath = displayPath;
+            return false;
+        }
+
+        try
+        {
+            validatePath?.Invoke(filePath);
+            var info = new FileInfo(LongPath.EnsureWindowsPrefix(filePath));
+            info.Refresh();
+            if (!info.Exists
+                || info.Length != snapshot.Size
+                || info.LastWriteTimeUtc != snapshot.ModifiedUtc)
+            {
+                changedPath = displayPath;
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or NotSupportedException
+                                   or ArgumentException)
+        {
+            changedPath = displayPath;
+            return false;
+        }
+
+        changedPath = null;
+        return true;
+    }
+
+    internal static bool TryCaptureDirectoryStatSnapshots(
+        IEnumerable<string> directories,
+        out Dictionary<string, DirectoryStatSnapshot> snapshots,
+        out string? failedPath,
+        CancellationToken cancellationToken = default,
+        Action<string>? validateDirectory = null)
+    {
+        snapshots = new Dictionary<string, DirectoryStatSnapshot>(StringComparer.Ordinal);
+        failedPath = null;
+        foreach (var directory in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (snapshots.ContainsKey(directory))
+                continue;
+            try
+            {
+                validateDirectory?.Invoke(directory);
+                var info = new DirectoryInfo(LongPath.EnsureWindowsPrefix(directory));
+                info.Refresh();
+                if (!info.Exists)
+                {
+                    failedPath = directory;
+                    return false;
+                }
+
+                snapshots[directory] = new DirectoryStatSnapshot(info.LastWriteTimeUtc);
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException
+                                       or ArgumentException)
+            {
+                failedPath = directory;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static bool DirectoryStatSnapshotsMatch(
+        IReadOnlyDictionary<string, DirectoryStatSnapshot> before,
+        IReadOnlyDictionary<string, DirectoryStatSnapshot> after,
+        out string? changedPath)
+    {
+        foreach (var (path, snapshot) in before)
+        {
+            if (!after.TryGetValue(path, out var current) || current != snapshot)
+            {
+                changedPath = path;
+                return false;
+            }
+        }
+
+        if (before.Count != after.Count)
+        {
+            changedPath = after.Keys.FirstOrDefault(path => !before.ContainsKey(path));
+            return false;
+        }
+
+        changedPath = null;
+        return true;
+    }
+
+    internal static bool TryValidateDirectoryStatSnapshots(
+        IReadOnlyList<string> directories,
+        IReadOnlyDictionary<string, DirectoryStatSnapshot> snapshots,
+        out string? changedPath,
+        CancellationToken cancellationToken = default,
+        Action<string>? validateDirectory = null)
+    {
+        if (directories.Count != snapshots.Count)
+        {
+            changedPath = "<csharp_workspace>";
+            return false;
+        }
+
+        foreach (var directory in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                validateDirectory?.Invoke(directory);
+                var info = new DirectoryInfo(LongPath.EnsureWindowsPrefix(directory));
+                info.Refresh();
+                if (!info.Exists
+                    || !snapshots.TryGetValue(directory, out var snapshot)
+                    || info.LastWriteTimeUtc != snapshot.ModifiedUtc)
+                {
+                    changedPath = directory;
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException
+                                       or ArgumentException)
+            {
+                changedPath = directory;
+                return false;
+            }
+        }
+
+        changedPath = null;
+        return true;
+    }
 
     private static bool ContainsCSharpWord(string text, string word)
         => ContainsCSharpWord(text.AsSpan(), word);
@@ -654,6 +956,10 @@ internal static class CSharpStaticInterfacePrepass
         }
     }
 
+    internal readonly record struct FileStatSnapshot(long Size, DateTime ModifiedUtc);
+
+    internal readonly record struct DirectoryStatSnapshot(DateTime ModifiedUtc);
+
     private static bool IsOutsideProjectRoot(string relativePath)
     {
         if (Path.IsPathRooted(relativePath))
@@ -669,4 +975,7 @@ internal static class CSharpStaticInterfacePrepass
 internal sealed record CSharpStaticInterfaceWorkspaceSymbols(
         IReadOnlyList<SymbolRecord> Symbols,
         bool HasStaticInterfaceContracts,
-        ReferenceExtractor.CSharpStaticInterfaceMemberLookups? StaticInterfaceMemberLookups = null);
+        ReferenceExtractor.CSharpStaticInterfaceMemberLookups? StaticInterfaceMemberLookups = null,
+        bool HasSourceStaticInterfaceContracts = false,
+        bool SourceContractEvidenceComplete = true,
+        IReadOnlyList<string>? IncompleteSourcePaths = null);

@@ -12,6 +12,83 @@ internal sealed record FilePurgePlan(
     internal static FilePurgePlan Empty { get; } = new(Array.Empty<long>(), 0, true, 0);
     internal int Count => FileIds.Count;
 
+    internal static FilePurgePlan Merge(IEnumerable<FilePurgePlan> plans)
+    {
+        ArgumentNullException.ThrowIfNull(plans);
+
+        var planArray = plans as FilePurgePlan[] ?? plans.ToArray();
+        if (planArray.Length == 0)
+            return Empty;
+        if (planArray.Length == 1)
+            return planArray[0] ?? throw new ArgumentNullException(nameof(plans));
+
+        long deletedBytes = 0;
+        long totalFileCount = 0;
+        var byteEstimateComplete = true;
+        var largestPlanCount = 0;
+        foreach (var plan in planArray)
+        {
+            ArgumentNullException.ThrowIfNull(plan);
+            largestPlanCount = Math.Max(largestPlanCount, plan.Count);
+            byteEstimateComplete &= plan.ByteEstimateComplete;
+            if (deletedBytes > long.MaxValue - plan.DeletedBytes)
+                byteEstimateComplete = false;
+            else
+                deletedBytes += plan.DeletedBytes;
+
+            var planTotalFileCount = plan.RemainingFileCount > long.MaxValue - plan.Count
+                ? long.MaxValue
+                : plan.RemainingFileCount + plan.Count;
+            totalFileCount = Math.Max(totalFileCount, planTotalFileCount);
+        }
+
+        // Every plan keeps IDs ascending. Merge the sorted snapshots directly so a large
+        // changed-between plan does not become one SortedSet node allocation per file.
+        // 各 plan の ID は昇順なので直接 merge し、巨大 changed-between plan で file ごとの
+        // SortedSet node allocation を発生させない。
+        var mergedFileIds = new List<long>(largestPlanCount);
+        var planOffsets = new int[planArray.Length];
+        var queue = new PriorityQueue<int, long>();
+        for (var planIndex = 0; planIndex < planArray.Length; planIndex++)
+        {
+            if (planArray[planIndex].Count > 0)
+                queue.Enqueue(planIndex, planArray[planIndex].FileIds[0]);
+        }
+
+        var hasOverlap = false;
+        long? previousFileId = null;
+        while (queue.TryDequeue(out var planIndex, out var fileId))
+        {
+            if (previousFileId == fileId)
+                hasOverlap = true;
+            else
+            {
+                mergedFileIds.Add(fileId);
+                previousFileId = fileId;
+            }
+
+            var nextOffset = ++planOffsets[planIndex];
+            if (nextOffset < planArray[planIndex].Count)
+                queue.Enqueue(planIndex, planArray[planIndex].FileIds[nextOffset]);
+        }
+
+        // Per-plan byte totals cannot identify the duplicated row's contribution. Keep the
+        // merged ID snapshot exact and make the optional byte estimate conservatively unknown.
+        // plan ごとの byte total から重複 ID 分だけを引けないため、ID snapshot は正確に保ち、
+        // optional な byte estimate は conservative に unknown とする。
+        if (hasOverlap)
+        {
+            deletedBytes = 0;
+            byteEstimateComplete = false;
+        }
+
+        return new FilePurgePlan(
+            mergedFileIds.AsReadOnly(),
+            deletedBytes,
+            byteEstimateComplete,
+            Math.Max(0, totalFileCount - mergedFileIds.Count));
+    }
+
     internal static bool ContainsSortedFileId(IReadOnlyList<long>? sortedFileIds, long fileId)
     {
         if (sortedFileIds == null)
@@ -117,6 +194,58 @@ public partial class DbWriter
         string projectRoot,
         IReadOnlySet<string>? preservedMissingPaths = null,
         CancellationToken cancellationToken = default)
+        => PlanStaleFilesCore(
+            projectRoot,
+            preservedMissingPaths,
+            language: null,
+            cancellationToken);
+
+    /// <summary>
+    /// Snapshot only stale C# rows. Scoped range updates use this narrower planner when
+    /// conservative source evidence requires finding a contract deletion outside the
+    /// caller-selected range; they must not turn a small delta into an all-language walk.
+    /// stale な C# 行だけを snapshot 化する。scoped range update で caller-selected range
+    /// 外の contract 削除確認が必要でも、全言語行の走査へ拡大しない。
+    /// </summary>
+    internal FilePurgePlan PlanStaleCSharpFiles(
+        string projectRoot,
+        IReadOnlySet<string>? preservedMissingPaths = null,
+        CancellationToken cancellationToken = default)
+        => PlanStaleFilesCore(
+            projectRoot,
+            preservedMissingPaths,
+            language: "csharp",
+            cancellationToken);
+
+    /// <summary>
+    /// Snapshot stale rows outside one language. Scoped range updates use this after their
+    /// authoritative target pass to retain the historical all-language missing-file cleanup
+    /// for non-C# rows, while C# rows remain protected by the immutable pre-workspace plan.
+    /// 指定言語以外の stale row を snapshot 化する。scoped range update の従来の
+    /// missing-file cleanup を非 C# row に維持し、C# row は workspace 前の immutable
+    /// plan だけで処理する。
+    /// </summary>
+    internal FilePurgePlan PlanStaleFilesExcludingLanguage(
+        string projectRoot,
+        IReadOnlySet<string>? preservedMissingPaths,
+        string excludedLanguage,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(excludedLanguage);
+        return PlanStaleFilesCore(
+            projectRoot,
+            preservedMissingPaths,
+            language: excludedLanguage,
+            cancellationToken,
+            excludeLanguage: true);
+    }
+
+    private FilePurgePlan PlanStaleFilesCore(
+        string projectRoot,
+        IReadOnlySet<string>? preservedMissingPaths,
+        string? language,
+        CancellationToken cancellationToken,
+        bool excludeLanguage = false)
     {
         // Identify stale files (no longer on disk) while streaming the current rows so
         // large indexes retain only deletion candidates rather than a second full path list.
@@ -130,7 +259,7 @@ public partial class DbWriter
             // the next index run will purge it. See LongPath.cs and #1547.
             return !File.Exists(LongPath.EnsureWindowsPrefix(absolutePath))
                 && (preservedMissingPaths == null || !preservedMissingPaths.Contains(relativePath));
-        }, cancellationToken);
+        }, cancellationToken, language, excludeLanguage);
     }
 
     /// <summary>
@@ -195,16 +324,26 @@ public partial class DbWriter
 
     private FilePurgePlan CollectCurrentFilePurgePlan(
         Func<long, string, bool> shouldCollect,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? language = null,
+        bool excludeLanguage = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Keep FileIds ordered so purge-aware preflight readers can exclude them with a
         // zero-allocation binary search instead of duplicating a large deletion set.
         // FileIds を昇順に保ち、purge-aware preflight reader が巨大な削除 set を
         // 複製せず、allocation なしの二分探索で除外できるようにする。
-        var cmd = RentCommand("SELECT id, path, size FROM files ORDER BY id", static _ => { });
+        var cmd = language == null
+            ? RentCommand("SELECT id, path, size FROM files ORDER BY id", static _ => { })
+            : RentCommand(
+                excludeLanguage
+                    ? "SELECT id, path, size FROM files WHERE lang IS NULL OR lang <> @lang ORDER BY id"
+                    : "SELECT id, path, size FROM files WHERE lang = @lang ORDER BY id",
+                static c => c.Parameters.Add("@lang", SqliteType.Text));
         try
         {
+            if (language != null)
+                cmd.Parameters["@lang"].Value = language;
             var fileIds = new List<long>();
             long deletedBytes = 0;
             var byteEstimateComplete = true;

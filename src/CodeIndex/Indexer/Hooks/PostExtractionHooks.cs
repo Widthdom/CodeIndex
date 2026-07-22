@@ -60,6 +60,7 @@ public sealed class PostExtractionHookRunner : IDisposable
     private readonly TimeSpan callbackBudget;
     private readonly int? maxSymbolCount;
     private readonly int? maxReferenceCount;
+    private int sawCSharpStaticInterfaceSourceContract;
     private bool disposed;
     internal static Func<TimeSpan>? CallbackBudgetForTesting { get; set; }
     internal static Func<int>? DiscoveryLimitForTesting { get; set; }
@@ -313,15 +314,64 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     internal int ParentLoadContextCountForTests => 0;
 
+    internal bool SawCSharpStaticInterfaceSourceContract
+        => Volatile.Read(ref sawCSharpStaticInterfaceSourceContract) != 0;
+
     public IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics
         => diagnostics.Count == 0 ? [] : diagnostics.ToList();
 
     public TimeSpan CallbackBudget => callbackBudget;
 
+    internal void ObserveCSharpStaticInterfaceSourceSymbols(
+        FileContext context,
+        IEnumerable<SymbolRecord> symbols)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!string.Equals(context.Language, "csharp", StringComparison.Ordinal)
+            || Volatile.Read(ref sawCSharpStaticInterfaceSourceContract) != 0)
+        {
+            return;
+        }
+
+        if (CSharpStaticInterfacePrepass.HasCSharpStaticInterfaceContractSymbol(symbols))
+        {
+            Interlocked.Exchange(ref sawCSharpStaticInterfaceSourceContract, 1);
+        }
+    }
+
     public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols, CancellationToken cancellationToken = default)
+        => OnSymbolsExtractedCore(
+            context,
+            symbols,
+            sourceSymbolsAlreadyObserved: false,
+            cancellationToken);
+
+    internal void OnSymbolsExtractedAfterSourceObservation(
+        FileContext context,
+        IList<SymbolRecord> symbols,
+        CancellationToken cancellationToken = default)
+        => OnSymbolsExtractedCore(
+            context,
+            symbols,
+            sourceSymbolsAlreadyObserved: true,
+            cancellationToken);
+
+    private void OnSymbolsExtractedCore(
+        FileContext context,
+        IList<SymbolRecord> symbols,
+        bool sourceSymbolsAlreadyObserved,
+        CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Observe built-in symbols before hooks, kind filters, or row caps can remove a
+        // contract member. This closes the prepass-to-extraction mutation window for the
+        // durable source-evidence stamp.
+        // hook・kind filter・row capより前のbuilt-in symbolを観測し、prepass後の変更も
+        // durable source evidenceへ反映する。
+        if (!sourceSymbolsAlreadyObserved)
+            ObserveCSharpStaticInterfaceSourceSymbols(context, symbols);
 
         foreach (var hook in hooks)
         {
