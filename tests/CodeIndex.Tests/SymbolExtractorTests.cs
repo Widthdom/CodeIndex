@@ -6033,7 +6033,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_JavaLargeRecordPrimaryComponents_CompletesWithinPracticalBudget()
     {
-        const int componentCount = 1_000;
+        const int componentCount = 500;
         var componentLines = string.Join('\n', Enumerable.Range(0, componentCount).Select(i => $"    int p{i},"));
         var content = $$"""
             package com.example;
@@ -6051,7 +6051,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p0" && s.ContainerName == "Huge");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"p{componentCount - 1}" && s.ContainerName == "Huge");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Huge");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large Java record component extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
@@ -6824,7 +6824,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_KotlinLargePrimaryConstructorComponents_CompletesWithinPracticalBudget()
     {
-        const int componentCount = 1_000;
+        const int componentCount = 500;
         var components = string.Join(", ", Enumerable.Range(0, componentCount).Select(i => $"val p{i}: String"));
         var content = $"""
             package generated
@@ -6839,7 +6839,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p0" && s.ContainerName == "Huge");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"p{componentCount - 1}" && s.ContainerName == "Huge");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Huge");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large Kotlin primary constructor extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
@@ -6877,7 +6877,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_Kotlin_ManyPrimaryConstructorTypes_CompletesWithinPracticalBudget()
     {
-        const int typeCount = 40_000;
+        const int typeCount = 20_000;
         _ = SymbolExtractor.Extract(0, "kotlin", "data class Warmup(val value: Int)");
         var content = string.Join('\n', Enumerable.Range(0, typeCount).Select(i =>
             $"data class Item{i}(val value{i}: Int) {{ }}"));
@@ -6889,7 +6889,7 @@ public partial class SymbolExtractorTests
         Assert.Equal(typeCount, symbols.Count(s => s.Kind == "property" && s.ContainerName?.StartsWith("Item", StringComparison.Ordinal) == true));
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value0" && s.ContainerName == "Item0");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"value{typeCount - 1}" && s.ContainerName == $"Item{typeCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Dense Kotlin primary-constructor extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
