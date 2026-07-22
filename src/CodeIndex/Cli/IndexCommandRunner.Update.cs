@@ -462,7 +462,7 @@ public static partial class IndexCommandRunner
                     ? scannedLanguages.TryGetValue(target.FilePath, out var scannedLanguage)
                       && scannedLanguage == "csharp"
                     : FileIndexer.TryDetectLanguage(target.FilePath) is
-                        { Status: FileIndexer.FileProbeStatus.Supported, Language: "csharp" };
+                    { Status: FileIndexer.FileProbeStatus.Supported, Language: "csharp" };
                 if (!isCSharp)
                 {
                     if (expectedCSharp)
