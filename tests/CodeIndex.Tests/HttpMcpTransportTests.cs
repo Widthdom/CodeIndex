@@ -533,7 +533,7 @@ public class HttpMcpTransportTests : IDisposable
                 cancellationToken: CancellationToken.None);
             var earlySecondWrite = await Task.WhenAny(
                 stream.SecondWriteEntered,
-                Task.Delay(TimeSpan.FromMilliseconds(100)));
+                Task.Delay(TimeSpan.FromMilliseconds(25)));
             Assert.NotSame(stream.SecondWriteEntered, earlySecondWrite);
             Assert.False(firstWrite.IsCompleted);
 
@@ -3095,7 +3095,7 @@ public class HttpMcpTransportTests : IDisposable
         var write = transport.WriteFrameAsync(responseBody, CancellationToken.None);
         var earlyResponseWrite = await Task.WhenAny(
             responseWriteEntered.Task,
-            Task.Delay(TimeSpan.FromMilliseconds(100)));
+            Task.Delay(TimeSpan.FromMilliseconds(25)));
         Assert.NotSame(responseWriteEntered.Task, earlyResponseWrite);
         Assert.False(write.IsCompleted);
 
@@ -3347,7 +3347,7 @@ public class HttpMcpTransportTests : IDisposable
         var post = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
         await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the initial initialize request to enter the queue");
 
-        await Task.Delay(100);
+        await Task.Delay(25);
         Assert.False(post.IsCompleted, "initial initialize headers must wait for the session identifier");
         Assert.False(probeAttempted.Task.IsCompleted, "initial initialize must not start the disconnect probe");
 

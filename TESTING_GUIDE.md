@@ -581,6 +581,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - SSE oversized-frame coverage uses the minimum practical keep-alive interval because the frame-size rejection, not elapsed idle time, is the contract; retain bounded polling for stream removal instead of a production-scale interval.
 - Low-level Git subprocess timeout tests use a 100 ms injected command budget. Commit-diff timeout coverage uses 500 ms because it must first complete ref validation before the fake executable hangs on `diff-tree`; keep both well below the production timeout without timing out the setup command.
 - Signal-gated transaction dispose/rollback tests use a 50 ms absence observation after the competing task has reached its explicit gate; keep the gate synchronization and bounded completion waits instead of restoring 200 ms sleeps.
+- Signal-gated HTTP serialization and initial-header tests use 25 ms absence observations after queue/write entry is explicit; retain the synchronization points and later positive completion assertions rather than restoring 100 ms sleeps.
 - Keep hang collection on both CI attempts, but defer crash collection to the failed-run retry so clean first-pass lanes do not pay crash-collector overhead; a persistent crash still reproduces under the collector.
 - When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
 - When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
@@ -1365,6 +1366,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - SSE oversized-frame coverage は、経過idle時間ではなくframe-size rejectionが契約なので、実用上最小のkeep-alive intervalを使います。stream除去は本番相当intervalではなく境界付きpollingで検証してください。
 - 低レベルGit subprocess timeout testは注入した100 msのcommand budgetを使います。commit-diff timeout coverageはfake executableが`diff-tree`でhangする前にref validationを完了する必要があるため500 msを使い、setup commandを誤ってtimeoutさせず本番timeoutより十分短く保ちます。
 - signal-gatedなtransaction dispose/rollback testは競合taskが明示的gateへ到達した後の不在観測を50 msにします。200 ms sleepへ戻さず、gate同期とbounded completion waitを維持してください。
+- signal-gatedなHTTP serializationとinitial-header testはqueue/write entryが明示された後の不在観測を25 msにします。100 ms sleepへ戻さず、同期点と後続のpositive completion assertionを維持してください。
 - CIのhang収集は両attemptで維持しますが、crash収集は失敗後retryへ遅延し、cleanな初回laneがcollector overheadを負わないようにします。継続するcrashはcollector有効下のretryで再現します。
 - 同種の key/value 期待値を長い表で固定するテストでは、期待値をデータとして残し、繰り返しの lookup/assertion 形は helper に通してください。重複行を見つけやすくするためです。
 - extractor テストで `SymbolName` / `ReferenceKind` の同じ predicate 形を positive / negative reference assertion の両方に繰り返す場合は、semantic assertion helper を使い、各 call site には container name/kind、context、line、column、除外 symbol set など挙動差分だけを残してください。
