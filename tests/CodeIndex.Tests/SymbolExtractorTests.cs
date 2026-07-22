@@ -772,6 +772,26 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_IndexesReflectionSensitivePropertyNames_Issue4709()
+    {
+        const string content = """
+            {
+              "$schema": "https://example.test/schema.json",
+              "path/key": true,
+              "quote\"key": false,
+              "\u65e5\u672c\u8a9e": 1
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "$schema" && symbol.Line == 2);
+        Assert.Contains(symbols, symbol => symbol.Name == "path/key" && symbol.Line == 3);
+        Assert.Contains(symbols, symbol => symbol.Name == "quote\"key" && symbol.Line == 4);
+        Assert.Contains(symbols, symbol => symbol.Name == "日本語" && symbol.Line == 5);
+    }
+
+    [Fact]
     public void Extract_Json_UsesReaderOffsetsForEscapedDuplicateKeys_Issue3808()
     {
         const string content = """
@@ -866,7 +886,7 @@ public partial class SymbolExtractorTests
         var content = $$"""
             {
               "root": {
-                "leaf": "ok"
+                "\u006c\u0065\u0061\u0066": "ok"
               }
               {{padding}}
             }

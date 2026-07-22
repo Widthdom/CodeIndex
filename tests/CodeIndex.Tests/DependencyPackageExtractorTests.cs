@@ -276,4 +276,26 @@ public class DependencyPackageExtractorTests
         Assert.Equal("left-pad", reference.ContainerName);
         Assert.Equal("\"repeat-string\": \"1.6.1\",", reference.Context);
     }
+
+    [Fact]
+    public void Extract_DependencyLock_IndexesJsonEncodedNpmPackagePaths_Issue4709()
+    {
+        const string content = """
+            {
+              "packages": {
+                "node_modules/@scope/package": {
+                  "version": "1.2.3"
+                }
+              }
+            }
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(12, "dependency_lock", content, filePath: "package-lock.json"),
+            candidate => candidate.Name == "@scope/package");
+
+        Assert.Equal("lock_dependency", symbol.SubKind);
+        Assert.Equal(3, symbol.Line);
+        Assert.Equal(4, symbol.StartColumn);
+    }
 }

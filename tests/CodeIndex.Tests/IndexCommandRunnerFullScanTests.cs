@@ -235,6 +235,91 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [PublishedTrimmedCliFact]
+    public void Run_FullScan_PublishedTrimmedBinary_IndexesJsonWorkerInputs_Issue4709()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trimmed_json_worker");
+        try
+        {
+            TestProjectHelper.WriteTextFiles(
+                projectRoot,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["version.json"] = """
+                        {
+                          "$schema": "https://example.test/version.schema.json",
+                          "version": "1.0.0"
+                        }
+                        """,
+                    ["stryker-config.json"] = """
+                        {
+                          "$schema": "https://example.test/stryker.schema.json",
+                          "stryker-config": { "mutate": ["src/**/*.cs"] }
+                        }
+                        """,
+                    ["package-lock.json"] = """
+                        {
+                          "lockfileVersion": 3,
+                          "packages": {
+                            "node_modules/@scope/package": { "version": "1.2.3" }
+                          }
+                        }
+                        """,
+                    ["doc/config.schema.json"] = """
+                        {
+                          "$schema": "https://json-schema.org/draft/2020-12/schema",
+                          "$id": "https://example.test/config.schema.json",
+                          "properties": { "enabled": { "type": "boolean" } }
+                        }
+                        """,
+                });
+
+            var publishedCli = TrimmedCliTestHelper.SharedTrimmedCli;
+            var (indexExitCode, indexStdOut, indexStdErr) = TrimmedCliTestHelper.RunPublishedCli(
+                publishedCli,
+                projectRoot,
+                "index",
+                projectRoot,
+                "--rebuild",
+                "--yes",
+                "--parallelism",
+                "1",
+                "--json",
+                "--quiet");
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStdErr);
+            using (var indexDocument = JsonDocument.Parse(indexStdOut))
+            {
+                Assert.Equal("success", indexDocument.RootElement.GetProperty("status").GetString());
+                Assert.True(indexDocument.RootElement.GetProperty("index_complete").GetBoolean());
+                Assert.Empty(indexDocument.RootElement.GetProperty("file_errors").EnumerateArray());
+            }
+
+            var dbPath = TestProjectHelper.ProjectPath(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusStdOut, statusStdErr) = TrimmedCliTestHelper.RunPublishedCli(
+                publishedCli,
+                projectRoot,
+                "status",
+                "--db",
+                dbPath,
+                "--check",
+                "--json");
+
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(string.Empty, statusStdErr);
+            using var statusDocument = JsonDocument.Parse(statusStdOut);
+            var status = statusDocument.RootElement;
+            Assert.True(status.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.True(status.GetProperty("index_complete").GetBoolean());
+            Assert.Equal(status.GetProperty("version").GetString(), status.GetProperty("index_writer_version").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void Run_FullScan_ReferenceCapHitPersistsPerFileAndRunCompleteness_Issue4620()
     {
