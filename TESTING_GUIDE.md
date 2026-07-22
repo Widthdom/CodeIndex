@@ -594,6 +594,7 @@ Use the inventory below before adding or moving a test class:
 - SQLite pool resets, direct `SqliteConnection.ClearAllPools()` calls, process current-directory changes, or process-global environment variable mutation: put the class in the `SQLite pool sensitive` non-parallel collection.
 - Extractor plugin registry tests belong in the dedicated non-parallel `Plugin registry sensitive` collection: they mutate process-global registry reload state, worker inventories, staging hooks, and user plugin directory overrides. Keep `TrustedPluginAssemblyFixture` on that collection only, so ordinary console-sensitive tests do not build an unused plugin fixture.
 - Environment variables: use `EnvironmentVariableScope.Capture(...)` so setup failures and assertion failures restore the original values through one cleanup path.
+- JSON API-version utility coverage belongs in the non-parallel collection because its combined command scenario temporarily disables update checks through a process-global environment variable; console locking alone does not isolate that lifetime.
 - `Console.Out` or `Console.Error` replacement: lock `TestConsoleLock.Gate` around the whole capture/swap window.
 - Console-only test classes do not need the SQLite-sensitive non-parallel collection once every capture/swap window, including writer-disposal checks, is protected by `TestConsoleLock.Gate`.
 - Pure i18n resolution, self-locking JSON-envelope capture, and isolated LSP request/budget fixtures should remain outside the SQLite-sensitive collection; owning a temporary DB is not itself process-global state when the context is disposed before helper cleanup.
@@ -1380,6 +1381,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - SQLite pool reset、`SqliteConnection.ClearAllPools()` の直接呼び出し、プロセスの current directory 変更、process-global な環境変数変更: クラスを non-parallel な `SQLite pool sensitive` collection に入れる。
 - extractor plugin registry testは専用のnon-parallelな`Plugin registry sensitive` collectionに置いてください。process-globalなregistry reload state、worker inventory、staging hook、user plugin directory overrideを変更します。通常のconsole-sensitive testが未使用plugin fixtureを構築しないよう、`TrustedPluginAssemblyFixture`はこのcollectionだけで所有します。
 - 環境変数: `EnvironmentVariableScope.Capture(...)` を使い、setup failure や assertion failure でも単一の cleanup 経路で元の値に戻す。
+- JSON API-versionのutility coverageは、combined command scenarioがprocess-globalな環境変数でupdate checkを一時無効化するためnon-parallel collectionに置きます。console lockだけではそのlifetimeを分離できません。
 - `Console.Out` / `Console.Error` の差し替え: capture / swap 期間全体を `TestConsoleLock.Gate` で lock する。
 - console だけを扱う test class は、writer disposal check を含むすべての capture / swap 期間が `TestConsoleLock.Gate` で保護されていれば、SQLite-sensitive non-parallel collection に入れる必要はない。
 - pure i18n resolution、内部で lock する JSON-envelope capture、独立した LSP request / budget fixture は SQLite-sensitive collection の外に保つ。一時 DB を所有するだけなら、context を helper cleanup 前に dispose している限り process-global state ではない。
