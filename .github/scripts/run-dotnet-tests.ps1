@@ -98,12 +98,7 @@ function Get-RetryFilterDecision {
   )
 
   $telemetryArgs = @(
-    "run",
-    "--project", "tools/CodeIndex.TestTelemetry",
-    "--configuration", "Release",
-    "--no-build",
-    "--no-restore",
-    "--",
+    "tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll",
     "retry-filter",
     "--trx-file", $TrxPath
   )

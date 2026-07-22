@@ -140,7 +140,7 @@ jobs:
 
       - name: Summarize TRX telemetry
         if: always() && steps.test.outputs.summarize == 'true'
-        run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize --results-directory ./TestResults --top 10
+        run: dotnet tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll summarize --results-directory ./TestResults --top 10
 
       - name: Upload test results
         if: always() && (steps.test.outputs.summarize == 'true' || failure())

@@ -114,7 +114,7 @@ public class CiWorkflowTests
             "-Framework \"${{ matrix.test-framework }}\"",
             "id: test",
             "- name: Summarize TRX telemetry\n        if: always() && steps.test.outputs.summarize == 'true'",
-            "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize",
+            "run: dotnet tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll summarize",
             "TestResults/**/*.trx",
             "TestResults/**/*.txt",
             "TestResults/**/*.xml",
@@ -151,9 +151,7 @@ public class CiWorkflowTests
             "[string]$TestFilter = \"\"",
             "$runArgs += @(\"--filter\", $TestFilter)",
             "function Get-RetryFilterDecision",
-            "\"--project\", \"tools/CodeIndex.TestTelemetry\"",
-            "\"--no-build\"",
-            "\"--no-restore\"",
+            "\"tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll\"",
             "\"retry-filter\"",
             "\"--trx-file\", $TrxPath",
             "ConvertFrom-Json -ErrorAction Stop",
@@ -168,11 +166,12 @@ public class CiWorkflowTests
         AssertContainsAll(
             workflow,
             "dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release",
-            "dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize");
+            "dotnet tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll summarize");
         AssertDoesNotContainAny(
             testScript,
             "dotnet build tools/CodeIndex.TestTelemetry",
-            "dotnet restore tools/CodeIndex.TestTelemetry");
+            "dotnet restore tools/CodeIndex.TestTelemetry",
+            "\"--project\", \"tools/CodeIndex.TestTelemetry\"");
     }
 
     [Fact]
