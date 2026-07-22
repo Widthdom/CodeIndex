@@ -293,7 +293,9 @@ public partial class IndexCommandRunnerTests
             {
                 Assert.Equal("success", indexDocument.RootElement.GetProperty("status").GetString());
                 Assert.True(indexDocument.RootElement.GetProperty("index_complete").GetBoolean());
-                Assert.Empty(indexDocument.RootElement.GetProperty("file_errors").EnumerateArray());
+                Assert.Equal(
+                    0,
+                    indexDocument.RootElement.GetProperty("summary").GetProperty("errors").GetInt32());
             }
 
             var dbPath = TestProjectHelper.ProjectPath(projectRoot, ".cdidx", "codeindex.db");
