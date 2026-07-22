@@ -801,7 +801,7 @@ internal static class DependencyPackageExtractor
 
     private static (int Line, int Column) FindJsonProperty(string[] lines, string propertyName, int startLine)
     {
-        var quoted = JsonSerializer.Serialize(propertyName);
+        var quoted = "\"" + JsonEncodedText.Encode(propertyName).ToString() + "\"";
         for (var i = Math.Max(0, startLine - 1); i < lines.Length; i++)
         {
             var index = lines[i].IndexOf(quoted, StringComparison.Ordinal);

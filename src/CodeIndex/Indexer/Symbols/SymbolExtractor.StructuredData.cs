@@ -25,11 +25,6 @@ public static partial class SymbolExtractor
         MaxDepth = StructuredDataMaxJsonDepth + 2,
     };
 
-    private static readonly JsonSerializerOptions StructuredJsonStringOptions = new()
-    {
-        MaxDepth = StructuredDataMaxJsonDepth,
-    };
-
     private static readonly Regex JsonFallbackPropertyRegex = new(
         @"^\s*""(?<name>(?:\\.|[^""\\])+)""\s*:",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -688,7 +683,7 @@ public static partial class SymbolExtractor
     private static string EncodeJsonPropertySearchName(string propertyName)
         => IsSimpleJsonPropertySearchName(propertyName)
             ? "\"" + propertyName + "\""
-            : JsonSerializer.Serialize(propertyName);
+            : "\"" + JsonEncodedText.Encode(propertyName).ToString() + "\"";
 
     private static bool IsSimpleJsonPropertySearchName(string propertyName)
     {
@@ -806,12 +801,13 @@ public static partial class SymbolExtractor
 
         try
         {
-            return BoundedJson.Deserialize<string>(
+            using var document = BoundedJson.ParseDocument(
                 "\"" + value + "\"",
                 StructuredDataMaxJsonParseUtf8Bytes,
-                StructuredJsonStringOptions) ?? value;
+                maxDepth: 1);
+            return document.RootElement.GetString() ?? value;
         }
-        catch (Exception ex) when (ex is JsonException or System.IO.InvalidDataException)
+        catch (Exception ex) when (ex is JsonException or System.IO.InvalidDataException or InvalidOperationException)
         {
             return value;
         }
