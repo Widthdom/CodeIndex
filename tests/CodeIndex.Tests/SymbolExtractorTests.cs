@@ -12547,7 +12547,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_DockerfileLargeNamedStageChain_CompletesWithinPracticalBudget()
     {
-        const int stageCount = 1_000;
+        const int stageCount = 500;
         var builder = new StringBuilder();
         builder.AppendLine("FROM alpine AS stage0");
         for (var i = 1; i < stageCount; i++)
@@ -12562,7 +12562,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "base_image" && s.Name == "alpine");
         Assert.DoesNotContain(symbols, s => s.Kind == "base_image" && s.Name == "stage0");
         Assert.DoesNotContain(symbols, s => s.Kind == "base_image" && s.Name == $"stage{stageCount - 2}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large Dockerfile named stage extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
