@@ -144,6 +144,96 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void DeferredAggregateRefresh_RefreshesCrossFileReferenceLineDependentsOnce()
+    {
+        var lineOwnerId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-context.sql",
+            Lang = "sql",
+            Modified = DateTime.UtcNow,
+        });
+        var callerId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-caller.sql",
+            Lang = "sql",
+            Modified = DateTime.UtcNow,
+        });
+        _writer.InsertReferences(
+        [
+            new CodeIndex.Models.ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "target",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 6,
+                Context = "target",
+            },
+        ]);
+        using (var crossFileLine = _db.Connection.CreateCommand())
+        {
+            crossFileLine.CommandText = """
+                INSERT INTO reference_lines(file_id, line, context) VALUES (@owner, 1, 'EXEC dbo.target');
+                UPDATE symbol_references
+                SET context = NULL,
+                    reference_line_id = last_insert_rowid()
+                WHERE file_id = @caller;
+                """;
+            crossFileLine.Parameters.AddWithValue("@owner", lineOwnerId);
+            crossFileLine.Parameters.AddWithValue("@caller", callerId);
+            crossFileLine.ExecuteNonQuery();
+        }
+        using (var demote = _db.Connection.CreateCommand())
+        {
+            demote.CommandText = $"PRAGMA user_version = {_db.GetUserVersion() & ~DbContext.HotspotReferenceAggregateReadyFlag}";
+            demote.ExecuteNonQuery();
+        }
+        _db.InitializeSchema();
+
+        var previousStatementHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var previousDirtyHook = DbWriter.DeferredHotspotDirtyFilesForTesting;
+        var refreshStatements = 0;
+        HashSet<long>? refreshedFileIds = null;
+        try
+        {
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                refreshStatements++;
+                previousStatementHook?.Invoke();
+            };
+            DbWriter.DeferredHotspotDirtyFilesForTesting = dirtyFileIds =>
+            {
+                refreshedFileIds = dirtyFileIds.ToHashSet();
+                previousDirtyHook?.Invoke(dirtyFileIds);
+            };
+
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh();
+            using (var transaction = _writer.BeginTransaction())
+            {
+                _writer.DeleteFileData(lineOwnerId);
+                transaction.Commit();
+            }
+            deferredRefresh.Complete(CancellationToken.None);
+
+            Assert.Equal(1, refreshStatements);
+            Assert.NotNull(refreshedFileIds);
+            Assert.Contains(lineOwnerId, refreshedFileIds!);
+            Assert.Contains(callerId, refreshedFileIds!);
+            using var aggregate = _db.Connection.CreateCommand();
+            aggregate.CommandText = "SELECT symbol_name FROM hotspot_reference_counts WHERE file_id = @caller";
+            aggregate.Parameters.AddWithValue("@caller", callerId);
+            var aggregateName = Assert.IsType<string>(aggregate.ExecuteScalar());
+            aggregate.CommandText = "SELECT sql_resolve_reference_name_at(symbol_name, context, container_name, column_number) FROM symbol_references WHERE file_id = @caller";
+            Assert.Equal(Assert.IsType<string>(aggregate.ExecuteScalar()), aggregateName);
+        }
+        finally
+        {
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousStatementHook;
+            DbWriter.DeferredHotspotDirtyFilesForTesting = previousDirtyHook;
+        }
+    }
+
+    [Fact]
     public void FileBatchCleanup_DemotesReferenceIdentityContract_Issue4581()
     {
         var retainedId = _writer.UpsertFile(new CodeIndex.Models.FileRecord { Path = "src/retained.cs", Lang = "csharp", Modified = DateTime.UtcNow });
@@ -399,6 +489,349 @@ public partial class DbReaderTests
         AssertAggregateAndRawReferenceCounts(pythonFileId, expected: 0);
         AssertAggregateAndRawReferenceCounts(obsoleteFileId, expected: 0);
     }
+
+    [Fact]
+    public void DeferredAggregateRefresh_RefreshesMixedLanguageFilesOnce()
+    {
+        var inputs = new[]
+        {
+            (Path: "src/deferred.cs", Lang: "csharp", Symbol: "Target.Run", Context: "Target.Run();"),
+            (Path: "src/deferred.py", Lang: "python", Symbol: "target", Context: "target()"),
+            (Path: "docs/deferred.md", Lang: "markdown", Symbol: "guide#usage", Context: "[usage](guide#usage)"),
+            (Path: "src/deferred.sql", Lang: "sql", Symbol: "dbo.target", Context: "EXEC dbo.target"),
+        };
+        var fileIds = inputs
+            .Select(input => _writer.UpsertFile(new CodeIndex.Models.FileRecord
+            {
+                Path = input.Path,
+                Lang = input.Lang,
+                Modified = DateTime.UtcNow,
+            }))
+            .ToArray();
+        var previousReadinessHook = DbWriter.HotspotAggregateReadinessCheckedForTesting;
+        var previousStatementHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var previousDirtyHook = DbWriter.DeferredHotspotDirtyFilesForTesting;
+        var readinessChecks = 0;
+        var refreshStatements = 0;
+        HashSet<long>? refreshedFileIds = null;
+        try
+        {
+            DbWriter.HotspotAggregateReadinessCheckedForTesting = () =>
+            {
+                readinessChecks++;
+                previousReadinessHook?.Invoke();
+            };
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                refreshStatements++;
+                previousStatementHook?.Invoke();
+            };
+            DbWriter.DeferredHotspotDirtyFilesForTesting = dirtyFileIds =>
+            {
+                refreshedFileIds = dirtyFileIds.ToHashSet();
+                previousDirtyHook?.Invoke(dirtyFileIds);
+            };
+
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh();
+            for (var i = 0; i < inputs.Length; i++)
+            {
+                using var transaction = _writer.BeginTransaction();
+                _writer.InsertReferencesInAtomicFileScope(
+                [
+                    new CodeIndex.Models.ReferenceRecord
+                    {
+                        FileId = fileIds[i],
+                        SymbolName = inputs[i].Symbol,
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 1,
+                        Context = inputs[i].Context,
+                    },
+                ], refreshMutualRecursionFlags: false, CancellationToken.None);
+                transaction.Commit();
+            }
+            deferredRefresh.Complete(CancellationToken.None);
+
+            Assert.Equal(inputs.Length, readinessChecks);
+            Assert.Equal(1, refreshStatements);
+            Assert.NotNull(refreshedFileIds);
+            Assert.True(fileIds.ToHashSet().SetEquals(refreshedFileIds!));
+            Assert.NotEqual(0, _db.GetUserVersion() & DbContext.HotspotReferenceAggregateReadyFlag);
+            using var count = _db.Connection.CreateCommand();
+            count.Parameters.Add("@file_id", SqliteType.Integer);
+            foreach (var fileId in fileIds)
+            {
+                count.Parameters["@file_id"].Value = fileId;
+                count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id";
+                var rawCount = (long)count.ExecuteScalar()!;
+                count.CommandText = "SELECT COALESCE(SUM(reference_count), 0) FROM hotspot_reference_counts WHERE file_id = @file_id";
+                Assert.Equal(rawCount, (long)count.ExecuteScalar()!);
+            }
+        }
+        finally
+        {
+            DbWriter.HotspotAggregateReadinessCheckedForTesting = previousReadinessHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousStatementHook;
+            DbWriter.DeferredHotspotDirtyFilesForTesting = previousDirtyHook;
+        }
+    }
+
+    [Fact]
+    public void DeferredAggregateRefresh_UsesOneStatementBeyondDirtyIdInsertBatch()
+    {
+        const int fileCount = 1_001;
+        var fileIds = new long[fileCount];
+        using (var seedTransaction = _writer.BeginTransaction())
+        {
+            for (var i = 0; i < fileCount; i++)
+            {
+                fileIds[i] = _writer.InsertNewFile(new CodeIndex.Models.FileRecord
+                {
+                    Path = $"src/deferred-bulk-{i:D4}.py",
+                    Lang = "python",
+                    Modified = DateTime.UtcNow,
+                });
+            }
+            seedTransaction.Commit();
+        }
+        var references = fileIds
+            .Select((fileId, index) => BuildDeferredReference(fileId, $"bulk_target_{index}"))
+            .ToArray();
+        var previousStatementHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var refreshStatements = 0;
+        try
+        {
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                refreshStatements++;
+                previousStatementHook?.Invoke();
+            };
+
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh();
+            using (var transaction = _writer.BeginTransaction())
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                transaction.Commit();
+            }
+            deferredRefresh.Complete(CancellationToken.None);
+
+            Assert.Equal(1, refreshStatements);
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id >= @first_file_id AND file_id <= @last_file_id";
+            count.Parameters.AddWithValue("@first_file_id", fileIds[0]);
+            count.Parameters.AddWithValue("@last_file_id", fileIds[^1]);
+            Assert.Equal((long)fileCount, (long)count.ExecuteScalar()!);
+            count.CommandText = "SELECT COALESCE(SUM(reference_count), 0) FROM hotspot_reference_counts WHERE file_id >= @first_file_id AND file_id <= @last_file_id";
+            Assert.Equal((long)fileCount, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousStatementHook;
+        }
+    }
+
+    [Fact]
+    public void DeferredAggregateRefresh_DiscardsRolledBackFileCheckpoint()
+    {
+        var successfulFileId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-success.py",
+            Lang = "python",
+            Modified = DateTime.UtcNow,
+        });
+        var failedFileId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-failed.py",
+            Lang = "python",
+            Modified = DateTime.UtcNow,
+        });
+        var previousDirtyHook = DbWriter.DeferredHotspotDirtyFilesForTesting;
+        HashSet<long>? refreshedFileIds = null;
+        try
+        {
+            DbWriter.DeferredHotspotDirtyFilesForTesting = dirtyFileIds =>
+            {
+                refreshedFileIds = dirtyFileIds.ToHashSet();
+                previousDirtyHook?.Invoke(dirtyFileIds);
+            };
+
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh();
+            using (var failedTransaction = _writer.BeginTransaction())
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    [BuildDeferredReference(failedFileId, "failed_target")],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+            using (var successfulTransaction = _writer.BeginTransaction())
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    [BuildDeferredReference(successfulFileId, "successful_target")],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                successfulTransaction.Commit();
+            }
+            deferredRefresh.Complete(CancellationToken.None);
+
+            Assert.NotNull(refreshedFileIds);
+            Assert.Equal([successfulFileId], refreshedFileIds!.OrderBy(static id => id));
+            AssertAggregateAndRawReferenceCounts(successfulFileId, expected: 1);
+            AssertAggregateAndRawReferenceCounts(failedFileId, expected: 0);
+            Assert.NotEqual(0, _db.GetUserVersion() & DbContext.HotspotReferenceAggregateReadyFlag);
+        }
+        finally
+        {
+            DbWriter.DeferredHotspotDirtyFilesForTesting = previousDirtyHook;
+        }
+    }
+
+    [Fact]
+    public void DeferredAggregateRefresh_PreservesPriorFalseReadiness()
+    {
+        var fileId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-prior-false.py",
+            Lang = "python",
+            Modified = DateTime.UtcNow,
+        });
+        using (var demote = _db.Connection.CreateCommand())
+        {
+            demote.CommandText = $"PRAGMA user_version = {_db.GetUserVersion() & ~DbContext.HotspotReferenceAggregateReadyFlag}";
+            demote.ExecuteNonQuery();
+        }
+
+        using (var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh())
+        {
+            using var transaction = _writer.BeginTransaction();
+            _writer.InsertReferencesInAtomicFileScope(
+                [BuildDeferredReference(fileId, "prior_false_target")],
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+            transaction.Commit();
+            deferredRefresh.Complete(CancellationToken.None);
+        }
+
+        Assert.Equal(0, _db.GetUserVersion() & DbContext.HotspotReferenceAggregateReadyFlag);
+        AssertAggregateAndRawReferenceCounts(fileId, expected: 1);
+    }
+
+    [Fact]
+    public void DeferredAggregateRefresh_CancellationLeavesTrustDemoted()
+    {
+        var fileId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-cancel.py",
+            Lang = "python",
+            Modified = DateTime.UtcNow,
+        });
+        using var cancellation = new CancellationTokenSource();
+        var previousRefreshHook = DbWriter.HotspotAggregateRefreshExecutingForTesting;
+        try
+        {
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh();
+            using (var transaction = _writer.BeginTransaction())
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    [BuildDeferredReference(fileId, "cancel_target")],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                transaction.Commit();
+            }
+            DbWriter.HotspotAggregateRefreshExecutingForTesting = () =>
+            {
+                previousRefreshHook?.Invoke();
+                cancellation.Cancel();
+            };
+
+            Assert.Throws<OperationCanceledException>(() => deferredRefresh.Complete(cancellation.Token));
+            Assert.Equal(0, _db.GetUserVersion() & DbContext.HotspotReferenceAggregateReadyFlag);
+        }
+        finally
+        {
+            DbWriter.HotspotAggregateRefreshExecutingForTesting = previousRefreshHook;
+        }
+    }
+
+    [Fact]
+    public void DeferredAggregateRefresh_TracksZeroReferenceCleanupAndStaleDelete()
+    {
+        var zeroReferenceFileId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-zero.py",
+            Lang = "python",
+            Modified = DateTime.UtcNow,
+        });
+        var staleFileId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-stale.py",
+            Lang = "python",
+            Modified = DateTime.UtcNow,
+        });
+        _writer.InsertReferences(
+        [
+            BuildDeferredReference(zeroReferenceFileId, "removed_target"),
+            BuildDeferredReference(staleFileId, "stale_target"),
+        ]);
+        var previousDirtyHook = DbWriter.DeferredHotspotDirtyFilesForTesting;
+        HashSet<long>? refreshedFileIds = null;
+        try
+        {
+            DbWriter.DeferredHotspotDirtyFilesForTesting = dirtyFileIds =>
+            {
+                refreshedFileIds = dirtyFileIds.ToHashSet();
+                previousDirtyHook?.Invoke(dirtyFileIds);
+            };
+
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh();
+            using (var updateTransaction = _writer.BeginTransaction())
+            {
+                _writer.UpsertFile(
+                    new CodeIndex.Models.FileRecord
+                    {
+                        Path = "src/deferred-zero.py",
+                        Lang = "python",
+                        Modified = DateTime.UtcNow.AddSeconds(1),
+                    },
+                    out _);
+                _writer.InsertReferencesInAtomicFileScope(
+                    [],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                updateTransaction.Commit();
+            }
+            Assert.True(_writer.DeleteFileByPath("src/deferred-stale.py"));
+            deferredRefresh.Complete(CancellationToken.None);
+
+            Assert.NotNull(refreshedFileIds);
+            Assert.True(
+                new[] { zeroReferenceFileId, staleFileId }
+                    .ToHashSet()
+                    .SetEquals(refreshedFileIds!));
+            AssertAggregateAndRawReferenceCounts(zeroReferenceFileId, expected: 0);
+            using var stale = _db.Connection.CreateCommand();
+            stale.CommandText = "SELECT COUNT(*) FROM files WHERE id = @file_id";
+            stale.Parameters.AddWithValue("@file_id", staleFileId);
+            Assert.Equal(0L, (long)stale.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.DeferredHotspotDirtyFilesForTesting = previousDirtyHook;
+        }
+    }
+
+    private static CodeIndex.Models.ReferenceRecord BuildDeferredReference(long fileId, string symbolName)
+        => new()
+        {
+            FileId = fileId,
+            SymbolName = symbolName,
+            ReferenceKind = "call",
+            Line = 1,
+            Column = 1,
+            Context = symbolName + "()",
+        };
 
     private void AssertAggregateAndRawReferenceCounts(long fileId, long expected)
     {

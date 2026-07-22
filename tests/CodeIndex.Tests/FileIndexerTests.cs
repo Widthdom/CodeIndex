@@ -247,6 +247,172 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_DefaultCaseProbeSharesOneEntrySnapshotPerDirectory()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-entry-snapshot");
+        var tempDir = project.Root;
+        var childDir = Directory.CreateDirectory(Path.Combine(tempDir, "src")).FullName;
+        TestProjectHelper.WriteTextFile(tempDir, "root.cs", "class RootSnapshotFixture { }\n");
+        TestProjectHelper.WriteTextFile(tempDir, "src/child.cs", "class ChildSnapshotFixture { }\n");
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        IEnumerable<string> EnumerateEntries(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            enumerationCounts[fullPath] = enumerationCounts.GetValueOrDefault(fullPath) + 1;
+            return Directory.EnumerateFileSystemEntries(directory);
+        }
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            enumerateFileSystemEntries: EnumerateEntries).ScanFilesDetailed();
+
+        Assert.Equal(["root.cs", "src/child.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        Assert.Equal(2, enumerationCounts.Count);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(childDir)]);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DefaultCaseProbeUsesTheInjectedEntrySnapshot()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-case-entry-snapshot");
+        var tempDir = project.Root;
+        var existingVariant = TestProjectHelper.WriteTextFile(tempDir, "probeA", "probe\n");
+        var sourceFile = TestProjectHelper.WriteTextFile(tempDir, "source.cs", "class SnapshotCaseProbeFixture { }\n");
+        var snapshotSpelling = Path.Combine(tempDir, "probea");
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: true,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            enumerateFileSystemEntries: _ => [snapshotSpelling, sourceFile]).ScanFilesDetailed();
+
+        Assert.Equal(["source.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        Assert.DoesNotContain(result.Errors, error =>
+            error.Path == string.Empty
+            && error.Message.Contains("case-sensitivity differs", StringComparison.OrdinalIgnoreCase));
+        Assert.True(File.Exists(existingVariant));
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_CustomDirectoryCaseProbeRemainsAuthoritativeAndRunsOncePerDirectory()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-custom-case-probe");
+        var tempDir = project.Root;
+        var childDir = Directory.CreateDirectory(Path.Combine(tempDir, "src")).FullName;
+        TestProjectHelper.WriteTextFile(tempDir, "root.cs", "class RootCustomProbeFixture { }\n");
+        TestProjectHelper.WriteTextFile(tempDir, "src/child.cs", "class ChildCustomProbeFixture { }\n");
+        var probeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        bool? ProbeDirectory(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            probeCounts[fullPath] = probeCounts.GetValueOrDefault(fullPath) + 1;
+            return false;
+        }
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: ProbeDirectory).ScanFilesDetailed();
+
+        Assert.Equal(["root.cs", "src/child.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        Assert.Equal(2, probeCounts.Count);
+        Assert.Equal(1, probeCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, probeCounts[Path.GetFullPath(childDir)]);
+        Assert.DoesNotContain(result.Errors, error =>
+            error.Message.Contains("case-sensitivity differs", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_EntrySnapshotEnumerationFailureReportsOneErrorWithoutCaseWarning()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-entry-snapshot-failure");
+        var tempDir = project.Root;
+        var blockedDir = Directory.CreateDirectory(Path.Combine(tempDir, "blocked")).FullName;
+        TestProjectHelper.WriteTextFile(tempDir, "root.cs", "class SnapshotFailureFixture { }\n");
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var probeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        IEnumerable<string> EnumerateEntries(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            enumerationCounts[fullPath] = enumerationCounts.GetValueOrDefault(fullPath) + 1;
+            if (fullPath == Path.GetFullPath(blockedDir))
+                throw new UnauthorizedAccessException("blocked snapshot");
+            return Directory.EnumerateFileSystemEntries(directory);
+        }
+
+        bool? ProbeDirectory(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            probeCounts[fullPath] = probeCounts.GetValueOrDefault(fullPath) + 1;
+            return false;
+        }
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: ProbeDirectory,
+            enumerateFileSystemEntries: EnumerateEntries).ScanFilesDetailed();
+
+        Assert.Equal(["root.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        var error = Assert.Single(result.Errors);
+        Assert.Equal("blocked", error.Path);
+        Assert.Equal("Could not scan directory due to permissions.", error.Message);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(blockedDir)]);
+        Assert.Equal(1, probeCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, probeCounts[Path.GetFullPath(blockedDir)]);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DefaultCaseProbeEnumerationFailureReportsOneErrorWithoutCaseWarning()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-default-entry-snapshot-failure");
+        var tempDir = project.Root;
+        var blockedDir = Directory.CreateDirectory(Path.Combine(tempDir, "blocked")).FullName;
+        TestProjectHelper.WriteTextFile(tempDir, "root.cs", "class DefaultSnapshotFailureFixture { }\n");
+        var rootIgnoreCase = CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(tempDir) ?? false;
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        IEnumerable<string> EnumerateEntries(string directory)
+        {
+            var fullPath = Path.GetFullPath(directory);
+            enumerationCounts[fullPath] = enumerationCounts.GetValueOrDefault(fullPath) + 1;
+            if (fullPath == Path.GetFullPath(blockedDir))
+                throw new UnauthorizedAccessException("blocked default snapshot");
+            return Directory.EnumerateFileSystemEntries(directory);
+        }
+
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: rootIgnoreCase,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            enumerateFileSystemEntries: EnumerateEntries).ScanFilesDetailed();
+
+        Assert.Equal(["root.cs"], ToSortedRelativePaths(tempDir, result.Files));
+        var error = Assert.Single(result.Errors);
+        Assert.Equal("blocked", error.Path);
+        Assert.Equal("Could not scan directory due to permissions.", error.Message);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(tempDir)]);
+        Assert.Equal(1, enumerationCounts[Path.GetFullPath(blockedDir)]);
+    }
+
+    [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_RemovesProbeAfterSuccess_Issue3689()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx-write-probe-success");
@@ -1229,32 +1395,247 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void GetProjectMarkerFingerprint_UsesJoinedSortedMarkerPaths()
+    public void GetProjectMarkerFingerprintResults_UsesKnownHashesAndSingleLanguageApiDelegates()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_exact");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
         File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Library.vbproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Tools.fsproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Directory.Build.targets"), "<Project />");
 
         var indexer = new FileIndexer(tempDir);
-        var expectedPayload = "App.csproj\nDirectory.Build.props";
-        var expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(expectedPayload))).ToLowerInvariant();
+        var results = indexer.GetProjectMarkerFingerprintResults();
 
-        Assert.Equal(expected, indexer.GetProjectMarkerFingerprint("msbuild"));
+        Assert.Equal(FileIndexer.GetHotspotFamilyMarkerLanguages(), results.Keys);
+        Assert.Equal("2e18211a956f0514a6ed2c7e5ba4f90b99c9910b37932c5c4f05faab42d56c15", results["csharp"].Fingerprint);
+        Assert.Equal("5468decb0f22c9efc117ce5fd6907feb3c15bf9255a644995977ee214d36c95f", results["vb"].Fingerprint);
+        Assert.Equal("43fd0eb67433addec02c0f48e376d69b7891d7223cdc60b0da45bc35bbb8175e", results["fsharp"].Fingerprint);
+        Assert.Equal("88dbe811de43e74ce7605fe7c9362d171b75e2727c3fb72ca2ca88875444e5bd", results["msbuild"].Fingerprint);
+        foreach (var language in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            Assert.True(results[language].IsComplete);
+            Assert.Empty(results[language].Warnings);
+            Assert.Equal(results[language].Fingerprint, indexer.GetProjectMarkerFingerprint(language));
+        }
     }
 
     [Fact]
-    public void GetProjectMarkerFingerprint_CancelledToken_ThrowsBeforeTraversal()
+    public void GetProjectMarkerFingerprintResults_EnumeratesEachDirectoryOnceForAllLanguages()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_count");
+        var tempDir = project.Root;
+        Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "tests"));
+        File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        try
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = directory =>
+            {
+                var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(tempDir, directory));
+                enumerationCounts.TryGetValue(relativePath, out var count);
+                enumerationCounts[relativePath] = count + 1;
+                return Directory.EnumerateDirectories(directory);
+            };
+
+            var results = new FileIndexer(tempDir, ignoreCase: false).GetProjectMarkerFingerprintResults();
+
+            Assert.Equal(4, results.Count);
+            Assert.Equal(3, enumerationCounts.Count);
+            Assert.All(enumerationCounts.Values, count => Assert.Equal(1, count));
+            Assert.Contains(".", enumerationCounts.Keys);
+            Assert.Contains("src", enumerationCounts.Keys);
+            Assert.Contains("tests", enumerationCounts.Keys);
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_LanguageBudgetsTruncateIndependently()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_budgets");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Extra.csproj"), "<Project />");
+        var nestedDir = Path.Combine(tempDir, "nested");
+        Directory.CreateDirectory(nestedDir);
+        File.WriteAllText(Path.Combine(nestedDir, "Library.vbproj"), "<Project />");
+        File.WriteAllText(Path.Combine(nestedDir, "Tools.fsproj"), "<Project />");
+        var budgets = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintBudget>(StringComparer.Ordinal)
+        {
+            ["csharp"] = new(MaxDirectories: 100, MaxMarkerFiles: 1),
+            ["vb"] = new(MaxDirectories: 1, MaxMarkerFiles: 100),
+            ["fsharp"] = new(MaxDirectories: 100, MaxMarkerFiles: 100),
+            ["msbuild"] = new(MaxDirectories: 100, MaxMarkerFiles: 100),
+        };
+
+        var indexer = new FileIndexer(tempDir);
+        var results = indexer.GetProjectMarkerFingerprintResultsForTesting(budgets);
+
+        Assert.False(results["csharp"].IsComplete);
+        Assert.Contains(results["csharp"].Warnings, warning =>
+            warning.Message.Contains("marker file budget 1", StringComparison.Ordinal));
+        Assert.False(results["vb"].IsComplete);
+        Assert.Contains(results["vb"].Warnings, warning =>
+            warning.Message.Contains("directory budget 1", StringComparison.Ordinal));
+        Assert.True(results["fsharp"].IsComplete);
+        Assert.Empty(results["fsharp"].Warnings);
+        Assert.True(results["msbuild"].IsComplete);
+        Assert.Empty(results["msbuild"].Warnings);
+        Assert.Equal(indexer.GetProjectMarkerFingerprint("fsharp"), results["fsharp"].Fingerprint);
+        Assert.Equal(indexer.GetProjectMarkerFingerprint("msbuild"), results["msbuild"].Fingerprint);
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_PreservesPerLanguageWarningOrder()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_warning_order");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[z-a].tmp\n");
+        Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+        var budgets = FileIndexer.GetHotspotFamilyMarkerLanguages().ToDictionary(
+            language => language,
+            _ => new FileIndexer.ProjectMarkerFingerprintBudget(MaxDirectories: 1, MaxMarkerFiles: 100),
+            StringComparer.Ordinal);
+
+        var results = new FileIndexer(tempDir).GetProjectMarkerFingerprintResultsForTesting(budgets);
+
+        foreach (var result in results.Values)
+        {
+            Assert.False(result.IsComplete);
+            Assert.Collection(
+                result.Warnings,
+                warning => Assert.Contains("Invalid ignore rule skipped", warning.Message, StringComparison.Ordinal),
+                warning => Assert.Contains("directory budget 1", warning.Message, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_HonorIgnoreNestedRepositoryAndSubmoduleBoundaries()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_boundaries");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "ignored/\n",
+                [".gitmodules"] = "[submodule \"lib\"]\n\tpath = modules/lib\n\turl = https://example.invalid/lib.git\n",
+                ["App.csproj"] = "<Project />",
+                ["Directory.Build.props"] = "<Project />",
+                ["ignored/Ignored.csproj"] = "<Project />",
+                ["nested/.git/HEAD"] = "ref: refs/heads/main\n",
+                ["nested/Nested.vbproj"] = "<Project />",
+                ["modules/lib/.git"] = "gitdir: ../../.git/modules/lib\n",
+                ["modules/lib/Submodule.fsproj"] = "<Project />",
+            });
+
+        var results = new FileIndexer(tempDir).GetProjectMarkerFingerprintResults();
+
+        Assert.Equal(ExpectedProjectMarkerFingerprint("App.csproj"), results["csharp"].Fingerprint);
+        Assert.Equal(ExpectedProjectMarkerFingerprint(), results["vb"].Fingerprint);
+        Assert.Equal(ExpectedProjectMarkerFingerprint("modules/lib/Submodule.fsproj"), results["fsharp"].Fingerprint);
+        Assert.Equal(
+            ExpectedProjectMarkerFingerprint("App.csproj", "Directory.Build.props", "modules/lib/Submodule.fsproj"),
+            results["msbuild"].Fingerprint);
+        Assert.All(results.Values, result => Assert.True(result.IsComplete));
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_PreservesPlatformPatternCasing()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_casing");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "Upper.CSPROJ"), "<Project />");
+        var expectedMarkerPaths = FileSystemTraversalPolicy
+            .EnumerateFiles(tempDir, "*.csproj")
+            .Select(path => Path.GetFileName(path)!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var results = new FileIndexer(tempDir).GetProjectMarkerFingerprintResults();
+        var expectedFingerprint = ExpectedProjectMarkerFingerprint(expectedMarkerPaths);
+
+        Assert.Equal(expectedFingerprint, results["csharp"].Fingerprint);
+        Assert.Equal(expectedFingerprint, results["msbuild"].Fingerprint);
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_CancelledToken_ThrowsBeforeTraversal()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_cancel");
         var tempDir = project.Root;
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
-        var indexer = new FileIndexer(tempDir);
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        var enumerationCount = 0;
+        try
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = directory =>
+            {
+                enumerationCount++;
+                return Directory.EnumerateDirectories(directory);
+            };
 
-        Assert.Throws<OperationCanceledException>(() =>
-            indexer.GetProjectMarkerFingerprint("msbuild", cancellation.Token));
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Throws<OperationCanceledException>(() =>
+                indexer.GetProjectMarkerFingerprintResults(cancellation.Token));
+            Assert.Equal(0, enumerationCount);
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprintResults_CancellationDuringSharedTraversal_Propagates()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_cancel_mid_walk");
+        var tempDir = project.Root;
+        var childDirectory = Path.Combine(tempDir, "src");
+        Directory.CreateDirectory(childDirectory);
+        using var cancellation = new CancellationTokenSource();
+
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        var enumerationCount = 0;
+        try
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => EnumerateAndCancel();
+            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+
+            Assert.Throws<OperationCanceledException>(() =>
+                indexer.GetProjectMarkerFingerprintResults(cancellation.Token));
+            Assert.Equal(1, enumerationCount);
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+        }
+
+        IEnumerable<string> EnumerateAndCancel()
+        {
+            enumerationCount++;
+            cancellation.Cancel();
+            yield return childDirectory;
+        }
+    }
+
+    private static string ExpectedProjectMarkerFingerprint(params string[] markerPaths)
+    {
+        Array.Sort(markerPaths, StringComparer.Ordinal);
+        return Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', markerPaths))))
+            .ToLowerInvariant();
     }
 
     [Fact]
@@ -1308,7 +1689,7 @@ public partial class FileIndexerTests
 
     [Theory]
     [MemberData(nameof(ProjectMarkerTraversalFailures))]
-    public void GetProjectMarkerFingerprint_TraversalFailureReportsWarning_Issue3473(Exception exception)
+    public void GetProjectMarkerFingerprintResults_TraversalFailureReportsWarningForEveryLanguage_Issue3473(Exception exception)
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_warning");
         var tempDir = project.Root;
@@ -1318,13 +1699,17 @@ public partial class FileIndexerTests
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => throw exception;
             var indexer = new FileIndexer(tempDir, ignoreCase: false);
 
-            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 10, maxMarkerFiles: 100);
+            var results = indexer.GetProjectMarkerFingerprintResults();
 
-            Assert.False(result.IsComplete);
-            var warning = Assert.Single(result.Warnings);
-            Assert.Equal(".", warning.Path);
-            Assert.Contains("Project marker discovery skipped this subtree", warning.Message, StringComparison.Ordinal);
-            Assert.Contains(exception.GetType().Name, warning.Message, StringComparison.Ordinal);
+            Assert.Equal(4, results.Count);
+            foreach (var result in results.Values)
+            {
+                Assert.False(result.IsComplete);
+                var warning = Assert.Single(result.Warnings);
+                Assert.Equal(".", warning.Path);
+                Assert.Contains("Project marker discovery skipped this subtree", warning.Message, StringComparison.Ordinal);
+                Assert.Contains(exception.GetType().Name, warning.Message, StringComparison.Ordinal);
+            }
         }
         finally
         {
@@ -1459,6 +1844,328 @@ public partial class FileIndexerTests
         Assert.Contains("File too large", ex.Message);
         Assert.Contains("--max-file-bytes", ex.Message);
         Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
+    }
+
+    [Theory]
+    [InlineData("raw-negative", false, false)]
+    [InlineData("semantic-negative", true, false)]
+    [InlineData("contract", true, true)]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_ProbeShapesUseOneAuthorizedBoundedSnapshot(
+        string shape,
+        bool expectsRawCandidate,
+        bool expectsSemanticContract)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_snapshot");
+        var filler = new string('x', 128 * 1024);
+        var source = shape switch
+        {
+            "raw-negative" => $"public class C {{ static int M() => 0; {filler} }}",
+            "semantic-negative" => $"public class C {{ const string S = \"interface I {{ static abstract int M(); }}\"; {filler} }}",
+            "contract" => $"public interface I {{ static abstract int M(); {filler} }}",
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+        var bytes = Encoding.UTF8.GetBytes(source);
+        var path = TestProjectHelper.WriteBinaryFile(project.Root, "Fixture.cs", bytes);
+        var openCount = 0;
+        var authorizationCount = 0;
+        CountingCSharpPrepassFileStream? openedStream = null;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (string.Equals(candidate, path, StringComparison.Ordinal))
+                    authorizationCount++;
+            },
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                openedStream = new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 4 * 1024);
+                return openedStream;
+            });
+
+        var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
+
+        Assert.Equal(1, openCount);
+        Assert.Equal(1, authorizationCount);
+        Assert.NotNull(openedStream);
+        Assert.Equal(expectsRawCandidate, candidateContent is not null);
+        Assert.Equal(
+            expectsSemanticContract,
+            candidateContent is not null
+            && CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent));
+        if (expectsRawCandidate)
+        {
+            Assert.Equal(1, openedStream.RewindCount);
+            Assert.InRange(openedStream.RawProbeBytes, 1, bytes.Length - 1);
+            Assert.Equal(bytes.Length + openedStream.RawProbeBytes, openedStream.BytesRead);
+        }
+        else
+        {
+            Assert.Equal(0, openedStream.RewindCount);
+            Assert.Equal(bytes.Length, openedStream.BytesRead);
+        }
+    }
+
+    [Theory]
+    [InlineData("utf8")]
+    [InlineData("utf8-bom")]
+    [InlineData("utf16-le")]
+    [InlineData("utf16-be")]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_ContractEncodingsPreserveSemanticProbe(string encodingName)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_encoding");
+        const string source = "public interface I { static abstract int M(); }\n";
+        Encoding encoding = encodingName switch
+        {
+            "utf8" => new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            "utf8-bom" => new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+            "utf16-le" => new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
+            "utf16-be" => new UnicodeEncoding(bigEndian: true, byteOrderMark: true),
+            _ => throw new ArgumentOutOfRangeException(nameof(encodingName), encodingName, null),
+        };
+        var bytes = encoding.GetPreamble().Concat(encoding.GetBytes(source)).ToArray();
+        var path = TestProjectHelper.WriteBinaryFile(project.Root, "Fixture.cs", bytes);
+        var openCount = 0;
+        var authorizationCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (string.Equals(candidate, path, StringComparison.Ordinal))
+                    authorizationCount++;
+            },
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 7);
+            });
+
+        var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
+
+        Assert.Equal(1, openCount);
+        Assert.Equal(1, authorizationCount);
+        Assert.Equal(source, candidateContent);
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_IndexBlockingNullPreservesBinaryRejection()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_null");
+        var bytes = Encoding.UTF8.GetBytes("public interface I { static abstract int M(); }\0binary");
+        var path = TestProjectHelper.WriteBinaryFile(project.Root, "Fixture.cs", bytes);
+        var openCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 8);
+            });
+
+        var ex = Assert.Throws<FileIndexer.BinaryFileSkippedException>(
+            () => indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs"));
+
+        Assert.Equal(1, openCount);
+        Assert.Equal(Array.IndexOf(bytes, (byte)0), ex.NullByteOffset);
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_GrowthBeyondLimitIsRejectedOnSameHandle()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_growth");
+        const string source = "interface I{static abstract int M();}";
+        var path = TestProjectHelper.WriteTextFile(project.Root, "Fixture.cs", source);
+        var initialBytes = new FileInfo(path).Length;
+        var openCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: initialBytes + 8,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 64,
+                    afterFirstRead: () => File.AppendAllText(path, new string('x', 32)));
+            });
+
+        var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(
+            () => indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs"));
+
+        Assert.Equal(1, openCount);
+        Assert.Contains("grew during read", ex.Message);
+        Assert.Contains("--max-file-bytes", ex.Message);
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_TruncationReauthorizesAndReopensSafely()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_truncation");
+        const string replacementSource = "interface I{static abstract int M();}";
+        var originalSource = replacementSource + new string('x', 32 * 1024);
+        var path = TestProjectHelper.WriteTextFile(project.Root, "Fixture.cs", originalSource);
+        var originalModifiedUtc = File.GetLastWriteTimeUtc(path);
+        var replacementBytes = Encoding.UTF8.GetBytes(replacementSource);
+        var openCount = 0;
+        var authorizationCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (string.Equals(candidate, path, StringComparison.Ordinal))
+                    authorizationCount++;
+            },
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                Action? afterFirstRead = null;
+                if (openCount == 1)
+                {
+                    afterFirstRead = () =>
+                    {
+                        using (var replacement = new FileStream(
+                                   path,
+                                   FileMode.Create,
+                                   FileAccess.Write,
+                                   FileShare.ReadWrite | FileShare.Delete))
+                        {
+                            replacement.Write(replacementBytes);
+                        }
+                        File.SetLastWriteTimeUtc(path, originalModifiedUtc);
+                    };
+                }
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 4 * 1024,
+                    afterFirstRead);
+            });
+
+        var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
+
+        Assert.Equal(2, openCount);
+        Assert.Equal(2, authorizationCount);
+        Assert.Equal(replacementSource, candidateContent);
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_AtomicReplacementReauthorizesAndReadsNewFile()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_atomic_replace");
+        var originalSource = "class C { static int M() => 0; }" + new string('x', 32 * 1024);
+        const string replacementSource = "interface I { static abstract int M(); }";
+        var path = TestProjectHelper.WriteTextFile(project.Root, "Fixture.cs", originalSource);
+        var replacementPath = TestProjectHelper.WriteTextFile(project.Root, "Replacement.cs", replacementSource);
+        File.SetLastWriteTimeUtc(replacementPath, DateTime.UtcNow.AddSeconds(5));
+        var openCount = 0;
+        var authorizationCount = 0;
+        var indexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (string.Equals(candidate, path, StringComparison.Ordinal))
+                    authorizationCount++;
+            },
+            openReadForIndexContent: candidate =>
+            {
+                openCount++;
+                var stream = new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 4 * 1024);
+                if (openCount == 1)
+                    File.Replace(replacementPath, path, destinationBackupFileName: null);
+                return stream;
+            });
+
+        var candidateContent = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs");
+
+        Assert.Equal(2, openCount);
+        Assert.Equal(2, authorizationCount);
+        Assert.Equal(replacementSource, candidateContent);
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
+    }
+
+    [Fact]
+    public void LoadCSharpStaticInterfaceCandidateContentForPrepass_CancellationAndAccessFailuresDoNotReopen()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_csharp_prepass_failures");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "Fixture.cs",
+            "interface I { static int M(); }" + new string('x', 16 * 1024));
+        using var cancellation = new CancellationTokenSource();
+        var cancellationOpens = 0;
+        var cancellingIndexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: candidate =>
+            {
+                cancellationOpens++;
+                return new CountingCSharpPrepassFileStream(
+                    candidate,
+                    maxReadBytes: 64,
+                    afterFirstRead: cancellation.Cancel);
+            });
+
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            cancellingIndexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(
+                path,
+                "Fixture.cs",
+                cancellation.Token));
+        Assert.Equal(1, cancellationOpens);
+
+        var authorizationCount = 0;
+        var authorizationOpens = 0;
+        var rejectingIndexer = new FileIndexer(
+            project.Root,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: FileIndexer.DefaultMaxFileSizeBytes,
+            directoryIgnoreCaseProbe: null,
+            pathAccessValidator: candidate =>
+            {
+                if (!string.Equals(candidate, path, StringComparison.Ordinal))
+                    return;
+                authorizationCount++;
+                throw new UnauthorizedAccessException("fixture rejection");
+            },
+            openReadForIndexContent: candidate =>
+            {
+                authorizationOpens++;
+                return new CountingCSharpPrepassFileStream(candidate, maxReadBytes: 64);
+            });
+
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            rejectingIndexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(path, "Fixture.cs"));
+        Assert.Equal(1, authorizationCount);
+        Assert.Equal(0, authorizationOpens);
     }
 
     [Fact]
@@ -3384,6 +4091,755 @@ public partial class FileIndexerTests
         Assert.Contains("fresh", result.CheckpointedDirectories);
         Assert.DoesNotContain("cached", result.ListedDirectories);
         Assert.DoesNotContain("cached", result.FullyScannedDirectories);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DirectoryListingSnapshotsAreOptInAndExcludeSkippedDirectories()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.cs"] = "class Program { }\n",
+                ["src/Service.cs"] = "class Service { }\n",
+                ["node_modules/pkg/Ignored.cs"] = "class Ignored { }\n",
+            });
+
+        var indexer = new FileIndexer(tempDir);
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+        var capturedDirectories = capturedResult.InputSnapshot.DirectoryListings
+            .Select(snapshot => snapshot.Path)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains(Path.GetFullPath(tempDir), capturedDirectories);
+        Assert.Contains(Path.GetFullPath(Path.Combine(tempDir, "src")), capturedDirectories);
+        Assert.DoesNotContain(Path.GetFullPath(Path.Combine(tempDir, "node_modules")), capturedDirectories);
+        Assert.DoesNotContain(Path.GetFullPath(Path.Combine(tempDir, "node_modules", "pkg")), capturedDirectories);
+        Assert.DoesNotContain(
+            capturedResult.InputSnapshot.ConfigurationInputs,
+            input => input.Path == Path.Combine(tempDir, ".gitignore")
+                || input.Path == Path.Combine(tempDir, ".cdidxignore"));
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_CapturesEachDirectoryListingWithOneBaselineProbe()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.cs"] = "public sealed class Program { }\n",
+                ["src/Service.cs"] = "public sealed class Service { }\n",
+            });
+        var probeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        FileIndexer.DirectoryListingSnapshotProbeForTesting = path =>
+        {
+            var normalizedPath = Path.GetFullPath(path);
+            probeCounts.TryGetValue(normalizedPath, out var count);
+            probeCounts[normalizedPath] = count + 1;
+        };
+        try
+        {
+            var indexer = new FileIndexer(tempDir);
+            var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+            Assert.False(capturedResult.ScanResult.HadErrors);
+            Assert.All(
+                capturedResult.InputSnapshot.DirectoryListings,
+                snapshot => Assert.Equal(1, probeCounts[snapshot.Path]));
+
+            Assert.True(indexer.TryValidateScanInputSnapshot(
+                capturedResult.InputSnapshot,
+                out _));
+            Assert.All(
+                capturedResult.InputSnapshot.DirectoryListings,
+                snapshot => Assert.Equal(2, probeCounts[snapshot.Path]));
+        }
+        finally
+        {
+            FileIndexer.DirectoryListingSnapshotProbeForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_InPlaceIgnoreChangeWithStableDirectoryMtimeIsNotAuthoritative()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var ignoredPath = Path.Combine(tempDir, "IHidden.cs");
+        var ignorePath = Path.Combine(tempDir, ".gitignore");
+        File.WriteAllText(ignoredPath, "public interface IHidden<T> { static abstract T Create(); }\n");
+        File.WriteAllText(ignorePath, "IHidden.cs\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        var changed = 0;
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            enumerateFileSystemEntries: directory =>
+            {
+                var normalizedDirectory = Path.GetFullPath(LongPath.RemoveWindowsPrefix(directory));
+                if (string.Equals(normalizedDirectory, tempDir, StringComparison.Ordinal)
+                    && Interlocked.Exchange(ref changed, 1) == 0)
+                {
+                    File.WriteAllText(ignorePath, "XHidden.cs\n");
+                    Directory.SetLastWriteTimeUtc(tempDir, rootModifiedUtc);
+                }
+
+                return Directory.EnumerateFileSystemEntries(normalizedDirectory).ToArray();
+            });
+
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+        Assert.Equal(1, changed);
+        Assert.Equal(rootModifiedUtc, Directory.GetLastWriteTimeUtc(tempDir));
+        Assert.False(capturedResult.ScanResult.HadErrors);
+        Assert.True(capturedResult.InputSnapshot.IsComplete);
+        Assert.DoesNotContain(ignoredPath, capturedResult.ScanResult.Files);
+        Assert.False(indexer.TryValidateScanInputSnapshot(
+            capturedResult.InputSnapshot,
+            out var changedPath));
+        Assert.Equal(ignorePath, changedPath);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_PresentIgnoreDisappearingBeforeOpenIsNotAuthoritative()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var ignorePath = Path.Combine(tempDir, ".gitignore");
+        File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
+        File.WriteAllText(ignorePath, "ignored.cs\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        var failedOpen = 0;
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: path =>
+            {
+                var normalizedPath = Path.GetFullPath(LongPath.RemoveWindowsPrefix(path));
+                if (string.Equals(normalizedPath, ignorePath, StringComparison.Ordinal)
+                    && Interlocked.Exchange(ref failedOpen, 1) == 0)
+                {
+                    File.Delete(ignorePath);
+                    Directory.SetLastWriteTimeUtc(tempDir, rootModifiedUtc.AddMinutes(1));
+                    throw new FileNotFoundException("simulated ignore open race", path);
+                }
+
+                return new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+            });
+
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+        Assert.Equal(1, failedOpen);
+        Assert.False(capturedResult.ScanResult.HadErrors);
+        Assert.True(capturedResult.InputSnapshot.IsComplete);
+        Assert.False(indexer.TryValidateScanInputSnapshot(
+            capturedResult.InputSnapshot,
+            out var changedPath));
+        Assert.Equal(tempDir, changedPath);
+    }
+
+    [Fact]
+    public void ScanInputSnapshot_DifferentLengthConfigurationAbaAfterMaterializationIsNotAuthoritative()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var ignorePath = Path.Combine(tempDir, ".gitignore");
+        const string originalIgnore = "Program.cs\n";
+        File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
+        File.WriteAllText(ignorePath, originalIgnore);
+        var ignoreModifiedUtc = File.GetLastWriteTimeUtc(ignorePath);
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        var indexer = new FileIndexer(tempDir);
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+        Assert.False(capturedResult.ScanResult.HadErrors);
+
+        File.WriteAllText(ignorePath, "Program.cs\nGenerated.cs\n");
+        _ = indexer.EvaluatePathFilter(Path.Combine(tempDir, "Other.cs"));
+        File.WriteAllText(ignorePath, originalIgnore);
+        File.SetLastWriteTimeUtc(ignorePath, ignoreModifiedUtc);
+        Directory.SetLastWriteTimeUtc(tempDir, rootModifiedUtc);
+
+        Assert.False(indexer.TryValidateScanInputSnapshot(
+            capturedResult.InputSnapshot,
+            out var changedPath));
+        Assert.Equal(ignorePath, changedPath);
+    }
+
+    [Fact]
+    public void ScanInputSnapshot_MissingConfigurationReplacedByDirectoryIsNotAbsent()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var gitmodulesPath = Path.Combine(tempDir, ".gitmodules");
+        File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        var indexer = new FileIndexer(tempDir);
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+        Directory.CreateDirectory(gitmodulesPath);
+        Directory.SetLastWriteTimeUtc(tempDir, rootModifiedUtc);
+
+        Assert.False(indexer.TryValidateScanInputSnapshot(
+            capturedResult.InputSnapshot,
+            out var changedPath));
+        Assert.Equal(gitmodulesPath, changedPath);
+    }
+
+    [Fact]
+    public void ScanInputSnapshot_MissingConfigurationReplacedByDanglingLinkIsNotAbsent()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var gitmodulesPath = Path.Combine(tempDir, ".gitmodules");
+        File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        var indexer = new FileIndexer(tempDir);
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+        try
+        {
+            File.CreateSymbolicLink(gitmodulesPath, Path.Combine(tempDir, "missing-gitmodules-target"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+        Directory.SetLastWriteTimeUtc(tempDir, rootModifiedUtc);
+
+        Assert.False(indexer.TryValidateScanInputSnapshot(
+            capturedResult.InputSnapshot,
+            out var changedPath));
+        Assert.Equal(gitmodulesPath, changedPath);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_NonCapturingScanCallDoesNotObserveOrHashConfigurationInputs()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var ignorePath = Path.Combine(tempDir, ".gitignore");
+        File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
+        File.WriteAllText(ignorePath, "Generated.cs\n");
+        var indexer = new FileIndexer(tempDir);
+        var generationBefore = indexer.ConfigurationInputSnapshotGenerationForTesting;
+        var hashesBefore = indexer.ConfigurationInputContentHashCountForTesting;
+
+        var ordinaryResult = indexer.ScanFilesDetailed();
+
+        Assert.False(ordinaryResult.HadErrors);
+        Assert.Equal(generationBefore, indexer.ConfigurationInputSnapshotGenerationForTesting);
+        Assert.Equal(hashesBefore, indexer.ConfigurationInputContentHashCountForTesting);
+
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+        Assert.False(capturedResult.ScanResult.HadErrors);
+        Assert.True(indexer.ConfigurationInputSnapshotGenerationForTesting > generationBefore);
+        Assert.True(indexer.ConfigurationInputContentHashCountForTesting > hashesBefore);
+        Assert.Contains(
+            capturedResult.InputSnapshot.ConfigurationInputs,
+            input => input.Path == ignorePath && input.ContentHash is { Length: > 0 });
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_PatternDirectoryProbeCountIsBoundedByUniqueDirectories()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        for (var index = 0; index < 100; index++)
+            File.WriteAllText(Path.Combine(tempDir, $"sample-{index}.__cdidx_probe_unmapped_4711"), "content\n");
+
+        var indexer = new FileIndexer(tempDir);
+        var probesBefore = indexer.PatternConfigurationDirectoryProbeCountForTesting;
+
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+        Assert.False(capturedResult.ScanResult.HadErrors);
+        var scanProbeCount = indexer.PatternConfigurationDirectoryProbeCountForTesting - probesBefore;
+        Assert.InRange(scanProbeCount, 1, 2);
+    }
+
+    [Theory]
+    [InlineData("enumerator_creation")]
+    [InlineData("enumerator_move_next")]
+    [InlineData("safety_inspection")]
+    public void ScanFilesDetailed_PatternDirectoryDiscoveryFailureMakesSnapshotIncomplete(string failureMode)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var cdidxDirectory = Path.Combine(tempDir, ".cdidx");
+        var patternDirectory = Path.Combine(cdidxDirectory, "patterns");
+        var patternPath = Path.Combine(patternDirectory, "custom.yaml");
+        Directory.CreateDirectory(patternDirectory);
+        File.WriteAllText(
+            patternPath,
+            "language: custom\nextensions:\n  - extension: .custom\npatterns:\n  - kind: class\n    regex: ^class (?<name>[A-Za-z_]+)\n");
+        File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
+
+        ExtractorPluginRegistry.ResetForTests();
+        ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests =
+            Path.Combine(tempDir, "missing-user-patterns");
+        var expectedIncompletePath = patternDirectory;
+        switch (failureMode)
+        {
+            case "enumerator_creation":
+                ExtractorPluginRegistry.EnumeratePatternFilesForTesting = (_, _) =>
+                    throw new IOException("simulated pattern enumerator creation failure");
+                break;
+            case "enumerator_move_next":
+                ExtractorPluginRegistry.EnumeratePatternFilesForTesting = (_, searchPattern) =>
+                    searchPattern == "*.yaml"
+                        ? EnumeratePatternFileThenFail(patternPath)
+                        : Array.Empty<string>();
+                break;
+            case "safety_inspection":
+                expectedIncompletePath = cdidxDirectory;
+                ExtractorPluginRegistry.InspectPatternDirectoryForTesting = _ =>
+                    throw new IOException("simulated pattern directory inspection failure");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(failureMode), failureMode, null);
+        }
+
+        try
+        {
+            var capturedResult = new FileIndexer(tempDir)
+                .ScanFilesDetailedWithDirectoryListingSnapshots();
+
+            Assert.True(capturedResult.ScanResult.HadErrors);
+            Assert.False(capturedResult.InputSnapshot.IsComplete);
+            Assert.Equal(expectedIncompletePath, capturedResult.InputSnapshot.IncompletePath);
+        }
+        finally
+        {
+            ExtractorPluginRegistry.ResetForTests();
+        }
+
+        static IEnumerable<string> EnumeratePatternFileThenFail(string path)
+        {
+            yield return path;
+            throw new IOException("simulated pattern enumerator MoveNext failure");
+        }
+    }
+
+    [Fact]
+    public void ScanInputSnapshot_UserPatternDirectoryUnderSkippedProjectPathBindsMissingDirectory()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var userPatternDirectory = Path.Combine(tempDir, ".config", "cdidx", "patterns");
+        File.WriteAllText(Path.Combine(tempDir, "sample.__cdidx_user_pattern_probe"), "content\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        ExtractorPluginRegistry.ResetForTests();
+        ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests = userPatternDirectory;
+        try
+        {
+            var indexer = new FileIndexer(tempDir);
+            var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+            Assert.False(capturedResult.ScanResult.HadErrors);
+            Assert.Contains(
+                capturedResult.InputSnapshot.ConfigurationInputs,
+                input => input.Path == userPatternDirectory
+                    && input.Kind == FileIndexer.ConfigurationInputKind.MissingDirectory);
+
+            Directory.CreateDirectory(userPatternDirectory);
+            Directory.SetLastWriteTimeUtc(tempDir, rootModifiedUtc);
+
+            Assert.False(indexer.TryValidateScanInputSnapshot(
+                capturedResult.InputSnapshot,
+                out var changedPath));
+            Assert.Equal(userPatternDirectory, changedPath);
+        }
+        finally
+        {
+            ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests = null;
+            ExtractorPluginRegistry.ResetForTests();
+        }
+    }
+
+    [Fact]
+    public void ScanInputSnapshot_UserLanguageMapUnderSkippedProjectPathBindsMissingFile()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var userLanguageMapPath = Path.Combine(tempDir, ".config", "cdidx", "langmap.yaml");
+        File.WriteAllText(Path.Combine(tempDir, "sample.__cdidx_user_langmap_probe"), "content\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        LanguageMapOverrides.UserConfigPathOverrideForTesting = userLanguageMapPath;
+        try
+        {
+            var indexer = new FileIndexer(tempDir);
+            var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+            Assert.False(capturedResult.ScanResult.HadErrors);
+            Assert.Contains(
+                capturedResult.InputSnapshot.ConfigurationInputs,
+                input => input.Path == userLanguageMapPath
+                    && input.Kind == FileIndexer.ConfigurationInputKind.MissingFile);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(userLanguageMapPath)!);
+            File.WriteAllText(userLanguageMapPath, ".__cdidx_user_langmap_probe: custom\n");
+            Directory.SetLastWriteTimeUtc(tempDir, rootModifiedUtc);
+
+            Assert.False(indexer.TryValidateScanInputSnapshot(
+                capturedResult.InputSnapshot,
+                out var changedPath));
+            Assert.Equal(userLanguageMapPath, changedPath);
+        }
+        finally
+        {
+            LanguageMapOverrides.UserConfigPathOverrideForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
+    public void FileIndexer_PatternConfigSymlinkIsRejectedBySafeRegistryOpen()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var patternDirectory = Path.Combine(tempDir, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        var targetPath = Path.Combine(tempDir, "pattern-target.yaml");
+        File.WriteAllText(
+            targetPath,
+            "language: symlinkdsl\nextensions:\n  - extension: .__cdidx_symlink_pattern\npatterns:\n  - kind: class\n    regex: ^entity (?<name>\\w+)\n");
+        var linkPath = Path.Combine(patternDirectory, "symlink.yaml");
+        try
+        {
+            File.CreateSymbolicLink(linkPath, targetPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        ExtractorPluginRegistry.ResetForTests();
+        try
+        {
+            var capturedResult = new FileIndexer(tempDir)
+                .ScanFilesDetailedWithDirectoryListingSnapshots();
+
+            Assert.False(capturedResult.ScanResult.HadErrors);
+            Assert.False(ExtractorPluginRegistry.TryGetLanguageForExtension(
+                ".__cdidx_symlink_pattern",
+                tempDir,
+                out _));
+            Assert.DoesNotContain(
+                capturedResult.InputSnapshot.ConfigurationInputs,
+                input => input.Path == linkPath && input.ContentHash is { Length: > 0 });
+        }
+        finally
+        {
+            ExtractorPluginRegistry.ResetForTests();
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_NestedRepositoryMarkerRemovedAfterDecisionIsNotAuthoritative()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var nestedDirectory = Path.Combine(tempDir, "nested");
+        var markerPath = Path.Combine(nestedDirectory, ".git");
+        Directory.CreateDirectory(markerPath);
+        File.WriteAllText(Path.Combine(nestedDirectory, "Hidden.cs"), "public sealed class Hidden { }\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        var removed = 0;
+        FileIndexer.NestedRepositoryDetectedBeforeSnapshotForTesting = observedPath =>
+        {
+            if (observedPath == markerPath && Interlocked.Exchange(ref removed, 1) == 0)
+                Directory.Delete(markerPath);
+        };
+        try
+        {
+            var indexer = new FileIndexer(tempDir);
+            var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+            Assert.Equal(1, removed);
+            Assert.Equal(rootModifiedUtc, Directory.GetLastWriteTimeUtc(tempDir));
+            Assert.True(capturedResult.ScanResult.HadErrors);
+            Assert.DoesNotContain(Path.Combine(nestedDirectory, "Hidden.cs"), capturedResult.ScanResult.Files);
+            Assert.False(capturedResult.InputSnapshot.IsComplete);
+            Assert.Equal(markerPath, capturedResult.InputSnapshot.IncompletePath);
+        }
+        finally
+        {
+            FileIndexer.NestedRepositoryDetectedBeforeSnapshotForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_NestedRepositoryMarkerCreatedAfterListingBaselineIsNotAuthoritative()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var nestedDirectory = Path.Combine(tempDir, "nested");
+        var markerPath = Path.Combine(nestedDirectory, ".git");
+        Directory.CreateDirectory(nestedDirectory);
+        File.WriteAllText(Path.Combine(nestedDirectory, "Hidden.cs"), "public sealed class Hidden { }\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        var nestedModifiedUtc = Directory.GetLastWriteTimeUtc(nestedDirectory);
+        var created = 0;
+        FileIndexer.NestedRepositoryListingCapturedBeforeProbeForTesting = observedPath =>
+        {
+            if (observedPath == markerPath && Interlocked.Exchange(ref created, 1) == 0)
+            {
+                Directory.CreateDirectory(markerPath);
+                Directory.SetLastWriteTimeUtc(nestedDirectory, nestedModifiedUtc.AddMinutes(1));
+            }
+        };
+        try
+        {
+            var indexer = new FileIndexer(tempDir);
+            var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+            Assert.Equal(1, created);
+            Assert.Equal(rootModifiedUtc, Directory.GetLastWriteTimeUtc(tempDir));
+            Assert.False(capturedResult.ScanResult.HadErrors);
+            Assert.DoesNotContain(Path.Combine(nestedDirectory, "Hidden.cs"), capturedResult.ScanResult.Files);
+            Assert.True(capturedResult.InputSnapshot.IsComplete);
+            Assert.False(indexer.TryValidateScanInputSnapshot(
+                capturedResult.InputSnapshot,
+                out var changedPath));
+            Assert.Equal(nestedDirectory, changedPath);
+        }
+        finally
+        {
+            FileIndexer.NestedRepositoryListingCapturedBeforeProbeForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_NestedRepositoryDecisionCacheIsResetForEachScan()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var nestedDirectory = Path.Combine(tempDir, "nested");
+        var nestedFile = Path.Combine(nestedDirectory, "Hidden.cs");
+        Directory.CreateDirectory(nestedDirectory);
+        File.WriteAllText(nestedFile, "public sealed class Hidden { }\n");
+        var indexer = new FileIndexer(tempDir);
+
+        var firstResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+        Assert.False(firstResult.ScanResult.HadErrors);
+        Assert.Contains(nestedFile, firstResult.ScanResult.Files);
+
+        Directory.CreateDirectory(Path.Combine(nestedDirectory, ".git"));
+        var secondResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+        Assert.False(secondResult.ScanResult.HadErrors);
+        Assert.DoesNotContain(nestedFile, secondResult.ScanResult.Files);
+        Assert.Contains("nested", secondResult.ScanResult.NestedRepositories);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DirectoryListingSnapshotLimitReportsBoundedReason()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        TestProjectHelper.WriteTextFiles(
+            project.Root,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.cs"] = "public sealed class Program { }\n",
+                ["src/Service.cs"] = "public sealed class Service { }\n",
+            });
+        FileIndexer.MaxDirectoryListingSnapshotsForTesting = 1;
+        try
+        {
+            var capturedResult = new FileIndexer(project.Root)
+                .ScanFilesDetailedWithDirectoryListingSnapshots();
+
+            Assert.True(capturedResult.ScanResult.HadErrors);
+            Assert.False(capturedResult.InputSnapshot.IsComplete);
+            Assert.Contains(
+                "Directory listing snapshot count limit (1) was exceeded",
+                capturedResult.InputSnapshot.IncompleteReason,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                capturedResult.ScanResult.Errors,
+                error => error.Message.Contains(
+                    "Directory listing snapshot count limit (1) was exceeded",
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            FileIndexer.MaxDirectoryListingSnapshotsForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_ConfigurationInputSnapshotCountLimitReportsBoundedReason()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        File.WriteAllText(Path.Combine(project.Root, "Program.cs"), "public sealed class Program { }\n");
+        FileIndexer.MaxConfigurationInputSnapshotsForTesting = 1;
+        try
+        {
+            var capturedResult = new FileIndexer(project.Root)
+                .ScanFilesDetailedWithDirectoryListingSnapshots();
+
+            Assert.True(capturedResult.ScanResult.HadErrors);
+            Assert.False(capturedResult.InputSnapshot.IsComplete);
+            Assert.Contains(
+                "Configuration input snapshot count limit (1) was exceeded",
+                capturedResult.InputSnapshot.IncompleteReason,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                capturedResult.ScanResult.Errors,
+                error => error.Message.Contains(
+                    "Configuration input snapshot count limit (1) was exceeded",
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            FileIndexer.MaxConfigurationInputSnapshotsForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_ConfigurationInputSnapshotByteLimitReportsBoundedReason()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        File.WriteAllText(Path.Combine(project.Root, "Program.cs"), "public sealed class Program { }\n");
+        File.WriteAllText(Path.Combine(project.Root, ".gitignore"), "Generated.cs\n");
+        FileIndexer.MaxConfigurationInputSnapshotBytesForTesting = 1;
+        try
+        {
+            var capturedResult = new FileIndexer(project.Root)
+                .ScanFilesDetailedWithDirectoryListingSnapshots();
+
+            Assert.True(capturedResult.ScanResult.HadErrors);
+            Assert.False(capturedResult.InputSnapshot.IsComplete);
+            Assert.Contains(
+                "Configuration input snapshot byte limit (1 bytes) was exceeded",
+                capturedResult.InputSnapshot.IncompleteReason,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                capturedResult.ScanResult.Errors,
+                error => error.Message.Contains(
+                    "Configuration input snapshot byte limit (1 bytes) was exceeded",
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            FileIndexer.MaxConfigurationInputSnapshotBytesForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void ScanInputSnapshot_OversizePatternConfigShrinkingToValidIsNotAuthoritative()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var patternDirectory = Path.Combine(tempDir, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        var patternPath = Path.Combine(patternDirectory, "oversize.yaml");
+        File.WriteAllText(patternPath, new string('#', ExtractorPluginRegistry.MaxPatternConfigBytes + 1));
+        File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
+        var patternDirectoryModifiedUtc = Directory.GetLastWriteTimeUtc(patternDirectory);
+        var indexer = new FileIndexer(tempDir);
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+        Assert.False(capturedResult.ScanResult.HadErrors);
+        Assert.Contains(
+            capturedResult.InputSnapshot.ConfigurationInputs,
+            input => input.Path == patternPath
+                && input.Kind == FileIndexer.ConfigurationInputKind.RejectedOversizeFile);
+
+        File.WriteAllText(
+            patternPath,
+            "language: custom\nextensions:\n  - extension: .custom\npatterns:\n  - kind: class\n    regex: ^class (?<name>[A-Za-z_]+)\n");
+        Directory.SetLastWriteTimeUtc(patternDirectory, patternDirectoryModifiedUtc);
+
+        Assert.False(indexer.TryValidateScanInputSnapshot(
+            capturedResult.InputSnapshot,
+            out var changedPath));
+        Assert.Equal(patternPath, changedPath);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_EnumeratedPatternConfigDisappearingBeforeOpenIsNotAuthoritative()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        var patternDirectory = Path.Combine(tempDir, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        var patternPath = Path.Combine(patternDirectory, "custom.yaml");
+        File.WriteAllText(
+            patternPath,
+            "language: custom\nextensions:\n  - extension: .custom\npatterns:\n  - kind: class\n    regex: class\\s+(?&lt;name&gt;[A-Za-z_]+)\n");
+        File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
+        var patternDirectoryModifiedUtc = Directory.GetLastWriteTimeUtc(patternDirectory);
+        var failedOpen = 0;
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            openReadForIndexContent: path =>
+            {
+                var normalizedPath = Path.GetFullPath(LongPath.RemoveWindowsPrefix(path));
+                if (string.Equals(normalizedPath, patternPath, StringComparison.Ordinal)
+                    && Interlocked.Exchange(ref failedOpen, 1) == 0)
+                {
+                    File.Delete(patternPath);
+                    Directory.SetLastWriteTimeUtc(patternDirectory, patternDirectoryModifiedUtc);
+                    throw new FileNotFoundException("simulated pattern open race", path);
+                }
+
+                return new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+            },
+            bindConfigurationReadsToFileSystemIdentity: true);
+
+        var capturedResult = indexer.ScanFilesDetailedWithDirectoryListingSnapshots();
+
+        Assert.Equal(1, failedOpen);
+        Assert.Equal(patternDirectoryModifiedUtc, Directory.GetLastWriteTimeUtc(patternDirectory));
+        Assert.True(capturedResult.ScanResult.HadErrors);
+        Assert.False(capturedResult.InputSnapshot.IsComplete);
+        Assert.Equal(patternPath, capturedResult.InputSnapshot.IncompletePath);
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_SubmoduleAncestorPassthroughCapturesListingSnapshot()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = Path.GetFullPath(project.Root);
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitmodules"] = "[submodule \"foo\"]\n    path = vendor/foo\n",
+                ["vendor/foo/Library.cs"] = "public sealed class Library { }\n",
+            });
+
+        var capturedResult = new FileIndexer(tempDir)
+            .ScanFilesDetailedWithDirectoryListingSnapshots();
+        var passthroughPath = Path.Combine(tempDir, "vendor");
+
+        Assert.False(capturedResult.ScanResult.HadErrors);
+        Assert.Contains(
+            capturedResult.InputSnapshot.DirectoryListings,
+            snapshot => snapshot.Path == passthroughPath);
+        Assert.Contains(Path.Combine(tempDir, "vendor", "foo", "Library.cs"), capturedResult.ScanResult.Files);
     }
 
     [Fact]
@@ -6263,6 +7719,74 @@ public partial class FileIndexerTests
             FileIndexer.DefaultMaxFileSizeBytes,
             out var checksum));
         Assert.Equal(FileIndexer.ComputeChecksum(bytes), checksum);
+    }
+
+    private sealed class CountingCSharpPrepassFileStream : FileStream
+    {
+        private readonly int _maxReadBytes;
+        private readonly Action? _afterFirstRead;
+        private bool _firstReadObserved;
+
+        internal CountingCSharpPrepassFileStream(
+            string path,
+            int maxReadBytes,
+            Action? afterFirstRead = null)
+            : base(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete)
+        {
+            _maxReadBytes = maxReadBytes;
+            _afterFirstRead = afterFirstRead;
+        }
+
+        internal long BytesRead { get; private set; }
+        internal long RawProbeBytes { get; private set; }
+        internal int RewindCount { get; private set; }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = base.Read(buffer, offset, Math.Min(count, _maxReadBytes));
+            RecordRead(read);
+            return read;
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            var read = base.Read(buffer[..Math.Min(buffer.Length, _maxReadBytes)]);
+            RecordRead(read);
+            return read;
+        }
+
+        public override int ReadByte()
+        {
+            var value = base.ReadByte();
+            if (value >= 0)
+                BytesRead++;
+            return value;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            if (offset == 0 && origin == SeekOrigin.Begin && Position > 0)
+            {
+                if (RewindCount == 0)
+                    RawProbeBytes = BytesRead;
+                RewindCount++;
+            }
+            return base.Seek(offset, origin);
+        }
+
+        private void RecordRead(int read)
+        {
+            BytesRead += read;
+            if (read <= 0 || _firstReadObserved)
+                return;
+
+            _firstReadObserved = true;
+            _afterFirstRead?.Invoke();
+        }
     }
 
 }

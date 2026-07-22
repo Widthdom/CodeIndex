@@ -93,6 +93,59 @@ internal sealed partial class FileContentLoader(
         return NormalizeContentForPrepass(content);
     }
 
+    internal (string? Content, bool RequiresRetry) LoadCSharpStaticInterfaceCandidateContentForPrepass(
+        string absolutePath,
+        string normalizedRelativePath,
+        string relativePath,
+        bool retryOnMutation,
+        CancellationToken cancellationToken)
+    {
+        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+        cancellationToken.ThrowIfCancellationRequested();
+        var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
+        byte[]? bytes = null;
+        bool lengthChanged;
+        using (var stream = _openReadForIndexContent(absolutePath))
+        {
+            var initialLength = stream.Length;
+            if (initialLength > maxFileSizeBytes)
+                throw new FileIndexer.FileTooLargeSkippedException(
+                    normalizedRelativePath,
+                    initialLength,
+                    maxFileSizeBytes,
+                    BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
+
+            var probe = CSharpStaticInterfacePrepass.CreateRawByteContractProbe();
+            var rawCandidate = RawByteChunksMayMatch(
+                stream,
+                initialLength,
+                normalizedRelativePath,
+                probe.AppendAndCheck,
+                cancellationToken);
+            if (rawCandidate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                stream.Seek(0, SeekOrigin.Begin);
+                (bytes, _) = ReadStreamBytesWithKnownInitialLength(
+                    stream,
+                    initialLength,
+                    normalizedRelativePath,
+                    cancellationToken);
+            }
+
+            lengthChanged = stream.Length != initialLength;
+        }
+
+        var modifiedAfterRead = File.GetLastWriteTimeUtc(ioPath);
+        if (retryOnMutation && (modifiedAfterRead != modifiedBeforeRead || lengthChanged))
+            return (null, RequiresRetry: true);
+        if (bytes is null || IsGitLfsPointer(bytes))
+            return (null, RequiresRetry: false);
+
+        var (content, _, _) = DecodeIndexableContent(bytes, relativePath, inspectRawByteContent: false);
+        return (NormalizeContentForPrepass(content), RequiresRetry: false);
+    }
+
     internal static string NormalizeLineEndings(string content)
     {
         var firstCarriageReturn = content.IndexOf('\r');

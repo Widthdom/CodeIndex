@@ -21,6 +21,7 @@ public partial class FileIndexer
         var gitmodulesPath = Path.Combine(ignoreRuleRoot, ".gitmodules");
         var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
         var gitmodulesRelativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(projectRoot, gitmodulesPath));
+        RecordConfigurationFileProbe(gitmodulesPath);
         try
         {
             _pathAccessValidator?.Invoke(gitmodulesPath);
@@ -160,7 +161,7 @@ public partial class FileIndexer
             MaxGitmodulesLineChars,
             out lines,
             out failure,
-            openFile: _openReadForIndexContent);
+            openFile: OpenConfigurationFileForRead);
         skippedReason = success ? string.Empty : failure.Reason;
         return success;
     }

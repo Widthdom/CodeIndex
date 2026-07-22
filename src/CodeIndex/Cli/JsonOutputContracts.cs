@@ -668,6 +668,8 @@ internal sealed class IndexUpdateSummaryJsonResult
     public int SymbolsDroppedByKindFilter { get; init; }
     [JsonPropertyName("fts_optimize_ran")]
     public bool FtsOptimizeRan { get; init; }
+    [JsonPropertyName("fts_merge_ran")]
+    public bool FtsMergeRan { get; init; }
 }
 
 internal sealed class IndexFullScanSummaryJsonResult

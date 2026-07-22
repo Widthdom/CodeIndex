@@ -361,6 +361,28 @@ public class GitHelperTests : IDisposable
     }
 
     [ExternalProcessFact]
+    public void ChangedFileQueries_PreserveCanonicalUtf8Paths()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "base.txt"), "base\n");
+        RunGit(repoDir, "add", "base.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var baseCommit = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var unicodeDirectory = Path.Combine(repoDir, "日本");
+        Directory.CreateDirectory(unicodeDirectory);
+        File.WriteAllText(Path.Combine(unicodeDirectory, "é.cs"), "class Café { }\n");
+        RunGit(repoDir, "add", ".");
+        RunGit(repoDir, "commit", "-m", "add unicode path");
+        var headCommit = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        const string expectedPath = "日本/é.cs";
+        Assert.Equal([expectedPath], GitHelper.GetChangedFilesFromCommit(repoDir, headCommit));
+        Assert.Equal([expectedPath], GitHelper.GetChangedFilesBetweenRefs(repoDir, baseCommit, headCommit));
+    }
+
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_IncludesFilesForRootCommit()
     {
         var repoDir = CreateGitRepo();
@@ -516,6 +538,34 @@ public class GitHelperTests : IDisposable
 
         Assert.Contains("old.txt", changedFiles);
         Assert.Contains("new.txt", changedFiles);
+    }
+
+    [ExternalProcessFact]
+    public void ChangedFileHelpers_NullDelimitedRenamePreservesTabAndNewlinePaths()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = CreateGitRepo();
+        const string oldPath = "old\tname.txt";
+        const string newPath = "new\nname.txt";
+        File.WriteAllText(Path.Combine(repoDir, oldPath), "unchanged rename payload\n");
+        RunGit(repoDir, "add", oldPath);
+        RunGit(repoDir, "commit", "-m", "initial control path");
+        var oldRef = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        File.Move(Path.Combine(repoDir, oldPath), Path.Combine(repoDir, newPath));
+        RunGit(repoDir, "add", "-A");
+        RunGit(repoDir, "commit", "-m", "rename control path");
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var commitPaths = GitHelper.GetChangedFilesFromCommit(repoDir, commitId);
+        var rangePaths = GitHelper.GetChangedFilesBetweenRefs(repoDir, oldRef, commitId);
+
+        Assert.Contains(oldPath, commitPaths);
+        Assert.Contains(newPath, commitPaths);
+        Assert.Contains(oldPath, rangePaths);
+        Assert.Contains(newPath, rangePaths);
     }
 
     [ExternalProcessFact]

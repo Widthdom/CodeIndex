@@ -19,6 +19,7 @@ internal static class LanguageMapOverrides
 
     internal static Func<string, Stream>? OpenOverrideFileForTesting { get; set; }
     internal static Action<string>? ConfigPathStampProbeForTesting { get; set; }
+    internal static string? UserConfigPathOverrideForTesting { get; set; }
 
     internal enum ConfigProbeStatus
     {
@@ -59,6 +60,18 @@ internal static class LanguageMapOverrides
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectory(string? startDirectory)
         => LoadEffectiveMapFromDirectoryWithDiagnostics(startDirectory).Map;
 
+    internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectoryForIndexing(
+        string? startDirectory,
+        Func<string, Stream> openFile,
+        Action<string, ConfigProbeStatus, bool>? observeProbe = null)
+    {
+        ArgumentNullException.ThrowIfNull(openFile);
+        startDirectory = NormalizeStartDirectory(startDirectory);
+        var candidates = CreateConfigPathCandidates(startDirectory);
+        var stamps = GetConfigPathStamps(candidates);
+        return LoadEffectiveMapFromStamps(stamps, ReportWarningOnce, openFile, observeProbe).Map;
+    }
+
     internal static LoadResult LoadEffectiveMapWithDiagnostics(string? startPath = null)
         => LoadEffectiveMapFromDirectoryWithDiagnostics(ResolveStartDirectory(startPath));
 
@@ -96,7 +109,8 @@ internal static class LanguageMapOverrides
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectoryWithinScope(
         string? startDirectory,
         string workspaceScopeRoot,
-        Func<string, Stream> openFile)
+        Func<string, Stream> openFile,
+        Action<string, ConfigProbeStatus, bool>? observeProbe = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceScopeRoot);
         ArgumentNullException.ThrowIfNull(openFile);
@@ -112,6 +126,7 @@ internal static class LanguageMapOverrides
         {
             var candidate = Path.Combine(directory, WorkspaceFileName);
             var probeStatus = ProbeWorkspaceConfigFile(directory);
+            observeProbe?.Invoke(candidate, probeStatus, false);
             if (probeStatus == ConfigProbeStatus.ProbeFailed)
                 break;
             if (probeStatus == ConfigProbeStatus.Present)
@@ -176,12 +191,15 @@ internal static class LanguageMapOverrides
 
     private static LoadResult LoadEffectiveMapFromStamps(
         IReadOnlyList<ConfigPathStamp> stamps,
-        Action<string, string?>? reportWarning)
+        Action<string, string?>? reportWarning,
+        Func<string, Stream>? openFile = null,
+        Action<string, ConfigProbeStatus, bool>? observeProbe = null)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var diagnostics = new List<Diagnostic>();
         foreach (var stamp in stamps)
         {
+            observeProbe?.Invoke(stamp.Path, stamp.Status, stamp.IsUserConfig);
             if (stamp.Status == ConfigProbeStatus.ProbeFailed)
             {
                 var reason = stamp.FailureReason ?? "probe_failed";
@@ -207,7 +225,7 @@ internal static class LanguageMapOverrides
                         reportWarning,
                         diagnostics,
                         blocksParentFallback: false,
-                        openFile: null);
+                        openFile);
                 continue;
             }
 
@@ -220,7 +238,7 @@ internal static class LanguageMapOverrides
                 reportWarning,
                 diagnostics,
                 blocksParentFallback: true,
-                openFile: null);
+                openFile);
             break;
         }
 
@@ -230,9 +248,22 @@ internal static class LanguageMapOverrides
     private static List<ConfigPathCandidate> CreateConfigPathCandidates(string startDirectory)
     {
         var candidates = new List<ConfigPathCandidate>();
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(home))
-            candidates.Add(new ConfigPathCandidate(Path.Combine(home, ".config", "cdidx", "langmap.yaml"), IsUserConfig: true));
+        if (!string.IsNullOrWhiteSpace(UserConfigPathOverrideForTesting))
+        {
+            candidates.Add(new ConfigPathCandidate(
+                Path.GetFullPath(UserConfigPathOverrideForTesting),
+                IsUserConfig: true));
+        }
+        else
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(home))
+            {
+                candidates.Add(new ConfigPathCandidate(
+                    Path.Combine(home, ".config", "cdidx", "langmap.yaml"),
+                    IsUserConfig: true));
+            }
+        }
 
         var directory = startDirectory;
         while (!string.IsNullOrEmpty(directory))

@@ -17,6 +17,58 @@ public partial class FileIndexer
         bool continueOnError = true,
         int? initialFileCapacity = null,
         CancellationToken cancellationToken = default)
+        => ScanFilesDetailedCore(
+            checkpointedDirectories,
+            continueOnError,
+            initialFileCapacity,
+            captureDirectoryListingSnapshots: false,
+            cancellationToken: cancellationToken).ScanResult;
+
+    internal ScanFilesWithDirectoryListingSnapshotsResult ScanFilesDetailedWithDirectoryListingSnapshots(
+        IReadOnlySet<string>? checkpointedDirectories = null,
+        bool continueOnError = true,
+        int? initialFileCapacity = null,
+        CancellationToken cancellationToken = default)
+        => ScanFilesDetailedCore(
+            checkpointedDirectories,
+            continueOnError,
+            initialFileCapacity,
+            captureDirectoryListingSnapshots: true,
+            cancellationToken: cancellationToken);
+
+    private ScanFilesWithDirectoryListingSnapshotsResult ScanFilesDetailedCore(
+        IReadOnlySet<string>? checkpointedDirectories,
+        bool continueOnError,
+        int? initialFileCapacity,
+        bool captureDirectoryListingSnapshots,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var previousSuppression = _suppressConfigurationInputObservation;
+        _suppressConfigurationInputObservation = !captureDirectoryListingSnapshots;
+        ResetPatternConfigurationDirectoryExistenceCache();
+        _nestedGitRepositoryCache.Clear();
+        try
+        {
+            return ScanFilesDetailedCoreWithConfigurationObservation(
+                checkpointedDirectories,
+                continueOnError,
+                initialFileCapacity,
+                captureDirectoryListingSnapshots,
+                cancellationToken);
+        }
+        finally
+        {
+            _suppressConfigurationInputObservation = previousSuppression;
+        }
+    }
+
+    private ScanFilesWithDirectoryListingSnapshotsResult ScanFilesDetailedCoreWithConfigurationObservation(
+        IReadOnlySet<string>? checkpointedDirectories,
+        bool continueOnError,
+        int? initialFileCapacity,
+        bool captureDirectoryListingSnapshots,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var resolvedFileCapacity = ResolveInitialScanFileCapacity(initialFileCapacity);
@@ -26,6 +78,9 @@ public partial class FileIndexer
         var languageCounts = new Dictionary<string, int>(InitialScanLanguageCapacity, StringComparer.Ordinal);
         var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
         var listedDirectories = new HashSet<string>(resolvedDirectoryCapacity, StringComparer.Ordinal);
+        var directoryListingSnapshots = captureDirectoryListingSnapshots
+            ? new List<DirectoryListingSnapshot>(resolvedDirectoryCapacity)
+            : null;
         var fullyScannedDirectories = new HashSet<string>(resolvedDirectoryCapacity, StringComparer.Ordinal);
         IReadOnlySet<string> activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
@@ -40,9 +95,11 @@ public partial class FileIndexer
             languageCounts,
             errors,
             listedDirectories,
+            directoryListingSnapshots,
             fullyScannedDirectories,
             activeCheckpointedDirectories,
-            visitedDirectories);
+            visitedDirectories,
+            captureDirectoryListingSnapshots);
         errors.AddRange(_submoduleLoadWarnings);
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
@@ -50,7 +107,22 @@ public partial class FileIndexer
         {
             ScanDirectory(_projectRoot, scanState, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken, depth: 0);
         }
-        return new ScanFilesResult(
+        var inputSnapshot = captureDirectoryListingSnapshots
+            ? MaterializeScanInputSnapshot(
+                scanState.DirectoryListingSnapshots,
+                scanState.DirectoryListingSnapshotsComplete,
+                scanState.DirectoryListingSnapshotsIncompletePath,
+                scanState.DirectoryListingSnapshotsIncompleteReason)
+            : EmptyScanInputSnapshot;
+        if (captureDirectoryListingSnapshots && !inputSnapshot.IsComplete)
+        {
+            scanState.Errors.Add(new ScanError(
+                ToRelativePath(inputSnapshot.IncompletePath ?? _projectRoot),
+                inputSnapshot.IncompleteReason is { Length: > 0 } incompleteReason
+                    ? $"{incompleteReason} Reduce or split the indexed workspace before retrying."
+                    : "Could not capture every directory listing or configuration input needed for one stable source snapshot; rerun indexing."));
+        }
+        var scanResult = new ScanFilesResult(
             scanState.Results,
             scanState.FileLanguages,
             scanState.Errors,
@@ -67,6 +139,7 @@ public partial class FileIndexer
         {
             LanguageCounts = MaterializeLanguageCounts(scanState.LanguageCounts),
         };
+        return new ScanFilesWithDirectoryListingSnapshotsResult(scanResult, inputSnapshot);
     }
 
     private static IReadOnlyList<string> MaterializePathSet(HashSet<string>? paths)
@@ -118,7 +191,9 @@ public partial class FileIndexer
         bool isProjectRoot = false,
         bool continueOnError = true,
         CancellationToken cancellationToken = default,
-        int depth = 0)
+        int depth = 0,
+        DateTime? listingModifiedBeforeUtc = null,
+        bool listingSnapshotAlreadyRecorded = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var relativeDir = ToRelativePath(dir);
@@ -154,7 +229,16 @@ public partial class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, relativeDir, scanState, activeIgnoreRules, continueOnError, cancellationToken, depth);
+        return EnumerateDirectory(
+            dir,
+            relativeDir,
+            scanState,
+            activeIgnoreRules,
+            continueOnError,
+            cancellationToken,
+            depth,
+            listingModifiedBeforeUtc,
+            listingSnapshotAlreadyRecorded);
     }
 
     private bool IsNestedGitRepository(string dir)

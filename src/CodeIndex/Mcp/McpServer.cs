@@ -995,6 +995,17 @@ public partial class McpServer : IDisposable
                             transportFrame.CompleteResourceRetentionWhen(retainedWork);
                             Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
                             admissionGate.Release();
+
+                            // A canceled or timed-out isolated action may still be unwinding
+                            // durable writer cleanup after its response has been sent. Release
+                            // frame admission and the transport resource callback first, then keep
+                            // the outer request task attached to that cleanup so EOF's bounded
+                            // drain cannot return while the action is restoring database state.
+                            // cancel / timeout 応答後も isolated action が永続 writer cleanup を
+                            // unwind 中の場合がある。frame admission と transport resource callback
+                            // を先に解放し、その後 outer request task を cleanup に接続して、EOF の
+                            // bounded drain が database 復元中に戻らないようにする。
+                            await retainedWork.ConfigureAwait(false);
                         }
                     }, CancellationToken.None);
                 }

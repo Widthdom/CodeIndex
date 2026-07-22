@@ -455,6 +455,7 @@ public static partial class ReferenceExtractor
             if (language != "csharp")
                 return;
 
+            var aliasNameChanged = false;
             foreach (var reference in references)
             {
                 if (reference.ReferenceKind is not ("instantiate" or "attribute"))
@@ -470,32 +471,11 @@ public static partial class ReferenceExtractor
 
                 reference.SymbolName = resolvedName;
                 reference.IsSelfReference = IsSameReferenceName(reference.ContainerName, resolvedName);
+                aliasNameChanged = true;
             }
 
-            var deduped = new HashSet<ReferenceDedupeKey>();
-            for (var index = 0; index < references.Count;)
-            {
-                var reference = references[index];
-                var key = CreateReferenceDedupeKey(
-                    reference.FileId,
-                    language,
-                    reference.Line,
-                    reference.Column,
-                    reference.ReferenceKind,
-                    reference.SymbolName,
-                    new SymbolRecord
-                    {
-                        Kind = reference.ContainerKind ?? string.Empty,
-                        Name = reference.ContainerName ?? string.Empty,
-                    });
-                if (deduped.Add(key))
-                {
-                    index++;
-                    continue;
-                }
-
-                references.RemoveAt(index);
-            }
+            if (aliasNameChanged)
+                CompactCSharpUsingAliasReferences(references, language);
         }
 
         bool IsUnqualifiedCSharpTokenAtColumn(int lineNumber, int column, string symbolName)
@@ -587,11 +567,6 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                var container = new SymbolRecord
-                {
-                    Kind = reference.ContainerKind ?? string.Empty,
-                    Name = reference.ContainerName ?? string.Empty,
-                };
                 var dedupeKey = CreateReferenceDedupeKey(
                     reference.FileId,
                     language,
@@ -599,7 +574,8 @@ public static partial class ReferenceExtractor
                     reference.Column,
                     "bcl_regex_without_timeout",
                     reference.SymbolName,
-                    container);
+                    reference.ContainerKind,
+                    reference.ContainerName);
                 if (!seen.Add(dedupeKey))
                     continue;
 
@@ -1091,6 +1067,7 @@ public static partial class ReferenceExtractor
                 structuralLines,
                 symbols,
                 workspaceSymbols ?? symbols,
+                request.CSharpStaticInterfaceMemberLookups,
                 references,
                 seen);
         }

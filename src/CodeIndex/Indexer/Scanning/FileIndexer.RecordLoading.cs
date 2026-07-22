@@ -112,6 +112,34 @@ public partial class FileIndexer
             cancellationToken);
     }
 
+    internal string? LoadCSharpStaticInterfaceCandidateContentForPrepass(
+        string absolutePath,
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
+        for (var attempt = 0; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _pathAccessValidator?.Invoke(absolutePath);
+            if (!IsFilePathSyntaxIndexable(absolutePath))
+                throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+            var indexability = GetFileIndexabilityForIndexing(absolutePath);
+            if (indexability != FileProbeStatus.Supported)
+                throw new InvalidOperationException("Only regular files can be indexed");
+
+            var (content, requiresRetry) = _contentLoader.LoadCSharpStaticInterfaceCandidateContentForPrepass(
+                absolutePath,
+                normalizedRelativePath,
+                relativePath,
+                retryOnMutation: attempt == 0,
+                cancellationToken);
+            if (!requiresRetry)
+                return content;
+        }
+    }
+
     internal bool RawFileMayContainCSharpStaticInterfaceContract(
         string absolutePath,
         string relativePath,

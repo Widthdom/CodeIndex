@@ -19,10 +19,14 @@ namespace CodeIndex.Database;
 public partial class DbWriter
 {
     public const string FtsIncrementalWritesSinceOptimizeMetaKey = "fts_incremental_writes_since_optimize";
+    public const string FtsIncrementalWritesSinceMergeMetaKey = "fts_incremental_writes_since_merge";
     public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
     public const string FtsLastOptimizeDurationMsMetaKey = "fts_last_optimize_duration_ms";
     public const string FtsBulkLoadInProgressMetaKey = "fts_bulk_load_in_progress";
+    public const string FtsBulkLoadOwnerGenerationMetaKey = "fts_bulk_load_owner_generation";
     public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
+    public const int DefaultFtsMergeIncrementalWriteThreshold = 25;
+    public const int DefaultFtsIncrementalMergeWorkTargetPages = 1000;
 
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
@@ -35,6 +39,14 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCSharpContractPreflightForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedCSharpContractWorkspaceReadForTesting = new();
+    private static readonly AsyncLocal<Action<CSharpContractWorkspaceReadStats>?>
+        ScopedCSharpContractWorkspaceReadStatsForTesting = new();
+    private static readonly AsyncLocal<Action<int>?>
+        ScopedCSharpFilePathLookupBatchCompletedForTesting = new();
+    private static readonly AsyncLocal<Action<bool>?> ScopedAtomicFileReferenceInsertForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedReferenceBatchTransactionOpeningForTesting = new();
+    private static readonly AsyncLocal<Action<DbWriterBatchStatement>?> ScopedBatchStatementExecutingForTesting = new();
     internal static Action<string>? LanguagePresenceCheckForTesting
     {
         get => ScopedLanguagePresenceCheckForTesting.Value;
@@ -83,6 +95,42 @@ public partial class DbWriter
         set => ScopedCSharpContractPreflightForTesting.Value = value;
     }
 
+    internal static Action? CSharpContractWorkspaceReadForTesting
+    {
+        get => ScopedCSharpContractWorkspaceReadForTesting.Value;
+        set => ScopedCSharpContractWorkspaceReadForTesting.Value = value;
+    }
+
+    internal static Action<CSharpContractWorkspaceReadStats>? CSharpContractWorkspaceReadStatsForTesting
+    {
+        get => ScopedCSharpContractWorkspaceReadStatsForTesting.Value;
+        set => ScopedCSharpContractWorkspaceReadStatsForTesting.Value = value;
+    }
+
+    internal static Action<int>? CSharpFilePathLookupBatchCompletedForTesting
+    {
+        get => ScopedCSharpFilePathLookupBatchCompletedForTesting.Value;
+        set => ScopedCSharpFilePathLookupBatchCompletedForTesting.Value = value;
+    }
+
+    internal static Action<bool>? AtomicFileReferenceInsertForTesting
+    {
+        get => ScopedAtomicFileReferenceInsertForTesting.Value;
+        set => ScopedAtomicFileReferenceInsertForTesting.Value = value;
+    }
+
+    internal static Action? ReferenceBatchTransactionOpeningForTesting
+    {
+        get => ScopedReferenceBatchTransactionOpeningForTesting.Value;
+        set => ScopedReferenceBatchTransactionOpeningForTesting.Value = value;
+    }
+
+    internal static Action<DbWriterBatchStatement>? BatchStatementExecutingForTesting
+    {
+        get => ScopedBatchStatementExecutingForTesting.Value;
+        set => ScopedBatchStatementExecutingForTesting.Value = value;
+    }
+
     // Transaction ownership (#4154): the semaphore is held for the outermost writer
     // transaction lifetime. Same-stack nested calls from the owning thread and
     // AsyncLocal token skip the semaphore and become SAVEPOINTs; other flows wait even
@@ -117,6 +165,7 @@ public partial class DbWriter
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private int _rowSkipSavepointCounter;
     private long _batchRowsSkipped;
+    private long _durableCommitGeneration;
     private int _transactionDepth;
     private int _transactionOwnerThreadId;
     private Guid _transactionOwnerToken;
@@ -142,6 +191,14 @@ public partial class DbWriter
     public long BatchRowsSkipped => Volatile.Read(ref _batchRowsSkipped);
 
     internal sealed record DbWriterBatchProgress(string Operation, int RowsProcessed, int RowsTotal);
+    internal sealed record DbWriterBatchStatement(string Operation, int ActiveRows, int StatementRows);
+
+    private static void ReportBatchStatementForTesting(
+        string operation,
+        int activeRows,
+        int statementRows)
+        => BatchStatementExecutingForTesting?.Invoke(
+            new DbWriterBatchStatement(operation, activeRows, statementRows));
 
     public DbWriter(SqliteConnection connection)
         : this(connection, commandCache: null, markWriteWork: null)

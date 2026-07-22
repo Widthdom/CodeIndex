@@ -474,6 +474,50 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void CreateReferenceDedupeKey_DirectContainerIdentityMatchesSymbolContainer()
+    {
+        var container = new SymbolRecord { Kind = "function", Name = "Example.Run" };
+
+        var symbolContainerKey = ReferenceExtractor.CreateReferenceDedupeKey(
+            1,
+            "csharp",
+            3,
+            5,
+            "call",
+            "Target",
+            container);
+        var directContainerKey = ReferenceExtractor.CreateReferenceDedupeKey(
+            1,
+            "csharp",
+            3,
+            5,
+            "call",
+            "Target",
+            container.Kind,
+            container.Name);
+        var emptySymbolContainerKey = ReferenceExtractor.CreateReferenceDedupeKey(
+            1,
+            "csharp",
+            3,
+            5,
+            "call",
+            "Target",
+            new SymbolRecord());
+        var nullDirectContainerKey = ReferenceExtractor.CreateReferenceDedupeKey(
+            1,
+            "csharp",
+            3,
+            5,
+            "call",
+            "Target",
+            containerKind: null,
+            containerName: null);
+
+        Assert.Equal(symbolContainerKey, directContainerKey);
+        Assert.Equal(emptySymbolContainerKey, nullDirectContainerKey);
+    }
+
+    [Fact]
     public void AddTypeReferenceSegment_DedupesWithinFileAndLanguageOnly()
     {
         var references = new List<ReferenceRecord>();
@@ -3051,6 +3095,159 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "Regex"
             && reference.ReferenceKind == "instantiate"
             && reference.Context.Contains("System.Text.RegularExpressions.Regex", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CompactCSharpUsingAliasReferences_RemovesRewriteDuplicatesInStableOrder()
+    {
+        var rewrittenAlias = new ReferenceRecord
+        {
+            FileId = 1,
+            SymbolName = "AliasType",
+            ReferenceKind = "instantiate",
+            Line = 10,
+            Column = 17,
+            Context = "alias",
+            ContainerKind = "function",
+            ContainerName = "Build",
+        };
+        var duplicate = new ReferenceRecord
+        {
+            FileId = 1,
+            SymbolName = "TargetType",
+            ReferenceKind = "instantiate",
+            Line = 10,
+            Column = 17,
+            Context = "duplicate",
+            ContainerKind = "function",
+            ContainerName = "Build",
+        };
+        var differentContainer = new ReferenceRecord
+        {
+            FileId = 1,
+            SymbolName = "TargetType",
+            ReferenceKind = "instantiate",
+            Line = 10,
+            Column = 17,
+            Context = "different container",
+            ContainerKind = "function",
+            ContainerName = "BuildOther",
+        };
+        var laterReference = new ReferenceRecord
+        {
+            FileId = 1,
+            SymbolName = "LaterType",
+            ReferenceKind = "instantiate",
+            Line = 11,
+            Column = 17,
+            Context = "later",
+            ContainerKind = "function",
+            ContainerName = "Build",
+        };
+        var references = new List<ReferenceRecord>
+        {
+            rewrittenAlias,
+            duplicate,
+            differentContainer,
+            laterReference,
+        };
+
+        rewrittenAlias.SymbolName = "TargetType";
+        ReferenceExtractor.CompactCSharpUsingAliasReferences(references, "csharp");
+
+        Assert.Equal(3, references.Count);
+        Assert.Same(rewrittenAlias, references[0]);
+        Assert.Same(differentContainer, references[1]);
+        Assert.Same(laterReference, references[2]);
+    }
+
+    [Fact]
+    public void Extract_CSharpConstructorAlias_PreservesReferenceLimit()
+    {
+        const string content = """
+            using AliasType = External.TargetType;
+
+            public sealed class Worker
+            {
+                public void Build()
+                {
+                    _ = new AliasType();
+                    _ = new AliasType();
+                    _ = new AliasType();
+                    _ = new AliasType();
+                    _ = new AliasType();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(
+            1,
+            "csharp",
+            content,
+            symbols,
+            maxReferenceCount: 4);
+
+        Assert.Equal(4, references.Count);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "TargetType"
+            && reference.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "AliasType");
+    }
+
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("python")]
+    public void Extract_DirectTwoSymbolCycle_MarksMutualAndKeepsSelfReferencesSeparate(string language)
+    {
+        var content = language == "csharp"
+            ? """
+                public sealed class Cycle
+                {
+                    public void Alpha()
+                    {
+                        Beta();
+                        Alpha();
+                    }
+
+                    public void Beta()
+                    {
+                        Alpha();
+                    }
+                }
+                """
+            : """
+                def alpha():
+                    beta()
+                    alpha()
+
+                def beta():
+                    alpha()
+                """;
+        var alphaName = language == "csharp" ? "Alpha" : "alpha";
+        var betaName = language == "csharp" ? "Beta" : "beta";
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ContainerName == alphaName
+            && reference.SymbolName == betaName
+            && reference.ReferenceKind == "call"
+            && reference.IsMutualRecursion
+            && !reference.IsSelfReference);
+        Assert.Contains(references, reference =>
+            reference.ContainerName == betaName
+            && reference.SymbolName == alphaName
+            && reference.ReferenceKind == "call"
+            && reference.IsMutualRecursion
+            && !reference.IsSelfReference);
+        Assert.Contains(references, reference =>
+            reference.ContainerName == alphaName
+            && reference.SymbolName == alphaName
+            && reference.ReferenceKind == "call"
+            && reference.IsSelfReference
+            && !reference.IsMutualRecursion);
     }
 
     [Fact]

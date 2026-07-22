@@ -19,6 +19,127 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_FullScanAndScopedUpdateUseGuardedAtomicFileReferenceScope()
+    {
+        var projectRoot = CreateTempProject();
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var previousAggregateRefreshHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var atomicCalls = new List<bool>();
+        var aggregateRefreshStatements = 0;
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(sourcePath, "def run():\n    return helper()\n");
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCalls.Add(newFiles);
+                previousAtomicHook?.Invoke(newFiles);
+            };
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                aggregateRefreshStatements++;
+                previousAggregateRefreshHook?.Invoke();
+            };
+
+            var (fullExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            Assert.Contains(true, atomicCalls);
+            Assert.Equal(1, aggregateRefreshStatements);
+
+            atomicCalls.Clear();
+            aggregateRefreshStatements = 0;
+            File.WriteAllText(sourcePath, "def run():\n    return updated_helper()\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+            var (updateExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--files", sourcePath, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Contains(false, atomicCalls);
+            Assert.Equal(1, aggregateRefreshStatements);
+        }
+        finally
+        {
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousAggregateRefreshHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_MultiLanguagePersistenceUsesNewAndUpdateReferenceLinePaths()
+    {
+        var projectRoot = CreateTempProject();
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        try
+        {
+            var pythonPath = Path.Combine(projectRoot, "app.py");
+            var typeScriptPath = Path.Combine(projectRoot, "app.ts");
+            File.WriteAllText(
+                pythonPath,
+                "def py_target():\n    return 1\n\ndef py_caller():\n    return py_target()\n");
+            File.WriteAllText(
+                typeScriptPath,
+                "function tsTarget() { return 1; }\nfunction tsCaller() { return tsTarget(); }\n");
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            var (fullExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            Assert.Contains(statements, statement => statement.Operation == "insert_reference_lines");
+            Assert.Contains(statements, statement => statement.Operation == "insert_references");
+
+            statements.Clear();
+            File.WriteAllText(
+                pythonPath,
+                "def py_target():\n    return 2\n\ndef py_caller():\n    return py_target() + py_target()\n");
+            File.WriteAllText(
+                typeScriptPath,
+                "function tsTarget() { return 2; }\nfunction tsCaller() { return tsTarget() + tsTarget(); }\n");
+            File.SetLastWriteTimeUtc(pythonPath, DateTime.UtcNow.AddSeconds(2));
+            File.SetLastWriteTimeUtc(typeScriptPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Contains(statements, statement => statement.Operation == "upsert_reference_lines");
+            Assert.Contains(statements, statement => statement.Operation == "lookup_reference_lines");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = """
+                SELECT f.lang, COUNT(sr.id), COUNT(DISTINCT sr.reference_line_id)
+                FROM files AS f
+                JOIN symbol_references AS sr ON sr.file_id = f.id
+                WHERE f.path IN ('app.py', 'app.ts')
+                GROUP BY f.lang
+                """;
+            var languageCounts = new Dictionary<string, (long References, long Lines)>(StringComparer.Ordinal);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                languageCounts[reader.GetString(0)] = (reader.GetInt64(1), reader.GetInt64(2));
+
+            Assert.True(languageCounts["python"].References >= 2);
+            Assert.True(languageCounts["python"].Lines >= 1);
+            Assert.True(languageCounts["typescript"].References >= 2);
+            Assert.True(languageCounts["typescript"].Lines >= 1);
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MemoryTrace_ReportsFullScanAndUpdatePhaseBoundaries()
     {
         var projectRoot = CreateTempProject();
@@ -39,7 +160,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, fullExitCode);
             var fullSamples = fullJson.GetProperty("memory_timeline").GetProperty("samples").EnumerateArray().ToArray();
             Assert.Equal(
-                ["start", "scan", "purge", "csharp_prepass", "extraction", "reference_graph", "text_index", "finalize", "commit"],
+                ["start", "scan", "csharp_prepass", "purge", "extraction", "reference_graph", "text_index", "finalize", "commit"],
                 fullSamples.Select(sample => sample.GetProperty("phase").GetString()));
             AssertPhaseSamplesAreMonotonic(fullSamples);
 
@@ -425,10 +546,18 @@ public partial class IndexCommandRunnerTests
                     Assert.True(swapped);
                     Assert.Equal(CommandExitCodes.PartialResult, exitCode);
                     Assert.Equal("partial", json.GetProperty("status").GetString());
-                    Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+                    // The guarded content read reports the unsafe target, and the final
+                    // snapshot barrier independently reports the directory-entry drift.
+                    Assert.Equal(2, json.GetProperty("summary").GetProperty("errors").GetInt32());
                     Assert.Contains(
                         json.GetProperty("errors").EnumerateArray(),
                         error => string.Equals(error.GetProperty("file").GetString(), sourcePath, StringComparison.Ordinal));
+                    Assert.Contains(
+                        json.GetProperty("errors").EnumerateArray(),
+                        error => error.GetProperty("file").GetString() == "."
+                            && error.GetProperty("message").GetString()!.StartsWith(
+                                nameof(IOException),
+                                StringComparison.Ordinal));
                     Assert.DoesNotContain("app.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
                 }
                 finally
@@ -586,10 +715,9 @@ public partial class IndexCommandRunnerTests
                     Assert.DoesNotContain("app.cs", loadedPaths);
                     Assert.DoesNotContain("app.ts", loadedPaths);
                     Assert.Contains("feature.cs", loadedPaths);
-                    Assert.Equal(1, statLookups["app.cs"]);
-                    Assert.Equal(1, statLookups["app.ts"]);
+                    Assert.Equal(2, statLookups["app.cs"]);
+                    Assert.Equal(2, statLookups["app.ts"]);
                     Assert.Equal(1, statLookups["feature.cs"]);
-                    Assert.All(statLookups, lookup => Assert.Equal(1, lookup.Value));
                     Assert.Equal(1, statSnapshotReads);
                     Assert.Equal(1, foldBackfillVerifications);
                 }
@@ -606,6 +734,67 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DenseDeletionCapsReusableStatSnapshotCapacityToRetainedRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_reuse_capacity");
+        var previousCapacityHook = DbWriter.ReusableStatSnapshotInitialCapacityForTesting;
+        var previousFilterModeHook = DbWriter.ReusableStatSnapshotFilterModeForTesting;
+        var previousCandidateRowHook = DbWriter.ReusableStatSnapshotCandidateRowForTesting;
+        int? reusableSnapshotInitialCapacity = null;
+        var filterModes = new List<string>();
+        var candidateRows = new List<string>();
+        try
+        {
+            var retainedPath = Path.Combine(projectRoot, "retained.py");
+            File.WriteAllText(retainedPath, "def retained():\n    return 1\n");
+            var stalePaths = Enumerable.Range(0, 32)
+                .Select(index => Path.Combine(projectRoot, $"stale-{index:D2}.py"))
+                .ToArray();
+            foreach (var stalePath in stalePaths)
+                File.WriteAllText(stalePath, "def stale():\n    return 1\n");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(stalePaths.Length + 1, initialJson.GetProperty("summary").GetProperty("files_scanned").GetInt32());
+
+            foreach (var stalePath in stalePaths)
+                File.Delete(stalePath);
+            DbWriter.ReusableStatSnapshotInitialCapacityForTesting = capacity =>
+            {
+                reusableSnapshotInitialCapacity = capacity;
+                previousCapacityHook?.Invoke(capacity);
+            };
+            DbWriter.ReusableStatSnapshotFilterModeForTesting = mode =>
+            {
+                filterModes.Add(mode);
+                previousFilterModeHook?.Invoke(mode);
+            };
+            DbWriter.ReusableStatSnapshotCandidateRowForTesting = path =>
+            {
+                candidateRows.Add(path);
+                previousCandidateRowHook?.Invoke(path);
+            };
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal(1, reusableSnapshotInitialCapacity);
+            Assert.Equal(new[] { "excluded_ids" }, filterModes);
+            Assert.Equal(new[] { "retained.py" }, candidateRows);
+            Assert.Equal(stalePaths.Length, refreshJson.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+        }
+        finally
+        {
+            DbWriter.ReusableStatSnapshotInitialCapacityForTesting = previousCapacityHook;
+            DbWriter.ReusableStatSnapshotFilterModeForTesting = previousFilterModeHook;
+            DbWriter.ReusableStatSnapshotCandidateRowForTesting = previousCandidateRowHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -735,6 +924,49 @@ public partial class IndexCommandRunnerTests
         finally
         {
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ChangedReferenceUsesDirtyGraphScope()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_dirty_graph_scope");
+        var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        DbWriter.ReferenceGraphRefreshScopeStats? observed = null;
+        try
+        {
+            var firstPath = Path.Combine(projectRoot, "MutualRecursionA.cs");
+            File.WriteAllText(
+                firstPath,
+                "public static class MutualRecursionA { public static void CrossCycleA() { CrossCycleB(); } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "MutualRecursionB.cs"),
+                "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats =>
+            {
+                observed = stats;
+                previousScopeHook?.Invoke(stats);
+            };
+            File.AppendAllText(firstPath, "// changed A\n");
+            File.SetLastWriteTimeUtc(firstPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.InRange(json.GetProperty("summary").GetProperty("files_scanned").GetInt32(), 1, 2);
+            Assert.NotNull(observed);
+            Assert.False(observed!.UsedFullRefresh);
+            Assert.Equal(2, observed.DirtyReferenceCount);
+            Assert.Equal(2, observed.TotalReferenceCount);
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -1123,13 +1355,1141 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScanExplicitDb_KnownRootSwitchRejectsPositiveCsharpStatReuse()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_fullscan_csharp_root_switch_{Guid.NewGuid():N}.db");
+        var contractSource =
+            "public interface IParseable<T> { static abstract T Parse(string s); }\n";
+        var plainPrefix = "public interface IParseable<T> { }\n";
+        var plainSource = plainPrefix.TrimEnd('\n').PadRight(contractSource.Length - 1) + "\n";
+        var implementationSource =
+            "public readonly struct Money : IParseable<Money>\n"
+            + "{\n"
+            + "    public static Money Parse(string s) => new();\n"
+            + "}\n";
+        var sharedModified = DateTime.UtcNow.AddMinutes(-5);
+        try
+        {
+            foreach (var projectRoot in new[] { projectRootA, projectRootB })
+                File.WriteAllText(Path.Combine(projectRoot, "Money.cs"), implementationSource);
+            File.WriteAllText(Path.Combine(projectRootA, "IParseable.cs"), contractSource);
+            File.WriteAllText(Path.Combine(projectRootB, "IParseable.cs"), plainSource);
+            foreach (var projectRoot in new[] { projectRootA, projectRootB })
+            {
+                File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "IParseable.cs"), sharedModified);
+                File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "Money.cs"), sharedModified);
+            }
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json", "--quiet"], _jsonOptions));
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRootB, "--db", dbPath, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var command = conn.CreateCommand();
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references r
+                    JOIN files f ON f.id = r.file_id
+                    WHERE f.path = 'Money.cs'
+                      AND r.symbol_name = 'Parse'
+                      AND r.reference_kind = 'implicit_implementation'
+                    """;
+                Assert.Equal(0L, (long)command.ExecuteScalar()!);
+            }
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(Path.GetFullPath(projectRootB), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            Assert.Equal(false, new DbWriter(db).GetCSharpStaticInterfaceSourceEvidence());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_ParallelCsharpStaticInterfacePrepass_IndexesImplicitImplementationReference()
     {
+        const int implementationFileCount = 64;
         var projectRoot = CreateTempProject();
+        var previousLookupHook = ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting;
+        var previousPrepassHook = IndexCommandRunner.FullScanCSharpPrepassForTesting;
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var matchingLookupBuilds = 0;
+        var noOpPrepassCount = 0;
+        var noOpContentLoadCount = 0;
+        try
+        {
+            ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = symbols =>
+            {
+                if (symbols.Any(symbol =>
+                    symbol.Kind == "interface"
+                    && symbol.Name == "IPrecomputedLookupFixture"))
+                {
+                    matchingLookupBuilds++;
+                }
+                previousLookupHook?.Invoke(symbols);
+            };
+            File.WriteAllText(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                """
+                public interface IPrecomputedLookupFixture<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            for (var fileIndex = 0; fileIndex < implementationFileCount; fileIndex++)
+            {
+                var typeName = $"Money{fileIndex:D3}";
+                File.WriteAllText(
+                    Path.Combine(projectRoot, typeName + ".cs"),
+                    $$"""
+                    public readonly struct {{typeName}} : IPrecomputedLookupFixture<{{typeName}}>
+                    {
+                        public static {{typeName}} Parse(string s) => new();
+                    }
+                    """);
+            }
+
+            var exitCode = IndexCommandRunner.Run(
+                [projectRoot, "--parallelism", "4", "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            InstallCSharpEvidenceWriteAudit(dbPath);
+
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = () => noOpPrepassCount++;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = _ => noOpContentLoadCount++;
+            var noOpExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--parallelism", "4", "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, noOpExitCode);
+            Assert.Equal(0, noOpPrepassCount);
+            Assert.Equal(0, noOpContentLoadCount);
+            Assert.Equal(0L, CountCSharpEvidenceWrites(dbPath));
+
+            using var conn = OpenNonPoolingConnection(dbPath);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT COUNT(*)
+                FROM symbol_references r
+                JOIN files f ON f.id = r.file_id
+                JOIN reference_lines rl ON rl.id = r.reference_line_id
+                WHERE f.path = 'Money000.cs'
+                  AND r.symbol_name = 'Parse'
+                  AND r.reference_kind = 'implicit_implementation'
+                  AND rl.context = 'public static Money000 Parse(string s) => new();'";
+            var count = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Equal(1, count);
+            Assert.Equal(1, matchingLookupBuilds);
+
+            static void InstallCSharpEvidenceWriteAudit(string path)
+            {
+                using var connection = OpenNonPoolingConnection(path);
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = $"""
+                    CREATE TABLE csharp_evidence_write_audit(operation TEXT NOT NULL);
+                    CREATE TRIGGER csharp_evidence_write_audit_insert
+                    AFTER INSERT ON codeindex_meta
+                    WHEN NEW.key = '{DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey}'
+                    BEGIN
+                        INSERT INTO csharp_evidence_write_audit(operation) VALUES ('insert');
+                    END;
+                    CREATE TRIGGER csharp_evidence_write_audit_update
+                    AFTER UPDATE ON codeindex_meta
+                    WHEN NEW.key = '{DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey}'
+                    BEGIN
+                        INSERT INTO csharp_evidence_write_audit(operation) VALUES ('update');
+                    END;
+                    CREATE TRIGGER csharp_evidence_write_audit_delete
+                    AFTER DELETE ON codeindex_meta
+                    WHEN OLD.key = '{DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey}'
+                    BEGIN
+                        INSERT INTO csharp_evidence_write_audit(operation) VALUES ('delete');
+                    END;
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            static long CountCSharpEvidenceWrites(string path)
+            {
+                using var connection = OpenNonPoolingConnection(path);
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM csharp_evidence_write_audit";
+                return (long)command.ExecuteScalar()!;
+            }
+        }
+        finally
+        {
+            ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = previousLookupHook;
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = previousPrepassHook;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ParallelSymbolCapLeavesLateCsharpStaticInterfaceSourceEvidenceUnknown()
+    {
+        var projectRoot = CreateTempProject();
+        var sourcePath = Path.Combine(projectRoot, "IParseable.cs");
+        var sourceRewritten = false;
+        var parallelized = false;
+        try
+        {
+            File.WriteAllText(sourcePath, "public interface IParseable<T> { }\n");
+
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    IndexCommandRunner.FullScanExtractionSchedulingForTesting =
+                        (enabled, _) => parallelized = enabled;
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+                    {
+                        if (sourceRewritten
+                            || !string.Equals(path, "IParseable.cs", StringComparison.Ordinal))
+                        {
+                            return;
+                        }
+
+                        File.WriteAllText(
+                            sourcePath,
+                            """
+                            public interface IParseable<T>
+                            {
+                                static abstract T Parse(string s);
+                            }
+                            public sealed class ExtraSymbol
+                            {
+                                public void First() { }
+                                public void Second() { }
+                            }
+                            """);
+                        sourceRewritten = true;
+                    };
+
+                    var (exitCode, json) = RunAndCaptureJson(
+                        [projectRoot, "--parallelism", "4", "--max-symbols-per-file", "1", "--json", "--quiet"]);
+
+                    Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+                    Assert.Equal("partial", json.GetProperty("status").GetString());
+                    Assert.False(json.GetProperty("index_complete").GetBoolean());
+                    Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+                    Assert.Contains(
+                        json.GetProperty("file_errors").EnumerateArray(),
+                        error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                    IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+                }
+            }
+
+            Assert.True(sourceRewritten);
+            Assert.True(parallelized);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(db);
+            Assert.Null(writer.GetCSharpStaticInterfaceSourceEvidence());
+
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "4", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.True(recoveryJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(recoveryJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.Equal(true, writer.GetCSharpStaticInterfaceSourceEvidence());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_FullScan_PostPrepassCsharpContractLeavesReadinessPartialUntilCleanRetry(
+        bool rebuildExisting)
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var moneyPath = Path.Combine(projectRoot, "Money.cs");
+        const string moneySource =
+            "public readonly struct Money : IParseable<Money>\n"
+            + "{\n"
+            + "    public static Money Parse(string s) => new();\n"
+            + "}\n";
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var interfaceRewritten = false;
+        try
+        {
+            if (rebuildExisting)
+            {
+                File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ready')\n");
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            }
+
+            File.WriteAllText(interfacePath, "public interface IParseable<T> { }\n");
+            File.WriteAllText(moneyPath, moneySource);
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (interfaceRewritten || !path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                File.WriteAllText(
+                    interfacePath,
+                    "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+                if (path != "IParseable.cs")
+                    File.WriteAllText(moneyPath, moneySource + "// changed after workspace preflight\n");
+                interfaceRewritten = true;
+            };
+            var arguments = rebuildExisting
+                ? new[] { projectRoot, "--rebuild", "--yes", "--parallelism", "1", "--json", "--quiet" }
+                : new[] { projectRoot, "--parallelism", "1", "--json", "--quiet" };
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(arguments);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.False(partialJson.GetProperty("csharp_symbol_name_ready").GetBoolean());
+            Assert.False(partialJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+            Assert.Contains(
+                partialJson.GetProperty("file_errors").EnumerateArray(),
+                error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(arguments);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.True(recoveryJson.GetProperty("csharp_symbol_name_ready").GetBoolean());
+            Assert.True(recoveryJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_InitialSqlReadFailureKeepsSqlReadinessPartialUntilCleanRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
         try
         {
             File.WriteAllText(
+                Path.Combine(projectRoot, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            IndexCommandRunner.FullScanFileContentLoadForTesting = _ =>
+                throw new IOException("simulated initial SQL read failure");
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "1", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.Equal(1, partialJson.GetProperty("file_errors").GetArrayLength());
+            Assert.False(partialJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                partialJson.GetProperty("sql_graph_contract_degraded_reason").GetString());
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "1", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.True(recoveryJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("sql")]
+    public void Run_FullScan_RebuildFailureRetainsPersistedReadinessForReclassifiedLanguage(
+        string initialLanguage)
+    {
+        var projectRoot = CreateTempProject();
+        var configPath = Path.Combine(projectRoot, LanguageMapOverrides.WorkspaceFileName);
+        var sourcePath = Path.Combine(projectRoot, "sample.custom");
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            File.WriteAllText(
+                configPath,
+                $"entries:\n- extension: .custom\n  language: {initialLanguage}\n");
+            File.WriteAllText(
+                sourcePath,
+                initialLanguage == "csharp"
+                    ? "public interface IContract { }\n"
+                    : "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "1", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(initialLanguage == "csharp"
+                ? initialJson.GetProperty("csharp_symbol_name_ready").GetBoolean()
+                : initialJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+
+            File.WriteAllText(
+                configPath,
+                "entries:\n- extension: .custom\n  language: python\n");
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (path == "sample.custom")
+                    throw new IOException("simulated rebuild read failure after language reclassification");
+            };
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--rebuild", "--yes", "--parallelism", "1", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            if (initialLanguage == "csharp")
+            {
+                Assert.False(partialJson.GetProperty("csharp_symbol_name_ready").GetBoolean());
+                Assert.False(partialJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+            }
+            else
+            {
+                Assert.False(partialJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+                Assert.Equal(
+                    DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                    partialJson.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            }
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.True(new DbWriter(db).HasAnyFilesWithLanguage(initialLanguage));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PartialDiscoveryRetainsKnownLanguageReadinessFailures()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var unreadableDirectory = Path.Combine(projectRoot, "unreadable");
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Contract.cs"),
+                "public interface IContract { }\n");
+            Directory.CreateDirectory(unreadableDirectory);
+            File.WriteAllText(Path.Combine(unreadableDirectory, "blocked.py"), "print('blocked')\n");
+            originalMode = File.GetUnixFileMode(unreadableDirectory);
+            File.SetUnixFileMode(unreadableDirectory, UnixFileMode.None);
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (path == "schema.sql")
+                    throw new IOException("simulated SQL read failure after partial discovery");
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "1", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.True(json.GetProperty("summary").GetProperty("errors").GetInt32() >= 2);
+            Assert.False(
+                json.GetProperty("sql_graph_contract_ready").GetBoolean(),
+                json.GetRawText());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            Assert.False(json.GetProperty("csharp_symbol_name_ready").GetBoolean());
+            Assert.False(json.GetProperty("csharp_metadata_target_ready").GetBoolean());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            if (originalMode.HasValue && Directory.Exists(unreadableDirectory))
+                File.SetUnixFileMode(unreadableDirectory, originalMode.Value);
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PositiveCsharpNoOpLateRemovalRefreshesEveryCsharpReference()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var stalePath = Path.Combine(projectRoot, "obsolete.py");
+        var loadedPaths = new ConcurrentBag<string>();
+        var previousRevalidationHook = IndexCommandRunner.FullScanCSharpFinalStatRevalidationForTesting;
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(stalePath, "print('obsolete')\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            File.Delete(stalePath);
+
+            IndexCommandRunner.FullScanCSharpFinalStatRevalidationForTesting = () =>
+            {
+                WriteParseableInterface(interfacePath, hasStaticContract: false);
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(2));
+            };
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var exitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(["IParseable.cs", "Money.cs"], loadedPaths.Order(StringComparer.Ordinal));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(false, new DbWriter(db).GetCSharpStaticInterfaceSourceEvidence());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpFinalStatRevalidationForTesting = previousRevalidationHook;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_KnownNegativeNoOpSkipsWorkspaceUntilCompletenessIsDegraded()
+    {
+        var projectRoot = CreateTempProject();
+        var previousPrepassHook = IndexCommandRunner.FullScanCSharpPrepassForTesting;
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var prepassCalls = 0;
+        var loadedPaths = new List<string>();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "IPlain.cs"),
+                "public interface IPlain { void Run(); }\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            using (var db = new DbContext(
+                       DbOpenIntent.WriteIndex,
+                       Path.Combine(projectRoot, ".cdidx", "codeindex.db")))
+            {
+                Assert.Equal(false, new DbWriter(db).GetCSharpStaticInterfaceSourceEvidence());
+            }
+
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = () => prepassCalls++;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(0, prepassCalls);
+            Assert.Empty(loadedPaths);
+
+            using (var db = new DbContext(
+                       DbOpenIntent.WriteIndex,
+                       Path.Combine(projectRoot, ".cdidx", "codeindex.db")))
+            {
+                new DbWriter(db).MarkIndexIncomplete(["test_degraded"]);
+            }
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, prepassCalls);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = previousPrepassHook;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ReadinessBoundaryNewCsharpFileLeavesPartialUntilCleanRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var previousValidationHook = IndexCommandRunner.FullScanCSharpReadinessValidationForTesting;
+        var addedPath = Path.Combine(projectRoot, "INewContract.cs");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = () =>
+            {
+                File.WriteAllText(
+                    addedPath,
+                    "public interface INewContract<T> { static abstract T Create(); }\n");
+                File.SetLastWriteTimeUtc(addedPath, DateTime.UtcNow.AddSeconds(2));
+            };
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.Contains(
+                partialJson.GetProperty("file_errors").EnumerateArray(),
+                error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+            using (var partialDb = new DbContext(
+                       DbOpenIntent.WriteIndex,
+                       Path.Combine(projectRoot, ".cdidx", "codeindex.db")))
+            {
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+            }
+
+            IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(
+                [projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            using var recoveryDb = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(true, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void Run_FullScan_ValidatesScanInputExactlyBeforeWriteAndReadiness(
+        bool includeCSharp,
+        bool symbolsOnly)
+    {
+        var projectRoot = CreateTempProject();
+        var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var phases = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "def run():\n    return 1\n");
+            if (includeCSharp)
+                File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phases.Add;
+
+            var args = symbolsOnly
+                ? new[] { projectRoot, "--symbols-only", "--json", "--quiet" }
+                : [projectRoot, "--json", "--quiet"];
+            var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(["before_write", "before_readiness"], phases);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_FreshSnapshotAbortRetainsDiscoveredLanguageFailuresWithoutRows()
+    {
+        var projectRoot = CreateTempProject();
+        var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        var phases = new List<string>();
+        try
+        {
+            File.WriteAllText(ignorePath, "# snapshot-a\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Contract.cs"),
+                "public interface IContract { }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            var ignoreModifiedUtc = File.GetLastWriteTimeUtc(ignorePath);
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(projectRoot);
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phase =>
+            {
+                phases.Add(phase);
+                if (phase != "before_write")
+                    return;
+                File.WriteAllText(ignorePath, "# snapshot-b\n");
+                File.SetLastWriteTimeUtc(ignorePath, ignoreModifiedUtc);
+                Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(["before_write"], phases);
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            Assert.False(json.GetProperty("csharp_symbol_name_ready").GetBoolean());
+            Assert.False(json.GetProperty("csharp_metadata_target_ready").GetBoolean());
+            using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            var reader = new DbReader(db.Connection);
+            Assert.Null(reader.GetFileByPath("Contract.cs"));
+            Assert.Null(reader.GetFileByPath("schema.sql"));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_FirstSnapshotBarrierDriftPreservesRowsAndTrustAfterSchemaInitialization()
+    {
+        var projectRoot = CreateTempProject();
+        var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        var appPath = Path.Combine(projectRoot, "app.py");
+        var obsoletePath = Path.Combine(projectRoot, "obsolete.md");
+        var phases = new List<string>();
+        try
+        {
+            File.WriteAllText(ignorePath, "never-match-a\n");
+            File.WriteAllText(appPath, "def run():\n    return 1\n");
+            File.WriteAllText(obsoletePath, "# Obsolete\n");
+            File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            int priorReadiness;
+            string? priorIndexComplete;
+            string? priorAppChecksum;
+            bool? priorSourceEvidence;
+            string? priorFtsRecoveryMarker;
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                priorReadiness = db.GetUserVersion();
+                priorIndexComplete = db.GetMetaString(DbContext.IndexCompletenessMetaKey);
+                priorAppChecksum = new DbReader(db.Connection).GetFileByPath("app.py")?.Checksum;
+                var priorWriter = new DbWriter(db);
+                priorSourceEvidence = priorWriter.GetCSharpStaticInterfaceSourceEvidence();
+                priorWriter.MarkFtsBulkLoadRecoveryNeeded();
+                priorFtsRecoveryMarker = db.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey);
+            }
+
+            File.WriteAllText(appPath, "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(appPath, DateTime.UtcNow.AddSeconds(3));
+            File.Delete(obsoletePath);
+            var ignoreModifiedUtc = File.GetLastWriteTimeUtc(ignorePath);
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(projectRoot);
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phase =>
+            {
+                phases.Add(phase);
+                if (phase != "before_write")
+                    return;
+                File.WriteAllText(ignorePath, "never-match-b\n");
+                File.SetLastWriteTimeUtc(ignorePath, ignoreModifiedUtc);
+                Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(["before_write"], phases);
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Contains(
+                json.GetProperty("file_errors").EnumerateArray(),
+                error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+            using var preservedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(priorReadiness, preservedDb.GetUserVersion());
+            Assert.Equal(priorIndexComplete, preservedDb.GetMetaString(DbContext.IndexCompletenessMetaKey));
+            Assert.Equal(
+                priorFtsRecoveryMarker,
+                preservedDb.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(priorAppChecksum, new DbReader(preservedDb.Connection).GetFileByPath("app.py")?.Checksum);
+            Assert.NotNull(new DbReader(preservedDb.Connection).GetFileByPath("obsolete.md"));
+            Assert.Equal(
+                priorSourceEvidence,
+                new DbWriter(preservedDb).GetCSharpStaticInterfaceSourceEvidence());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ReadinessBoundaryInPlaceGitignoreChangeLeavesPartialUntilCleanRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var previousValidationHook = IndexCommandRunner.FullScanCSharpReadinessValidationForTesting;
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "IHidden.cs"),
+                "public interface IHidden<T> { static abstract T Create(); }\n");
+            File.WriteAllText(ignorePath, "IHidden.cs\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(projectRoot);
+            IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = () =>
+            {
+                File.WriteAllText(ignorePath, "XHidden.cs\n");
+                Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
+            };
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(rootModifiedUtc, Directory.GetLastWriteTimeUtc(projectRoot));
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.False(partialJson.GetProperty("index_complete").GetBoolean());
+            Assert.False(partialJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.Contains(
+                partialJson.GetProperty("file_errors").EnumerateArray(),
+                error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+            using (var partialDb = new DbContext(
+                       DbOpenIntent.WriteIndex,
+                       Path.Combine(projectRoot, ".cdidx", "codeindex.db")))
+            {
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+            }
+
+            IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(
+                [projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            using var recoveryDb = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(true, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ReadinessBoundaryIgnoredDirectoryChurnRemainsClean()
+    {
+        var projectRoot = CreateTempProject();
+        var previousValidationHook = IndexCommandRunner.FullScanCSharpReadinessValidationForTesting;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
+            var ignoredDirectory = Path.Combine(projectRoot, "node_modules", "pkg");
+            Directory.CreateDirectory(ignoredDirectory);
+            File.WriteAllText(Path.Combine(ignoredDirectory, "existing.js"), "module.exports = 1;\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = () =>
+                File.WriteAllText(
+                    Path.Combine(ignoredDirectory, "generated.cs"),
+                    "public interface IIgnored<T> { static abstract T Create(); }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_RawCsharpPrepassMemberRemovalPreservesRowsUntilCleanRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var implementationPath = Path.Combine(projectRoot, "Money.cs");
+        var previousPrepassHook = IndexCommandRunner.FullScanCSharpPrepassForTesting;
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var loadedPaths = new ConcurrentBag<string>();
+        var contractRemoved = false;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                implementationPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            var interfaceChecksumBefore = ReadIndexedChecksum("IParseable.cs");
+            var implementationChecksumBefore = ReadIndexedChecksum("Money.cs");
+
+            File.AppendAllText(implementationPath, "// force raw workspace prepass\n");
+            File.SetLastWriteTimeUtc(implementationPath, DateTime.UtcNow.AddSeconds(2));
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = () =>
+            {
+                Assert.False(contractRemoved);
+                WriteParseableInterface(interfacePath, hasStaticContract: false);
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+                contractRemoved = true;
+            };
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.True(contractRemoved);
+            Assert.Empty(loadedPaths);
+            Assert.Equal(2, partialJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            var failure = Assert.Single(partialJson.GetProperty("file_errors").EnumerateArray());
+            Assert.Equal("IParseable.cs", failure.GetProperty("file").GetString());
+            Assert.Equal("csharp_prepass", failure.GetProperty("phase").GetString());
+            Assert.Equal(interfaceChecksumBefore, ReadIndexedChecksum("IParseable.cs"));
+            Assert.Equal(implementationChecksumBefore, ReadIndexedChecksum("Money.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            using (var partialDb = new DbContext(
+                       DbOpenIntent.WriteIndex,
+                       Path.Combine(projectRoot, ".cdidx", "codeindex.db")))
+            {
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+            }
+
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = previousPrepassHook;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(
+                [projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            using var recoveryDb = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(false, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+
+            string ReadIndexedChecksum(string path)
+            {
+                using var db = new DbContext(
+                    DbOpenIntent.WriteIndex,
+                    Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = "SELECT checksum FROM files WHERE path = $path";
+                command.Parameters.AddWithValue("$path", path);
+                return Assert.IsType<string>(command.ExecuteScalar());
+            }
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpPrepassForTesting = previousPrepassHook;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_AfterSymbolsOnlyRebuildsCsharpGraphBeforeReady()
+    {
+        var projectRoot = CreateTempProject();
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var loadedPaths = new ConcurrentBag<string>();
+        try
+        {
+            WriteParseableInterface(
                 Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--symbols-only", "--json", "--quiet"],
+                    _jsonOptions));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson(
+                [projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Equal(["IParseable.cs", "Money.cs"], loadedPaths.Order(StringComparer.Ordinal));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Null(db.GetMetaString(DbContext.SymbolsOnlyGraphOmittedMetaKey));
+            var status = new DbReader(db.Connection).GetStatus();
+            Assert.True(status.GraphDataCurrent);
+            Assert.True(status.IndexComplete);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PositiveCsharpNoOpLateOversizeContractRefreshesEveryCsharpReference()
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var stalePath = Path.Combine(projectRoot, "obsolete.py");
+        var loadedPaths = new ConcurrentBag<string>();
+        var previousRevalidationHook = IndexCommandRunner.FullScanCSharpFinalStatRevalidationForTesting;
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        try
+        {
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            File.WriteAllText(stalePath, "print('obsolete')\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            File.Delete(stalePath);
+            IndexCommandRunner.FullScanCSharpFinalStatRevalidationForTesting = () =>
+            {
+                File.WriteAllText(interfacePath, new string('x', 2048));
+                File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(2));
+            };
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson(
+                [projectRoot, "--max-file-bytes", "1024", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.True(refreshJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(refreshJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.Equal(["IParseable.cs", "Money.cs"], loadedPaths.Order(StringComparer.Ordinal));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            using var refreshDb = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(false, new DbWriter(refreshDb).GetCSharpStaticInterfaceSourceEvidence());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanCSharpFinalStatRevalidationForTesting = previousRevalidationHook;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DeletedCsharpStaticInterfaceContractDoesNotRegenerateImplicitReference()
+    {
+        var projectRoot = CreateTempProject();
+        var previousPreflightHook = DbWriter.CSharpContractPreflightForTesting;
+        var preflightCount = 0;
+        try
+        {
+            DbWriter.CSharpContractPreflightForTesting = () =>
+            {
+                preflightCount++;
+                previousPreflightHook?.Invoke();
+            };
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
                 """
                 public interface IParseable<T>
                 {
@@ -1145,25 +2505,154 @@ public partial class IndexCommandRunnerTests
                 }
                 """);
 
-            var exitCode = IndexCommandRunner.Run(
-                [projectRoot, "--parallelism", "4", "--json", "--quiet"],
-                _jsonOptions);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0, preflightCount);
+
+            File.Delete(interfacePath);
+
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0, preflightCount);
+
+            var noStaleExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, noStaleExitCode);
+            Assert.Equal(0, preflightCount);
 
             using var conn = OpenNonPoolingConnection(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-                SELECT COUNT(*)
-                FROM symbol_references r
-                JOIN files f ON f.id = r.file_id
-                JOIN reference_lines rl ON rl.id = r.reference_line_id
-                WHERE f.path = 'Money.cs'
-                  AND r.symbol_name = 'Parse'
-                  AND r.reference_kind = 'implicit_implementation'
-                  AND rl.context = 'public static Money Parse(string s) => new();'";
-            var count = Convert.ToInt32(cmd.ExecuteScalar());
-            Assert.Equal(1, count);
+            cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'IParseable'";
+            Assert.Equal(0L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.CSharpContractPreflightForTesting = previousPreflightHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DeletedPlainCsharpInterfaceKeepsUnchangedFilesReusable()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var plainInterfacePath = Path.Combine(projectRoot, "IPlain.cs");
+            File.WriteAllText(plainInterfacePath, "public interface IPlain { void Run(); }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "Stable.cs"), "public sealed class Stable { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(plainInterfacePath);
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DeletedNonCsharpFileKeepsPositiveCsharpSnapshotReusable()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            var stalePythonPath = Path.Combine(projectRoot, "stale.py");
+            File.WriteAllText(stalePythonPath, "print('stale')\n");
+
+            var initialExitCode = IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            File.Delete(stalePythonPath);
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            var summary = refreshJson.GetProperty("summary");
+            Assert.Equal(1, summary.GetProperty("files_purged").GetInt32());
+            Assert.Equal(2, summary.GetProperty("files_skipped").GetInt32());
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_FatalDiscoveryErrorDefersCsharpGraphMutationUntilCleanRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var moneyPath = Path.Combine(projectRoot, "Money.cs");
+        var oversizedIgnorePath = Path.Combine(projectRoot, ".gitignore");
+        try
+        {
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            File.WriteAllText(
+                moneyPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+
+            File.WriteAllText(
+                moneyPath,
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string text) => new();\n"
+                + "}\n");
+            File.SetLastWriteTimeUtc(moneyPath, DateTime.UtcNow.AddSeconds(2));
+            File.WriteAllText(oversizedIgnorePath, new string('a', 256 * 1024 + 1));
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            using (var partialDb = new DbContext(
+                       DbOpenIntent.WriteIndex,
+                       Path.Combine(projectRoot, ".cdidx", "codeindex.db")))
+            {
+                Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+            }
+
+            File.Delete(oversizedIgnorePath);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
         }
         finally
         {
@@ -1593,8 +3082,11 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void Run_FullScan_UnreadableDirectoryPreservesFilesAndCheckpointSupportsRetry()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_FullScan_IncompleteSnapshotDoesNotWriteCheckpointAndCleanRetryRescans(
+        bool symbolsOnly)
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1614,40 +3106,60 @@ public partial class IndexCommandRunnerTests
             File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "initial");
+            var jsonArgs = symbolsOnly
+                ? new[] { projectRoot, "--symbols-only", "--json" }
+                : [projectRoot, "--json"];
+            var humanArgs = symbolsOnly
+                ? new[] { projectRoot, "--symbols-only" }
+                : [projectRoot];
 
-            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            var initialExitCode = IndexCommandRunner.Run(jsonArgs, _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             SetUnixPermissions(secretDir, UnixFileMode.None);
-            var (partialExitCode, partialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            var (partialExitCode, partialJson) = RunAndCaptureJson(jsonArgs);
 
             Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
             Assert.Equal("partial", partialJson.GetProperty("status").GetString());
             Assert.Equal(0, partialJson.GetProperty("summary").GetProperty("files_purged").GetInt32());
-            Assert.Equal(1, partialJson.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal("secret", partialJson.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.Equal(
-                "Could not scan directory due to permissions.",
-                partialJson.GetProperty("errors")[0].GetProperty("message").GetString());
+            Assert.True(partialJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Contains(
+                partialJson.GetProperty("errors").EnumerateArray(),
+                error =>
+                    error.GetProperty("file").GetString() == "secret"
+                    && error.GetProperty("message").GetString() == "Could not scan directory due to permissions.");
 
             var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
-            Assert.True(File.Exists(checkpointPath));
+            Assert.False(File.Exists(checkpointPath));
 
-            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot]);
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams(humanArgs);
             Assert.Equal(CommandExitCodes.PartialResult, humanExitCode);
             Assert.Contains("secret", stderr);
             Assert.Contains("Could not scan directory due to permissions.", stderr);
 
             SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var head = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            File.WriteAllText(
+                checkpointPath,
+                $$"""
+                {
+                  "Version": 1,
+                  "GitHead": "{{head}}",
+                  "Directories": [
+                    "src"
+                  ]
+                }
+                """);
+            Assert.True(File.Exists(checkpointPath));
             File.Delete(srcFile);
-            var (retryExitCode, retryJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            var (retryExitCode, retryJson) = RunAndCaptureJson(jsonArgs);
 
             Assert.Equal(CommandExitCodes.Success, retryExitCode);
             Assert.Equal("success", retryJson.GetProperty("status").GetString());
             Assert.False(File.Exists(checkpointPath));
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.Contains("src/b.cs", indexedPaths);
+            Assert.DoesNotContain("src/b.cs", indexedPaths);
             Assert.Contains("secret/a.cs", indexedPaths);
         }
         finally
@@ -1659,7 +3171,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_ReportsCheckpointSaveAndDeleteFailuresAsWarnings()
+    public void Run_FullScan_IncompleteSnapshotSkipsCheckpointWriteAndDeleteFailureIsWarning()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1680,29 +3192,37 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             SetUnixPermissions(secretDir, UnixFileMode.None);
-            IndexCommandRunner.WriteScanCheckpointForTesting = _ => throw new IOException("checkpoint save denied");
+            var checkpointSaveAttempts = 0;
+            IndexCommandRunner.WriteScanCheckpointForTesting = _ =>
+            {
+                checkpointSaveAttempts++;
+                throw new IOException("checkpoint save denied");
+            };
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Contains(
-                json.GetProperty("warnings").EnumerateArray(),
-                warning =>
-                    warning.GetProperty("file").GetString() == "<scan_checkpoint>"
-                    && warning.GetProperty("message").GetString()!.Contains("scan checkpoint save failed", StringComparison.Ordinal)
-                    && warning.GetProperty("message").GetString()!.Contains("IOException", StringComparison.Ordinal));
+            Assert.True(json.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(0, checkpointSaveAttempts);
 
             IndexCommandRunner.WriteScanCheckpointForTesting = null;
-            var (partialExitCode, partialJson) = RunAndCaptureJson([projectRoot, "--json"]);
-            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
-            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
-
             var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
-            Assert.True(File.Exists(checkpointPath));
+            Assert.False(File.Exists(checkpointPath));
 
             SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var head = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            File.WriteAllText(
+                checkpointPath,
+                $$"""
+                {
+                  "Version": 1,
+                  "GitHead": "{{head}}",
+                  "Directories": [
+                    "secret"
+                  ]
+                }
+                """);
             IndexCommandRunner.DeleteScanCheckpointForTesting = _ => throw new IOException("checkpoint delete denied");
 
             var (deleteExitCode, deleteJson) = RunAndCaptureJson([projectRoot, "--json"]);
@@ -1728,7 +3248,60 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_IgnoresOversizedCheckpoint()
+    public void Run_FullScan_StableFileReadFailureDeletesLegacyCheckpointWithoutWritingOne()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var targetPath = Path.Combine(projectRoot, "stable.cs");
+        try
+        {
+            File.WriteAllText(targetPath, "public class Stable { }\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
+            File.WriteAllText(
+                checkpointPath,
+                "{\"Version\":1,\"GitHead\":\"legacy\",\"Directories\":[\"\"]}");
+            File.WriteAllText(targetPath, "public class Stable { public int Changed => 1; }\n");
+            SetUnixPermissions(targetPath, UnixFileMode.None);
+            var checkpointSaveAttempts = 0;
+            var checkpointDeleteAttempts = 0;
+            IndexCommandRunner.WriteScanCheckpointForTesting = _ =>
+            {
+                checkpointSaveAttempts++;
+                throw new IOException("legacy checkpoint must not be written");
+            };
+            IndexCommandRunner.DeleteScanCheckpointForTesting = path =>
+            {
+                checkpointDeleteAttempts++;
+                File.Delete(path);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(0, checkpointSaveAttempts);
+            Assert.Equal(1, checkpointDeleteAttempts);
+            Assert.False(File.Exists(checkpointPath));
+        }
+        finally
+        {
+            IndexCommandRunner.WriteScanCheckpointForTesting = null;
+            IndexCommandRunner.DeleteScanCheckpointForTesting = null;
+            if (File.Exists(targetPath))
+                SetUnixPermissions(targetPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DeletesLegacyOversizedCheckpointWithoutParsing()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1761,11 +3334,18 @@ public partial class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains(
-                json.GetProperty("warnings").EnumerateArray(),
-                warning =>
-                    warning.GetProperty("file").GetString() == "<scan_checkpoint>"
-                    && warning.GetProperty("message").GetString()!.Contains("file exceeds the scan checkpoint size limit", StringComparison.Ordinal));
+            var warnings = json.GetProperty("warnings");
+            if (warnings.ValueKind == JsonValueKind.Array)
+            {
+                Assert.DoesNotContain(
+                    warnings.EnumerateArray(),
+                    warning => warning.GetProperty("file").GetString() == "<scan_checkpoint>");
+            }
+            else
+            {
+                Assert.Equal(JsonValueKind.Null, warnings.ValueKind);
+            }
+            Assert.False(File.Exists(checkpointPath));
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("src/a.cs", indexedPaths);
@@ -1776,8 +3356,14 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    private static (int Readiness, string? IndexCompleteness) ReadFullScanTrustSnapshot(string dbPath)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        return (db.GetUserVersion(), db.GetMetaString(DbContext.IndexCompletenessMetaKey));
+    }
+
     [Fact]
-    public void Run_FullScan_PurgesStaleRowsWithinListedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
+    public void Run_FullScan_PreservesStaleRowsWhenAnyDirectoryIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1793,6 +3379,8 @@ public partial class IndexCommandRunnerTests
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var priorTrust = ReadFullScanTrustSnapshot(dbPath);
 
             File.WriteAllText(toolPath, "plain text now\n");
             SetUnixPermissions(secretDir, UnixFileMode.None);
@@ -1801,11 +3389,14 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
-            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Contains(
+                json.GetProperty("errors").EnumerateArray(),
+                error => error.GetProperty("file").GetString() == "secret");
 
-            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.DoesNotContain("tool", indexedPaths);
+            Assert.Equal(priorTrust, ReadFullScanTrustSnapshot(dbPath));
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.Contains("tool", indexedPaths);
             Assert.Contains("secret/a.cs", indexedPaths);
         }
         finally
@@ -1817,7 +3408,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_HumanOutput_ExplainsPartialPurgeScopeWhenAnotherDirectoryIsUnreadable()
+    public void Run_FullScan_HumanOutput_ExplainsWriteBarrierWhenDirectoryIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1833,6 +3424,8 @@ public partial class IndexCommandRunnerTests
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var priorTrust = ReadFullScanTrustSnapshot(dbPath);
 
             File.WriteAllText(toolPath, "plain text now\n");
             SetUnixPermissions(secretDir, UnixFileMode.None);
@@ -1840,8 +3433,10 @@ public partial class IndexCommandRunnerTests
             var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot]);
 
             Assert.Equal(CommandExitCodes.PartialResult, humanExitCode);
-            Assert.Contains("positively observed as no longer indexable or missing from directories whose file listing completed successfully", stdout);
-            Assert.Contains("Skipped authoritative purge outside directories whose file listing completed successfully", stderr);
+            Assert.DoesNotContain("Purged", stdout, StringComparison.Ordinal);
+            Assert.Contains("stopped before index-data mutation", stderr, StringComparison.Ordinal);
+            Assert.Equal(priorTrust, ReadFullScanTrustSnapshot(dbPath));
+            Assert.Contains("tool", ReadIndexedPaths(dbPath));
         }
         finally
         {
@@ -1852,7 +3447,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_PurgesDeletedFilesWithinFullyScannedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
+    public void Run_FullScan_PreservesDeletedFilesWhenAnotherDirectoryIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1869,6 +3464,8 @@ public partial class IndexCommandRunnerTests
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var priorTrust = ReadFullScanTrustSnapshot(dbPath);
 
             File.Delete(deletedPath);
             SetUnixPermissions(secretDir, UnixFileMode.None);
@@ -1877,11 +3474,14 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
-            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Contains(
+                json.GetProperty("errors").EnumerateArray(),
+                error => error.GetProperty("file").GetString() == "secret");
 
-            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.DoesNotContain("src/a.cs", indexedPaths);
+            Assert.Equal(priorTrust, ReadFullScanTrustSnapshot(dbPath));
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.Contains("src/a.cs", indexedPaths);
             Assert.Contains("secret/a.cs", indexedPaths);
         }
         finally
@@ -1893,7 +3493,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_PurgesDeletedRootFileWhenSiblingDirectoryIsUnreadable()
+    public void Run_FullScan_PreservesDeletedRootFileWhenSiblingDirectoryIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1909,6 +3509,8 @@ public partial class IndexCommandRunnerTests
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var priorTrust = ReadFullScanTrustSnapshot(dbPath);
 
             File.Delete(deletedPath);
             SetUnixPermissions(secretDir, UnixFileMode.None);
@@ -1917,11 +3519,14 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
-            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Contains(
+                json.GetProperty("errors").EnumerateArray(),
+                error => error.GetProperty("file").GetString() == "secret");
 
-            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.DoesNotContain("direct.cs", indexedPaths);
+            Assert.Equal(priorTrust, ReadFullScanTrustSnapshot(dbPath));
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.Contains("direct.cs", indexedPaths);
             Assert.Contains("secret/hidden.cs", indexedPaths);
         }
         finally
@@ -1933,7 +3538,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_PurgesDeletedFilesWhenUnreadableDescendantExistsUnderSameParentDirectory()
+    public void Run_FullScan_PreservesDeletedFilesWhenUnreadableDescendantExistsUnderSameParentDirectory()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1950,6 +3555,8 @@ public partial class IndexCommandRunnerTests
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var priorTrust = ReadFullScanTrustSnapshot(dbPath);
 
             File.Delete(deletedPath);
             SetUnixPermissions(secretDir, UnixFileMode.None);
@@ -1958,11 +3565,14 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
-            Assert.Equal("src/secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Contains(
+                json.GetProperty("errors").EnumerateArray(),
+                error => error.GetProperty("file").GetString() == "src/secret");
 
-            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.DoesNotContain("src/direct.cs", indexedPaths);
+            Assert.Equal(priorTrust, ReadFullScanTrustSnapshot(dbPath));
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.Contains("src/direct.cs", indexedPaths);
             Assert.Contains("src/secret/hidden.cs", indexedPaths);
         }
         finally

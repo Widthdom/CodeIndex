@@ -1313,8 +1313,12 @@ public partial class McpServer
     }
 
     private void AddReferenceGraphCompletenessSignal(JsonObject payload, DbReader reader)
+        => AddReferenceGraphCompletenessSignal(payload, reader.GetReferenceExtractionCapHits());
+
+    private void AddReferenceGraphCompletenessSignal(
+        JsonObject payload,
+        ReferenceExtractionCapHitSummary capHits)
     {
-        var capHits = reader.GetReferenceExtractionCapHits();
         var complete = capHits.StateAvailable && capHits.HitCount == 0;
         payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
             ReferenceExtractor.GetSafetyLimits(),
@@ -1359,13 +1363,8 @@ public partial class McpServer
 
     private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(
         FileIndexer indexer,
-        CancellationToken cancellationToken)
-    {
-        var values = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = indexer.GetProjectMarkerFingerprintResult(lang, cancellationToken);
-        return values;
-    }
+        CancellationToken cancellationToken) =>
+        indexer.GetProjectMarkerFingerprintResults(cancellationToken);
 
     private static void RestampHotspotFamilyTrust(
         DbWriter writer,

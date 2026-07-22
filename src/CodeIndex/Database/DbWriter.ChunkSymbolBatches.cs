@@ -53,6 +53,9 @@ public partial class DbWriter
     public void InsertSymbols(IReadOnlyList<SymbolRecord> symbols, CancellationToken cancellationToken)
     {
         if (symbols.Count == 0) return;
+        cancellationToken.ThrowIfCancellationRequested();
+        _typeScriptAugmentationDirtyNameScope?.TrackInsertedSymbols(symbols, cancellationToken);
+        TrackReferenceGraphInsertedSymbols(symbols);
         InvalidateReferenceIdentityContractForMutation();
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 20);

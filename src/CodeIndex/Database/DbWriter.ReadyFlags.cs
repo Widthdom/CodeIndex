@@ -126,6 +126,15 @@ public partial class DbWriter
 
     private bool ClearHotspotReferenceAggregateReady()
     {
+        if (TryStartDeferredHotspotReferenceMutation())
+            return false;
+
+        return ClearHotspotReferenceAggregateReadyCore();
+    }
+
+    private bool ClearHotspotReferenceAggregateReadyCore()
+    {
+        HotspotAggregateReadinessCheckedForTesting?.Invoke();
         using var read = _conn.CreateCommand();
         read.Transaction = _activeTransaction;
         read.CommandText = "PRAGMA user_version";
@@ -140,6 +149,9 @@ public partial class DbWriter
 
     private void RestoreHotspotReferenceAggregateReady(bool wasReady)
     {
+        if (_deferredHotspotReferenceRefresh is { IsCompleting: false, IsCompleted: false })
+            return;
+
         if (wasReady)
             MarkHotspotReferenceAggregateReady();
     }

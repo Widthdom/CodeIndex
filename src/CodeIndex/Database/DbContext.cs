@@ -163,6 +163,10 @@ public class DbContext : IDisposable
         "idx_symbol_refs_container_nocase_kind",
         "idx_symbols_name_nocase",
         "idx_symbols_name_folded",
+        "idx_symbols_file_name_folded",
+        "idx_symbols_file_name_nocase",
+        "idx_symbols_name_folded_container_name_nocase",
+        "idx_symbols_name_folded_container_qualified_name_nocase",
         "idx_symbol_refs_symbol_name_folded",
         "idx_symbol_refs_container_name_folded",
         "idx_symbol_refs_symbol_name_folded_kind",
@@ -174,6 +178,7 @@ public class DbContext : IDisposable
         "idx_hotspot_reference_counts_rank",
         "idx_symbol_refs_source_symbol",
         "idx_symbol_refs_target_symbol",
+        "idx_symbol_refs_resolved_source_target_kind",
         "idx_symbol_ref_candidates_symbol",
     ];
     internal static readonly string[] ResourceListGenerationTriggerNames =
@@ -2002,6 +2007,7 @@ public class DbContext : IDisposable
         => HotspotFamilyIncompleteMarkerFingerprintPrefix + (string.IsNullOrWhiteSpace(fingerprint) ? "unknown" : fingerprint);
     public const int CSharpSymbolNameContractVersion = 2;
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
+    public const string CSharpStaticInterfaceSourceEvidenceMetaKey = "csharp_static_interface_source_evidence";
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const int ReferenceIdentityContractVersion = 1;
@@ -2514,8 +2520,13 @@ public class DbContext : IDisposable
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_generated ON files(generated)");
-                // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
-                // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
+                Execute("CREATE INDEX IF NOT EXISTS idx_files_checksum ON files(checksum)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_files_path_nocase ON files(path COLLATE NOCASE)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_file_issues_file_kind ON file_issues(file_id, kind)");
+                // The UNIQUE path constraint supplies the BINARY exact index. The separate
+                // NOCASE index is only for bounded ASCII case-alias candidate lookups.
+                // path の UNIQUE 制約が BINARY exact index を作り、別の NOCASE index は
+                // bounded ASCII case-alias candidate lookup 専用に使う。
                 Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_end_start_nonnull ON chunks(file_id, end_line, start_line, chunk_index) WHERE content IS NOT NULL");
                 Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_start_chunk_nonnull ON chunks(file_id, start_line, chunk_index, end_line) WHERE content IS NOT NULL");
@@ -2556,6 +2567,15 @@ public class DbContext : IDisposable
                 // the NOCASE indexes above. Both sets coexist so mixed-state DBs cannot regress.
                 // #86: 折り畳み列のインデックス。FoldReadyFlag が立っている DB でだけ使う。
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)");
+                // Reference-source and ranked-candidate resolution repeatedly combines the folded
+                // symbol name with file or container scope. Keep those probes bounded for every
+                // indexed language, including the NOCASE fallback used by partially migrated DBs.
+                // 参照元・rank 候補解決は folded 名と file/container scope を繰り返し組み合わせる。
+                // 全言語と部分 migration DB の NOCASE fallback を複合 index で bounded に保つ。
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_folded ON symbols(file_id, name_folded)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_nocase ON symbols(file_id, name COLLATE NOCASE)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_name_nocase ON symbols(name_folded, container_name COLLATE NOCASE)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_qualified_name_nocase ON symbols(name_folded, container_qualified_name COLLATE NOCASE)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded  ON symbol_references(container_name_folded)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)");
@@ -2563,6 +2583,12 @@ public class DbContext : IDisposable
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)");
+                // Mutual-recursion refresh probes the reverse of every resolved edge. Restrict the
+                // covering index to rows that can participate so unresolved references add no write
+                // or storage cost during ordinary extraction.
+                // 相互再帰 refresh は解決済み edge ごとに逆辺を探す。参加可能な行だけを covering
+                // index に含め、通常抽出中の未解決参照には書き込み・容量コストを加えない。
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind) WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)");
 
                 // Full-text search / 全文検索
@@ -3512,6 +3538,8 @@ public class DbContext : IDisposable
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)"));
         yield return ("CREATE INDEX idx_symbol_refs_target_symbol",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)"));
+        yield return ("CREATE INDEX idx_symbol_refs_resolved_source_target_kind",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind) WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL"));
         yield return ("CREATE INDEX idx_symbol_ref_candidates_symbol",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)"));
 
@@ -3543,6 +3571,14 @@ public class DbContext : IDisposable
         yield return ("EnsureColumn symbol_references.container_name_folded", () => EnsureColumn("symbol_references", "container_name_folded", "TEXT"));
         yield return ("CREATE INDEX idx_symbols_name_folded",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)"));
+        yield return ("CREATE INDEX idx_symbols_file_name_folded",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_folded ON symbols(file_id, name_folded)"));
+        yield return ("CREATE INDEX idx_symbols_file_name_nocase",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_nocase ON symbols(file_id, name COLLATE NOCASE)"));
+        yield return ("CREATE INDEX idx_symbols_name_folded_container_name_nocase",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_name_nocase ON symbols(name_folded, container_name COLLATE NOCASE)"));
+        yield return ("CREATE INDEX idx_symbols_name_folded_container_qualified_name_nocase",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_qualified_name_nocase ON symbols(name_folded, container_qualified_name COLLATE NOCASE)"));
         yield return ("CREATE INDEX idx_symbol_refs_symbol_name_folded",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)"));
         yield return ("CREATE INDEX idx_symbol_refs_container_name_folded",

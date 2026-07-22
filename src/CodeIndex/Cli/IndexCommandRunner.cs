@@ -86,13 +86,22 @@ public static partial class IndexCommandRunner
     internal static Action<string, string>? FullScanFilePhaseForTesting { get; set; }
     internal static Action<int>? FullScanExtractionQueueCapacityForTesting { get; set; }
     internal static Action? FullScanFtsOptimizeForTesting { get; set; }
+    internal static Action? FullScanFtsMergeForTesting { get; set; }
+    internal static Action<bool>? FullScanStaleFilePurgeForTesting { get; set; }
+    internal static Action? FullScanReferencePurgeForTesting { get; set; }
     internal static Action? FullScanCSharpPrepassForTesting { get; set; }
+    internal static Action? FullScanCSharpFinalStatRevalidationForTesting { get; set; }
+    internal static Action? FullScanCSharpReadinessValidationForTesting { get; set; }
     internal static Action? FullScanCSharpMetadataResolveForTesting { get; set; }
     internal static Action? FullScanTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Action? UpdateCSharpPrepassForTesting { get; set; }
+    internal static Action? UpdateCSharpExpansionScanStartingForTesting { get; set; }
+    internal static Action<string>? UpdateCleanupChecksumReadForTesting { get; set; }
     internal static Action? UpdateCSharpMetadataResolveForTesting { get; set; }
     internal static Action? UpdateTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Action? UpdateExtractionWorkStartedForTesting { get; set; }
+    internal static Action<string>? UpdateFileContentLoadForTesting { get; set; }
+    internal static Action<string>? UpdateSkippedFileRecordBuiltForTesting { get; set; }
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
@@ -291,9 +300,6 @@ public static partial class IndexCommandRunner
                         "Move the database to writable storage, stop the writer holding the WAL lock, or rerun the query command with --read-only if you only need read access.",
                         CommandErrorCodes.DbNotWritable);
                 }
-                if (options.Rebuild)
-                    db.RepairIncompleteBatchReadiness();
-
                 // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
                 // touches a subset of files, so trust bits the DB did NOT previously carry must not
                 // be fabricated after a partial pass. But bits the DB DID carry should survive —
@@ -340,6 +346,10 @@ public static partial class IndexCommandRunner
                     "true",
                     StringComparison.OrdinalIgnoreCase);
                 var priorIndexIncompleteReasons = JsonStringListCodec.Deserialize(PriorMeta(DbContext.IndexIncompleteReasonsMetaKey));
+                var priorIndexComplete = string.Equals(
+                    PriorMeta(DbContext.IndexCompletenessMetaKey),
+                    "complete",
+                    StringComparison.OrdinalIgnoreCase);
                 var priorFileIndexIncomplete = string.Equals(
                         PriorMeta(DbContext.IndexCompletenessMetaKey),
                         "incomplete",
@@ -370,7 +380,6 @@ public static partial class IndexCommandRunner
                 AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
                 var writer = new DbWriter(db);
-                writer.RecoverInterruptedFtsBulkLoadIfNeeded(indexCancellation.Token);
                 var indexer = new FileIndexer(
                     options.ProjectPath,
                     ignoreCase,
@@ -384,8 +393,8 @@ public static partial class IndexCommandRunner
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
-                    ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFileIndexIncomplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
-                    : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
+                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorFileIndexIncomplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
+                    : RunFullScan(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                 {
                     try
@@ -819,13 +828,8 @@ public static partial class IndexCommandRunner
 
     private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(
         FileIndexer indexer,
-        CancellationToken cancellationToken = default)
-    {
-        var values = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = indexer.GetProjectMarkerFingerprintResult(lang, cancellationToken);
-        return values;
-    }
+        CancellationToken cancellationToken = default) =>
+        indexer.GetProjectMarkerFingerprintResults(cancellationToken);
 
     private static int AddProjectMarkerFingerprintWarnings(
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints,
@@ -1524,11 +1528,17 @@ public static partial class IndexCommandRunner
                 null);
         }
 
-        public static FullScanFileWorkItem Failure(string filePath, string relativePath, string phase, Exception exception)
-            => new(-1, filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, phase, exception);
+        public static FullScanFileWorkItem Failure(int fileIndex, string filePath, string relativePath, string phase, Exception exception)
+            => new(fileIndex, filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, phase, exception);
 
-        public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(-1, filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null, null);
+        public static FullScanFileWorkItem Skipped(int fileIndex, string filePath, string relativePath, string warning)
+            => new(fileIndex, filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null, null);
+    }
+
+    private sealed class CSharpWorkspaceSnapshotDriftException(string path)
+        : IOException("A C# source changed after workspace preflight; rerun indexing to refresh the complete C# graph.")
+    {
+        public string Path { get; } = path;
     }
 
     private sealed record FoldOnlyRemediation(
@@ -1632,6 +1642,9 @@ public sealed class IndexCommandOptions
 
 public sealed class SymbolKindFilter
 {
+    private static readonly string[] CSharpStaticInterfaceContractMemberKinds =
+        ["function", "operator", "property"];
+
     public static readonly SymbolKindFilter Empty = new([], [], null);
 
     private readonly HashSet<string> _include;
@@ -1664,6 +1677,40 @@ public sealed class SymbolKindFilter
                 .ToArray();
 
         return new SymbolKindFilter(Normalize(include), Normalize(exclude), parseError);
+    }
+
+    internal static bool SignatureRetainsCSharpStaticInterfaceContractMembers(string? signature)
+    {
+        const string includePrefix = "include=";
+        const string excludeSeparator = ";exclude=";
+        if (signature == null || !signature.StartsWith(includePrefix, StringComparison.Ordinal))
+            return false;
+
+        var excludeSeparatorIndex = signature.IndexOf(excludeSeparator, StringComparison.Ordinal);
+        if (excludeSeparatorIndex < includePrefix.Length
+            || signature.IndexOf(excludeSeparator, excludeSeparatorIndex + excludeSeparator.Length, StringComparison.Ordinal) >= 0)
+        {
+            return false;
+        }
+
+        var includeText = signature[includePrefix.Length..excludeSeparatorIndex];
+        var excludeText = signature[(excludeSeparatorIndex + excludeSeparator.Length)..];
+        if (includeText.Contains(';', StringComparison.Ordinal)
+            || excludeText.Contains(';', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        static HashSet<string> ParseKinds(string value)
+            => value
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var includeKinds = ParseKinds(includeText);
+        var excludeKinds = ParseKinds(excludeText);
+        return CSharpStaticInterfaceContractMemberKinds.All(kind =>
+            (includeKinds.Count == 0 || includeKinds.Contains(kind))
+            && !excludeKinds.Contains(kind));
     }
 
     public int Apply(IList<SymbolRecord> symbols)

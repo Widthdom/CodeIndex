@@ -5,12 +5,44 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private const string ReusableStatSnapshotFilterTable = "reusable_stat_snapshot_filter";
+    private const string ReusableStatSnapshotCandidatePathIndex = "idx_reusable_stat_snapshot_filter_candidate_path";
+    private const string ReusableStatSnapshotExcludedIdIndex = "idx_reusable_stat_snapshot_filter_excluded_id";
+    private const int ReusableStatSnapshotFilterBatchSize = 256;
     private static readonly AsyncLocal<Action?> ScopedReusableStatSnapshotReadForTesting = new();
+    private static readonly AsyncLocal<Action<int>?> ScopedReusableStatSnapshotInitialCapacityForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedReusableStatSnapshotFilterModeForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedReusableStatSnapshotCandidateRowForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedReusableStatSnapshotFilterBatchForTesting = new();
 
     internal static Action? ReusableStatSnapshotReadForTesting
     {
         get => ScopedReusableStatSnapshotReadForTesting.Value;
         set => ScopedReusableStatSnapshotReadForTesting.Value = value;
+    }
+
+    internal static Action<int>? ReusableStatSnapshotInitialCapacityForTesting
+    {
+        get => ScopedReusableStatSnapshotInitialCapacityForTesting.Value;
+        set => ScopedReusableStatSnapshotInitialCapacityForTesting.Value = value;
+    }
+
+    internal static Action<string>? ReusableStatSnapshotFilterModeForTesting
+    {
+        get => ScopedReusableStatSnapshotFilterModeForTesting.Value;
+        set => ScopedReusableStatSnapshotFilterModeForTesting.Value = value;
+    }
+
+    internal static Action<string>? ReusableStatSnapshotCandidateRowForTesting
+    {
+        get => ScopedReusableStatSnapshotCandidateRowForTesting.Value;
+        set => ScopedReusableStatSnapshotCandidateRowForTesting.Value = value;
+    }
+
+    internal static Action? ReusableStatSnapshotFilterBatchForTesting
+    {
+        get => ScopedReusableStatSnapshotFilterBatchForTesting.Value;
+        set => ScopedReusableStatSnapshotFilterBatchForTesting.Value = value;
     }
 
     /// <summary>
@@ -370,12 +402,18 @@ public partial class DbWriter
     /// <summary>
     /// Loads repository-wide stat-reuse candidates in one SQLite statement. Callers still
     /// compare every row with a fresh filesystem stat, while avoiding per-file database probes.
+    /// Optional retained paths and sorted excluded IDs avoid materializing rows selected for purge.
     /// repository 全体の stat-reuse 候補を 1 回で読み、filesystem stat は各 file で再確認する。
+    /// 任意の retained path と昇順 excluded ID により purge 予定行の materialize を避ける。
     /// </summary>
-    internal IReadOnlyDictionary<string, ReusableIndexedFileStat> LoadReusableIndexedFileStats(
+    internal ReusableIndexedFileStatsSnapshot LoadReusableIndexedFileStats(
         int maxSymbolsPerFile,
         int maxReferencesPerFile,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int initialCapacity = 0,
+        IReadOnlySet<string>? includedPaths = null,
+        IReadOnlyList<long>? excludedFileIds = null,
+        Action<string>? persistedCSharpPathObserver = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ReusableStatSnapshotReadForTesting?.Invoke();
@@ -412,61 +450,105 @@ public partial class DbWriter
                     WHERE file_id = f.id AND kind = @generated_issue_kind
                 )"
             : "0";
-        var cmd = RentCommand(
-            $@"SELECT
+        using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+        var sqlFilter = PrepareReusableStatSnapshotFilter(includedPaths, excludedFileIds, cancellationToken);
+        SqliteCommand cmd;
+        try
+        {
+            cmd = RentCommand(
+                $@"SELECT
                     f.id,
                     f.path,
                     f.modified,
                     f.size,
                     f.lang,
-                    {generatedSuppressionProjection} AS generated_suppressed
-                FROM files f
-                WHERE f.lang IS NOT NULL
-                  {staleIssuePredicate}
-                  AND NOT EXISTS (
-                      SELECT 1 FROM symbols
-                      WHERE file_id = f.id
-                      LIMIT 1 OFFSET @max_symbols
-                  )
-                  {countIssuePredicates}
-                  AND NOT EXISTS (
-                      SELECT 1 FROM symbol_references
-                      WHERE file_id = f.id
-                      LIMIT 1 OFFSET @max_references
-                  )",
-            c =>
-            {
-                c.Parameters.Add("@max_symbols", SqliteType.Integer);
-                c.Parameters.Add("@max_references", SqliteType.Integer);
-                if (hasIssuesTable)
-                    c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
-            });
-        var candidates = new List<ReusableIndexedFileStat>();
+                    {generatedSuppressionProjection} AS generated_suppressed,
+                    CASE WHEN
+                        f.lang IS NOT NULL
+                        AND typeof(f.modified) = 'text'
+                        AND typeof(f.size) = 'integer'
+                        AND f.size >= 0
+                        {staleIssuePredicate}
+                        AND NOT EXISTS (
+                            SELECT 1 FROM symbols
+                            WHERE file_id = f.id
+                            LIMIT 1 OFFSET @max_symbols
+                        )
+                        {countIssuePredicates}
+                        AND NOT EXISTS (
+                            SELECT 1 FROM symbol_references
+                            WHERE file_id = f.id
+                            LIMIT 1 OFFSET @max_references
+                        )
+                    THEN 1 ELSE 0 END AS reusable_eligible
+                {sqlFilter.FromSql}
+                {sqlFilter.WhereSql}",
+                c =>
+                {
+                    c.Parameters.Add("@max_symbols", SqliteType.Integer);
+                    c.Parameters.Add("@max_references", SqliteType.Integer);
+                    if (hasIssuesTable)
+                        c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
+                });
+        }
+        catch
+        {
+            if (sqlFilter.UsesTempTable)
+                TryClearReusableStatSnapshotFilter();
+            throw;
+        }
+        var currentVersionByLanguage = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var reusableInitialCapacity = includedPaths == null
+            ? initialCapacity
+            : Math.Min(initialCapacity, includedPaths.Count);
+        ReusableStatSnapshotInitialCapacityForTesting?.Invoke(reusableInitialCapacity);
+        var reusable = new ReusableIndexedFileStatsSnapshot(reusableInitialCapacity);
         try
         {
             cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
             cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
             if (hasIssuesTable)
                 cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
-            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (reader.GetValue(2) is not string modified
-                    || !TryParseStoredModifiedUtc(modified, out var modifiedUtc)
-                    || reader.GetValue(3) is not long size)
+                var fileId = reader.GetInt64(0);
+                var path = reader.GetString(1);
+                ReusableStatSnapshotCandidateRowForTesting?.Invoke(path);
+                var language = reader.IsDBNull(4) ? null : reader.GetString(4);
+                if (language == "csharp")
+                    persistedCSharpPathObserver?.Invoke(path);
+                var rawSize = reader.GetValue(3);
+                var sizeKnown = rawSize is long && (long)rawSize >= 0;
+                var persistedSize = sizeKnown ? (long)rawSize : 0;
+                if (reader.GetInt64(6) == 0)
                 {
+                    reusable.RecordNonReusablePersistedSize(path, sizeKnown, sizeKnown ? persistedSize : 0);
                     continue;
                 }
 
-                candidates.Add(new ReusableIndexedFileStat(
-                    reader.GetInt64(0),
-                    reader.GetString(1),
+                // reusable_eligible guarantees a non-null language.
+                var reusableLanguage = language!;
+                if (!currentVersionByLanguage.TryGetValue(reusableLanguage, out var versionCurrent))
+                {
+                    versionCurrent = SymbolExtractorVersionMatchesCurrent(reusableLanguage);
+                    currentVersionByLanguage.Add(reusableLanguage, versionCurrent);
+                }
+
+                if (!versionCurrent
+                    || !TryParseStoredModifiedUtc(reader.GetString(2), out var modifiedUtc))
+                {
+                    reusable.RecordNonReusablePersistedSize(path, sizeKnown, sizeKnown ? persistedSize : 0);
+                    continue;
+                }
+
+                reusable.RecordReusable(path, new ReusableIndexedFileStat(
+                    fileId,
                     modifiedUtc,
-                    size,
-                    reader.GetString(4),
+                    persistedSize,
+                    reusableLanguage,
                     reader.GetInt64(5) != 0));
             }
             cancellationToken.ThrowIfCancellationRequested();
@@ -478,25 +560,194 @@ public partial class DbWriter
         finally
         {
             ReleaseCommand(cmd);
-        }
-
-        var currentVersionByLanguage = new Dictionary<string, bool>(StringComparer.Ordinal);
-        var reusable = new Dictionary<string, ReusableIndexedFileStat>(candidates.Count, StringComparer.Ordinal);
-        foreach (var candidate in candidates)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!currentVersionByLanguage.TryGetValue(candidate.Language, out var versionCurrent))
-            {
-                versionCurrent = SymbolExtractorVersionMatchesCurrent(candidate.Language);
-                currentVersionByLanguage.Add(candidate.Language, versionCurrent);
-            }
-
-            if (versionCurrent)
-                reusable[candidate.Path] = candidate;
+            if (sqlFilter.UsesTempTable)
+                TryClearReusableStatSnapshotFilter();
         }
 
         return reusable;
     }
+
+    private ReusableStatSnapshotSqlFilter PrepareReusableStatSnapshotFilter(
+        IReadOnlySet<string>? includedPaths,
+        IReadOnlyList<long>? excludedFileIds,
+        CancellationToken cancellationToken)
+    {
+        var hasIncludedPathFilter = includedPaths != null;
+        var hasExcludedIdFilter = excludedFileIds is { Count: > 0 };
+        if (!hasIncludedPathFilter && !hasExcludedIdFilter)
+        {
+            ReusableStatSnapshotFilterModeForTesting?.Invoke("none");
+            return new ReusableStatSnapshotSqlFilter("FROM files AS f", string.Empty, UsesTempTable: false);
+        }
+
+        try
+        {
+            using var setupTransaction = !IsInTransaction()
+                ? BeginTransaction(cancellationToken, "prepare reusable stat snapshot filter")
+                : null;
+            cancellationToken.ThrowIfCancellationRequested();
+            using (var create = _conn.CreateCommand())
+            {
+                create.Transaction = _activeTransaction;
+                create.CommandText = $"""
+                    DROP TABLE IF EXISTS temp.{ReusableStatSnapshotFilterTable};
+                    CREATE TEMP TABLE {ReusableStatSnapshotFilterTable} (
+                        filter_kind INTEGER NOT NULL,
+                        candidate_path TEXT,
+                        excluded_file_id INTEGER
+                    );
+                    """;
+                create.ExecuteNonQuery();
+            }
+
+            if (includedPaths != null)
+                InsertReusableStatSnapshotCandidatePaths(includedPaths, cancellationToken);
+            if (excludedFileIds is { Count: > 0 })
+                InsertReusableStatSnapshotExcludedIds(excludedFileIds, cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            using (var createIndexes = _conn.CreateCommand())
+            {
+                createIndexes.Transaction = _activeTransaction;
+                createIndexes.CommandText = $"""
+                    CREATE UNIQUE INDEX temp.{ReusableStatSnapshotCandidatePathIndex}
+                        ON {ReusableStatSnapshotFilterTable}(candidate_path)
+                        WHERE filter_kind = 0;
+                    CREATE UNIQUE INDEX temp.{ReusableStatSnapshotExcludedIdIndex}
+                        ON {ReusableStatSnapshotFilterTable}(excluded_file_id)
+                        WHERE filter_kind = 1;
+                    """;
+                createIndexes.ExecuteNonQuery();
+            }
+            setupTransaction?.Commit();
+
+            if (hasIncludedPathFilter)
+            {
+                ReusableStatSnapshotFilterModeForTesting?.Invoke("candidate_paths");
+                return new ReusableStatSnapshotSqlFilter(
+                    $"""
+                    FROM temp.{ReusableStatSnapshotFilterTable} AS candidate INDEXED BY {ReusableStatSnapshotCandidatePathIndex}
+                    CROSS JOIN files AS f ON f.path = candidate.candidate_path
+                    LEFT JOIN temp.{ReusableStatSnapshotFilterTable} AS excluded INDEXED BY {ReusableStatSnapshotExcludedIdIndex}
+                        ON excluded.filter_kind = 1
+                       AND excluded.excluded_file_id = f.id
+                    """,
+                    "WHERE candidate.filter_kind = 0 AND excluded.excluded_file_id IS NULL",
+                    UsesTempTable: true);
+            }
+
+            ReusableStatSnapshotFilterModeForTesting?.Invoke("excluded_ids");
+            return new ReusableStatSnapshotSqlFilter(
+                $"""
+                FROM files AS f
+                LEFT JOIN temp.{ReusableStatSnapshotFilterTable} AS excluded INDEXED BY {ReusableStatSnapshotExcludedIdIndex}
+                    ON excluded.filter_kind = 1
+                   AND excluded.excluded_file_id = f.id
+                """,
+                "WHERE excluded.excluded_file_id IS NULL",
+                UsesTempTable: true);
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            TryClearReusableStatSnapshotFilter();
+            throw new OperationCanceledException("Reusable file stat snapshot filter preparation was interrupted.", ex, cancellationToken);
+        }
+        catch
+        {
+            TryClearReusableStatSnapshotFilter();
+            throw;
+        }
+    }
+
+    private void InsertReusableStatSnapshotCandidatePaths(
+        IReadOnlySet<string> includedPaths,
+        CancellationToken cancellationToken)
+    {
+        var batch = new List<string>(Math.Min(ReusableStatSnapshotFilterBatchSize, includedPaths.Count));
+        foreach (var path in includedPaths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            batch.Add(path);
+            if (batch.Count < ReusableStatSnapshotFilterBatchSize)
+                continue;
+
+            InsertReusableStatSnapshotFilterBatch(batch, filterKind: 0, cancellationToken);
+            batch.Clear();
+        }
+
+        if (batch.Count > 0)
+            InsertReusableStatSnapshotFilterBatch(batch, filterKind: 0, cancellationToken);
+    }
+
+    private void InsertReusableStatSnapshotExcludedIds(
+        IReadOnlyList<long> excludedFileIds,
+        CancellationToken cancellationToken)
+    {
+        for (var start = 0; start < excludedFileIds.Count; start += ReusableStatSnapshotFilterBatchSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Math.Min(ReusableStatSnapshotFilterBatchSize, excludedFileIds.Count - start);
+            using var insert = _conn.CreateCommand();
+            insert.Transaction = _activeTransaction;
+            var sql = new System.Text.StringBuilder(
+                $"INSERT INTO temp.{ReusableStatSnapshotFilterTable}(filter_kind, excluded_file_id) VALUES ");
+            for (var index = 0; index < count; index++)
+            {
+                if (index > 0)
+                    sql.Append(',');
+                var parameterName = $"@id{index}";
+                sql.Append("(1,").Append(parameterName).Append(')');
+                insert.Parameters.Add(parameterName, SqliteType.Integer).Value = excludedFileIds[start + index];
+            }
+            insert.CommandText = sql.ToString();
+            ReusableStatSnapshotFilterBatchForTesting?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
+            insert.ExecuteNonQuery();
+        }
+    }
+
+    private void InsertReusableStatSnapshotFilterBatch(
+        IReadOnlyList<string> paths,
+        int filterKind,
+        CancellationToken cancellationToken)
+    {
+        using var insert = _conn.CreateCommand();
+        insert.Transaction = _activeTransaction;
+        var sql = new System.Text.StringBuilder(
+            $"INSERT INTO temp.{ReusableStatSnapshotFilterTable}(filter_kind, candidate_path) VALUES ");
+        for (var index = 0; index < paths.Count; index++)
+        {
+            if (index > 0)
+                sql.Append(',');
+            var parameterName = $"@path{index}";
+            sql.Append('(').Append(filterKind).Append(',').Append(parameterName).Append(')');
+            insert.Parameters.Add(parameterName, SqliteType.Text).Value = paths[index];
+        }
+        insert.CommandText = sql.ToString();
+        ReusableStatSnapshotFilterBatchForTesting?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+        insert.ExecuteNonQuery();
+    }
+
+    private void TryClearReusableStatSnapshotFilter()
+    {
+        try
+        {
+            using var drop = _conn.CreateCommand();
+            drop.Transaction = _activeTransaction;
+            drop.CommandText = $"DROP TABLE IF EXISTS temp.{ReusableStatSnapshotFilterTable}";
+            drop.ExecuteNonQuery();
+        }
+        catch (SqliteException)
+        {
+            // Best effort during preparation failure; the next call drops the table first.
+        }
+    }
+
+    private readonly record struct ReusableStatSnapshotSqlFilter(
+        string FromSql,
+        string WhereSql,
+        bool UsesTempTable);
 
     private static bool TryParseStoredModifiedUtc(string value, out DateTime modifiedUtc)
         => DateTime.TryParse(
@@ -744,8 +995,58 @@ public partial class DbWriter
 
 internal readonly record struct ReusableIndexedFileStat(
     long FileId,
-    string Path,
     DateTime ModifiedUtc,
     long Size,
     string Language,
     bool GeneratedExtractionSuppressed);
+
+internal readonly record struct PersistedIndexedFileSize(
+    bool Exists,
+    bool SizeKnown,
+    long Size);
+
+internal sealed class ReusableIndexedFileStatsSnapshot : Dictionary<string, ReusableIndexedFileStat>
+{
+    private readonly int _reusableCapacity;
+    private bool _reusableCapacityApplied;
+    private Dictionary<string, long>? _nonReusablePersistedSizes;
+    private HashSet<string>? _unknownPersistedSizePaths;
+
+    internal ReusableIndexedFileStatsSnapshot(int capacity)
+        : base(0, StringComparer.Ordinal)
+    {
+        _reusableCapacity = capacity;
+    }
+
+    internal void RecordReusable(string path, ReusableIndexedFileStat stat)
+    {
+        if (!_reusableCapacityApplied)
+        {
+            EnsureCapacity(_reusableCapacity);
+            _reusableCapacityApplied = true;
+        }
+        this[path] = stat;
+    }
+
+    internal void RecordNonReusablePersistedSize(string path, bool sizeKnown, long size)
+    {
+        if (sizeKnown)
+        {
+            (_nonReusablePersistedSizes ??= new Dictionary<string, long>(StringComparer.Ordinal))[path] = size;
+            return;
+        }
+
+        (_unknownPersistedSizePaths ??= new HashSet<string>(StringComparer.Ordinal)).Add(path);
+    }
+
+    internal PersistedIndexedFileSize GetPersistedSize(string path)
+    {
+        if (TryGetValue(path, out var reusable))
+            return new PersistedIndexedFileSize(Exists: true, SizeKnown: true, reusable.Size);
+        if (_nonReusablePersistedSizes?.TryGetValue(path, out var size) == true)
+            return new PersistedIndexedFileSize(Exists: true, SizeKnown: true, size);
+        if (_unknownPersistedSizePaths?.Contains(path) == true)
+            return new PersistedIndexedFileSize(Exists: true, SizeKnown: false, 0);
+        return new PersistedIndexedFileSize(Exists: false, SizeKnown: false, 0);
+    }
+}

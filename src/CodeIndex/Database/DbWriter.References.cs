@@ -7,6 +7,7 @@ public partial class DbWriter
 {
     internal static Action? HotspotAggregateRefreshExecutingForTesting { get; set; }
     private const string NonTypeReceiverQualifierPrefix = "\u001freceiver:";
+    private const int MaxReferenceLineWindowBatchCount = 32;
 
     private const string MutualRecursionValueSql = """
         CASE
@@ -70,9 +71,8 @@ public partial class DbWriter
         END
         """;
 
-    private const string RefreshReferenceSourceSymbolsSql = """
-        UPDATE symbol_references AS r
-        SET source_symbol_id = (
+    private const string ReferenceSourceSymbolValueSql = """
+        (
             SELECT s.id
             FROM symbols AS s
             WHERE s.file_id = r.file_id
@@ -86,6 +86,19 @@ public partial class DbWriter
                      s.id
             LIMIT 1
         )
+        """;
+
+    private static readonly string RefreshReferenceSourceSymbolsFullSql = $"""
+        UPDATE symbol_references AS r
+        SET source_symbol_id = {ReferenceSourceSymbolValueSql}
+        """;
+
+    private static readonly string RefreshReferenceSourceSymbolsDifferentialSql = $"""
+        UPDATE symbol_references AS r
+        SET source_symbol_id = {ReferenceSourceSymbolValueSql}
+        -- IS NOT is null-safe: stable NULL identities must not be rewritten either.
+        -- IS NOTはNULL-safeであり、安定したNULL identityも再書込みしない。
+        WHERE r.source_symbol_id IS NOT {ReferenceSourceSymbolValueSql}
         """;
 
     private const string CreateReferenceUniqueFamiliesSql = """
@@ -349,9 +362,8 @@ public partial class DbWriter
 
         """;
 
-    private const string RefreshReferenceResolutionSql = """
-        UPDATE symbol_references AS r
-        SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = (
+    private const string ReferenceResolutionValueSql = """
+        (
             SELECT CASE WHEN candidate_count = 1 THEN minimum_symbol_id END,
                    CASE WHEN target_family_count = 1 THEN minimum_target_key END,
                    candidate_count,
@@ -375,15 +387,38 @@ public partial class DbWriter
                     JOIN files AS target_file ON target_file.id = target.file_id
                     WHERE c.reference_id = r.id
             ) AS resolution
-        );
+        )
+        """;
+
+    private const string SelfReferenceValueSql = """
+        CASE
+            WHEN source_symbol_id IS NOT NULL
+             AND target_symbol_id IS NOT NULL
+             AND source_symbol_id = target_symbol_id THEN 1
+            ELSE 0
+        END
+        """;
+
+    private static readonly string RefreshReferenceResolutionFullSql = $"""
+        UPDATE symbol_references AS r
+        SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = {ReferenceResolutionValueSql};
 
         UPDATE symbol_references
-        SET is_self_reference = CASE
-                WHEN source_symbol_id IS NOT NULL
-                 AND target_symbol_id IS NOT NULL
-                 AND source_symbol_id = target_symbol_id THEN 1
-                ELSE 0
-            END;
+        SET is_self_reference = {SelfReferenceValueSql};
+        """;
+
+    private static readonly string RefreshReferenceResolutionDifferentialSql = $"""
+        UPDATE symbol_references AS r
+        SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = {ReferenceResolutionValueSql}
+        -- A row-value IS NOT comparison preserves NULL semantics while avoiding four
+        -- index-maintaining writes for every already-current reference.
+        -- row-value IS NOTでNULL semanticsを保ち、最新referenceへの4列再書込みを避ける。
+        WHERE (r.target_symbol_id, r.target_symbol_key, r.resolution_candidate_count, r.resolution_state)
+              IS NOT {ReferenceResolutionValueSql};
+
+        UPDATE symbol_references
+        SET is_self_reference = {SelfReferenceValueSql}
+        WHERE is_self_reference IS NOT ({SelfReferenceValueSql});
         """;
 
     private static readonly string RefreshMutualRecursionFlagsSql = $"""
@@ -405,18 +440,100 @@ public partial class DbWriter
         => InsertReferences(references, refreshMutualRecursionFlags: true, cancellationToken);
 
     public void InsertReferences(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags, CancellationToken cancellationToken)
-        => InsertReferencesCore(references, refreshMutualRecursionFlags, cancellationToken, referenceLinesAreNew: false);
+        => InsertReferencesCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: false,
+            batchesAreAtomicInCaller: false);
 
     public void InsertReferencesForNewFiles(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags, CancellationToken cancellationToken)
-        => InsertReferencesCore(references, refreshMutualRecursionFlags, cancellationToken, referenceLinesAreNew: true);
+        => InsertReferencesCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: true,
+            batchesAreAtomicInCaller: false);
+
+    /// <summary>
+    /// Insert references while explicitly delegating all-batch atomicity to an active
+    /// file transaction owned by this writer and execution context.
+    /// このwriterと実行contextが所有するfile transactionへ全batchの原子性を明示委譲して参照を挿入する。
+    /// </summary>
+    internal void InsertReferencesInAtomicFileScope(
+        IReadOnlyList<ReferenceRecord> references,
+        CancellationToken cancellationToken)
+        => InsertReferencesInAtomicFileScope(
+            references,
+            refreshMutualRecursionFlags: true,
+            cancellationToken);
+
+    internal void InsertReferencesInAtomicFileScope(
+        IReadOnlyList<ReferenceRecord> references,
+        bool refreshMutualRecursionFlags,
+        CancellationToken cancellationToken)
+        => InsertReferencesInAtomicFileScopeCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: false,
+            operation: nameof(InsertReferencesInAtomicFileScope));
+
+    internal void InsertReferencesForNewFilesInAtomicFileScope(
+        IReadOnlyList<ReferenceRecord> references,
+        bool refreshMutualRecursionFlags,
+        CancellationToken cancellationToken)
+        => InsertReferencesInAtomicFileScopeCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: true,
+            operation: nameof(InsertReferencesForNewFilesInAtomicFileScope));
+
+    private void InsertReferencesInAtomicFileScopeCore(
+        IReadOnlyList<ReferenceRecord> references,
+        bool refreshMutualRecursionFlags,
+        CancellationToken cancellationToken,
+        bool referenceLinesAreNew,
+        string operation)
+    {
+        RequireCallerOwnedTransaction(operation);
+        AtomicFileReferenceInsertForTesting?.Invoke(referenceLinesAreNew);
+        InsertReferencesCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew,
+            batchesAreAtomicInCaller: true);
+    }
+
+    private void RequireCallerOwnedTransaction(string operation)
+    {
+        lock (_transactionStateLock)
+        {
+            if (_transactionDepth > 0
+                && _activeTransaction != null
+                && _transactionOwnerThreadId == Environment.CurrentManagedThreadId
+                && _transactionOwnerToken != Guid.Empty
+                && _currentTransactionGateToken.Value == _transactionOwnerToken)
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"{operation} requires an active transaction owned by this DbWriter on the current execution context.");
+    }
 
     private void InsertReferencesCore(
         IReadOnlyList<ReferenceRecord> references,
         bool refreshMutualRecursionFlags,
         CancellationToken cancellationToken,
-        bool referenceLinesAreNew)
+        bool referenceLinesAreNew,
+        bool batchesAreAtomicInCaller)
     {
         if (references.Count == 0) return;
+        TrackReferenceGraphInsertedReferences(references);
         InvalidateReferenceIdentityContractForMutation();
 
         // If a chunk commits but aggregate refresh is cancelled, readers must fall back to
@@ -431,61 +548,45 @@ public partial class DbWriter
         var newReferenceLineIds = referenceLinesAreNew
             ? new Dictionary<(long FileId, int Line, string Context), long>()
             : null;
-        for (int i = 0; i < references.Count; i += rowsPerStatement)
+        int referenceBatchCount = GetReferenceBatchCount(references.Count, rowsPerStatement);
+        if (batchesAreAtomicInCaller)
         {
-            CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
-            int end = Math.Min(i + rowsPerStatement, references.Count);
-            // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
-            // symbol_references share one rollback boundary; without it a mid-chunk failure
-            // under an outer transaction would orphan committed reference_lines (#1518).
-            using var transaction = BeginTransaction(cancellationToken, "insert references");
-            var referenceLineIds = referenceLinesAreNew
-                ? InsertNewReferenceLines(references, i, end, newReferenceLineIds!, cancellationToken)
-                : UpsertReferenceLines(references, i, end, cancellationToken);
-
-            var batchCount = end - i;
-            var sql = ReferenceInsertSqlCache.GetOrAdd(batchCount, static count => BuildReferenceInsertSql(count));
-            var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, batchCount));
-            try
+            InsertAtomicReferenceBatches(
+                references,
+                referenceLinesAreNew,
+                newReferenceLineIds,
+                foldedNameCache,
+                rowsPerStatement,
+                referenceBatchCount,
+                cancellationToken);
+        }
+        else
+        {
+            // Public APIs always retain the #1518 chunk transaction/SAVEPOINT contract.
+            // The explicit atomic-file APIs alone aggregate reference-line work under
+            // their required caller-owned file transaction.
+            // public APIは#1518のchunk transaction/SAVEPOINT契約を常に維持する。
+            // 明示atomic-file APIだけが必須の呼出元file transaction配下で参照行処理を集約する。
+            for (int batchIndex = 0; batchIndex < referenceBatchCount; batchIndex++)
             {
-                var parameterIndex = 0;
-                (long FileId, int Line, string Context)? previousReferenceLineKey = null;
-                var previousReferenceLineId = 0L;
-                for (int j = i; j < end; j++)
-                {
-                    var reference = references[j];
-                    ValidateReferenceKinds(reference);
-                    var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
-                    if (previousReferenceLineKey is not { } previousKey
-                        || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
-                    {
-                        previousReferenceLineId = referenceLineIds[referenceLineKey];
-                        previousReferenceLineKey = referenceLineKey;
-                    }
-
-                    cmd.Parameters[parameterIndex++].Value = reference.FileId;
-                    cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
-                    cmd.Parameters[parameterIndex++].Value = reference.ReferenceKind;
-                    cmd.Parameters[parameterIndex++].Value = reference.Line;
-                    cmd.Parameters[parameterIndex++].Value = reference.Column;
-                    cmd.Parameters[parameterIndex++].Value = DBNull.Value;
-                    cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
-                    cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
-                    cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
-                    cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
-                    cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
-                    cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
-                    cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
-                    cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
-                }
-
-                cmd.ExecuteNonQuery();
+                int start = batchIndex * rowsPerStatement;
+                int end = Math.Min(start + rowsPerStatement, references.Count);
+                CheckBatchCancellationAndReportProgress(
+                    "insert_references",
+                    start,
+                    references.Count,
+                    cancellationToken);
+                using var transaction = BeginReferenceBatchTransaction(cancellationToken);
+                var referenceLineIds = MaterializeReferenceLines(
+                    references,
+                    start,
+                    end,
+                    referenceLinesAreNew,
+                    newReferenceLineIds,
+                    cancellationToken);
+                InsertReferenceBatch(references, start, end, referenceLineIds, foldedNameCache);
+                transaction.Commit();
             }
-            finally
-            {
-                ReleaseCommand(cmd);
-            }
-            transaction.Commit();
         }
 
         CheckBatchCancellationAndReportProgress("insert_references", references.Count, references.Count, cancellationToken);
@@ -496,6 +597,182 @@ public partial class DbWriter
             cancellationToken.ThrowIfCancellationRequested();
             RefreshMutualRecursionFlags(cancellationToken);
         }
+    }
+
+    private void InsertAtomicReferenceBatches(
+        IReadOnlyList<ReferenceRecord> references,
+        bool referenceLinesAreNew,
+        Dictionary<(long FileId, int Line, string Context), long>? newReferenceLineIds,
+        Dictionary<string, string?> foldedNameCache,
+        int rowsPerStatement,
+        int referenceBatchCount,
+        CancellationToken cancellationToken)
+    {
+        for (int windowStartBatch = 0; windowStartBatch < referenceBatchCount;)
+        {
+            int windowStart = windowStartBatch * rowsPerStatement;
+            CheckBatchCancellationAndReportProgress(
+                "insert_references",
+                windowStart,
+                references.Count,
+                cancellationToken);
+            int windowEndBatch = GetAtomicReferenceLineWindowEndBatch(
+                references,
+                windowStartBatch,
+                referenceBatchCount,
+                rowsPerStatement);
+            int windowEnd = Math.Min(windowEndBatch * rowsPerStatement, references.Count);
+            var referenceLineIds = MaterializeReferenceLines(
+                references,
+                windowStart,
+                windowEnd,
+                referenceLinesAreNew,
+                newReferenceLineIds,
+                cancellationToken);
+
+            for (int batchIndex = windowStartBatch; batchIndex < windowEndBatch; batchIndex++)
+            {
+                int start = batchIndex * rowsPerStatement;
+                if (batchIndex != windowStartBatch)
+                {
+                    CheckBatchCancellationAndReportProgress(
+                        "insert_references",
+                        start,
+                        references.Count,
+                        cancellationToken);
+                }
+                int end = Math.Min(start + rowsPerStatement, references.Count);
+                InsertReferenceBatch(references, start, end, referenceLineIds, foldedNameCache);
+            }
+
+            windowStartBatch = windowEndBatch;
+        }
+    }
+
+    private static int GetAtomicReferenceLineWindowEndBatch(
+        IReadOnlyList<ReferenceRecord> references,
+        int windowStartBatch,
+        int referenceBatchCount,
+        int rowsPerStatement)
+    {
+        int maxReferenceLines = GetRowsPerInsertStatement(columnCount: 3);
+        var windowKeys = new HashSet<(long FileId, int Line, string Context)>(maxReferenceLines);
+        int windowEndBatch = windowStartBatch;
+        while (windowEndBatch < referenceBatchCount
+               && windowEndBatch - windowStartBatch < MaxReferenceLineWindowBatchCount)
+        {
+            int batchStart = windowEndBatch * rowsPerStatement;
+            int batchEnd = Math.Min(batchStart + rowsPerStatement, references.Count);
+            for (int index = batchStart; index < batchEnd; index++)
+            {
+                var reference = references[index];
+                var key = (reference.FileId, reference.Line, reference.Context);
+                windowKeys.Add(key);
+            }
+
+            if (windowKeys.Count > maxReferenceLines && windowEndBatch > windowStartBatch)
+                break;
+
+            windowEndBatch++;
+        }
+
+        return windowEndBatch;
+    }
+
+    private Dictionary<(long FileId, int Line, string Context), long> MaterializeReferenceLines(
+        IReadOnlyList<ReferenceRecord> references,
+        int start,
+        int end,
+        bool referenceLinesAreNew,
+        Dictionary<(long FileId, int Line, string Context), long>? newReferenceLineIds,
+        CancellationToken cancellationToken)
+        => referenceLinesAreNew
+            ? InsertNewReferenceLines(references, start, end, newReferenceLineIds!, cancellationToken)
+            : UpsertReferenceLines(references, start, end, cancellationToken);
+
+    private void InsertReferenceBatch(
+        IReadOnlyList<ReferenceRecord> references,
+        int start,
+        int end,
+        Dictionary<(long FileId, int Line, string Context), long> referenceLineIds,
+        Dictionary<string, string?> foldedNameCache)
+    {
+        var rowsInBatch = end - start;
+        var sql = ReferenceInsertSqlCache.GetOrAdd(rowsInBatch, static count => BuildReferenceInsertSql(count));
+        var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
+        try
+        {
+            var parameterIndex = 0;
+            (long FileId, int Line, string Context)? previousReferenceLineKey = null;
+            var previousReferenceLineId = 0L;
+            for (int index = start; index < end; index++)
+            {
+                var reference = references[index];
+                ValidateReferenceKinds(reference);
+                var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
+                if (previousReferenceLineKey is not { } previousKey
+                    || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
+                {
+                    previousReferenceLineId = referenceLineIds[referenceLineKey];
+                    previousReferenceLineKey = referenceLineKey;
+                }
+
+                cmd.Parameters[parameterIndex++].Value = reference.FileId;
+                cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
+                cmd.Parameters[parameterIndex++].Value = reference.ReferenceKind;
+                cmd.Parameters[parameterIndex++].Value = reference.Line;
+                cmd.Parameters[parameterIndex++].Value = reference.Column;
+                cmd.Parameters[parameterIndex++].Value = DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
+                cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
+                cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
+                cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
+            }
+
+            ReportBatchStatementForTesting("insert_references", rowsInBatch, rowsInBatch);
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    private TransactionScope BeginReferenceBatchTransaction(CancellationToken cancellationToken)
+    {
+        ReferenceBatchTransactionOpeningForTesting?.Invoke();
+        return BeginTransaction(cancellationToken, "insert references");
+    }
+
+    private static int GetReferenceBatchCount(int referenceCount, int rowsPerStatement)
+    {
+        if (referenceCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(referenceCount));
+        if (rowsPerStatement <= 0)
+            throw new ArgumentOutOfRangeException(nameof(rowsPerStatement));
+
+        return referenceCount == 0
+            ? 0
+            : ((referenceCount - 1) / rowsPerStatement) + 1;
+    }
+
+    internal static long CountReferenceBatchTransactionScopesForTesting(
+        IReadOnlyList<int> referenceCountsByFile,
+        bool atomicFileScope)
+    {
+        ArgumentNullException.ThrowIfNull(referenceCountsByFile);
+        if (atomicFileScope)
+            return 0;
+
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 14);
+        long transactionCount = 0;
+        foreach (var referenceCount in referenceCountsByFile)
+            transactionCount += GetReferenceBatchCount(referenceCount, rowsPerStatement);
+        return transactionCount;
     }
 
     private void RefreshHotspotReferenceCounts(
@@ -514,6 +791,8 @@ public partial class DbWriter
         CancellationToken cancellationToken)
     {
         if (fileIds.Count == 0)
+            return;
+        if (TryDeferHotspotReferenceRefresh(fileIds, requireDirtyFileIds: true))
             return;
 
         using var transaction = BeginTransaction(cancellationToken, "refresh hotspot reference counts");
@@ -548,6 +827,7 @@ public partial class DbWriter
                 cmd.Parameters["@file_id"].Value = fileId;
                 try
                 {
+                    HotspotAggregateRefreshStatementExecutingForTesting?.Invoke();
                     cmd.ExecuteNonQuery();
                 }
                 catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
@@ -599,6 +879,7 @@ public partial class DbWriter
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
+                ReportBatchStatementForTesting("upsert_reference_lines", statementRowCount, statementRowCount);
                 cmd.ExecuteNonQuery();
             }
             finally
@@ -621,6 +902,7 @@ public partial class DbWriter
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, keyEnd);
+                ReportBatchStatementForTesting("lookup_reference_lines", statementRowCount, statementRowCount);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -685,6 +967,7 @@ public partial class DbWriter
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
+                ReportBatchStatementForTesting("insert_reference_lines", statementRowCount, statementRowCount);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -713,12 +996,30 @@ public partial class DbWriter
            && left.Line == right.Line
            && string.Equals(left.Context, right.Context, StringComparison.Ordinal);
 
+    private bool HasPersistedReferenceResolutionState(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        const string sql = "SELECT EXISTS(SELECT 1 FROM symbol_references WHERE resolution_state IS NOT NULL LIMIT 1)";
+        var command = RentCommand(sql, static _ => { });
+        try
+        {
+            return Convert.ToInt64(command.ExecuteScalar()) != 0;
+        }
+        finally
+        {
+            ReleaseCommand(command);
+        }
+    }
+
     internal void RefreshMutualRecursionFlags(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
         cancellationToken.ThrowIfCancellationRequested();
+        var graphScope = _referenceGraphRefreshScope;
         using var transaction = BeginTransaction(cancellationToken, "refresh reference identities");
+        if (graphScope != null)
+            graphScope.IsCompleting = true;
         SqliteCommand? createUniqueFamiliesCommand = null;
         SqliteCommand? refreshCommand = null;
         try
@@ -728,12 +1029,47 @@ public partial class DbWriter
             createUniqueFamiliesCommand = RentCommand(CreateReferenceUniqueFamiliesSql, static _ => { });
             createUniqueFamiliesCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
+            var refreshPlan = graphScope == null
+                ? new ReferenceGraphRefreshPlan(true, 0, 0, 0, 0)
+                : BuildReferenceGraphRefreshPlan(graphScope, cancellationToken);
+            ReferenceGraphRefreshScopeForTesting?.Invoke(new ReferenceGraphRefreshScopeStats(
+                refreshPlan.UseFullRefresh,
+                refreshPlan.DirtyFileCount,
+                refreshPlan.DirtyNameCount,
+                refreshPlan.DirtyReferenceCount,
+                refreshPlan.TotalReferenceCount));
+            cancellationToken.ThrowIfCancellationRequested();
+            // A fresh graph evaluates each correlated identity expression once. Once any
+            // persisted resolution exists, differential SQL avoids rewriting the stable
+            // majority while newly inserted or invalidated rows still repair normally.
+            // fresh graphでは相関identity式を1回だけ評価し、既存resolutionがあれば
+            // differential SQLで安定多数の再書込みを避けつつ新規/無効rowを修復する。
+            string refreshIdentitySql;
+            if (refreshPlan.UseFullRefresh)
+            {
+                refreshIdentitySql = HasPersistedReferenceResolutionState(cancellationToken)
+                    ? RefreshReferenceSourceSymbolsDifferentialSql + ";\n" +
+                      RefreshReferenceUniqueFamiliesSql + "\n" +
+                      RefreshReferenceCandidatesSql + "\n" +
+                      RefreshReferenceResolutionDifferentialSql + "\n"
+                    : RefreshReferenceSourceSymbolsFullSql + ";\n" +
+                      RefreshReferenceUniqueFamiliesSql + "\n" +
+                      RefreshReferenceCandidatesSql + "\n" +
+                      RefreshReferenceResolutionFullSql + "\n";
+            }
+            else
+            {
+                DeleteRemovedReferenceCandidates(cancellationToken);
+                refreshIdentitySql = RefreshScopedReferenceSourceSymbolsSql + "\n" +
+                                     RefreshScopedReferenceUniqueFamiliesSql + "\n" +
+                                     RefreshScopedReferenceCandidatesSql + "\n" +
+                                     RefreshScopedReferenceResolutionSql + "\n" +
+                                     ExpandReferenceGraphNewMutualScopeSql + "\n";
+            }
             refreshCommand = RentCommand(
-                RefreshReferenceSourceSymbolsSql + ";\n" +
-                RefreshReferenceUniqueFamiliesSql + "\n" +
-                RefreshReferenceCandidatesSql + "\n" +
-                RefreshReferenceResolutionSql + "\n" +
-                RefreshMutualRecursionFlagsSql,
+                refreshIdentitySql + (refreshPlan.UseFullRefresh
+                    ? RefreshMutualRecursionFlagsSql
+                    : RefreshScopedMutualRecursionFlagsSql),
                 static _ => { });
             // Stamp inside the same transaction, but before the graph refresh so the
             // public SQLite changes() result continues to describe recursion updates.
@@ -742,7 +1078,10 @@ public partial class DbWriter
             cancellationToken.ThrowIfCancellationRequested();
             refreshCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
+            if (graphScope != null)
+                ExecuteReferenceGraphScopeSql(ClearReferenceGraphDirtyScopeSql, cancellationToken);
             transaction.Commit();
+            graphScope?.MarkRefreshCompleted();
         }
         catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
         {
@@ -754,6 +1093,8 @@ public partial class DbWriter
                 ReleaseCommand(refreshCommand);
             if (createUniqueFamiliesCommand != null)
                 ReleaseCommand(createUniqueFamiliesCommand);
+            if (graphScope != null)
+                graphScope.IsCompleting = false;
         }
     }
 

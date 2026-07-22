@@ -13,9 +13,13 @@ public static partial class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken,
         out HashSet<string> targetPaths,
+        out HashSet<string> gitTargetPaths,
+        out HashSet<string> explicitFileTargetPaths,
         out bool relevantIgnoreFileChanged)
     {
         targetPaths = new HashSet<string>(StringComparer.Ordinal);
+        gitTargetPaths = new HashSet<string>(StringComparer.Ordinal);
+        explicitFileTargetPaths = new HashSet<string>(StringComparer.Ordinal);
         relevantIgnoreFileChanged = false;
         HashSet<string>? skipWorktreePaths = null;
 
@@ -47,6 +51,7 @@ public static partial class IndexCommandRunner
                         if (IsMissingSparseSkippedTarget(f))
                             continue;
                         targetPaths.Add(f);
+                        gitTargetPaths.Add(f);
                     }
                 }
             }
@@ -93,6 +98,7 @@ public static partial class IndexCommandRunner
                     if (IsMissingSparseSkippedTarget(f))
                         continue;
                     targetPaths.Add(f);
+                    gitTargetPaths.Add(f);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -124,7 +130,10 @@ public static partial class IndexCommandRunner
         {
             relevantIgnoreFileChanged |= ContainsRelevantIgnoreFileUpdate(projectRoot, options.UpdateFiles);
             foreach (var relPath in NormalizeUpdateFileTargets(projectRoot, options.UpdateFiles, options.Json))
+            {
                 targetPaths.Add(relPath);
+                explicitFileTargetPaths.Add(relPath);
+            }
         }
 
         return null;

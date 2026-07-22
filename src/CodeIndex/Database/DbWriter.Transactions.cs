@@ -7,6 +7,28 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private static readonly AsyncLocal<Action?> ScopedBeforePassiveWalCheckpointForTesting = new();
+    internal static Action? BeforePassiveWalCheckpointForTesting
+    {
+        get => ScopedBeforePassiveWalCheckpointForTesting.Value;
+        set => ScopedBeforePassiveWalCheckpointForTesting.Value = value;
+    }
+    private static readonly AsyncLocal<Action?> ScopedBeforeRollbackTerminalStateForTesting = new();
+    internal static Action? BeforeRollbackTerminalStateForTesting
+    {
+        get => ScopedBeforeRollbackTerminalStateForTesting.Value;
+        set => ScopedBeforeRollbackTerminalStateForTesting.Value = value;
+    }
+
+    internal long CaptureDurableCommitGeneration()
+        => Interlocked.Read(ref _durableCommitGeneration);
+
+    internal bool HasDurableCommitSince(long generation)
+        => Interlocked.Read(ref _durableCommitGeneration) != generation;
+
+    private void RecordDurableCommit()
+        => Interlocked.Increment(ref _durableCommitGeneration);
+
     /// <summary>
     /// Begin a transaction or savepoint for grouping multiple operations atomically.
     /// SQLite does not support nested BEGIN TRANSACTION, so nested calls use SAVEPOINT.
@@ -233,6 +255,7 @@ public partial class DbWriter
         private readonly string? _savepointName;
         private readonly SqliteConnection? _conn;
         private readonly DbWriter _writer;
+        private readonly DeferredHotspotReferenceTransactionFrame? _deferredHotspotReferenceFrame;
         private readonly TransactionGateLease _transactionGateLease;
         private readonly object _stateWaitLock = new();
         private const int StateActive = 0;
@@ -253,6 +276,7 @@ public partial class DbWriter
         {
             _transaction = transaction;
             _writer = writer;
+            _deferredHotspotReferenceFrame = writer.BeginDeferredHotspotReferenceTransactionFrame();
             _transactionGateLease = transactionGateLease;
         }
 
@@ -267,6 +291,7 @@ public partial class DbWriter
             _savepointName = savepointName;
             _conn = conn;
             _writer = writer;
+            _deferredHotspotReferenceFrame = writer.BeginDeferredHotspotReferenceTransactionFrame();
             _transactionGateLease = transactionGateLease;
         }
 
@@ -292,36 +317,52 @@ public partial class DbWriter
                     break;
             }
 
+            var commitBoundaryCompleted = false;
             try
             {
                 if (_transaction != null)
                 {
                     _transaction.Commit();
+                    commitBoundaryCompleted = true;
+                    // SQLite has durably committed at this point. Publish that boundary before
+                    // any post-commit bookkeeping or WAL checkpoint can fail so cleanup guards
+                    // never mistake committed rows for a rolled-back attempt.
+                    // この時点で SQLite commit は durable。後続 bookkeeping / WAL checkpoint
+                    // が失敗しても cleanup guard が rollback 済みと誤認しないよう先に通知する。
+                    _writer.RecordDurableCommit();
+                    // Clear the writer's cached active-transaction reference immediately after
+                    // the real transaction commit. Otherwise a subsequent RentCommand would
+                    // bind a cached command to the now-detached transaction.
+                    // real transaction の commit 直後に writer 側の active transaction 参照を解除する。
+                    _writer._activeTransaction = null;
+                    _writer.EndDeferredHotspotReferenceTransactionFrame(
+                        _deferredHotspotReferenceFrame,
+                        committed: true);
                     _writer._markWriteWork?.Invoke();
+                    BeforePassiveWalCheckpointForTesting?.Invoke();
                     _writer.RunPassiveWalCheckpoint();
                 }
                 else
                 {
                     ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+                    commitBoundaryCompleted = true;
+                    _writer.EndDeferredHotspotReferenceTransactionFrame(
+                        _deferredHotspotReferenceFrame,
+                        committed: true);
                 }
-                // Mark committed after success so Dispose() will rollback if Commit/Release throws.
-                // コミット/リリース成功後に committed に遷移し、失敗時は Dispose() でロールバックされるようにする。
                 SetState(StateCommitted);
-                // Clear the writer's cached active-transaction reference immediately after a
-                // real-transaction commit. Otherwise a subsequent RentCommand between Commit
-                // and Dispose would bind a cached prepared command to the now-committed (and
-                // detached from the connection) SqliteTransaction and throw at execute time.
-                // Savepoint Commit (RELEASE) does not affect the outer SqliteTransaction.
-                // real transaction の commit 直後に writer 側の active transaction 参照を解除する。
-                // commit と Dispose の間に RentCommand が走った場合、commit 済み(connection から
-                // 外れている) transaction を cached command に再バインドして execute 時に例外を
-                // 投げるため。savepoint の RELEASE は外側 SqliteTransaction に影響しない。
-                if (_transaction != null)
-                    _writer._activeTransaction = null;
             }
             catch
             {
-                SetState(StateActive);
+                // Keep the scope finalizing until every post-commit action has either completed
+                // or failed. A concurrent Dispose must not release the transaction gate while
+                // bookkeeping or the passive WAL checkpoint is still using this writer. Once
+                // the SQLite commit/RELEASE boundary succeeded, publish the terminal state so
+                // Dispose never attempts a fictitious rollback of committed work.
+                // post-commit action の完了または失敗確定までは finalizing を維持し、並行
+                // Dispose が writer 使用中に transaction gate を解放しないようにする。
+                // SQLite commit/RELEASE 済みなら terminal state を公開し、架空 rollback を防ぐ。
+                SetState(commitBoundaryCompleted ? StateCommitted : StateActive);
                 throw;
             }
         }
@@ -348,22 +389,37 @@ public partial class DbWriter
                     break;
             }
 
+            var rollbackBoundaryCompleted = false;
             try
             {
                 if (_transaction != null)
+                {
                     _transaction.Rollback();
-                else
-                    ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
-                SetState(StateRolledBack);
-                // Same rationale as Commit: drop the stale reference so cached commands
-                // re-bind correctly after the transaction boundary.
-                // Commit と同じ理由で stale 参照を解除する。
-                if (_transaction != null)
+                    rollbackBoundaryCompleted = true;
+                    // Clear the detached transaction reference before publishing a terminal
+                    // state. Concurrent Dispose can release the gate as soon as it observes
+                    // StateRolledBack; no old finalizer may then overwrite a successor's live
+                    // transaction reference.
+                    // terminal state 公開前に detach 済み transaction 参照を消す。並行
+                    // Dispose が gate 解放後、旧 finalizer が後続 transaction を null で
+                    // 上書きしてはならない。
                     _writer._activeTransaction = null;
+                }
+                else
+                {
+                    ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+                    rollbackBoundaryCompleted = true;
+                }
+                _writer.EndDeferredHotspotReferenceTransactionFrame(
+                    _deferredHotspotReferenceFrame,
+                    committed: false);
+                _writer.NotifyTypeScriptAugmentationTransactionRolledBack();
+                BeforeRollbackTerminalStateForTesting?.Invoke();
+                SetState(StateRolledBack);
             }
             catch
             {
-                SetState(StateActive);
+                SetState(rollbackBoundaryCompleted ? StateRolledBack : StateActive);
                 throw;
             }
         }
@@ -383,7 +439,12 @@ public partial class DbWriter
                         break;
                     if (state == StateCommitting || state == StateRollingBack)
                     {
-                        WaitForStateTransition("dispose", state);
+                        // Dispose owns the transaction resources and gate. It must not time out
+                        // and release either while Commit/Rollback is still finalizing on another
+                        // thread; those finalizers always publish a terminal/active state.
+                        // Dispose は transaction resource と gate の owner。別 thread の
+                        // Commit/Rollback が finalizing 中に timeout して解放してはいけない。
+                        WaitForStateTransition("dispose", state, waitUntilFinalized: true);
                         continue;
                     }
 
@@ -406,6 +467,13 @@ public partial class DbWriter
                         // Best effort during dispose / Dispose中はベストエフォート
                         GlobalToolLog.Error($"transaction_scope_dispose_rollback_failed {GlobalToolLog.FormatExceptionChain(ex)}");
                         SetState(StateRolledBack);
+                    }
+                    finally
+                    {
+                        _writer.EndDeferredHotspotReferenceTransactionFrame(
+                            _deferredHotspotReferenceFrame,
+                            committed: false);
+                        _writer.NotifyTypeScriptAugmentationTransactionRolledBack();
                     }
                     break;
                 }
@@ -439,7 +507,10 @@ public partial class DbWriter
             }
         }
 
-        private void WaitForStateTransition(string operation, int observedState)
+        private void WaitForStateTransition(
+            string operation,
+            int observedState,
+            bool waitUntilFinalized = false)
         {
             var timeout = GetTransactionStateContentionTimeout();
             var stopwatch = Stopwatch.StartNew();
@@ -447,6 +518,12 @@ public partial class DbWriter
             {
                 while (IsFinalizingState(Volatile.Read(ref _state)))
                 {
+                    if (waitUntilFinalized)
+                    {
+                        Monitor.Wait(_stateWaitLock, TransactionStateContentionWaitInterval);
+                        continue;
+                    }
+
                     var waitMilliseconds = GetTransactionStateContentionWaitMilliseconds(timeout, stopwatch);
                     if (waitMilliseconds <= 0)
                     {

@@ -164,12 +164,17 @@ public static partial class ExtractorPluginRegistry
     private static IEnumerable<string> EnumeratePatternConfigPaths(
         PatternWorkspaceState state,
         string workspaceRoot,
-        bool includeUserDirectory = true)
+        bool includeUserDirectory = true,
+        Func<string, bool, bool>? directoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
         foreach (var path in EnumeratePatternConfigPathsFromDirectory(
                      state,
                      Path.Combine(workspaceRoot, ".cdidx", "patterns"),
-                     workspaceRoot))
+                     workspaceRoot,
+                     isUserConfiguration: false,
+                     directoryExists,
+                     observeInput))
         {
             yield return path;
         }
@@ -177,18 +182,24 @@ public static partial class ExtractorPluginRegistry
         if (!includeUserDirectory)
             yield break;
 
-        foreach (var path in EnumerateUserPatternConfigPaths(state))
+        foreach (var path in EnumerateUserPatternConfigPaths(state, directoryExists, observeInput))
             yield return path;
     }
 
-    private static IEnumerable<string> EnumerateUserPatternConfigPaths(PatternWorkspaceState state)
+    private static IEnumerable<string> EnumerateUserPatternConfigPaths(
+        PatternWorkspaceState state,
+        Func<string, bool, bool>? directoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
         if (!string.IsNullOrWhiteSpace(UserPatternDirectoryOverrideForTests))
         {
             foreach (var path in EnumeratePatternConfigPathsFromDirectory(
                          state,
                          UserPatternDirectoryOverrideForTests,
-                         workspaceRoot: null))
+                         workspaceRoot: null,
+                         isUserConfiguration: true,
+                         directoryExists,
+                         observeInput))
             {
                 yield return path;
             }
@@ -202,7 +213,10 @@ public static partial class ExtractorPluginRegistry
             foreach (var path in EnumeratePatternConfigPathsFromDirectory(
                          state,
                          Path.Combine(home, ".config", "cdidx", "patterns"),
-                         workspaceRoot: null))
+                         workspaceRoot: null,
+                         isUserConfiguration: true,
+                         directoryExists,
+                         observeInput))
             {
                 yield return path;
             }
@@ -212,19 +226,33 @@ public static partial class ExtractorPluginRegistry
     private static IEnumerable<string> EnumeratePatternConfigPathsFromDirectory(
         PatternWorkspaceState state,
         string directory,
-        string? workspaceRoot)
+        string? workspaceRoot,
+        bool isUserConfiguration,
+        Func<string, bool, bool>? directoryExists = null,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
     {
-        if (!Directory.Exists(directory) || !PatternDirectoryIsSafe(state, directory, workspaceRoot))
+        if (!(directoryExists?.Invoke(directory, isUserConfiguration) ?? Directory.Exists(directory)))
+            yield break;
+        if (!PatternDirectoryIsSafe(state, directory, workspaceRoot, observeInput))
             yield break;
 
         var directoryCandidates = 0;
         foreach (var searchPattern in PatternConfigSearchPatterns)
         {
-            using var enumerator = TryEnumeratePatternFiles(state, directory, searchPattern);
+            using var enumerator = TryEnumeratePatternFiles(
+                state,
+                directory,
+                searchPattern,
+                observeInput);
             if (enumerator == null)
                 continue;
 
-            while (TryMoveNextPatternFile(state, directory, enumerator, out var path))
+            while (TryMoveNextPatternFile(
+                       state,
+                       directory,
+                       enumerator,
+                       observeInput,
+                       out var path))
             {
                 if (directoryCandidates >= MaxPatternConfigCandidatesPerDirectory)
                 {
@@ -244,11 +272,14 @@ public static partial class ExtractorPluginRegistry
     private static IEnumerator<string>? TryEnumeratePatternFiles(
         PatternWorkspaceState state,
         string directory,
-        string searchPattern)
+        string searchPattern,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput)
     {
         try
         {
-            return CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory, searchPattern).GetEnumerator();
+            var files = EnumeratePatternFilesForTesting?.Invoke(directory, searchPattern)
+                ?? CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory, searchPattern);
+            return files.GetEnumerator();
         }
         catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
@@ -257,6 +288,7 @@ public static partial class ExtractorPluginRegistry
                 "Pattern directory",
                 ex);
             ReportPatternDirectoryRejected(state, directory, diagnostic.Message, diagnostic.Category);
+            observeInput?.Invoke(directory, null, null);
             return null;
         }
     }
@@ -265,6 +297,7 @@ public static partial class ExtractorPluginRegistry
         PatternWorkspaceState state,
         string directory,
         IEnumerator<string> enumerator,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput,
         out string patternPath)
     {
         patternPath = string.Empty;
@@ -283,6 +316,7 @@ public static partial class ExtractorPluginRegistry
                 "Pattern directory",
                 ex);
             ReportPatternDirectoryRejected(state, directory, diagnostic.Message, diagnostic.Category);
+            observeInput?.Invoke(directory, null, null);
             return false;
         }
     }
@@ -290,19 +324,20 @@ public static partial class ExtractorPluginRegistry
     private static bool PatternDirectoryIsSafe(
         PatternWorkspaceState state,
         string directory,
-        string? workspaceRoot)
+        string? workspaceRoot,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput)
     {
         if (workspaceRoot != null)
         {
             var workspaceCdidxDirectory = Path.Combine(workspaceRoot, ".cdidx");
-            if (DirectoryIsSymlinkOrReparsePoint(state, workspaceCdidxDirectory))
+            if (DirectoryIsSymlinkOrReparsePoint(state, workspaceCdidxDirectory, observeInput))
             {
                 ReportPatternDirectoryRejected(state, workspaceCdidxDirectory, "symbolic links and reparse points are not supported");
                 return false;
             }
         }
 
-        if (DirectoryIsSymlinkOrReparsePoint(state, directory))
+        if (DirectoryIsSymlinkOrReparsePoint(state, directory, observeInput))
         {
             ReportPatternDirectoryRejected(state, directory, "symbolic links and reparse points are not supported");
             return false;
@@ -311,16 +346,21 @@ public static partial class ExtractorPluginRegistry
         return true;
     }
 
-    private static bool DirectoryIsSymlinkOrReparsePoint(PatternWorkspaceState state, string directory)
+    private static bool DirectoryIsSymlinkOrReparsePoint(
+        PatternWorkspaceState state,
+        string directory,
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput)
     {
         try
         {
+            InspectPatternDirectoryForTesting?.Invoke(directory);
             var info = new DirectoryInfo(directory);
             return FileSystemBoundary.IsSymlinkOrReparsePoint(info);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
         {
             ReportPatternDirectoryRejected(state, directory, "could not inspect pattern directory");
+            observeInput?.Invoke(directory, null, null);
             return true;
         }
     }

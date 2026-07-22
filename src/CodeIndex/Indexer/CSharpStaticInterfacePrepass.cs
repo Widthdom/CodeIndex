@@ -1,3 +1,4 @@
+using System.Buffers;
 using CodeIndex.Database;
 using CodeIndex.Models;
 
@@ -21,6 +22,8 @@ internal static class CSharpStaticInterfacePrepass
         Action<string?>? reportCurrentFile = null,
         Action<int, string?>? reportCandidateFile = null,
         int parallelism = 1,
+        IReadOnlyList<long>? excludedExistingFileIds = null,
+        Func<string, bool>? isExistingSymbolPathExcluded = null,
         CancellationToken cancellationToken = default)
     {
         var targetCount = fileTargets.TryGetNonEnumeratedCount(out var count) ? count : 0;
@@ -33,24 +36,39 @@ internal static class CSharpStaticInterfacePrepass
             cancellationToken.ThrowIfCancellationRequested();
             var absolutePath = target.FilePath;
             var relativePath = target.DisplayRelativePath;
-            if (includeExistingSymbols && !IsOutsideProjectRoot(relativePath))
-                pendingPaths!.Add(target.IndexPath);
+            var canExcludeExistingPath = includeExistingSymbols && !IsOutsideProjectRoot(relativePath);
 
             var language = target.Language;
             if (language == null)
             {
                 var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
                 if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+                {
+                    if (canExcludeExistingPath)
+                        pendingPaths!.Add(target.IndexPath);
                     continue;
+                }
 
                 language = detection.Language;
             }
 
             if (language != "csharp")
+            {
+                if (canExcludeExistingPath)
+                    pendingPaths!.Add(target.IndexPath);
                 continue;
+            }
 
+            // An unchanged reusable C# row remains authoritative for the workspace
+            // lookup. Only paths whose current extraction will replace or suppress
+            // that row belong to pendingPaths.
+            // 再利用可能な未変更C#行はworkspace lookupに保持し、今回の抽出で置換・
+            // suppressionされるpathだけをpendingPathsへ入れる。
             if (includeExistingSymbols && canReuseExistingSymbolsWithoutRead?.Invoke(target) == true)
                 continue;
+
+            if (canExcludeExistingPath)
+                pendingPaths!.Add(target.IndexPath);
 
             var generatedExtractionSuppressed = isGeneratedCodeExtractionSuppressed?.Invoke(target)
                 ?? target.GeneratedExtractionSuppressed
@@ -60,6 +78,8 @@ internal static class CSharpStaticInterfacePrepass
         }
 
         var extractedByCandidate = new List<SymbolRecord>?[candidates.Count];
+        var sourceEvidenceComplete = 1;
+        string? firstIncompleteSourcePath = null;
         var parallelOptions = new ParallelOptions
         {
             CancellationToken = cancellationToken,
@@ -74,17 +94,11 @@ internal static class CSharpStaticInterfacePrepass
                 reportCandidateFile?.Invoke(candidateIndex, target.DisplayRelativePath);
                 try
                 {
-                    if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
-                        target.FilePath,
-                        target.RelativePath,
-                        cancellationToken))
-                        return;
-
-                    var content = indexer.LoadNormalizedContentForPrepass(
+                    var content = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(
                         target.FilePath,
                         target.RelativePath,
                         cancellationToken);
-                    if (MayContainCSharpStaticInterfaceContract(content))
+                    if (content is not null && MayContainCSharpStaticInterfaceContract(content))
                         extractedByCandidate[candidateIndex] = SymbolExtractor.Extract(
                             0,
                             "csharp",
@@ -92,10 +106,23 @@ internal static class CSharpStaticInterfacePrepass
                             target.IndexPath,
                             cancellationToken: cancellationToken);
                 }
+                catch (Exception ex) when (ex is FileIndexer.BinaryFileSkippedException
+                                           or FileIndexer.FileTooLargeSkippedException)
+                {
+                    // The authoritative indexing pass persists these files with no symbols,
+                    // so their empty source evidence is complete rather than an I/O gap.
+                    // main pass が symbol なしで確定保存する intentional skip は、read failure
+                    // ではなく complete な negative source evidence として扱う。
+                }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
                 {
-                    // The real indexing pass reports file failures; this pre-pass only supplies
-                    // workspace symbols for cross-file static interface member matching.
+                    // Keep one actionable path for the caller's bounded partial-run diagnostic.
+                    // A workspace-wide permission failure must not retain and sort every path.
+                    Interlocked.Exchange(ref sourceEvidenceComplete, 0);
+                    Interlocked.CompareExchange(
+                        ref firstIncompleteSourcePath,
+                        target.DisplayRelativePath,
+                        null);
                 }
                 finally
                 {
@@ -116,15 +143,28 @@ internal static class CSharpStaticInterfacePrepass
                 pendingSymbols.AddRange(extracted);
         }
 
+        var hasSourceStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(pendingSymbols);
+        var hadPendingContracts = false;
         var symbols = includeExistingSymbols
-            ? writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths!)
+            ? writer.LoadCSharpStaticInterfaceContractSymbols(
+                pendingPaths!,
+                excludedExistingFileIds,
+                isExistingSymbolPathExcluded,
+                out hadPendingContracts,
+                cancellationToken)
             : [];
         symbols.AddRange(pendingSymbols);
-        var hadPendingContracts = includeExistingSymbols
-            && writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths!);
+        var hasStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts;
+        IReadOnlyList<string> incompletePaths = firstIncompleteSourcePath == null
+            ? []
+            : [firstIncompleteSourcePath];
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
-            HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts);
+            hasStaticInterfaceContracts,
+            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols),
+            hasSourceStaticInterfaceContracts,
+            sourceEvidenceComplete != 0,
+            incompletePaths);
     }
 
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
@@ -146,10 +186,11 @@ internal static class CSharpStaticInterfacePrepass
             reportCurrentFile: reportCurrentFile,
             reportCandidateFile: null,
             parallelism: 1,
+            excludedExistingFileIds: null,
             cancellationToken: cancellationToken);
     }
 
-    private static bool HasCSharpStaticInterfaceContractSymbol(IReadOnlyList<SymbolRecord> symbols)
+    internal static bool HasCSharpStaticInterfaceContractSymbol(IEnumerable<SymbolRecord> symbols)
     {
         foreach (var symbol in symbols)
         {
@@ -178,21 +219,7 @@ internal static class CSharpStaticInterfacePrepass
             return false;
         }
 
-        var masked = MaskCSharpCommentsAndStrings(content);
-        var index = 0;
-        while ((index = IndexOfCSharpWord(masked, "interface", index)) >= 0)
-        {
-            var bodyStart = masked.IndexOf('{', index + "interface".Length);
-            if (bodyStart < 0)
-                return false;
-
-            if (CSharpInterfaceBodyMayContainStaticContract(masked, bodyStart))
-                return true;
-
-            index = bodyStart + 1;
-        }
-
-        return false;
+        return CSharpCodeMayContainStaticInterfaceContract(contentSpan);
     }
 
     internal static bool RawBytesMayContainCSharpStaticInterfaceContract(byte[] bytes)
@@ -357,273 +384,521 @@ internal static class CSharpStaticInterfacePrepass
         return false;
     }
 
-    private static bool CSharpInterfaceBodyMayContainStaticContract(string masked, int bodyStart)
+    private static bool CSharpCodeMayContainStaticInterfaceContract(ReadOnlySpan<char> content)
     {
-        var depth = 1;
-        var memberStart = bodyStart + 1;
-        for (var index = bodyStart + 1; index < masked.Length; index++)
-        {
-            var ch = masked[index];
-            if (ch == '{')
-            {
-                if (depth == 1 && CSharpMemberHeaderHasStaticContract(masked, memberStart, index))
-                    return true;
-
-                depth++;
-            }
-            else if (ch == '}')
-            {
-                depth--;
-                if (depth == 0)
-                    return false;
-
-                if (depth == 1)
-                    memberStart = index + 1;
-            }
-            else if (ch == ';' && depth == 1)
-            {
-                if (CSharpMemberHeaderHasStaticContract(masked, memberStart, index))
-                    return true;
-
-                memberStart = index + 1;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool CSharpMemberHeaderHasStaticContract(string masked, int start, int endExclusive)
-    {
-        if (start < 0 || endExclusive <= start || endExclusive > masked.Length)
-            return false;
-
-        var header = masked.AsSpan(start, endExclusive - start);
-        return ContainsCSharpWord(header, "static")
-               && (ContainsCSharpWord(header, "abstract")
-                   || ContainsCSharpWord(header, "virtual"));
-    }
-
-    private static int IndexOfCSharpWord(string text, string word, int startIndex)
-    {
-        var index = Math.Max(0, startIndex);
-        while (index < text.Length)
-        {
-            index = text.IndexOf(word, index, StringComparison.Ordinal);
-            if (index < 0)
-                return -1;
-
-            var before = index == 0 ? '\0' : text[index - 1];
-            var afterIndex = index + word.Length;
-            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
-            if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
-                return index;
-
-            index += word.Length;
-        }
-
-        return -1;
-    }
-
-    private static string MaskCSharpCommentsAndStrings(string content)
-    {
-        var chars = content.ToCharArray();
-        var inLineComment = false;
-        var inBlockComment = false;
-        var inString = false;
-        var inChar = false;
-        var inVerbatimString = false;
-        var inRawString = false;
+        const int StackFrameCount = 32;
+        Span<CSharpInterfaceScanFrame> frames = stackalloc CSharpInterfaceScanFrame[StackFrameCount];
+        CSharpInterfaceScanFrame[]? rentedFrames = null;
+        var frameCount = 0;
+        var braceDepth = 0;
+        var pendingInterfaceBody = false;
+        var mode = CSharpLexMode.Code;
         var rawQuoteCount = 0;
 
-        for (var index = 0; index < chars.Length; index++)
+        try
         {
-            var ch = chars[index];
-            var next = index + 1 < chars.Length ? chars[index + 1] : '\0';
-
-            if (inLineComment)
+            var index = 0;
+            while (index < content.Length)
             {
-                if (ch is '\r' or '\n')
+                var ch = content[index];
+                var next = index + 1 < content.Length ? content[index + 1] : '\0';
+                switch (mode)
                 {
-                    inLineComment = false;
-                }
-                else
-                {
-                    chars[index] = ' ';
+                    case CSharpLexMode.LineComment:
+                        if (ch is '\r' or '\n')
+                            mode = CSharpLexMode.Code;
+                        index++;
+                        continue;
+                    case CSharpLexMode.BlockComment:
+                        if (ch == '*' && next == '/')
+                        {
+                            mode = CSharpLexMode.Code;
+                            index += 2;
+                        }
+                        else
+                        {
+                            index++;
+                        }
+                        continue;
+                    case CSharpLexMode.String:
+                        if (ch == '\\' && next != '\0')
+                            index += 2;
+                        else
+                        {
+                            if (ch == '"')
+                                mode = CSharpLexMode.Code;
+                            index++;
+                        }
+                        continue;
+                    case CSharpLexMode.Character:
+                        if (ch == '\\' && next != '\0')
+                            index += 2;
+                        else
+                        {
+                            if (ch == '\'')
+                                mode = CSharpLexMode.Code;
+                            index++;
+                        }
+                        continue;
+                    case CSharpLexMode.VerbatimString:
+                        if (ch == '"' && next == '"')
+                            index += 2;
+                        else
+                        {
+                            if (ch == '"')
+                                mode = CSharpLexMode.Code;
+                            index++;
+                        }
+                        continue;
+                    case CSharpLexMode.RawString:
+                        if (ch != '"')
+                        {
+                            index++;
+                            continue;
+                        }
+
+                        var closingQuoteCount = CountConsecutiveQuotes(content, index);
+                        if (closingQuoteCount < rawQuoteCount)
+                        {
+                            index += closingQuoteCount;
+                            continue;
+                        }
+
+                        index += rawQuoteCount;
+                        mode = CSharpLexMode.Code;
+                        continue;
                 }
 
-                continue;
-            }
-
-            if (inBlockComment)
-            {
-                if (ch == '*' && next == '/')
+                if (ch == '/' && next == '/')
                 {
-                    chars[index] = ' ';
-                    chars[index + 1] = ' ';
+                    mode = CSharpLexMode.LineComment;
+                    index += 2;
+                    continue;
+                }
+                if (ch == '/' && next == '*')
+                {
+                    mode = CSharpLexMode.BlockComment;
+                    index += 2;
+                    continue;
+                }
+                if ((ch == '@' && next == '"')
+                    || (index + 2 < content.Length
+                        && ((ch == '$' && next == '@') || (ch == '@' && next == '$'))
+                        && content[index + 2] == '"'))
+                {
+                    mode = CSharpLexMode.VerbatimString;
+                    index += next == '"' ? 2 : 3;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    var quoteCount = CountConsecutiveQuotes(content, index);
+                    if (quoteCount >= 3)
+                    {
+                        rawQuoteCount = quoteCount;
+                        mode = CSharpLexMode.RawString;
+                        index += quoteCount;
+                    }
+                    else
+                    {
+                        mode = CSharpLexMode.String;
+                        index++;
+                    }
+                    continue;
+                }
+                if (ch == '\'')
+                {
+                    mode = CSharpLexMode.Character;
                     index++;
-                    inBlockComment = false;
+                    continue;
                 }
-                else if (ch is not ('\r' or '\n'))
+                if (IsCSharpIdentifierPart(ch))
                 {
-                    chars[index] = ' ';
+                    var wordStart = index++;
+                    while (index < content.Length && IsCSharpIdentifierPart(content[index]))
+                        index++;
+
+                    var word = content[wordStart..index];
+                    if (word.SequenceEqual("interface"))
+                        pendingInterfaceBody = true;
+                    if (frameCount > 0 && braceDepth == frames[frameCount - 1].BodyDepth)
+                    {
+                        ref var frame = ref frames[frameCount - 1];
+                        if (word.SequenceEqual("static"))
+                            frame.HasStatic = true;
+                        else if (word.SequenceEqual("abstract"))
+                            frame.HasAbstract = true;
+                        else if (word.SequenceEqual("virtual"))
+                            frame.HasVirtual = true;
+                    }
+                    continue;
                 }
 
-                continue;
-            }
-
-            if (inRawString)
-            {
-                if (ch == '"' && HasConsecutiveQuotes(chars, index, rawQuoteCount))
+                if (ch == '{')
                 {
-                    for (var quote = 0; quote < rawQuoteCount && index + quote < chars.Length; quote++)
-                        chars[index + quote] = ' ';
-                    index += rawQuoteCount - 1;
-                    inRawString = false;
-                }
-                else if (ch is not ('\r' or '\n'))
-                {
-                    chars[index] = ' ';
-                }
+                    if (frameCount > 0
+                        && braceDepth == frames[frameCount - 1].BodyDepth
+                        && frames[frameCount - 1].HasStaticContract)
+                    {
+                        return true;
+                    }
 
-                continue;
-            }
-
-            if (inVerbatimString)
-            {
-                if (ch == '"' && next == '"')
-                {
-                    chars[index] = ' ';
-                    chars[index + 1] = ' ';
+                    braceDepth++;
+                    if (pendingInterfaceBody)
+                    {
+                        if (frameCount == frames.Length)
+                        {
+                            var expandedFrames = ArrayPool<CSharpInterfaceScanFrame>.Shared.Rent(frames.Length * 2);
+                            frames.CopyTo(expandedFrames);
+                            if (rentedFrames is not null)
+                                ArrayPool<CSharpInterfaceScanFrame>.Shared.Return(rentedFrames);
+                            rentedFrames = expandedFrames;
+                            frames = rentedFrames;
+                        }
+                        frames[frameCount++] = new CSharpInterfaceScanFrame(braceDepth);
+                        pendingInterfaceBody = false;
+                    }
                     index++;
-                }
-                else if (ch == '"')
-                {
-                    chars[index] = ' ';
-                    inVerbatimString = false;
-                }
-                else if (ch is not ('\r' or '\n'))
-                {
-                    chars[index] = ' ';
+                    continue;
                 }
 
-                continue;
-            }
-
-            if (inString)
-            {
-                if (ch == '\\' && next != '\0')
+                if (ch == '}')
                 {
-                    chars[index] = ' ';
-                    chars[index + 1] = ' ';
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    while (frameCount > 0 && frames[frameCount - 1].BodyDepth > braceDepth)
+                        frameCount--;
+                    if (frameCount > 0 && frames[frameCount - 1].BodyDepth == braceDepth)
+                        frames[frameCount - 1].ResetMemberHeader();
                     index++;
-                }
-                else if (ch == '"')
-                {
-                    chars[index] = ' ';
-                    inString = false;
-                }
-                else if (ch is not ('\r' or '\n'))
-                {
-                    chars[index] = ' ';
+                    continue;
                 }
 
-                continue;
-            }
-
-            if (inChar)
-            {
-                if (ch == '\\' && next != '\0')
+                if (ch == ';'
+                    && frameCount > 0
+                    && braceDepth == frames[frameCount - 1].BodyDepth)
                 {
-                    chars[index] = ' ';
-                    chars[index + 1] = ' ';
-                    index++;
+                    ref var frame = ref frames[frameCount - 1];
+                    if (frame.HasStaticContract)
+                        return true;
+                    frame.ResetMemberHeader();
                 }
-                else if (ch == '\'')
-                {
-                    chars[index] = ' ';
-                    inChar = false;
-                }
-                else if (ch is not ('\r' or '\n'))
-                {
-                    chars[index] = ' ';
-                }
-
-                continue;
-            }
-
-            if (ch == '/' && next == '/')
-            {
-                chars[index] = ' ';
-                chars[index + 1] = ' ';
                 index++;
-                inLineComment = true;
             }
-            else if (ch == '/' && next == '*')
-            {
-                chars[index] = ' ';
-                chars[index + 1] = ' ';
-                index++;
-                inBlockComment = true;
-            }
-            else if (ch == '@' && next == '"')
-            {
-                chars[index] = ' ';
-                chars[index + 1] = ' ';
-                index++;
-                inVerbatimString = true;
-            }
-            else if (ch == '"' && HasConsecutiveQuotes(chars, index, 3))
-            {
-                rawQuoteCount = CountConsecutiveQuotes(chars, index);
-                for (var quote = 0; quote < rawQuoteCount && index + quote < chars.Length; quote++)
-                    chars[index + quote] = ' ';
-                index += rawQuoteCount - 1;
-                inRawString = true;
-            }
-            else if (ch == '"')
-            {
-                chars[index] = ' ';
-                inString = true;
-            }
-            else if (ch == '\'')
-            {
-                chars[index] = ' ';
-                inChar = true;
-            }
-        }
 
-        return new string(chars);
-    }
-
-    private static bool HasConsecutiveQuotes(char[] chars, int index, int count)
-    {
-        if (index + count > chars.Length)
             return false;
-
-        for (var offset = 0; offset < count; offset++)
-        {
-            if (chars[index + offset] != '"')
-                return false;
         }
-
-        return true;
+        finally
+        {
+            if (rentedFrames is not null)
+                ArrayPool<CSharpInterfaceScanFrame>.Shared.Return(rentedFrames);
+        }
     }
 
-    private static int CountConsecutiveQuotes(char[] chars, int index)
+    private static int CountConsecutiveQuotes(ReadOnlySpan<char> content, int index)
     {
         var count = 0;
-        while (index + count < chars.Length && chars[index + count] == '"')
+        while (index + count < content.Length && content[index + count] == '"')
             count++;
         return count;
+    }
+
+    private enum CSharpLexMode : byte
+    {
+        Code,
+        LineComment,
+        BlockComment,
+        String,
+        Character,
+        VerbatimString,
+        RawString,
+    }
+
+    private struct CSharpInterfaceScanFrame(int bodyDepth)
+    {
+        internal int BodyDepth { get; } = bodyDepth;
+        internal bool HasStatic { get; set; }
+        internal bool HasAbstract { get; set; }
+        internal bool HasVirtual { get; set; }
+        internal readonly bool HasStaticContract => HasStatic && (HasAbstract || HasVirtual);
+
+        internal void ResetMemberHeader()
+        {
+            HasStatic = false;
+            HasAbstract = false;
+            HasVirtual = false;
+        }
     }
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
         => symbol.Kind is "function" or "operator" or "property"
            && symbol.ContainerKind == "interface"
-           && !string.IsNullOrWhiteSpace(symbol.Signature)
-           && ContainsCSharpWord(symbol.Signature!, "static")
-           && (ContainsCSharpWord(symbol.Signature!, "abstract")
-               || ContainsCSharpWord(symbol.Signature!, "virtual"));
+           && IsCSharpStaticInterfaceContractSignature(symbol.Signature);
+
+    internal static bool IsCSharpStaticInterfaceContractSignature(string? signature)
+        => !string.IsNullOrWhiteSpace(signature)
+           && ContainsCSharpWord(signature!, "static")
+           && (ContainsCSharpWord(signature!, "abstract")
+               || ContainsCSharpWord(signature!, "virtual"));
+
+    internal static bool TryCaptureFileStatSnapshots(
+        IReadOnlyList<FileTarget> targets,
+        out Dictionary<string, FileStatSnapshot> snapshots,
+        out string? failedPath,
+        CancellationToken cancellationToken = default,
+        Action<FileTarget>? validateTarget = null)
+    {
+        snapshots = new Dictionary<string, FileStatSnapshot>(targets.Count, StringComparer.Ordinal);
+        failedPath = null;
+        foreach (var target in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                validateTarget?.Invoke(target);
+                var info = new FileInfo(LongPath.EnsureWindowsPrefix(target.FilePath));
+                info.Refresh();
+                if (!info.Exists)
+                {
+                    failedPath = target.DisplayRelativePath;
+                    return false;
+                }
+
+                snapshots[target.IndexPath] = new FileStatSnapshot(info.Length, info.LastWriteTimeUtc);
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException
+                                       or ArgumentException)
+            {
+                failedPath = target.DisplayRelativePath;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static bool FileStatSnapshotsMatch(
+        IReadOnlyDictionary<string, FileStatSnapshot> before,
+        IReadOnlyDictionary<string, FileStatSnapshot> after,
+        out string? changedPath)
+    {
+        foreach (var (path, snapshot) in before)
+        {
+            if (!after.TryGetValue(path, out var current) || current != snapshot)
+            {
+                changedPath = path;
+                return false;
+            }
+        }
+
+        if (before.Count != after.Count)
+        {
+            changedPath = after.Keys.FirstOrDefault(path => !before.ContainsKey(path));
+            return false;
+        }
+
+        changedPath = null;
+        return true;
+    }
+
+    internal static bool TryValidateFileStatSnapshots(
+        IReadOnlyList<FileTarget> targets,
+        IReadOnlyDictionary<string, FileStatSnapshot> snapshots,
+        out string? changedPath,
+        CancellationToken cancellationToken = default,
+        Action<FileTarget>? validateTarget = null)
+    {
+        if (targets.Count != snapshots.Count)
+        {
+            changedPath = "<csharp_workspace>";
+            return false;
+        }
+
+        foreach (var target in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                validateTarget?.Invoke(target);
+                var info = new FileInfo(LongPath.EnsureWindowsPrefix(target.FilePath));
+                info.Refresh();
+                if (!info.Exists
+                    || !snapshots.TryGetValue(target.IndexPath, out var snapshot)
+                    || info.Length != snapshot.Size
+                    || info.LastWriteTimeUtc != snapshot.ModifiedUtc)
+                {
+                    changedPath = target.DisplayRelativePath;
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException
+                                       or ArgumentException)
+            {
+                changedPath = target.DisplayRelativePath;
+                return false;
+            }
+        }
+
+        changedPath = null;
+        return true;
+    }
+
+    internal static bool TryValidateLoadedFileStatSnapshot(
+        string filePath,
+        string indexPath,
+        string displayPath,
+        long loadedSize,
+        DateTime loadedModifiedUtc,
+        IReadOnlyDictionary<string, FileStatSnapshot> snapshots,
+        out string? changedPath,
+        CancellationToken cancellationToken = default,
+        Action<string>? validatePath = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!snapshots.TryGetValue(indexPath, out var snapshot)
+            || loadedSize != snapshot.Size
+            || loadedModifiedUtc != snapshot.ModifiedUtc)
+        {
+            changedPath = displayPath;
+            return false;
+        }
+
+        try
+        {
+            validatePath?.Invoke(filePath);
+            var info = new FileInfo(LongPath.EnsureWindowsPrefix(filePath));
+            info.Refresh();
+            if (!info.Exists
+                || info.Length != snapshot.Size
+                || info.LastWriteTimeUtc != snapshot.ModifiedUtc)
+            {
+                changedPath = displayPath;
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or NotSupportedException
+                                   or ArgumentException)
+        {
+            changedPath = displayPath;
+            return false;
+        }
+
+        changedPath = null;
+        return true;
+    }
+
+    internal static bool TryCaptureDirectoryStatSnapshots(
+        IEnumerable<string> directories,
+        out Dictionary<string, DirectoryStatSnapshot> snapshots,
+        out string? failedPath,
+        CancellationToken cancellationToken = default,
+        Action<string>? validateDirectory = null)
+    {
+        snapshots = new Dictionary<string, DirectoryStatSnapshot>(StringComparer.Ordinal);
+        failedPath = null;
+        foreach (var directory in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (snapshots.ContainsKey(directory))
+                continue;
+            try
+            {
+                validateDirectory?.Invoke(directory);
+                var info = new DirectoryInfo(LongPath.EnsureWindowsPrefix(directory));
+                info.Refresh();
+                if (!info.Exists)
+                {
+                    failedPath = directory;
+                    return false;
+                }
+
+                snapshots[directory] = new DirectoryStatSnapshot(info.LastWriteTimeUtc);
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException
+                                       or ArgumentException)
+            {
+                failedPath = directory;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static bool DirectoryStatSnapshotsMatch(
+        IReadOnlyDictionary<string, DirectoryStatSnapshot> before,
+        IReadOnlyDictionary<string, DirectoryStatSnapshot> after,
+        out string? changedPath)
+    {
+        foreach (var (path, snapshot) in before)
+        {
+            if (!after.TryGetValue(path, out var current) || current != snapshot)
+            {
+                changedPath = path;
+                return false;
+            }
+        }
+
+        if (before.Count != after.Count)
+        {
+            changedPath = after.Keys.FirstOrDefault(path => !before.ContainsKey(path));
+            return false;
+        }
+
+        changedPath = null;
+        return true;
+    }
+
+    internal static bool TryValidateDirectoryStatSnapshots(
+        IReadOnlyList<string> directories,
+        IReadOnlyDictionary<string, DirectoryStatSnapshot> snapshots,
+        out string? changedPath,
+        CancellationToken cancellationToken = default,
+        Action<string>? validateDirectory = null)
+    {
+        if (directories.Count != snapshots.Count)
+        {
+            changedPath = "<csharp_workspace>";
+            return false;
+        }
+
+        foreach (var directory in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                validateDirectory?.Invoke(directory);
+                var info = new DirectoryInfo(LongPath.EnsureWindowsPrefix(directory));
+                info.Refresh();
+                if (!info.Exists
+                    || !snapshots.TryGetValue(directory, out var snapshot)
+                    || info.LastWriteTimeUtc != snapshot.ModifiedUtc)
+                {
+                    changedPath = directory;
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException
+                                       or ArgumentException)
+            {
+                changedPath = directory;
+                return false;
+            }
+        }
+
+        changedPath = null;
+        return true;
+    }
 
     private static bool ContainsCSharpWord(string text, string word)
         => ContainsCSharpWord(text.AsSpan(), word);
@@ -681,6 +956,10 @@ internal static class CSharpStaticInterfacePrepass
         }
     }
 
+    internal readonly record struct FileStatSnapshot(long Size, DateTime ModifiedUtc);
+
+    internal readonly record struct DirectoryStatSnapshot(DateTime ModifiedUtc);
+
     private static bool IsOutsideProjectRoot(string relativePath)
     {
         if (Path.IsPathRooted(relativePath))
@@ -695,4 +974,8 @@ internal static class CSharpStaticInterfacePrepass
 
 internal sealed record CSharpStaticInterfaceWorkspaceSymbols(
         IReadOnlyList<SymbolRecord> Symbols,
-        bool HasStaticInterfaceContracts);
+        bool HasStaticInterfaceContracts,
+        ReferenceExtractor.CSharpStaticInterfaceMemberLookups? StaticInterfaceMemberLookups = null,
+        bool HasSourceStaticInterfaceContracts = false,
+        bool SourceContractEvidenceComplete = true,
+        IReadOnlyList<string>? IncompleteSourcePaths = null);

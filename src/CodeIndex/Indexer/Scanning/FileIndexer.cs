@@ -58,6 +58,7 @@ public partial class FileIndexer
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
     private readonly Func<string, bool?> _directoryIgnoreCaseProbe;
+    private readonly bool _usesDefaultDirectoryIgnoreCaseProbe;
     private readonly Func<string, IEnumerable<string>>? _enumerateFilesForTesting;
     private readonly Func<string, IEnumerable<string>> _enumerateFileSystemEntries;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
@@ -91,6 +92,9 @@ public partial class FileIndexer
 
     internal static Func<string, IEnumerable<string>>? EnumerateProjectMarkerDirectoriesForTesting { get; set; }
     internal static Func<string, IReadOnlyList<string>>? ReadGitmodulesLinesForTesting { get; set; }
+    internal static Action<string>? NestedRepositoryDetectedBeforeSnapshotForTesting { get; set; }
+    internal static Action<string>? NestedRepositoryListingCapturedBeforeProbeForTesting { get; set; }
+    internal static Action<string>? DirectoryListingSnapshotProbeForTesting { get; set; }
 
     private static readonly IReadOnlySet<string> EmptyCheckpointedDirectorySet = new HashSet<string>(StringComparer.Ordinal);
 
@@ -102,18 +106,22 @@ public partial class FileIndexer
             Dictionary<string, int> languageCounts,
             List<ScanError> errors,
             HashSet<string> listedDirectories,
+            List<DirectoryListingSnapshot>? directoryListingSnapshots,
             HashSet<string> fullyScannedDirectories,
             IReadOnlySet<string> checkpointedDirectories,
-            HashSet<string> visitedDirectories)
+            HashSet<string> visitedDirectories,
+            bool captureDirectoryListingSnapshots)
         {
             Results = results;
             FileLanguages = fileLanguages;
             LanguageCounts = languageCounts;
             Errors = errors;
             ListedDirectories = listedDirectories;
+            DirectoryListingSnapshots = directoryListingSnapshots;
             FullyScannedDirectories = fullyScannedDirectories;
             CheckpointedDirectories = checkpointedDirectories;
             VisitedDirectories = visitedDirectories;
+            CaptureDirectoryListingSnapshots = captureDirectoryListingSnapshots;
         }
 
         public List<string> Results { get; }
@@ -124,8 +132,13 @@ public partial class FileIndexer
         public HashSet<string>? UnknownExtensionFiles { get; private set; }
         public HashSet<string>? ProbeFailedFilePaths { get; private set; }
         public HashSet<string> ListedDirectories { get; }
+        public List<DirectoryListingSnapshot>? DirectoryListingSnapshots { get; }
+        public bool DirectoryListingSnapshotsComplete { get; private set; } = true;
+        public string? DirectoryListingSnapshotsIncompletePath { get; private set; }
+        public string? DirectoryListingSnapshotsIncompleteReason { get; private set; }
         public HashSet<string> FullyScannedDirectories { get; }
         public IReadOnlySet<string> CheckpointedDirectories { get; }
+        public bool CaptureDirectoryListingSnapshots { get; }
         public HashSet<string>? AttributePrunedDirectories { get; private set; }
         public HashSet<string>? NestedRepositories { get; private set; }
         public HashSet<string>? DanglingSymlinks { get; private set; }
@@ -134,6 +147,23 @@ public partial class FileIndexer
 
         public bool RecordFileIdentity(FileIdentity identity)
             => (VisitedFileIdentities ??= []).Add(identity);
+
+        public void RecordDirectoryListingSnapshot(string path, DateTime modifiedUtc)
+        {
+            if (DirectoryListingSnapshots == null)
+                return;
+
+            if (DirectoryListingSnapshots.Count >= DirectoryListingSnapshotLimit)
+            {
+                DirectoryListingSnapshotsComplete = false;
+                DirectoryListingSnapshotsIncompletePath ??= path;
+                DirectoryListingSnapshotsIncompleteReason ??=
+                    $"Directory listing snapshot count limit ({DirectoryListingSnapshotLimit}) was exceeded.";
+                return;
+            }
+
+            DirectoryListingSnapshots.Add(new DirectoryListingSnapshot(path, modifiedUtc));
+        }
 
         public void RecordNonIndexablePath(string path)
             => (NonIndexablePaths ??= CreatePathSet()).Add(path);
@@ -202,6 +232,7 @@ public partial class FileIndexer
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
+        _usesDefaultDirectoryIgnoreCaseProbe = directoryIgnoreCaseProbe is null;
         _directoryIgnoreCaseProbe = directoryIgnoreCaseProbe ?? ProbeExistingDirectoryIgnoreCase;
         _enumerateFilesForTesting = enumerateFiles;
         _enumerateFileSystemEntries = enumerateFileSystemEntries ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)));
@@ -228,11 +259,17 @@ public partial class FileIndexer
             ExtractorPluginRegistry.ReloadAuthorizedPatternConfigsForProjectRoot(
                 _projectRoot,
                 _enumerateFileSystemEntries,
-                _openReadForIndexContent);
+                OpenObservedPatternConfigurationFileForRead,
+                ObservePatternConfigurationDirectoryExists,
+                ObservePatternConfigurationInput);
         }
         else
         {
-            ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(_projectRoot);
+            ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(
+                _projectRoot,
+                openFile: null,
+                directoryExists: ObservePatternConfigurationDirectoryExists,
+                observeInput: ObservePatternConfigurationInput);
         }
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);

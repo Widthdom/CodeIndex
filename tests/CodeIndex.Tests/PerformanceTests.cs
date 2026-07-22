@@ -28,6 +28,32 @@ public class PerformanceTests : IDisposable
         _db.InitializeSchema();
     }
 
+    [Fact]
+    public void ReferenceBatchTransactions_RepositoryScaleAtomicFileScopeEliminatesControlledSqlScopes()
+    {
+        // Model the repository snapshot's 321,352 references across 856 files without
+        // allocating the rows themselves. The 5/6-batch distribution keeps large-file
+        // batching in the contract instead of reducing every file to one SQL scope.
+        // 参照row自体を確保せず、自己snapshotの321,352 refs / 856 filesを5/6 batch分布で固定する。
+        var referenceCountsByFile = Enumerable.Repeat(386, 729)
+            .Concat(Enumerable.Repeat(315, 80))
+            .Concat(Enumerable.Repeat(314, 47))
+            .ToArray();
+
+        Assert.Equal(856, referenceCountsByFile.Length);
+        Assert.Equal(321_352, referenceCountsByFile.Sum());
+        Assert.Equal(
+            5_009L,
+            DbWriter.CountReferenceBatchTransactionScopesForTesting(
+                referenceCountsByFile,
+                atomicFileScope: false));
+        Assert.Equal(
+            0L,
+            DbWriter.CountReferenceBatchTransactionScopesForTesting(
+                referenceCountsByFile,
+                atomicFileScope: true));
+    }
+
     [Fact(Skip = "Performance test — run manually with: dotnet test --filter Insert10KFiles")]
     public void Insert10KFiles_CompletesInReasonableTime()
     {
@@ -158,6 +184,49 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void ReusableStatSnapshot_OnePassMaterialization_StaysWithinAllocationBudget()
+    {
+        const int fileCount = 1_024;
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var writer = new DbWriter(_db.Connection);
+        using (var transaction = writer.BeginTransaction())
+        {
+            for (var index = 0; index < fileCount; index++)
+            {
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = $"src/reusable/file{index:D4}.cs",
+                    Lang = "csharp",
+                    Size = index + 1,
+                    Lines = 1,
+                    Modified = modified,
+                    Checksum = $"checksum-{index:D4}",
+                });
+            }
+            transaction.Commit();
+        }
+
+        _ = writer.LoadReusableIndexedFileStats(
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            initialCapacity: fileCount);
+
+        IReadOnlyDictionary<string, ReusableIndexedFileStat>? snapshot = null;
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+            snapshot = writer.LoadReusableIndexedFileStats(
+                maxSymbolsPerFile: 10,
+                maxReferencesPerFile: 10,
+                initialCapacity: fileCount));
+
+        Assert.Equal(fileCount, snapshot!.Count);
+        Assert.True(allocatedBytes < 380_000, $"Reusable stat snapshot allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void SymbolExtraction_CsharpHotPath_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpHotPathFixture(typeCount: 120);
@@ -166,6 +235,83 @@ public class PerformanceTests : IDisposable
         var allocatedBytes = MeasureAllocatedBytes(() => SymbolExtractor.Extract(1, "csharp", content));
 
         Assert.True(allocatedBytes < 18_000_000, $"Symbol extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void CSharpStaticInterfacePrepass_LargeSemanticProbeStaysWithinAllocationBudget()
+    {
+        const int repeats = 12;
+        var filler = new string('x', 576 * 1024);
+        var semanticNegative = $"class C {{ const string S = \"interface I {{ static abstract int M(); }}\"; {filler} }}";
+        var contract = $"interface I {{ {filler} static abstract int M(); }}";
+        Assert.False(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(semanticNegative));
+        Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(contract));
+
+        var negativeResult = false;
+        var contractResult = false;
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var iteration = 0; iteration < repeats; iteration++)
+            {
+                negativeResult |= CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(semanticNegative);
+                contractResult |= CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(contract);
+            }
+        });
+
+        Assert.False(negativeResult);
+        Assert.True(contractResult);
+        Assert.True(allocatedBytes < 4_096, $"C# static-interface semantic probes allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void CSharpStaticInterfaceLookup_UnrelatedInterfacesStayWithinAllocationBudget()
+    {
+        const int unrelatedInterfaceCount = 20_000;
+        var workspaceSymbols = new List<SymbolRecord>(unrelatedInterfaceCount + 2);
+        for (var index = 0; index < unrelatedInterfaceCount; index++)
+        {
+            workspaceSymbols.Add(new SymbolRecord
+            {
+                Kind = "interface",
+                Name = $"IUnrelated{index}",
+                Signature = $"public interface IUnrelated{index}<T>",
+            });
+        }
+
+        workspaceSymbols.Add(new SymbolRecord
+        {
+            Kind = "interface",
+            Name = "IContract",
+            Signature = "public interface IContract<T>",
+        });
+        workspaceSymbols.Add(new SymbolRecord
+        {
+            Kind = "function",
+            Name = "Create",
+            Signature = "static abstract T Create();",
+            ReturnType = "T",
+            ContainerKind = "interface",
+            ContainerName = "IContract",
+        });
+
+        _ = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
+        ReferenceExtractor.CSharpStaticInterfaceMemberLookups? lookups = null;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => lookups = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols));
+
+        Assert.True(
+            allocatedBytes < 64_000,
+            $"C# static-interface lookup allocated {allocatedBytes:N0} bytes for unrelated interfaces");
+        Assert.Single(lookups!.ContractsByType);
+        Assert.Single(lookups.InterfaceGenericParameters);
     }
 
 #if NET8_0
@@ -205,6 +351,82 @@ public class PerformanceTests : IDisposable
         var allocatedBytes = MeasureAllocatedBytes(() => ReferenceExtractor.Extract(1, "csharp", content, symbols));
 
         Assert.True(allocatedBytes < 6_000_000, $"Reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
+    {
+        var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        _ = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        List<ReferenceRecord>? references = null;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => references = ReferenceExtractor.Extract(1, "csharp", content, symbols));
+
+        Assert.Equal(12_000, references!.Count(reference =>
+            reference.SymbolName == "Target"
+            && reference.ReferenceKind == "call"));
+        Assert.True(
+            allocatedBytes < 62_000_000,
+            $"No-alias dense reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void MutualRecursion_DenseRepeatedQualifiedNames_StaysWithinAllocationBudget()
+    {
+        ReferenceExtractor.MarkMutualRecursionReferences(
+            BuildDenseMutualReferenceFixture("Warmup.Alpha", "Warmup.Beta", pairCount: 1));
+        var csharpReferences = BuildDenseMutualReferenceFixture(
+            "Example.Namespace.Alpha",
+            "Example.Namespace.Beta",
+            pairCount: 6_000);
+        var pythonReferences = BuildDenseMutualReferenceFixture(
+            "example.module.alpha",
+            "example.module.beta",
+            pairCount: 6_000);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            ReferenceExtractor.MarkMutualRecursionReferences(csharpReferences);
+            ReferenceExtractor.MarkMutualRecursionReferences(pythonReferences);
+        });
+
+        Assert.All(csharpReferences, reference => Assert.True(reference.IsMutualRecursion));
+        Assert.All(pythonReferences, reference => Assert.True(reference.IsMutualRecursion));
+        Assert.True(
+            allocatedBytes < 10_000,
+            $"Dense mutual-recursion marking allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void CSharpAliasCompaction_DenseDuplicates_StaysWithinAllocationBudget()
+    {
+        ReferenceExtractor.CompactCSharpUsingAliasReferences(
+            BuildCSharpAliasDuplicateReferenceFixture(uniqueReferenceCount: 1),
+            "csharp");
+        var references = BuildCSharpAliasDuplicateReferenceFixture(uniqueReferenceCount: 6_000);
+
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.CompactCSharpUsingAliasReferences(references, "csharp"));
+
+        Assert.Equal(6_000, references.Count);
+        Assert.All(references, reference => Assert.StartsWith("alias-", reference.Context, StringComparison.Ordinal));
+        Assert.True(
+            allocatedBytes < 1_000_000,
+            $"Dense C# alias compaction allocated {allocatedBytes:N0} bytes");
     }
 
 #if NET8_0
@@ -411,6 +633,83 @@ public class PerformanceTests : IDisposable
                     }
                 }
                 """));
+    }
+
+    private static string BuildCSharpNoAliasReferenceFixture(int referenceCount)
+    {
+        var content = new StringBuilder(referenceCount * 20)
+            .AppendLine("public sealed class DenseReferences")
+            .AppendLine("{")
+            .AppendLine("    public void Run()")
+            .AppendLine("    {");
+        for (var index = 0; index < referenceCount; index++)
+            content.AppendLine("        Target();");
+        return content.AppendLine("    }").AppendLine("}").ToString();
+    }
+
+    private static List<ReferenceRecord> BuildDenseMutualReferenceFixture(
+        string callerName,
+        string calleeName,
+        int pairCount)
+    {
+        var references = new List<ReferenceRecord>(pairCount * 2);
+        for (var index = 0; index < pairCount; index++)
+        {
+            references.Add(new ReferenceRecord
+            {
+                FileId = 1,
+                SymbolName = calleeName,
+                ReferenceKind = "call",
+                Line = (index * 2) + 1,
+                Column = 1,
+                ContainerKind = "function",
+                ContainerName = callerName,
+            });
+            references.Add(new ReferenceRecord
+            {
+                FileId = 1,
+                SymbolName = callerName,
+                ReferenceKind = "call",
+                Line = (index * 2) + 2,
+                Column = 1,
+                ContainerKind = "function",
+                ContainerName = calleeName,
+            });
+        }
+
+        return references;
+    }
+
+    private static List<ReferenceRecord> BuildCSharpAliasDuplicateReferenceFixture(int uniqueReferenceCount)
+    {
+        var references = new List<ReferenceRecord>(uniqueReferenceCount * 2);
+        for (var index = 0; index < uniqueReferenceCount; index++)
+        {
+            references.Add(new ReferenceRecord
+            {
+                FileId = 1,
+                SymbolName = "TargetType",
+                ReferenceKind = "instantiate",
+                Line = index + 1,
+                Column = 17,
+                Context = $"alias-{index}",
+                ContainerKind = "function",
+                ContainerName = "Build",
+            });
+            references.Add(new ReferenceRecord
+            {
+                FileId = 1,
+                SymbolName = "TargetType",
+                ReferenceKind = "instantiate",
+                Line = index + 1,
+                Column = 17,
+                Context = $"duplicate-{index}",
+                ContainerKind = "function",
+                ContainerName = "Build",
+            });
+        }
+
+        return references;
     }
 
     private static string BuildJavaScriptTypeScriptDenseIdentifierFixture(int functionCount)

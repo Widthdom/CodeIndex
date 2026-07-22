@@ -89,6 +89,9 @@ public partial class DbWriter
                  AND l.context = rl.context";
     }
 
+    internal static string BuildReferenceLineLookupSqlForTesting(int rowCount)
+        => BuildReferenceLineLookupSql(rowCount);
+
     private static void AddReferenceLineParameters(
         SqliteCommand cmd,
         int rowCount)

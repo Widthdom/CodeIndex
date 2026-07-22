@@ -105,6 +105,25 @@ internal static class TestProjectHelper
     internal static string CreateTempDbPath(string prefix)
         => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}.db");
 
+    internal static int ReclassifyIndexedFileAsTypeScriptAndRebuildAugmentations(
+        string dbPath,
+        string projectRoot,
+        string relativePath)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.InitializeSchema();
+        using (var command = db.Connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE files SET lang = 'typescript' WHERE path = @path";
+            command.Parameters.AddWithValue("@path", relativePath);
+            if (command.ExecuteNonQuery() == 0)
+                throw new InvalidOperationException("The language-transition fixture requires indexed C# files.");
+        }
+
+        var writer = new DbWriter(db);
+        return writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+    }
+
     internal static string CreateTempFilePath(string prefix, string extension)
         => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}{extension}");
 

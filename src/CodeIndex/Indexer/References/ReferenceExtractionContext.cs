@@ -19,4 +19,7 @@ public sealed record ReferenceExtractionContext(
     Action<ReferenceExtractionDiagnostic>? ReportDiagnostic = null,
     bool ContentIsNormalized = false,
     bool? HasOversizeLine = null,
-    int? ConflictMarkerLine = null);
+    int? ConflictMarkerLine = null)
+{
+    internal ReferenceExtractor.CSharpStaticInterfaceMemberLookups? CSharpStaticInterfaceMemberLookups { get; init; }
+}

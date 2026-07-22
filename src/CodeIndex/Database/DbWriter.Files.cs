@@ -25,6 +25,57 @@ public partial class DbWriter
         }
     }
 
+    /// <summary>
+    /// Return the persisted checksum only when the indexed row still matches a fresh
+    /// filesystem stat snapshot. Scoped cleanup planning can then reuse the checksum
+    /// without opening unchanged caller-selected files.
+    /// filesystem stat が永続 row と一致する場合だけ checksum を返し、scoped cleanup
+    /// planning が未変更 file を開かずに再利用できるようにする。
+    /// </summary>
+    internal bool TryGetFileChecksumByStat(
+        string relativePath,
+        long size,
+        DateTime modifiedUtc,
+        out string? checksum,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        checksum = null;
+        var command = RentCommand(
+            "SELECT checksum FROM files WHERE path = @path AND size = @size AND modified = @modified LIMIT 1",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@modified", SqliteType.Text);
+            });
+        try
+        {
+            command.Parameters["@path"].Value = relativePath;
+            command.Parameters["@size"].Value = size;
+            command.Parameters["@modified"].Value = modifiedUtc;
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return false;
+
+            checksum = reader.IsDBNull(0) ? null : reader.GetString(0);
+            cancellationToken.ThrowIfCancellationRequested();
+            return true;
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            throw new OperationCanceledException(
+                "File checksum stat lookup was interrupted.",
+                ex,
+                cancellationToken);
+        }
+        finally
+        {
+            ReleaseCommand(command);
+        }
+    }
+
     public IReadOnlyList<string> GetIndexedJavaScriptTypeScriptConfigPaths()
     {
         var cmd = RentCommand(
@@ -80,6 +131,10 @@ public partial class DbWriter
         out bool referenceIdentityChanged,
         bool cleanExistingData = true)
     {
+        var typeScriptDirtyNameScope = _typeScriptAugmentationDirtyNameScope;
+        var wasExistingTypeScript = cleanExistingData
+            && typeScriptDirtyNameScope?.TrackExistingFile(file.Path) == true;
+        TrackReferenceGraphFileAtPathBeforeMutation(file.Path);
         // ON CONFLICT DO UPDATE preserves the existing row ID
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
         var cmd = RentCommand(
@@ -125,12 +180,15 @@ public partial class DbWriter
             ReleaseCommand(cmd);
         }
 
+        TrackReferenceGraphFileIds([fileId]);
+
         // Release the RETURNING reader and its prepared command before leasing the
         // cleanup command. Existing rows keep the same ID, while new rows pay only a
         // harmless no-op delete. Fresh bulk loads use InsertNewFile and skip this path.
         // RETURNING reader と prepared command を解放してから cleanup command を借りる。
         // 既存行は同じIDを保ち、新規行のDELETEはno-op。fresh bulk loadはInsertNewFileを使う。
-        referenceIdentityChanged = cleanExistingData && DeleteFileData(fileId);
+        typeScriptDirtyNameScope?.TrackCurrentFile(fileId, file.Lang, wasExistingTypeScript);
+        referenceIdentityChanged = cleanExistingData && DeleteFileDataCore(fileId, trackTypeScriptInterfaceNames: false);
 
         return fileId;
     }
@@ -160,6 +218,7 @@ public partial class DbWriter
                 c.Parameters.Add("@modified", SqliteType.Text);
                 c.Parameters.Add("@generated", SqliteType.Integer);
             });
+        long fileId;
         try
         {
             cmd.Parameters["@path"].Value = file.Path;
@@ -172,21 +231,30 @@ public partial class DbWriter
             using var reader = cmd.ExecuteReader();
             if (!reader.Read())
                 throw new InvalidOperationException("SQLite RETURNING id produced no row for file insert.");
-            return reader.GetInt64(0);
+            fileId = reader.GetInt64(0);
         }
         finally
         {
             ReleaseCommand(cmd);
         }
+        _typeScriptAugmentationDirtyNameScope?.TrackCurrentFile(fileId, file.Lang);
+        TrackReferenceGraphFileIds([fileId]);
+        return fileId;
     }
 
     /// <summary>
     /// Delete old chunks and symbols for a file before re-indexing.
     /// 再インデックス前にファイルの古いチャンクとシンボルを削除する。
     /// </summary>
-    public bool DeleteFileData(long fileId)
+    public bool DeleteFileData(long fileId) =>
+        DeleteFileDataCore(fileId, trackTypeScriptInterfaceNames: true);
+
+    private bool DeleteFileDataCore(long fileId, bool trackTypeScriptInterfaceNames)
     {
         using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        if (trackTypeScriptInterfaceNames)
+            _typeScriptAugmentationDirtyNameScope?.TrackDeletedFiles([fileId]);
+        TrackReferenceGraphFilesBeforeMutation([fileId]);
         var dependentReferenceFileIds = GetReferenceFilesDependingOnLinesOwnedBy(fileId);
         var hasIdentityRows = HasReferenceIdentityRowsForFile(fileId);
         var referenceIdentityChanged = hasIdentityRows || dependentReferenceFileIds.Count > 0;
@@ -196,6 +264,7 @@ public partial class DbWriter
         // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
         // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
         var aggregateWasReady = ClearHotspotReferenceAggregateReady();
+        TrackDeferredHotspotReferenceFiles([fileId]);
         var cmd = RentCommand(
             """
             DELETE FROM chunks WHERE file_id = @fid;
@@ -241,6 +310,36 @@ public partial class DbWriter
         while (reader.Read())
             fileIds.Add(reader.GetInt64(0));
         return fileIds;
+    }
+
+    private HashSet<long> GetReferenceFilesDependingOnLinesOwnedBy(IReadOnlyList<long> fileIds)
+    {
+        var dependentFileIds = new HashSet<long>();
+        for (var offset = 0; offset < fileIds.Count; offset += DeleteFilesBatchSize)
+        {
+            var batchCount = Math.Min(DeleteFilesBatchSize, fileIds.Count - offset);
+            using var cmd = _conn.CreateCommand();
+            cmd.Transaction = _activeTransaction;
+            var batch = new long[batchCount];
+            for (var i = 0; i < batchCount; i++)
+                batch[i] = fileIds[offset + i];
+            var parameters = SqliteDynamicSql.AddParameters(
+                cmd,
+                "line_owner_file_id",
+                batch,
+                SqliteType.Integer,
+                "cross-file reference-line dependency batch");
+            cmd.CommandText = $"""
+                SELECT DISTINCT sr.file_id
+                FROM symbol_references sr
+                JOIN reference_lines rl ON rl.id = sr.reference_line_id
+                WHERE rl.file_id IN ({string.Join(", ", parameters)})
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                dependentFileIds.Add(reader.GetInt64(0));
+        }
+        return dependentFileIds;
     }
 
     private bool HasReferenceIdentityRowsForFile(long fileId)

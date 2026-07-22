@@ -52,16 +52,35 @@ public partial class FileIndexer
         }
     }
 
+    private static bool? ProbeExistingDirectoryIgnoreCase(string directory, IReadOnlyList<string> entries)
+    {
+        try
+        {
+            var normalizedDirectory = NormalizeDirectoryCaseProbePath(directory);
+            return CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(normalizedDirectory, entries);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static string NormalizeDirectoryCaseProbePath(string directory)
         => Path.IsPathFullyQualified(directory) ? directory : Path.GetFullPath(directory);
 
     private bool DirectoryUsesIgnoreCase(string directory)
+        => DirectoryUsesIgnoreCase(directory, entries: null);
+
+    private bool DirectoryUsesIgnoreCase(string directory, IReadOnlyList<string>? entries)
     {
         var fullPath = NormalizeDirectoryCaseProbePath(directory);
         if (_directoryIgnoreCaseCache.TryGetValue(fullPath, out var ignoreCase))
             return ignoreCase;
 
-        ignoreCase = _directoryIgnoreCaseProbe(fullPath) ?? _ignoreCase;
+        var probeResult = _usesDefaultDirectoryIgnoreCaseProbe && entries is not null
+            ? ProbeExistingDirectoryIgnoreCase(fullPath, entries)
+            : _directoryIgnoreCaseProbe(fullPath);
+        ignoreCase = probeResult ?? _ignoreCase;
         _directoryIgnoreCaseCache[fullPath] = ignoreCase;
         return ignoreCase;
     }

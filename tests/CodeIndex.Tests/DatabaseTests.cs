@@ -289,6 +289,490 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RefreshReferenceIdentities_UpdatesOnlyChangedRowsAndRollsBackEarlierPhases()
+    {
+        var fileId = UpsertTestFile(
+            "src/reference-identity-differential.cs",
+            checksum: "reference-identity-differential");
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Invoke",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+            },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Invoke",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 9,
+                Context = "Invoke();",
+                ContainerKind = "function",
+                ContainerName = "Invoke",
+            },
+        ],
+        refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        ExecuteNonQuery(_db.Connection, """
+            CREATE TABLE reference_identity_refresh_audit (phase TEXT NOT NULL);
+            CREATE TRIGGER audit_reference_identity_source
+            AFTER UPDATE OF source_symbol_id ON symbol_references
+            BEGIN
+                INSERT INTO reference_identity_refresh_audit VALUES ('source');
+            END;
+            CREATE TRIGGER audit_reference_identity_resolution
+            AFTER UPDATE OF target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state
+            ON symbol_references
+            BEGIN
+                INSERT INTO reference_identity_refresh_audit VALUES ('resolution');
+            END;
+            CREATE TRIGGER audit_reference_identity_self
+            AFTER UPDATE OF is_self_reference ON symbol_references
+            BEGIN
+                INSERT INTO reference_identity_refresh_audit VALUES ('self');
+            END;
+            CREATE TRIGGER audit_reference_identity_mutual
+            AFTER UPDATE OF is_mutual_recursion ON symbol_references
+            BEGIN
+                INSERT INTO reference_identity_refresh_audit VALUES ('mutual');
+            END;
+            """);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(0, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit"));
+
+        ExecuteNonQuery(_db.Connection, """
+            UPDATE symbol_references
+            SET source_symbol_id = NULL,
+                target_symbol_id = NULL,
+                target_symbol_key = 'stale-target',
+                resolution_candidate_count = 9,
+                resolution_state = 'ambiguous',
+                is_self_reference = 0,
+                is_mutual_recursion = 2;
+            DELETE FROM reference_identity_refresh_audit;
+            CREATE TRIGGER fail_reference_identity_resolution
+            BEFORE UPDATE OF target_symbol_id ON symbol_references
+            BEGIN
+                SELECT RAISE(ABORT, 'forced resolution refresh failure');
+            END;
+            """);
+
+        Assert.Throws<SqliteException>(() => _writer.RefreshMutualRecursionFlags());
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE source_symbol_id IS NULL"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE target_symbol_key = 'stale-target'"));
+
+        ExecuteNonQuery(_db.Connection, "DROP TRIGGER fail_reference_identity_resolution");
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(1, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit WHERE phase = 'source'"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit WHERE phase = 'resolution'"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit WHERE phase = 'self'"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit WHERE phase = 'mutual'"));
+        Assert.Equal(1, ExecuteScalarLong("""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE source_symbol_id = target_symbol_id
+              AND target_symbol_id IS NOT NULL
+              AND target_symbol_key IS NOT NULL
+              AND resolution_candidate_count = 1
+              AND resolution_state = 'resolved'
+              AND is_self_reference = 1
+              AND is_mutual_recursion = 0
+            """));
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(0, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(4, ExecuteScalarLong("SELECT COUNT(*) FROM reference_identity_refresh_audit"));
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_GeneratedSqlUsesDirtyPrimaryKeySeeks()
+    {
+        using var scope = _writer.BeginReferenceGraphRefreshScope();
+        _writer.RefreshMutualRecursionFlags();
+
+        var candidateSql = DbWriter.RefreshScopedReferenceCandidatesSqlForTesting;
+        Assert.DoesNotContain("AND s.name_folded IS NOT NULL", candidateSql, StringComparison.Ordinal);
+        Assert.Contains(
+            "FROM temp.reference_graph_lookup_names AS lookup_name",
+            candidateSql,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CROSS JOIN symbols AS s INDEXED BY idx_symbols_name_folded",
+            candidateSql,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AND s.name_folded = lookup_name.name_folded",
+            candidateSql,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            10,
+            candidateSql.Split(
+                "FROM temp.reference_graph_dirty_references AS dirty_reference",
+                StringSplitOptions.None).Length - 1);
+
+        var candidateInserts = candidateSql
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static statement => statement.StartsWith(
+                "INSERT INTO symbol_reference_candidates",
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(10, candidateInserts.Length);
+        foreach (var statement in candidateInserts)
+        {
+            var plan = ReadQueryPlanDetails(_db.Connection, statement);
+            Assert.Contains(plan, static detail => detail.Contains(
+                "SEARCH r USING INTEGER PRIMARY KEY",
+                StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(plan, static detail =>
+                detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
+                || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
+        }
+
+        var instantiateStatement = Assert.Single(candidateInserts.Where(static statement =>
+            statement.Contains("AS unique_target", StringComparison.Ordinal)));
+        var instantiatePlan = ReadQueryPlanDetails(_db.Connection, instantiateStatement);
+        Assert.Contains(instantiatePlan, static detail => detail.Contains(
+            "idx_symbols_name_folded",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(instantiatePlan, static detail => detail.Contains(
+            "SEARCH lookup_name USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+
+        foreach (var statement in DbWriter.ScopedReferenceGraphUpdateStatementsForTesting)
+        {
+            var plan = ReadQueryPlanDetails(_db.Connection, statement);
+            Assert.Contains(plan, static detail => detail.Contains(
+                "SEARCH r USING INTEGER PRIMARY KEY",
+                StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(plan, static detail =>
+                detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
+                || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_TinySetSkipsGlobalReferenceCountWithoutDiagnostics()
+    {
+        var fileId = UpsertTestFileWithLanguage("src/tiny-dirty.cs", "csharp", "tiny-dirty-initial");
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = fileId, SymbolName = "Missing", ReferenceKind = "call", Line = 1, Column = 1, Context = "Missing();" },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        var countedTables = new List<string>();
+        var previousCountHook = DbWriter.ReferenceGraphRowCountForTesting;
+        var previousStatsHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = null;
+            DbWriter.ReferenceGraphRowCountForTesting = countedTables.Add;
+            using var scope = _writer.BeginReferenceGraphRefreshScope();
+            using (var transaction = _writer.BeginTransaction())
+            {
+                fileId = _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/tiny-dirty.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "tiny-dirty-updated",
+                });
+                _writer.InsertReferences([
+                    new ReferenceRecord { FileId = fileId, SymbolName = "Missing", ReferenceKind = "call", Line = 1, Column = 1, Context = "Missing();" },
+                ], refreshMutualRecursionFlags: false);
+                transaction.Commit();
+            }
+
+            _writer.RefreshMutualRecursionFlags();
+
+            Assert.Contains("temp.reference_graph_dirty_references", countedTables);
+            Assert.DoesNotContain("symbol_references", countedTables);
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRowCountForTesting = previousCountHook;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousStatsHook;
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_TracksLanguageTransitionsAndMatchesFullRefresh()
+    {
+        var csharpCallerId = UpsertTestFileWithLanguage("src/caller.cs", "csharp", "dirty-csharp-caller");
+        var pythonCallerId = UpsertTestFileWithLanguage("src/caller.py", "python", "dirty-python-caller");
+        var targetId = UpsertTestFileWithLanguage("src/target.cs", "csharp", "dirty-target-csharp");
+        var stableTargetId = UpsertTestFileWithLanguage("src/stable-target.cs", "csharp", "dirty-stable-target");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = targetId, Kind = "function", Name = "Pivot", Line = 1 },
+            new SymbolRecord { FileId = stableTargetId, Kind = "function", Name = "StableTarget", Line = 1 },
+            new SymbolRecord { FileId = stableTargetId, Kind = "class", Name = "StableType", Line = 2 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = csharpCallerId, SymbolName = "Pivot", ReferenceKind = "call", Line = 1, Column = 1, Context = "Pivot();" },
+            new ReferenceRecord { FileId = pythonCallerId, SymbolName = "Pivot", ReferenceKind = "call", Line = 1, Column = 1, Context = "Pivot()" },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal("resolved", ReadReferenceResolutionState(csharpCallerId));
+        Assert.Equal("unresolved", ReadReferenceResolutionState(pythonCallerId));
+
+        DbWriter.ReferenceGraphRefreshScopeStats? observed = null;
+        var previousHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => observed = stats;
+            using (var scope = _writer.BeginReferenceGraphRefreshScope())
+            {
+                using var transaction = _writer.BeginTransaction();
+                targetId = _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/target.cs",
+                    Lang = "python",
+                    Size = 100,
+                    Lines = 4,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "dirty-target-python",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord { FileId = targetId, Kind = "function", Name = "Pivot", Line = 1 },
+                ]);
+                var newCallerId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "src/new-caller.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "dirty-new-caller",
+                });
+                _writer.InsertReferences([
+                    new ReferenceRecord { FileId = newCallerId, SymbolName = "StableTarget", ReferenceKind = "call", Line = 1, Column = 1, Context = "StableTarget();" },
+                    new ReferenceRecord { FileId = newCallerId, SymbolName = "StableType", ReferenceKind = "instantiate", Line = 2, Column = 1, Context = "new StableType();" },
+                ], refreshMutualRecursionFlags: false);
+                transaction.Commit();
+
+                _writer.RefreshMutualRecursionFlags();
+            }
+
+            Assert.NotNull(observed);
+            Assert.False(observed!.UsedFullRefresh);
+            Assert.Equal(4, observed.DirtyReferenceCount);
+            Assert.Equal(4, observed.TotalReferenceCount);
+            Assert.Equal("unresolved", ReadReferenceResolutionState(csharpCallerId));
+            Assert.Equal("resolved", ReadReferenceResolutionState(pythonCallerId));
+            Assert.Equal(2, ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_references AS r
+                JOIN files AS f ON f.id = r.file_id
+                WHERE f.path = 'src/new-caller.cs'
+                  AND r.resolution_state = 'resolved'
+                """));
+
+            var scopedSnapshot = ReadReferenceIdentitySnapshot();
+            _writer.RefreshMutualRecursionFlags();
+            Assert.Equal(scopedSnapshot, ReadReferenceIdentitySnapshot());
+
+            observed = null;
+            using (var renameScope = _writer.BeginReferenceGraphRefreshScope())
+            {
+                using var renameTransaction = _writer.BeginTransaction();
+                Assert.True(_writer.DeleteFileByPath("src/target.cs"));
+                var renamedTargetId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "src/renamed-target.py",
+                    Lang = "python",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "dirty-target-renamed",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord { FileId = renamedTargetId, Kind = "function", Name = "Pivot", Line = 1 },
+                ]);
+                renameTransaction.Commit();
+                _writer.RefreshMutualRecursionFlags();
+            }
+
+            Assert.NotNull(observed);
+            Assert.False(observed!.UsedFullRefresh);
+            Assert.Equal("unresolved", ReadReferenceResolutionState(csharpCallerId));
+            Assert.Equal("resolved", ReadReferenceResolutionState(pythonCallerId));
+            Assert.Contains("src/renamed-target.py", ExecuteScalarString($"""
+                SELECT target_symbol_key
+                FROM symbol_references
+                WHERE file_id = {pythonCallerId.ToString(CultureInfo.InvariantCulture)}
+                """), StringComparison.Ordinal);
+            var renamedSnapshot = ReadReferenceIdentitySnapshot();
+            _writer.RefreshMutualRecursionFlags();
+            Assert.Equal(renamedSnapshot, ReadReferenceIdentitySnapshot());
+            Assert.Equal(0, ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_reference_candidates AS candidate
+                LEFT JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+                LEFT JOIN symbols AS symbol ON symbol.id = candidate.symbol_id
+                WHERE reference.id IS NULL OR symbol.id IS NULL
+                """));
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousHook;
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
+    {
+        var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");
+        var originalTargetId = UpsertTestFileWithLanguage("src/retry-target.cs", "csharp", "retry-target");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = originalTargetId, Kind = "function", Name = "RetryTarget", Line = 1 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = callerId, SymbolName = "RetryTarget", ReferenceKind = "call", Line = 1, Column = 1, Context = "RetryTarget();" },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+
+        var previousHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        using var scope = _writer.BeginReferenceGraphRefreshScope();
+        try
+        {
+            using (var rolledBack = _writer.BeginTransaction())
+            {
+                var rolledBackTargetId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "src/retry-rolled-back.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "retry-rolled-back",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord { FileId = rolledBackTargetId, Kind = "function", Name = "RetryTarget", Line = 1 },
+                ]);
+            }
+
+            DbWriter.ReferenceGraphRefreshScopeStats? rollbackStats = null;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => rollbackStats = stats;
+            _writer.RefreshMutualRecursionFlags();
+            Assert.NotNull(rollbackStats);
+            Assert.False(rollbackStats!.UsedFullRefresh);
+            Assert.Equal(0, rollbackStats.DirtyReferenceCount);
+            Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+
+            using (var committed = _writer.BeginTransaction())
+            {
+                var secondTargetId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "src/retry-second.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "retry-second",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord { FileId = secondTargetId, Kind = "function", Name = "RetryTarget", Line = 1 },
+                ]);
+                committed.Commit();
+            }
+
+            using var cancellation = new CancellationTokenSource();
+            DbWriter.ReferenceGraphRefreshScopeForTesting = _ => cancellation.Cancel();
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.RefreshMutualRecursionFlags(cancellation.Token));
+            Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+            Assert.False(_writer.ReferenceIdentityContractMatchesCurrent());
+
+            DbWriter.ReferenceGraphRefreshScopeStats? retryStats = null;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => retryStats = stats;
+            _writer.RefreshMutualRecursionFlags();
+            Assert.NotNull(retryStats);
+            Assert.False(retryStats!.UsedFullRefresh);
+            Assert.Equal(1, retryStats.DirtyReferenceCount);
+            Assert.Equal("unresolved", ReadReferenceResolutionState(callerId));
+            Assert.True(_writer.ReferenceIdentityContractMatchesCurrent());
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousHook;
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_BroadSetFallsBackToFullRefresh()
+    {
+        const int referenceCount = 4_100;
+        var fileId = UpsertTestFileWithLanguage("src/broad-dirty.cs", "csharp", "broad-dirty-initial");
+        var references = Enumerable.Range(1, referenceCount)
+            .Select(line => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"Missing{line}",
+                ReferenceKind = "call",
+                Line = line,
+                Column = 1,
+                Context = $"Missing{line}();",
+            })
+            .ToArray();
+        _writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        DbWriter.ReferenceGraphRefreshScopeStats? observed = null;
+        var previousHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => observed = stats;
+            using var scope = _writer.BeginReferenceGraphRefreshScope();
+            using (var transaction = _writer.BeginTransaction())
+            {
+                fileId = _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/broad-dirty.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = referenceCount,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "broad-dirty-updated",
+                });
+                foreach (var reference in references)
+                    reference.FileId = fileId;
+                _writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+                transaction.Commit();
+            }
+            _writer.RefreshMutualRecursionFlags();
+
+            Assert.NotNull(observed);
+            Assert.True(observed!.UsedFullRefresh);
+            Assert.Equal(referenceCount, observed.DirtyReferenceCount);
+            Assert.Equal(referenceCount, observed.TotalReferenceCount);
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousHook;
+        }
+    }
+
+    [Fact]
     public void RefreshMutualRecursionFlags_CancellationInterruptsRunningSqlAndRollsBack()
     {
         var writer = new DbWriter(_db);
@@ -490,22 +974,402 @@ public class DatabaseTests : IDisposable
 
             var retainedId = UpsertTestFile("src/target_%100.py", checksum: "retained");
             var staleId = UpsertTestFile("src/target_%100.cs", checksum: "stale");
+            var extensionlessStaleId = UpsertTestFile("src/target_%100", checksum: "stale-extensionless");
+            var differentStemId = UpsertTestFile("src/target_%100..cs", checksum: "different-stem");
             var similarId = UpsertTestFile("src/targetA%100.cs", checksum: "similar");
             _writer.InsertChunks([
                 new() { FileId = retainedId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "retained" },
                 new() { FileId = staleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "stale" },
+                new() { FileId = extensionlessStaleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "extensionless stale" },
+                new() { FileId = differentStemId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "different stem" },
                 new() { FileId = similarId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "similar" },
             ]);
 
             var purged = _writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target_%100.py");
 
-            Assert.Equal(1, purged);
+            Assert.Equal(2, purged);
             Assert.True(_writer.HasFileAtPath("src/target_%100.py"));
             Assert.False(_writer.HasFileAtPath("src/target_%100.cs"));
+            Assert.False(_writer.HasFileAtPath("src/target_%100"));
+            Assert.True(_writer.HasFileAtPath("src/target_%100..cs"));
             Assert.True(_writer.HasFileAtPath("src/targetA%100.cs"));
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = "SELECT COUNT(*) FROM chunks";
-            Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+            Assert.Equal(3L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupPlan_CombinesKeysAndMergesSortedDeduplicatedIds()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-plan-overlap");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.py"), "# retained");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "live.cs"), "// live duplicate");
+
+            _ = UpsertTestFileWithLanguage("src/target.py", "python", "shared-checksum");
+            var overlapId = UpsertTestFile("src/target.cs", "shared-checksum");
+            var checksumOnlyId = UpsertTestFile("legacy/renamed.cs", "shared-checksum");
+            var stemOnlyId = UpsertTestFileWithLanguage("src/target.ts", "typescript", "stem-only");
+            _ = UpsertTestFile("src/live.cs", "shared-checksum");
+
+            var combinedPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/target.py",
+                "shared-checksum",
+                includeDirectoryAndStem: true);
+            var checksumPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/target.py",
+                "shared-checksum",
+                includeDirectoryAndStem: false);
+            var stemPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/target.py",
+                checksum: null,
+                includeDirectoryAndStem: true);
+            var mergedPlan = FilePurgePlan.Merge([checksumPlan, stemPlan]);
+            var expectedIds = new[] { overlapId, checksumOnlyId, stemOnlyId };
+            Array.Sort(expectedIds);
+
+            Assert.Equal(expectedIds, combinedPlan.FileIds);
+            Assert.Equal(expectedIds, mergedPlan.FileIds);
+            Assert.Equal(expectedIds.Length, combinedPlan.FileIds.Distinct().Count());
+            Assert.Equal(300L, combinedPlan.DeletedBytes);
+            Assert.True(combinedPlan.ByteEstimateComplete);
+            Assert.True(_writer.HasCSharpFilesInFileIds(combinedPlan.FileIds));
+            Assert.False(_writer.HasCSharpFilesInFileIds([stemOnlyId]));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void CSharpScopedFileCleanupPlan_CommonChecksumQueriesOnceAndVisitsOnlyCSharpRows()
+    {
+        const int targetCount = 16;
+        const string sharedChecksum = "shared-csharp-cleanup-checksum";
+        var projectRoot = TestProjectHelper.CreateTempProject("csharp-scoped-cleanup-common-checksum");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var targets = new List<(
+                string RetainedRelativePath,
+                string? Checksum,
+                bool IncludeDirectoryAndStem)>(targetCount + 1);
+            for (var index = 0; index < targetCount; index++)
+            {
+                var relativePath = $"src/live-{index:D2}.cs";
+                File.WriteAllText(
+                    Path.Combine(projectRoot, "src", $"live-{index:D2}.cs"),
+                    "public class Shared { }\n");
+                _ = UpsertTestFile(relativePath, sharedChecksum);
+                targets.Add((relativePath, sharedChecksum, false));
+
+                _ = UpsertTestFileWithLanguage(
+                    $"legacy/non-csharp-{index:D2}.py",
+                    "python",
+                    sharedChecksum);
+            }
+
+            const string unicodeRetainedPath = "src/Å.cs";
+            const string unicodeAliasPath = "src/å.cs";
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Å.cs"), "// retained alias\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "å.cs"), "// old alias\n");
+            _ = UpsertTestFile(unicodeRetainedPath, sharedChecksum);
+            targets.Add((unicodeRetainedPath, sharedChecksum, false));
+            var unicodeAliasId = UpsertTestFile(unicodeAliasPath, sharedChecksum);
+            var staleCSharpId = UpsertTestFile("legacy/stale.cs", sharedChecksum);
+
+            FilePurgePlan plan;
+            List<QueryProfileEntry> profile;
+            DbDebug.BeginProfile();
+            try
+            {
+                plan = _writer.PlanStaleCSharpFilesSharingCleanupKeys(
+                    projectRoot,
+                    targets,
+                    retainedPathComparison: StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                profile = DbDebug.EndProfile();
+            }
+
+            var expectedIds = new List<long> { staleCSharpId };
+            var unicodeRetainedAbsolutePath = Path.Combine(projectRoot, "src", "Å.cs");
+            var unicodeAliasAbsolutePath = Path.Combine(projectRoot, "src", "å.cs");
+            if (FileIndexer.TryGetFileIdentity(unicodeRetainedAbsolutePath, out var retainedIdentity)
+                && FileIndexer.TryGetFileIdentity(unicodeAliasAbsolutePath, out var aliasIdentity)
+                && retainedIdentity == aliasIdentity)
+            {
+                expectedIds.Add(unicodeAliasId);
+            }
+            expectedIds.Sort();
+            Assert.Equal(expectedIds, plan.FileIds);
+            var checksumQuery = Assert.Single(
+                profile.Where(entry => entry.Sql == DbWriter.StaleCSharpChecksumCandidateSql));
+            Assert.Equal(targetCount + 2, checksumQuery.RowsScanned);
+            Assert.Contains(
+                checksumQuery.QueryPlan,
+                row => row.Detail.Contains("idx_files_checksum", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                checksumQuery.QueryPlan,
+                row => row.Detail.Contains("SCAN files", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                profile,
+                entry => entry.Sql == DbWriter.StaleChecksumCandidateSql);
+
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.PlanStaleCSharpFilesSharingCleanupKeys(
+                    projectRoot,
+                    targets,
+                    cancelled.Token,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            _ = DbDebug.EndProfile();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupPlan_ApplyDeletesOnlyIdsCapturedBeforeLaterMatchingRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-plan-snapshot");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.py"), "# retained");
+            var plannedId = UpsertTestFile("src/target.cs", "shared-checksum");
+
+            var plan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/target.py",
+                "shared-checksum",
+                includeDirectoryAndStem: true);
+            var laterId = UpsertTestFileWithLanguage("src/target.fs", "fsharp", "shared-checksum");
+
+            Assert.Equal([plannedId], plan.FileIds);
+            Assert.DoesNotContain(laterId, plan.FileIds);
+            Assert.Equal(1, _writer.ApplyScopedFileCleanupPlan(plan));
+            Assert.False(_writer.HasFileAtPath("src/target.cs"));
+            Assert.True(_writer.HasFileAtPath("src/target.fs"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupPlan_FileIdentityTreatsOnlyRetainedCaseAliasAsStale()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-case-alias");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Target.cs"), "// retained");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "live.cs"), "// live duplicate");
+
+            var aliasId = UpsertTestFile("src/target.cs", "shared-checksum");
+            var liveId = UpsertTestFile("src/live.cs", "shared-checksum");
+
+            var caseInsensitivePlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/Target.cs",
+                "shared-checksum",
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.OrdinalIgnoreCase);
+            var ordinalPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/Target.cs",
+                "shared-checksum",
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.Ordinal);
+
+            Assert.Equal([aliasId], caseInsensitivePlan.FileIds);
+            Assert.Equal([aliasId], ordinalPlan.FileIds);
+            Assert.DoesNotContain(liveId, caseInsensitivePlan.FileIds);
+            Assert.DoesNotContain(liveId, ordinalPlan.FileIds);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupPlan_AsciiCaseAliasDoesNotRequireMatchingChecksum()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-case-alias-changed");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Target.cs"), "// retained and changed");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "live.cs"), "// unrelated live row");
+
+            var aliasId = UpsertTestFile("src/target.cs", "old-checksum");
+            var liveId = UpsertTestFile("src/live.cs", "new-checksum");
+
+            var caseInsensitivePlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/Target.cs",
+                checksum: null,
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.OrdinalIgnoreCase);
+            var ordinalPlan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                "src/Target.cs",
+                checksum: null,
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.Ordinal);
+
+            Assert.Equal([aliasId], caseInsensitivePlan.FileIds);
+            Assert.Equal([aliasId], ordinalPlan.FileIds);
+            Assert.DoesNotContain(liveId, caseInsensitivePlan.FileIds);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("src/target.cs", "src/Target.cs")]
+    [InlineData("src/A.cs", "Src/A.cs")]
+    [InlineData("src/é.cs", "src/É.cs")]
+    public void ScopedFileCleanupPlan_CaseFoldedDistinctLiveFilesAreNotAliases(
+        string persistedPath,
+        string retainedPath)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-distinct-identities");
+        try
+        {
+            var persistedAbsolutePath = Path.Combine(
+                projectRoot,
+                persistedPath.Replace('/', Path.DirectorySeparatorChar));
+            var retainedAbsolutePath = Path.Combine(
+                projectRoot,
+                retainedPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(persistedAbsolutePath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(retainedAbsolutePath)!);
+            File.WriteAllText(persistedAbsolutePath, "// persisted distinct file\n");
+            File.WriteAllText(retainedAbsolutePath, "// retained distinct file\n");
+
+            if (!FileIndexer.TryGetFileIdentity(persistedAbsolutePath, out var persistedIdentity)
+                || !FileIndexer.TryGetFileIdentity(retainedAbsolutePath, out var retainedIdentity)
+                || persistedIdentity == retainedIdentity)
+            {
+                return;
+            }
+
+            var persistedId = UpsertTestFile(persistedPath, "shared-case-fold-checksum");
+            var plan = _writer.PlanStaleFilesSharingCleanupKeys(
+                projectRoot,
+                retainedPath,
+                "shared-case-fold-checksum",
+                includeDirectoryAndStem: false,
+                retainedPathComparison: StringComparison.OrdinalIgnoreCase);
+
+            Assert.DoesNotContain(persistedId, plan.FileIds);
+            Assert.True(_writer.HasFileAtPath(persistedPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ScopedFileCleanupReappearance_FoldBucketsDoNotCrossMatchTargetIdentities()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("scoped-cleanup-fold-identity-buckets");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var candidateAbsolutePath = Path.Combine(projectRoot, "src", "target.cs");
+            var otherAbsolutePath = Path.Combine(projectRoot, "src", "other.cs");
+            File.WriteAllText(candidateAbsolutePath, "// candidate identity\n");
+            File.WriteAllText(otherAbsolutePath, "// other target identity\n");
+            Assert.True(FileIndexer.TryGetFileIdentity(candidateAbsolutePath, out var candidateIdentity));
+            Assert.True(FileIndexer.TryGetFileIdentity(otherAbsolutePath, out var otherIdentity));
+            Assert.NotEqual(candidateIdentity, otherIdentity);
+
+            var candidateId = UpsertTestFile("src/target.cs", "cross-target-checksum");
+            var retainedPathsExact = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "src/source.cs",
+                "src/Target.cs",
+            };
+            var retainedFileIdentitiesByCaseFold = new Dictionary<
+                string,
+                HashSet<FileIndexer.FileIdentity>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["src/source.cs"] = [candidateIdentity],
+                ["src/Target.cs"] = [otherIdentity],
+            };
+
+            var crossTargetMatch = _writer.FindReappearedFileInScopedCleanupPlan(
+                projectRoot,
+                [candidateId],
+                retainedPathsExact,
+                retainedFileIdentitiesByCaseFold);
+
+            Assert.Equal("src/target.cs", crossTargetMatch);
+
+            retainedFileIdentitiesByCaseFold["src/Target.cs"].Add(candidateIdentity);
+            var sameBucketMatch = _writer.FindReappearedFileInScopedCleanupPlan(
+                projectRoot,
+                [candidateId],
+                retainedPathsExact,
+                retainedFileIdentitiesByCaseFold);
+
+            Assert.Null(sameBucketMatch);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void StaleFilePlan_ExcludingCsharpRetainsLegacyNullLanguageRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("stale-plan-non-csharp");
+        try
+        {
+            var legacyId = _writer.UpsertFile(
+                new FileRecord
+                {
+                    Path = "legacy/unknown.ext",
+                    Lang = null,
+                    Size = 10,
+                    Lines = 1,
+                    Checksum = "legacy-null-language",
+                    Modified = DateTime.UtcNow,
+                },
+                out _);
+            var csharpId = UpsertTestFile("src/stale.cs", "stale-csharp");
+
+            var plan = _writer.PlanStaleFilesExcludingLanguage(
+                projectRoot,
+                preservedMissingPaths: null,
+                excludedLanguage: "csharp");
+
+            Assert.Contains(legacyId, plan.FileIds);
+            Assert.DoesNotContain(csharpId, plan.FileIds);
         }
         finally
         {
@@ -598,14 +1462,17 @@ public class DatabaseTests : IDisposable
     public void RebuildFtsFromChunks_CanLeaveIncrementalCounterForImmediateOptimize()
     {
         _writer.SetMeta(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "7");
+        _writer.SetMeta(DbWriter.FtsIncrementalWritesSinceMergeMetaKey, "3");
 
         _writer.RebuildFtsFromChunks(resetIncrementalWriteCounter: false);
 
         Assert.Equal(7, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(3, _writer.GetFtsIncrementalWritesSinceMerge());
 
         _writer.RebuildFtsFromChunks();
 
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceMerge());
     }
 
     [Fact]
@@ -621,6 +1488,117 @@ public class DatabaseTests : IDisposable
         }
 
         Assert.Equal(3L, CountFtsSyncTriggers());
+    }
+
+    [Fact]
+    public void FtsBulkLoadOwnerMarker_RemainsLegacyReadableAndCleanupTriggersInvalidateGeneration()
+    {
+        var pid = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var expectedMarker = "pid:" + pid;
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        try
+        {
+            var marker = Assert.IsType<string>(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(expectedMarker, marker);
+            Assert.True(int.TryParse(
+                marker.AsSpan("pid:".Length),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var legacyParsedPid));
+            Assert.Equal(Environment.ProcessId, legacyParsedPid);
+            Assert.StartsWith(
+                expectedMarker + ":",
+                ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey),
+                StringComparison.Ordinal);
+            Assert.Equal(3L, CountFtsBulkLoadGenerationCleanupTriggers());
+
+            // Model an older writer updating, deleting, and reinserting only the primary key.
+            _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, "true");
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+
+            _writer.SetMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey, expectedMarker + ":start:1");
+            using (var deletePrimary = _db.Connection.CreateCommand())
+            {
+                deletePrimary.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                deletePrimary.Parameters.AddWithValue("@key", DbWriter.FtsBulkLoadInProgressMetaKey);
+                Assert.Equal(1, deletePrimary.ExecuteNonQuery());
+            }
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+
+            _writer.SetMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey, expectedMarker + ":start:1");
+            _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, expectedMarker);
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+        }
+        finally
+        {
+            _writer.RestoreFtsSyncTriggers();
+            _writer.ClearFtsBulkLoadInProgress();
+        }
+    }
+
+    [Fact]
+    public void FtsBulkLoadTriggerGuard_StartPartialDropFailureDowngradesMarkerAndRecoversSameProcess()
+    {
+        var fileId = UpsertTestFile("src/failed-drop-bulk-fts.cs", checksum: "failed-drop-bulk-fts");
+        const string token = "faileddropcleanupbulktoken";
+        var previousHook = DbWriter.FtsMaintenanceBeforeExecuteForTesting;
+        var injectedException = new InvalidOperationException("simulated partial trigger-drop failure");
+        var injectedCount = 0;
+        FtsBulkLoadTriggerGuard? guard = null;
+
+        try
+        {
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = phase =>
+            {
+                previousHook?.Invoke(phase);
+                if (phase != DbWriter.FtsDropTriggersMaintenancePhase
+                    || Interlocked.Exchange(ref injectedCount, 1) != 0)
+                {
+                    return;
+                }
+
+                using var dropTrigger = _db.Connection.CreateCommand();
+                dropTrigger.CommandText = "DROP TRIGGER IF EXISTS fts_chunks_ai";
+                dropTrigger.ExecuteNonQuery();
+                throw injectedException;
+            };
+
+            var thrown = Assert.Throws<InvalidOperationException>(() =>
+                guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true));
+
+            Assert.Same(injectedException, thrown);
+            Assert.Null(guard);
+            Assert.Equal(1, injectedCount);
+            Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(2L, CountFtsSyncTriggers());
+
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = token,
+                },
+            ]);
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+            Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+            Assert.Equal(3L, CountFtsSyncTriggers());
+            Assert.Equal(1L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+        }
+        finally
+        {
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+            guard?.Dispose();
+        }
     }
 
     [Fact]
@@ -650,6 +1628,79 @@ public class DatabaseTests : IDisposable
 
         Assert.Equal(3L, CountFtsSyncTriggers());
         Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'abandonedbulktoken'"));
+    }
+
+    [Theory]
+    [InlineData(DbWriter.FtsRestoreTriggersMaintenancePhase, 0L)]
+    [InlineData(DbWriter.FtsRebuildMaintenancePhase, 3L)]
+    public void FtsBulkLoadTriggerGuard_DisposeCleanupFailureDowngradesMarkerAndRecoversSameProcess(
+        string failurePhase,
+        long expectedTriggersAfterFailure)
+    {
+        var fileId = UpsertTestFile(
+            $"src/failed-{failurePhase}-bulk-fts.cs",
+            checksum: $"failed-{failurePhase}-bulk-fts");
+        var token = failurePhase == DbWriter.FtsRestoreTriggersMaintenancePhase
+            ? "failedrestorecleanupbulktoken"
+            : "failedrebuildcleanupbulktoken";
+        var previousHook = DbWriter.FtsMaintenanceBeforeExecuteForTesting;
+        var injectedException = new InvalidOperationException($"simulated {failurePhase} cleanup failure");
+        var injectedCount = 0;
+        var ftsMutated = false;
+        var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated);
+
+        try
+        {
+            Assert.NotNull(guard);
+            Assert.StartsWith("pid:", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey), StringComparison.Ordinal);
+            Assert.Equal(0L, CountFtsSyncTriggers());
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = token,
+                },
+            ]);
+            ftsMutated = true;
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = phase =>
+            {
+                previousHook?.Invoke(phase);
+                if (phase == failurePhase && Interlocked.Exchange(ref injectedCount, 1) == 0)
+                    throw injectedException;
+            };
+
+            var thrown = Assert.Throws<InvalidOperationException>(() => guard!.Dispose());
+
+            Assert.Same(injectedException, thrown);
+            Assert.Equal(1, injectedCount);
+            Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(expectedTriggersAfterFailure, CountFtsSyncTriggers());
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+
+            guard.Dispose();
+            Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(expectedTriggersAfterFailure, CountFtsSyncTriggers());
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+            Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+            Assert.Equal(3L, CountFtsSyncTriggers());
+            Assert.Equal(1L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+        }
+        finally
+        {
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+            guard?.Dispose();
+        }
     }
 
     [Fact]
@@ -682,6 +1733,64 @@ public class DatabaseTests : IDisposable
         Assert.Equal(3L, CountFtsSyncTriggers());
         Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
         Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'failedcompletebulktoken'"));
+    }
+
+    [Fact]
+    public void FtsBulkLoadTriggerGuard_CompleteRebuildsAfterPostCommitCheckpointFailure()
+    {
+        var fileId = UpsertTestFile(
+            "src/post-commit-checkpoint-bulk-fts.cs",
+            checksum: "post-commit-checkpoint-bulk-fts");
+        const string token = "postcommitcheckpointbulktoken";
+        var previousHook = DbWriter.BeforePassiveWalCheckpointForTesting;
+        var injectedException = new InvalidOperationException("simulated post-commit WAL checkpoint failure");
+        var ftsMutated = false;
+        FtsBulkLoadTriggerGuard? guard = null;
+
+        try
+        {
+            guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated);
+            Assert.NotNull(guard);
+            using (var txn = _writer.BeginTransaction())
+            {
+                _writer.InsertChunks(
+                [
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = token,
+                    },
+                ]);
+                DbWriter.BeforePassiveWalCheckpointForTesting = () => throw injectedException;
+
+                var thrown = Assert.Throws<InvalidOperationException>(() => txn.Commit());
+
+                Assert.Same(injectedException, thrown);
+            }
+
+            Assert.False(ftsMutated);
+            Assert.Equal(0L, CountFtsSyncTriggers());
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.StartsWith(
+                "pid:",
+                ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey),
+                StringComparison.Ordinal);
+
+            DbWriter.BeforePassiveWalCheckpointForTesting = previousHook;
+            guard.Complete(rebuild: false);
+
+            Assert.Equal(3L, CountFtsSyncTriggers());
+            Assert.Equal(1L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        }
+        finally
+        {
+            DbWriter.BeforePassiveWalCheckpointForTesting = previousHook;
+            guard?.Dispose();
+        }
     }
 
     [Fact]
@@ -781,6 +1890,124 @@ public class DatabaseTests : IDisposable
         _writer.RestoreFtsSyncTriggers();
         _writer.RebuildFtsFromChunks();
         _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Theory]
+    [InlineData("start:1")]
+    [InlineData("token:00000000000000000000000000000001")]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_RebuildsWhenPidGenerationDoesNotMatch(
+        string generation)
+    {
+        var fileId = UpsertTestFile(
+            "src/reused-pid-bulk-fts.cs",
+            checksum: "reused-pid-bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "reusedpidbulktoken",
+            },
+        ]);
+        var pid = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _writer.SetMeta(
+            DbWriter.FtsBulkLoadOwnerGenerationMetaKey,
+            $"pid:{pid}:{generation}");
+
+        Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong(
+            "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'reusedpidbulktoken'"));
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_SkipsMismatchedGenerationAssociationConservatively()
+    {
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.SetMeta(
+            DbWriter.FtsBulkLoadOwnerGenerationMetaKey,
+            "pid:2147483647:start:1");
+
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(
+            $"pid:{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        _writer.RestoreFtsSyncTriggers();
+        _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_SkipsGenerationWhenCleanupTriggerSetIsIncomplete()
+    {
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        ExecuteNonQuery(
+            _db.Connection,
+            $"DROP TRIGGER {DbWriter.FtsBulkLoadGenerationClearDeleteTriggerName}");
+        _writer.SetMeta(
+            DbWriter.FtsBulkLoadOwnerGenerationMetaKey,
+            $"pid:{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}:start:1");
+
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(2L, CountFtsBulkLoadGenerationCleanupTriggers());
+        _writer.RestoreFtsSyncTriggers();
+        _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_WithoutMetaTableIsNoOpAndObservesPreCancellation()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        var writer = new DbWriter(connection);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var cancellationException = Assert.Throws<OperationCanceledException>(() =>
+            writer.RecoverInterruptedFtsBulkLoadIfNeeded(cancellation.Token));
+
+        Assert.Equal(cancellation.Token, cancellationException.CancellationToken);
+        Assert.False(writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_SkipsLegacyPidOnlyActiveOwnerConservatively()
+    {
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.SetMeta(
+            DbWriter.FtsBulkLoadInProgressMetaKey,
+            $"pid:{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(
+            $"pid:{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+        _writer.RestoreFtsSyncTriggers();
+        _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Fact]
+    public void FtsBulkLoadOwnerGeneration_StartMarkerDoesNotMatchTokenFallbackIncarnation()
+    {
+        Assert.False(DbWriter.IsFtsBulkLoadOwnerGenerationMatch(
+            expectedStartTimeUtcTicks: 1,
+            expectedIncarnationToken: null,
+            currentProcessStartTimeUtcTicks: null,
+            currentProcessIncarnationToken: Guid.NewGuid()));
     }
 
     [Fact]
@@ -1251,15 +2478,45 @@ public class DatabaseTests : IDisposable
     }
 
     private long UpsertTestFile(string path, string checksum)
+        => UpsertTestFileWithLanguage(path, "csharp", checksum);
+
+    private long UpsertTestFileWithLanguage(string path, string language, string checksum)
         => _writer.UpsertFile(new FileRecord
         {
             Path = path,
-            Lang = "csharp",
+            Lang = language,
             Size = 100,
             Lines = 4,
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             Checksum = checksum,
         });
+
+    private string ReadReferenceResolutionState(long fileId)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = "SELECT resolution_state FROM symbol_references WHERE file_id = @file_id";
+        command.Parameters.AddWithValue("@file_id", fileId);
+        return Assert.IsType<string>(command.ExecuteScalar());
+    }
+
+    private string ReadReferenceIdentitySnapshot()
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT group_concat(
+                       id || ':' ||
+                       COALESCE(source_symbol_id, -1) || ':' ||
+                       COALESCE(target_symbol_id, -1) || ':' ||
+                       COALESCE(target_symbol_key, '') || ':' ||
+                       resolution_candidate_count || ':' ||
+                       COALESCE(resolution_state, '') || ':' ||
+                       is_self_reference || ':' ||
+                       is_mutual_recursion,
+                       '|')
+            FROM (SELECT * FROM symbol_references ORDER BY id)
+            """;
+        return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture) ?? string.Empty;
+    }
 
     [Fact]
     public void OptimizeFtsIfIncrementalWriteThresholdReached_RunsOnlyAtThreshold()
@@ -1267,10 +2524,12 @@ public class DatabaseTests : IDisposable
         Assert.Equal(1, _writer.RecordFtsIncrementalWrite());
         Assert.False(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
         Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceMerge());
 
         Assert.Equal(2, _writer.RecordFtsIncrementalWrite());
         Assert.True(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceMerge());
     }
 
     [Fact]
@@ -1282,13 +2541,126 @@ public class DatabaseTests : IDisposable
             () => optimizeCount++,
             threshold: 2));
         Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceMerge());
         Assert.Equal(0, optimizeCount);
 
         Assert.True(_writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
             () => optimizeCount++,
             threshold: 2));
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceMerge());
         Assert.Equal(1, optimizeCount);
+    }
+
+    [Fact]
+    public void RecordFtsIncrementalWriteAndMergeIfThresholdReached_UsesMinimumWorkTargetAndKeepsSearchableRows()
+    {
+        var fileId = UpsertTestFile("src/fts-merge.cs", "fts_merge");
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "adaptive_merge_token",
+            },
+        ]);
+        var mergeCount = 0;
+
+        Assert.False(_writer.RecordFtsIncrementalWriteAndMergeIfThresholdReached(
+            () => mergeCount++,
+            threshold: 2,
+            mergeWorkTargetPages: 1));
+        Assert.True(_writer.RecordFtsIncrementalWriteAndMergeIfThresholdReached(
+            () => mergeCount++,
+            threshold: 2,
+            mergeWorkTargetPages: 1));
+
+        Assert.Equal(1, mergeCount);
+        Assert.Equal(2, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceMerge());
+        using var search = _db.Connection.CreateCommand();
+        search.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'adaptive_merge_token'";
+        Assert.Equal(1L, (long)search.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void MergeFtsSegments_PreCancelledOrInvalidWorkTargetDoesNotResetPendingWrites()
+    {
+        Assert.Equal(1, _writer.RecordFtsIncrementalWrite());
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => _writer.MergeFtsSegments(cancellationToken: cts.Token));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _writer.MergeFtsSegments(workTargetPages: 0));
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceMerge());
+    }
+
+    [Fact]
+    public void FtsMergeCounter_MissingOnLegacyDatabaseInheritsOptimizeCadence()
+    {
+        _writer.SetMeta(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "7");
+
+        Assert.Equal(7, _writer.GetFtsIncrementalWritesSinceMerge());
+        Assert.Equal(8, _writer.RecordFtsIncrementalWrite());
+        Assert.Equal(8, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(8, _writer.GetFtsIncrementalWritesSinceMerge());
+    }
+
+    [Theory]
+    [InlineData(0, 100, false)]
+    [InlineData(60, 0, false)]
+    [InlineData(5, 10, false)]
+    [InlineData(6, 10, true)]
+    [InlineData(6, 11, false)]
+    [InlineData(7, 11, true)]
+    [InlineData(100, 100, true)]
+    public void FtsBulkLoadDirtyBytePlanner_UsesCeilingThreeFifthsBoundary(
+        long dirtyBytes,
+        long totalBytes,
+        bool expected)
+        => Assert.Equal(expected, FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(dirtyBytes, totalBytes));
+
+    [Fact]
+    public void FtsBulkLoadDirtyBytePlanner_DoesNotOverflowLongByteCounts()
+    {
+        var quotient = long.MaxValue / FtsBulkLoadTriggerGuard.DirtyByteThresholdDenominator;
+        var remainder = long.MaxValue % FtsBulkLoadTriggerGuard.DirtyByteThresholdDenominator;
+        var threshold = quotient * FtsBulkLoadTriggerGuard.DirtyByteThresholdNumerator
+            + (remainder * FtsBulkLoadTriggerGuard.DirtyByteThresholdNumerator
+                + FtsBulkLoadTriggerGuard.DirtyByteThresholdDenominator - 1)
+                / FtsBulkLoadTriggerGuard.DirtyByteThresholdDenominator;
+
+        Assert.False(FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(threshold - 1, long.MaxValue));
+        Assert.True(FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(threshold, long.MaxValue));
+    }
+
+    [Fact]
+    public void FtsBulkLoadKnownByteAccumulator_DetectsAdditionAndReplacementOverflow()
+    {
+        Assert.True(FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
+            totalBytes: 100,
+            previousBytes: 10,
+            currentBytes: 20,
+            out var replacedTotal));
+        Assert.Equal(110, replacedTotal);
+
+        Assert.False(FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
+            totalBytes: long.MaxValue - 5,
+            previousBytes: null,
+            currentBytes: 6,
+            out var addedOverflowTotal));
+        Assert.Equal(long.MaxValue, addedOverflowTotal);
+
+        Assert.False(FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
+            totalBytes: long.MaxValue,
+            previousBytes: 10,
+            currentBytes: 11,
+            out var replacementOverflowTotal));
+        Assert.Equal(long.MaxValue, replacementOverflowTotal);
     }
 
     [Fact]
@@ -1480,6 +2852,149 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbWriter.TransactionStateContentionTimeoutForTesting = originalTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task TransactionScope_DisposeWaitsForPostCommitCheckpointFinalization()
+    {
+        var previousHook = DbWriter.BeforePassiveWalCheckpointForTesting;
+        var previousTimeout = DbWriter.TransactionStateContentionTimeoutForTesting;
+        using var checkpointEntered = new ManualResetEventSlim();
+        using var releaseCheckpoint = new ManualResetEventSlim();
+        var scope = _writer.BeginTransaction(CancellationToken.None, "post-commit finalization owner");
+        Task<Exception>? commitTask = null;
+        Task? disposeTask = null;
+
+        try
+        {
+            DbWriter.TransactionStateContentionTimeoutForTesting = TimeSpan.FromMilliseconds(25);
+            _writer.SetMeta("test_post_commit_finalization", "1");
+            DbWriter.BeforePassiveWalCheckpointForTesting = () =>
+            {
+                checkpointEntered.Set();
+                if (!releaseCheckpoint.Wait(TimeSpan.FromSeconds(5)))
+                    throw new TimeoutException("Timed out waiting to release the post-commit checkpoint hook.");
+            };
+
+            commitTask = Task.Run(() => Record.Exception(scope.Commit));
+            Assert.True(
+                checkpointEntered.Wait(TimeSpan.FromSeconds(2)),
+                "Transaction commit did not reach post-commit checkpoint finalization.");
+
+            var disposeStarted = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            disposeTask = Task.Run(() =>
+            {
+                disposeStarted.TrySetResult(true);
+                scope.Dispose();
+            });
+            await disposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.NotSame(
+                disposeTask,
+                await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromMilliseconds(200))));
+
+            releaseCheckpoint.Set();
+            Assert.Null(await commitTask.WaitAsync(TimeSpan.FromSeconds(2)));
+            await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+            using var next = _writer.BeginTransaction(
+                CancellationToken.None,
+                "post-commit finalization successor");
+        }
+        finally
+        {
+            releaseCheckpoint.Set();
+            DbWriter.BeforePassiveWalCheckpointForTesting = previousHook;
+            DbWriter.TransactionStateContentionTimeoutForTesting = previousTimeout;
+            scope.Dispose();
+            if (commitTask != null)
+                await commitTask.WaitAsync(TimeSpan.FromSeconds(2));
+            if (disposeTask != null)
+                await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
+    public async Task TransactionScope_RollbackClearsActiveTransactionBeforeDisposeReleasesGate()
+    {
+        var previousHook = DbWriter.BeforeRollbackTerminalStateForTesting;
+        using var rollbackFinalizationEntered = new ManualResetEventSlim();
+        using var releaseRollbackFinalization = new ManualResetEventSlim();
+        var activeTransactionField = typeof(DbWriter).GetField(
+            "_activeTransaction",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("DbWriter._activeTransaction field was not found.");
+        var scope = _writer.BeginTransaction(CancellationToken.None, "rollback finalization owner");
+        Task<Exception>? rollbackTask = null;
+        Task? disposeTask = null;
+        Task? successorTask = null;
+        object? activeTransactionAtFinalization = null;
+
+        try
+        {
+            _writer.SetMeta("test_rollback_finalization", "rolled-back");
+            DbWriter.BeforeRollbackTerminalStateForTesting = () =>
+            {
+                activeTransactionAtFinalization = activeTransactionField.GetValue(_writer);
+                rollbackFinalizationEntered.Set();
+                if (!releaseRollbackFinalization.Wait(TimeSpan.FromSeconds(5)))
+                    throw new TimeoutException("Timed out waiting to release rollback finalization.");
+            };
+
+            rollbackTask = Task.Run(() => Record.Exception(scope.Rollback));
+            Assert.True(
+                rollbackFinalizationEntered.Wait(TimeSpan.FromSeconds(2)),
+                "Transaction rollback did not reach terminal-state finalization.");
+            Assert.Null(activeTransactionAtFinalization);
+
+            var disposeStarted = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            disposeTask = Task.Run(() =>
+            {
+                disposeStarted.TrySetResult(true);
+                scope.Dispose();
+            });
+            await disposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var successorAttempting = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var successorEntered = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            successorTask = Task.Run(() =>
+            {
+                successorAttempting.TrySetResult(true);
+                using var successor = _writer.BeginTransaction(
+                    CancellationToken.None,
+                    "rollback finalization successor");
+                successorEntered.TrySetResult(true);
+                _writer.SetMeta("test_rollback_finalization", "successor");
+                successor.Commit();
+            });
+            await successorAttempting.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            Assert.False(disposeTask.IsCompleted);
+            Assert.False(successorEntered.Task.IsCompleted);
+
+            releaseRollbackFinalization.Set();
+            Assert.Null(await rollbackTask.WaitAsync(TimeSpan.FromSeconds(2)));
+            await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+            await successorTask.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal("successor", ReadMeta("test_rollback_finalization"));
+        }
+        finally
+        {
+            releaseRollbackFinalization.Set();
+            DbWriter.BeforeRollbackTerminalStateForTesting = previousHook;
+            scope.Dispose();
+            if (rollbackTask != null)
+                await rollbackTask.WaitAsync(TimeSpan.FromSeconds(2));
+            if (disposeTask != null)
+                await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+            if (successorTask != null)
+                await successorTask.WaitAsync(TimeSpan.FromSeconds(2));
         }
     }
 
@@ -1779,8 +3294,13 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void InitializeSchema_CreatesReferenceCompositeIndexesForGraphLookups()
     {
+        var symbolIndexes = ReadIndexNames(_db.Connection, "symbols");
         var indexes = ReadIndexNames(_db.Connection, "symbol_references");
 
+        Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
+        Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
+        Assert.Contains("idx_symbols_name_folded_container_name_nocase", symbolIndexes);
+        Assert.Contains("idx_symbols_name_folded_container_qualified_name_nocase", symbolIndexes);
         Assert.Contains("idx_symbol_refs_name_kind", indexes);
         Assert.Contains("idx_symbol_refs_name_file", indexes);
         Assert.Contains("idx_symbol_refs_name_nocase_kind", indexes);
@@ -1789,13 +3309,348 @@ public class DatabaseTests : IDisposable
         Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
         Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
         Assert.Contains("idx_symbol_refs_container_name_folded_kind", indexes);
+        Assert.Contains("idx_symbol_refs_resolved_source_target_kind", indexes);
 
+        AssertIndexColumns(_db.Connection, "idx_symbols_file_name_folded", [("file_id", "BINARY"), ("name_folded", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbols_file_name_nocase", [("file_id", "BINARY"), ("name", "NOCASE")]);
+        AssertIndexColumns(_db.Connection, "idx_symbols_name_folded_container_name_nocase", [("name_folded", "BINARY"), ("container_name", "NOCASE")]);
+        AssertIndexColumns(_db.Connection, "idx_symbols_name_folded_container_qualified_name_nocase", [("name_folded", "BINARY"), ("container_qualified_name", "NOCASE")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_name_nocase_kind", [("symbol_name", "NOCASE"), ("reference_kind", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_name_nocase_file", [("symbol_name", "NOCASE"), ("file_id", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_symbol_name_folded_kind", [("symbol_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_symbol_name_folded_file", [("symbol_name_folded", "BINARY"), ("file_id", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_symbol_refs_resolved_source_target_kind", [("source_symbol_id", "BINARY"), ("target_symbol_id", "BINARY"), ("reference_kind", "BINARY")]);
+        AssertIndexSqlContains(
+            _db.Connection,
+            "idx_symbol_refs_resolved_source_target_kind",
+            "WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL");
+    }
+
+    [Fact]
+    public void ReferenceResolutionLookupQueries_UseCompositeSymbolIndexes()
+    {
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE file_id = @file_id AND name_folded = @name_folded",
+                ("@file_id", 1L),
+                ("@name_folded", "worker")),
+            "idx_symbols_file_name_folded");
+
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE file_id = @file_id AND name = @name COLLATE NOCASE",
+                ("@file_id", 1L),
+                ("@name", "Worker")),
+            "idx_symbols_file_name_nocase");
+
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE name_folded = @name_folded AND container_name = @container COLLATE NOCASE",
+                ("@name_folded", "run"),
+                ("@container", "Worker")),
+            "idx_symbols_name_folded_container_name_nocase");
+
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE name_folded = @name_folded AND container_qualified_name = @container COLLATE NOCASE",
+                ("@name_folded", "run"),
+                ("@container", "Demo.Worker")),
+            "idx_symbols_name_folded_container_qualified_name_nocase");
+
+        var reverseEdgePlan = ReadQueryPlanDetails(
+            _db.Connection,
+            """
+            SELECT id
+            FROM symbol_references
+            WHERE source_symbol_id = @source_symbol_id
+              AND target_symbol_id = @target_symbol_id
+              AND reference_kind = @reference_kind
+            """,
+            ("@source_symbol_id", 1L),
+            ("@target_symbol_id", 2L),
+            ("@reference_kind", "call"));
+        Assert.Contains(reverseEdgePlan, detail =>
+            detail.Contains("SEARCH symbol_references USING COVERING INDEX idx_symbol_refs_resolved_source_target_kind", StringComparison.Ordinal));
+        Assert.DoesNotContain(reverseEdgePlan, detail =>
+            detail.Contains("SCAN symbol_references", StringComparison.Ordinal));
+
+        static void AssertSearchesWithIndex(IReadOnlyList<string> plan, string indexName)
+        {
+            Assert.Contains(plan, detail =>
+                detail.Contains("SEARCH symbols USING", StringComparison.Ordinal)
+                && detail.Contains(indexName, StringComparison.Ordinal));
+            Assert.DoesNotContain(plan, detail => detail.Contains("SCAN symbols", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void InitializeSchema_CreatesBoundedMaintenanceLookupIndexes()
+    {
+        Assert.Contains("idx_files_checksum", ReadIndexNames(_db.Connection, "files"));
+        Assert.Contains("idx_files_path_nocase", ReadIndexNames(_db.Connection, "files"));
+        Assert.Contains("idx_file_issues_file_kind", ReadIndexNames(_db.Connection, "file_issues"));
+
+        AssertIndexColumns(_db.Connection, "idx_files_checksum", [("checksum", "BINARY")]);
+        AssertIndexColumns(_db.Connection, "idx_files_path_nocase", [("path", "NOCASE")]);
+        AssertIndexColumns(
+            _db.Connection,
+            "idx_file_issues_file_kind",
+            [("file_id", "BINARY"), ("kind", "BINARY")]);
+    }
+
+    [Fact]
+    public void MaintenanceLookupQueries_UseBoundedIndexes()
+    {
+        var checksumPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleChecksumCandidateSql,
+            ("@checksum", "same-checksum"),
+            ("@path", "src/current.cs"));
+        Assert.Contains(checksumPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX idx_files_checksum", StringComparison.Ordinal));
+        Assert.DoesNotContain(checksumPlan, detail => detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var csharpChecksumPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleCSharpChecksumCandidateSql,
+            ("@checksum", "same-checksum"),
+            ("@path", "src/current.cs"));
+        Assert.Contains(csharpChecksumPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX idx_files_checksum", StringComparison.Ordinal));
+        Assert.DoesNotContain(csharpChecksumPlan, detail =>
+            detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var pathAliasPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleRetainedPathAliasCandidateSql,
+            ("@path", "src/Target.cs"));
+        Assert.Contains(pathAliasPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX idx_files_path_nocase", StringComparison.Ordinal));
+        Assert.DoesNotContain(pathAliasPlan, detail => detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var csharpPathAliasPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleCSharpRetainedPathAliasCandidateSql,
+            ("@path", "src/Target.cs"));
+        Assert.Contains(csharpPathAliasPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX idx_files_path_nocase", StringComparison.Ordinal));
+        Assert.DoesNotContain(csharpPathAliasPlan, detail =>
+            detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var issuePlan = ReadQueryPlanDetails(
+            _db.Connection,
+            """
+            SELECT f.id
+            FROM files f
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM file_issues
+                WHERE file_id = f.id AND kind = @kind
+            )
+            """,
+            ("@kind", "symbol_count_exceeded"));
+        Assert.Contains(issuePlan, detail =>
+            detail.Contains("SEARCH file_issues USING COVERING INDEX idx_file_issues_file_kind", StringComparison.Ordinal));
+        Assert.DoesNotContain(issuePlan, detail => detail.Contains("SCAN file_issues", StringComparison.Ordinal));
+
+        var directoryStemPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleDirectoryStemCandidateSql,
+            ("@path", "src/target.py"),
+            ("@base_path", "src/target"),
+            ("@base_dot_lower_bound", "src/target."),
+            ("@base_dot_upper_bound", "src/target/"));
+        Assert.Contains(directoryStemPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+        Assert.DoesNotContain(directoryStemPlan, detail => detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var csharpDirectoryStemPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.StaleCSharpDirectoryStemCandidateSql,
+            ("@path", "src/target.py"),
+            ("@base_path", "src/target"),
+            ("@base_dot_lower_bound", "src/target."),
+            ("@base_dot_upper_bound", "src/target/"));
+        Assert.Contains(csharpDirectoryStemPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+        Assert.DoesNotContain(csharpDirectoryStemPlan, detail =>
+            detail.Contains("SCAN files", StringComparison.Ordinal));
+
+        var contractPathPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.BuildCSharpStaticInterfaceContractPathPreflightSql(
+                batchCount: 1,
+                includeInterfaceDeclarationsAsConservativeEvidence: false),
+            ("@path0", "src/target.cs"));
+        Assert.Contains(contractPathPlan, detail =>
+            detail.Contains("SEARCH f USING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+        Assert.Contains(contractPathPlan, detail =>
+            detail.Contains("SEARCH s USING INDEX idx_symbols_file_kind", StringComparison.Ordinal));
+        Assert.DoesNotContain(contractPathPlan, detail =>
+            detail.Contains("SCAN f", StringComparison.Ordinal)
+            || detail.Contains("SCAN s", StringComparison.Ordinal));
+
+        var csharpFilePathPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.BuildCSharpFilePathLookupSql(batchCount: 1),
+            ("@path0", "src/target.cs"));
+        Assert.Contains(csharpFilePathPlan, detail =>
+            detail.Contains("SEARCH files USING INDEX sqlite_autoindex_files_1", StringComparison.Ordinal));
+        Assert.DoesNotContain(csharpFilePathPlan, detail =>
+            detail.Contains("SCAN files", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CSharpContractWorkspaceQueries_UseFileKindThenBoundedInterfaceNamePlans()
+    {
+        var memberPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.CSharpStaticInterfaceContractMemberWorkspaceSql);
+        Assert.Contains(memberPlan, detail =>
+            detail.Contains("SEARCH f USING INDEX idx_files_lang", StringComparison.Ordinal));
+        Assert.Contains(memberPlan, detail =>
+            detail.Contains("SEARCH s USING INDEX idx_symbols_file_kind", StringComparison.Ordinal)
+            && detail.Contains("file_id=? AND kind=?", StringComparison.Ordinal));
+        Assert.DoesNotContain(memberPlan, detail =>
+            detail.Contains("SCAN f", StringComparison.Ordinal)
+            || detail.Contains("SCAN s", StringComparison.Ordinal));
+
+        var interfacePlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.BuildCSharpStaticInterfaceDeclarationWorkspaceSql(batchCount: 1),
+            ("@containerName0", "IContract"));
+        Assert.Contains(interfacePlan, detail =>
+            detail.Contains("SEARCH s USING INDEX idx_symbols_name", StringComparison.Ordinal)
+            && detail.Contains("name=?", StringComparison.Ordinal));
+        Assert.Contains(interfacePlan, detail =>
+            detail.Contains("SEARCH f USING INTEGER PRIMARY KEY", StringComparison.Ordinal));
+        Assert.DoesNotContain(interfacePlan, detail =>
+            detail.Contains("SCAN f", StringComparison.Ordinal)
+            || detail.Contains("SCAN s", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void LoadCSharpContractWorkspace_MaterializesOnlyCandidatesAndMatchingInterfaces()
+    {
+        const int FillerCount = 64;
+        var contractFileId = UpsertTestFile("src/IContract.cs", "contract");
+        var duplicateInterfaceFileId = UpsertTestFile("src/Partials/IContract.cs", "contract-partial");
+        var symbols = new List<SymbolRecord>(FillerCount * 2 + 3)
+        {
+            new()
+            {
+                FileId = contractFileId,
+                Kind = "interface",
+                Name = "IContract",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 8,
+                Signature = "public partial interface IContract<T>",
+            },
+            new()
+            {
+                FileId = duplicateInterfaceFileId,
+                Kind = "interface",
+                Name = "IContract",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public partial interface IContract<T>",
+            },
+            new()
+            {
+                FileId = contractFileId,
+                Kind = "function",
+                Name = "Create",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public static abstract T Create();",
+                ContainerKind = "interface",
+                ContainerName = "IContract",
+                ReturnType = "T",
+            },
+        };
+        for (var index = 0; index < FillerCount; index++)
+        {
+            var fileId = UpsertTestFile($"src/Filler{index:D2}.cs", $"filler-{index:D2}");
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "interface",
+                Name = $"IPlain{index:D2}",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = $"public interface IPlain{index:D2}",
+            });
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = $"CreatevirtualNode{index:D2}",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                Signature = $"public static AbstractFactory CreatevirtualNode{index:D2}();",
+                ContainerKind = "interface",
+                ContainerName = $"IPlain{index:D2}",
+            });
+        }
+        _writer.InsertSymbols(symbols);
+
+        var previousStatsHook = DbWriter.CSharpContractWorkspaceReadStatsForTesting;
+        var reads = new List<DbWriter.CSharpContractWorkspaceReadStats>();
+        try
+        {
+            DbWriter.CSharpContractWorkspaceReadStatsForTesting = reads.Add;
+
+            var loaded = _writer.LoadCSharpStaticInterfaceContractSymbols();
+
+            Assert.Contains(loaded, symbol => symbol.Kind == "function" && symbol.Name == "Create");
+            Assert.Equal(2, loaded.Count(symbol => symbol.Kind == "interface" && symbol.Name == "IContract"));
+            Assert.DoesNotContain(loaded, symbol => symbol.Name.StartsWith("IPlain", StringComparison.Ordinal));
+            var read = Assert.Single(reads);
+            Assert.Equal(FillerCount + 1, read.MemberCandidateRowsRead);
+            Assert.Equal(1, read.ExactMembersRetained);
+            Assert.Equal(2, read.InterfaceDeclarationRowsRead);
+            Assert.Equal(1, read.InterfaceDeclarationBatchQueries);
+
+            reads.Clear();
+            var retained = _writer.LoadCSharpStaticInterfaceContractSymbols(
+                new HashSet<string>(["src/IContract.cs"], StringComparer.Ordinal),
+                out var excludedPathsHaveContracts);
+
+            Assert.Empty(retained);
+            Assert.True(excludedPathsHaveContracts);
+            var excludedRead = Assert.Single(reads);
+            Assert.Equal(FillerCount + 1, excludedRead.MemberCandidateRowsRead);
+            Assert.Equal(0, excludedRead.ExactMembersRetained);
+            Assert.Equal(0, excludedRead.InterfaceDeclarationRowsRead);
+            Assert.Equal(0, excludedRead.InterfaceDeclarationBatchQueries);
+
+            Assert.True(_writer.DeleteFileByPath("src/IContract.cs"));
+            reads.Clear();
+
+            var negative = _writer.LoadCSharpStaticInterfaceContractSymbols();
+
+            Assert.Empty(negative);
+            var negativeRead = Assert.Single(reads);
+            Assert.Equal(FillerCount, negativeRead.MemberCandidateRowsRead);
+            Assert.Equal(0, negativeRead.ExactMembersRetained);
+            Assert.Equal(0, negativeRead.InterfaceDeclarationRowsRead);
+            Assert.Equal(0, negativeRead.InterfaceDeclarationBatchQueries);
+        }
+        finally
+        {
+            DbWriter.CSharpContractWorkspaceReadStatsForTesting = previousStatsHook;
+        }
     }
 
     [Fact]
@@ -1837,8 +3692,15 @@ public class DatabaseTests : IDisposable
 
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
+            var fileIndexes = ReadIndexNames(db.Connection, "files");
+            var symbolIndexes = ReadIndexNames(db.Connection, "symbols");
             var indexes = ReadIndexNames(db.Connection, "symbol_references");
 
+            Assert.DoesNotContain("idx_files_path_nocase", fileIndexes);
+            Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
+            Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
+            Assert.Contains("idx_symbols_name_folded_container_name_nocase", symbolIndexes);
+            Assert.Contains("idx_symbols_name_folded_container_qualified_name_nocase", symbolIndexes);
             Assert.Contains("idx_symbol_refs_name_kind", indexes);
             Assert.Contains("idx_symbol_refs_name_file", indexes);
             Assert.Contains("idx_symbol_refs_name_nocase_kind", indexes);
@@ -1847,9 +3709,19 @@ public class DatabaseTests : IDisposable
             Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
             Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
             Assert.Contains("idx_symbol_refs_container_name_folded_kind", indexes);
+            Assert.Contains("idx_symbol_refs_resolved_source_target_kind", indexes);
 
+            AssertIndexColumns(db.Connection, "idx_symbols_file_name_folded", [("file_id", "BINARY"), ("name_folded", "BINARY")]);
+            AssertIndexColumns(db.Connection, "idx_symbols_file_name_nocase", [("file_id", "BINARY"), ("name", "NOCASE")]);
+            AssertIndexColumns(db.Connection, "idx_symbols_name_folded_container_name_nocase", [("name_folded", "BINARY"), ("container_name", "NOCASE")]);
+            AssertIndexColumns(db.Connection, "idx_symbols_name_folded_container_qualified_name_nocase", [("name_folded", "BINARY"), ("container_qualified_name", "NOCASE")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
+            AssertIndexColumns(db.Connection, "idx_symbol_refs_resolved_source_target_kind", [("source_symbol_id", "BINARY"), ("target_symbol_id", "BINARY"), ("reference_kind", "BINARY")]);
+            AssertIndexSqlContains(
+                db.Connection,
+                "idx_symbol_refs_resolved_source_target_kind",
+                "WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL");
         }
         finally
         {
@@ -3119,43 +4991,74 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void LoadReusableIndexedFileStats_SkipsIncompleteLegacyStats()
+    public void LoadReusableIndexedFileStats_FiltersStaleLanguagesAndMalformedStorageTypes()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        _writer.UpsertFile(new FileRecord
+        var fixtures = new (string Path, string Language)[]
         {
-            Path = "src/null-size.cs",
-            Lang = "csharp",
-            Size = 20,
-            Lines = 2,
-            Modified = modified,
-            Checksum = "null_size_checksum",
-        });
-        _writer.UpsertFile(new FileRecord
+            ("src/valid.cs", "csharp"),
+            ("src/stale.py", "python"),
+            ("src/stale-helper.py", "python"),
+            ("src/null-size.cs", "csharp"),
+            ("src/text-size.cs", "csharp"),
+            ("src/integer-modified.cs", "csharp"),
+            ("src/invalid-modified.cs", "csharp"),
+        };
+        foreach (var fixture in fixtures)
         {
-            Path = "src/invalid-modified.cs",
-            Lang = "csharp",
-            Size = 20,
-            Lines = 2,
-            Modified = modified,
-            Checksum = "invalid_modified_checksum",
-        });
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = fixture.Path,
+                Lang = fixture.Language,
+                Size = 20,
+                Lines = 2,
+                Modified = modified,
+                Checksum = fixture.Path,
+            });
+        }
+        _writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("python"), "0");
 
         using (var command = _db.Connection.CreateCommand())
         {
             command.CommandText = """
                 UPDATE files SET size = NULL WHERE path = 'src/null-size.cs';
+                UPDATE files SET size = 'not-an-integer' WHERE path = 'src/text-size.cs';
+                UPDATE files SET modified = 123 WHERE path = 'src/integer-modified.cs';
                 UPDATE files SET modified = 'not-a-timestamp' WHERE path = 'src/invalid-modified.cs';
                 """;
             command.ExecuteNonQuery();
         }
 
+        var observedPersistedCSharpPaths = new List<string>();
         var reusableStats = _writer.LoadReusableIndexedFileStats(
             maxSymbolsPerFile: 10,
-            maxReferencesPerFile: 10);
+            maxReferencesPerFile: 10,
+            initialCapacity: fixtures.Length,
+            persistedCSharpPathObserver: observedPersistedCSharpPaths.Add);
 
-        Assert.DoesNotContain("src/null-size.cs", reusableStats.Keys);
-        Assert.DoesNotContain("src/invalid-modified.cs", reusableStats.Keys);
+        var valid = Assert.Single(reusableStats);
+        Assert.Equal("src/valid.cs", valid.Key);
+        Assert.Equal(modified, valid.Value.ModifiedUtc);
+        Assert.Equal(20, valid.Value.Size);
+        Assert.Equal("csharp", valid.Value.Language);
+        Assert.Equal(
+            new PersistedIndexedFileSize(Exists: true, SizeKnown: true, 20),
+            reusableStats.GetPersistedSize("src/stale.py"));
+        Assert.Equal(
+            new PersistedIndexedFileSize(Exists: true, SizeKnown: false, 0),
+            reusableStats.GetPersistedSize("src/null-size.cs"));
+        Assert.Equal(
+            new PersistedIndexedFileSize(Exists: true, SizeKnown: false, 0),
+            reusableStats.GetPersistedSize("src/text-size.cs"));
+        Assert.Equal(
+            new PersistedIndexedFileSize(Exists: true, SizeKnown: true, 20),
+            reusableStats.GetPersistedSize("src/invalid-modified.cs"));
+        Assert.Equal(
+            fixtures
+                .Where(fixture => fixture.Language == "csharp")
+                .Select(fixture => fixture.Path)
+                .Order(StringComparer.Ordinal),
+            observedPersistedCSharpPaths.Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -3175,6 +5078,45 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbWriter.ReusableStatSnapshotReadForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void LoadReusableIndexedFileStats_FilterPreparationCancellationCleansTempTable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var previousBatchHook = DbWriter.ReusableStatSnapshotFilterBatchForTesting;
+        try
+        {
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/filter-cancel.cs",
+                Lang = "csharp",
+                Size = 20,
+                Lines = 1,
+                Modified = DateTime.UtcNow,
+                Checksum = "filter-cancel",
+            });
+            DbWriter.ReusableStatSnapshotFilterBatchForTesting = () =>
+            {
+                previousBatchHook?.Invoke();
+                cancellation.Cancel();
+            };
+
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.LoadReusableIndexedFileStats(
+                    maxSymbolsPerFile: 10,
+                    maxReferencesPerFile: 10,
+                    cancellation.Token,
+                    includedPaths: new HashSet<string>(["src/filter-cancel.cs"], StringComparer.Ordinal)));
+
+            using var command = _db.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_temp_master WHERE type = 'table' AND name = 'reusable_stat_snapshot_filter'";
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.ReusableStatSnapshotFilterBatchForTesting = previousBatchHook;
         }
     }
 
@@ -3564,6 +5506,105 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceBatchStatements_EightFiveOneInputsUseExactRowCounts()
+    {
+        var writer = new DbWriter(_db);
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        var fileIds = new List<long>();
+        try
+        {
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            foreach (var rowCount in new[] { 8, 5, 1 })
+            {
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = $"src/reference-batch-{rowCount}.cs",
+                    Lang = "csharp",
+                    Size = rowCount * 10,
+                    Lines = rowCount,
+                    Checksum = $"reference-batch-{rowCount}",
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                fileIds.Add(fileId);
+                writer.InsertReferencesForNewFiles(
+                    Enumerable.Range(0, rowCount)
+                        .Select(index => new ReferenceRecord
+                        {
+                            FileId = fileId,
+                            SymbolName = $"Target_{rowCount}_{index}",
+                            ReferenceKind = "call",
+                            Line = index + 1,
+                            Column = index + 1,
+                            Context = $"Target_{rowCount}_{index}();",
+                            ContainerKind = "function",
+                            ContainerName = "caller",
+                        })
+                        .ToArray(),
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+        }
+
+        Assert.Equal(
+            [(8, 8), (5, 5), (1, 1)],
+            statements.Where(statement => statement.Operation == "insert_reference_lines")
+                .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                .ToArray());
+        Assert.Equal(
+            [(8, 8), (5, 5), (1, 1)],
+            statements.Where(statement => statement.Operation == "insert_references")
+                .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                .ToArray());
+        using var countCommand = _db.Connection.CreateCommand();
+        countCommand.Parameters.Add("@fileId", SqliteType.Integer);
+        foreach (var (fileId, expectedRowCount) in fileIds.Zip(new[] { 8, 5, 1 }))
+        {
+            countCommand.Parameters["@fileId"].Value = fileId;
+            countCommand.CommandText = """
+                SELECT (SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId),
+                       (SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId)
+                """;
+            using var reader = countCommand.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(expectedRowCount, reader.GetInt32(0));
+            Assert.Equal(expectedRowCount, reader.GetInt32(1));
+        }
+    }
+
+    [Fact]
+    public void ReferenceLineLookup_BatchedInputUsesUniqueAutoIndexPlan()
+    {
+        const int StatementRowCount = 5;
+        var sql = DbWriter.BuildReferenceLineLookupSqlForTesting(StatementRowCount);
+
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        for (var parameterIndex = 0; parameterIndex < StatementRowCount * 3; parameterIndex++)
+            command.Parameters.AddWithValue($"@p{parameterIndex}", DBNull.Value);
+
+        var plan = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            plan.Add(reader.GetString(3));
+
+        Assert.Contains(
+            plan,
+            detail => detail.Contains(
+                "sqlite_autoindex_reference_lines_1",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void InsertSymbols_ChunksLargeInputUnderSqlVariableLimit()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -3789,8 +5830,22 @@ public class DatabaseTests : IDisposable
     public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesOnly()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug");
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var previousAggregateRefreshHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var atomicCalls = new List<bool>();
+        var aggregateRefreshStatements = 0;
         try
         {
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCalls.Add(newFiles);
+                previousAtomicHook?.Invoke(newFiles);
+            };
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                aggregateRefreshStatements++;
+                previousAggregateRefreshHook?.Invoke();
+            };
             TestProjectHelper.CreateDirectory(projectRoot, "src");
             TestProjectHelper.WriteTextFile(projectRoot, "src/module-c.ts", "export {}\ninterface Ambient {}\n");
             TestProjectHelper.WriteTextFile(projectRoot, "src/module-d.ts", "import \"./setup\";\ninterface Ambient {}\n");
@@ -3896,6 +5951,8 @@ public class DatabaseTests : IDisposable
             var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
 
             Assert.Equal(4, inserted);
+            Assert.Contains(false, atomicCalls);
+            Assert.Equal(1, aggregateRefreshStatements);
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = @"
             SELECT symbol_name, container_kind, COUNT(*)
@@ -3918,13 +5975,606 @@ public class DatabaseTests : IDisposable
             }
 
             Assert.Equal(4, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+            Assert.Equal(2, aggregateRefreshStatements);
             cmd.CommandText = "SELECT SUM(reference_count) FROM hotspot_reference_counts WHERE lang = 'typescript'";
             Assert.Equal(4L, (long)Assert.IsType<long>(cmd.ExecuteScalar()));
         }
         finally
         {
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousAggregateRefreshHook;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_MaterializesOnlyMergedGroups()
+    {
+        const int singletonInterfaceCount = 5_000;
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/augmentation-groups.ts",
+            Lang = "typescript",
+            Size = singletonInterfaceCount * 32,
+            Lines = singletonInterfaceCount + 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var symbols = new List<SymbolRecord>(singletonInterfaceCount + 2);
+        for (var index = 0; index < singletonInterfaceCount; index++)
+        {
+            var name = $"UniqueInterface{index:D4}";
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "interface",
+                Name = name,
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                Signature = $"interface {name} {{ value: number }}",
+            });
+        }
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = "MergedInterface",
+            Line = singletonInterfaceCount + 1,
+            StartLine = singletonInterfaceCount + 1,
+            EndLine = singletonInterfaceCount + 1,
+            Signature = "interface MergedInterface { first: number }",
+        });
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = "MergedInterface",
+            Line = singletonInterfaceCount + 2,
+            StartLine = singletonInterfaceCount + 2,
+            EndLine = singletonInterfaceCount + 2,
+            Signature = "interface MergedInterface { second: string }",
+        });
+        _writer.InsertSymbols(symbols);
+
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences());
+
+            Assert.NotNull(groupingStats);
+            Assert.Equal(singletonInterfaceCount + 2, groupingStats!.DeclarationCount);
+            Assert.Equal(singletonInterfaceCount + 1, groupingStats.GroupCount);
+            Assert.Equal(1, groupingStats.MergedGroupCount);
+            Assert.Equal(2, groupingStats.MaterializedDeclarationIndexCount);
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(2L, (long)count.ExecuteScalar()!);
+
+            groupingStats = null;
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(".", ["MergedInterface"]));
+            Assert.NotNull(groupingStats);
+            Assert.Equal(2, groupingStats!.DeclarationCount);
+            Assert.Equal(1, groupingStats.GroupCount);
+            Assert.Equal(1, groupingStats.MergedGroupCount);
+            Assert.Equal(2, groupingStats.MaterializedDeclarationIndexCount);
+            Assert.Equal(1, groupingStats.ScopedNameCount);
+
+            groupingStats = null;
+            var batchedDirtyNames = Enumerable.Range(0, 1_000)
+                .Select(static index => $"MissingInterface{index:D4}")
+                .Append("MergedInterface")
+                .ToArray();
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(".", batchedDirtyNames));
+            Assert.NotNull(groupingStats);
+            Assert.Equal(2, groupingStats!.DeclarationCount);
+            Assert.Equal(batchedDirtyNames.Length, groupingStats.ScopedNameCount);
+
+            groupingStats = null;
+            var broadDirtyNames = Enumerable.Range(0, singletonInterfaceCount)
+                .Select(static index => $"UniqueInterface{index:D4}")
+                .Append("MergedInterface")
+                .ToArray();
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(".", broadDirtyNames));
+            Assert.NotNull(groupingStats);
+            Assert.Equal(singletonInterfaceCount + 2, groupingStats!.DeclarationCount);
+            Assert.Null(groupingStats.ScopedNameCount);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+        }
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_ScopesOldAndNewDirtyNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug_dirty_names");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var firstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/first.ts"));
+            var secondFileId = _writer.UpsertFile(CreateTypeScriptFile("src/second.ts"));
+            var thirdFileId = _writer.UpsertFile(CreateTypeScriptFile("src/third.ts"));
+            _writer.InsertSymbols([
+                CreateInterface(firstFileId, "OldMerge", 1),
+                CreateInterface(firstFileId, "RemovedOnly", 2),
+                CreateInterface(secondFileId, "OldMerge", 1),
+                CreateInterface(secondFileId, "NewMerge", 2),
+                CreateInterface(secondFileId, "UntouchedMerge", 3),
+                CreateInterface(thirdFileId, "UntouchedMerge", 1),
+            ]);
+            Assert.Equal(4, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+
+            using var dirtyNames = _writer.BeginTypeScriptAugmentationDirtyNameTracking();
+            var retainedFirstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/first.ts"));
+            Assert.Equal(firstFileId, retainedFirstFileId);
+            _writer.InsertSymbols([CreateInterface(firstFileId, "NewMerge", 1)]);
+            Assert.Equal(
+                ["NewMerge", "OldMerge", "RemovedOnly"],
+                dirtyNames.DirtyNames.OrderBy(static name => name, StringComparer.Ordinal).ToArray());
+
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(projectRoot, dirtyNames.DirtyNames));
+
+            Assert.NotNull(groupingStats);
+            Assert.Equal(3, groupingStats!.DeclarationCount);
+            Assert.Equal(2, groupingStats.GroupCount);
+            Assert.Equal(1, groupingStats.MergedGroupCount);
+            Assert.Equal(2, groupingStats.MaterializedDeclarationIndexCount);
+            Assert.Equal(3, groupingStats.ScopedNameCount);
+
+            using var references = _db.Connection.CreateCommand();
+            references.CommandText = """
+                SELECT symbol_name, COUNT(*)
+                FROM symbol_references
+                WHERE reference_kind = 'augmentation'
+                GROUP BY symbol_name
+                ORDER BY symbol_name
+                """;
+            using var reader = references.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("NewMerge", reader.GetString(0));
+            Assert.Equal(2, reader.GetInt32(1));
+            Assert.True(reader.Read());
+            Assert.Equal("UntouchedMerge", reader.GetString(0));
+            Assert.Equal(2, reader.GetInt32(1));
+            Assert.False(reader.Read());
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name, int line) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = line,
+            StartLine = line,
+            EndLine = line,
+            Signature = $"interface {name} {{ value: number }}",
+        };
+    }
+
+    [Fact]
+    public void TypeScriptAugmentationDirtyNameTracking_CapturesBatchedStaleFilePurge()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug_stale_purge");
+        try
+        {
+            var staleFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/stale.ts",
+                Lang = "typescript",
+                Checksum = "rename-checksum",
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var peerFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/peer.ts",
+                Lang = "typescript",
+                Checksum = "peer-checksum",
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = staleFileId, Kind = "interface", Name = "RenamedMerge", Line = 1, StartLine = 1, EndLine = 1, Signature = "interface RenamedMerge { stale: number }" },
+                new SymbolRecord { FileId = peerFileId, Kind = "interface", Name = "RenamedMerge", Line = 1, StartLine = 1, EndLine = 1, Signature = "interface RenamedMerge { peer: number }" },
+            ]);
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+
+            using var dirtyNames = _writer.BeginTypeScriptAugmentationDirtyNameTracking();
+            Assert.Equal(
+                1,
+                _writer.PurgeStaleFilesSharingChecksum(
+                    projectRoot,
+                    "src/renamed.cs",
+                    "rename-checksum"));
+
+            Assert.True(dirtyNames.RequiresRefresh);
+            Assert.Equal(["RenamedMerge"], dirtyNames.DirtyNames);
+            Assert.False(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+            Assert.Equal(
+                0,
+                _writer.RebuildTypeScriptAugmentationReferences(projectRoot, dirtyNames.DirtyNames));
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(0L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_ScopedNamesUseOtherIndexedInterfaceAsModuleMarker()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug_scoped_module_marker");
+        var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        try
+        {
+            var globalFileId = _writer.UpsertFile(CreateTypeScriptFile("src/global.ts"));
+            var moduleFileId = _writer.UpsertFile(CreateTypeScriptFile("src/module.ts"));
+            _writer.InsertSymbols([
+                CreateInterface(globalFileId, "Shared", "interface Shared { global: number }"),
+                CreateInterface(moduleFileId, "Shared", "interface Shared { local: number }"),
+                CreateInterface(moduleFileId, "ModuleMarker", "export interface ModuleMarker { value: number }", "export"),
+            ]);
+
+            Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                groupingStats = stats;
+                previousGroupingHook?.Invoke(stats);
+            };
+
+            Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences(projectRoot, ["Shared"]));
+            Assert.NotNull(groupingStats);
+            Assert.Equal(2, groupingStats!.DeclarationCount);
+            Assert.Equal(2, groupingStats.GroupCount);
+            Assert.Equal(0, groupingStats.MergedGroupCount);
+            Assert.Equal(1, groupingStats.ScopedNameCount);
+
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(0L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name, string signature, string? visibility = null) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = signature,
+            Visibility = visibility,
+        };
+    }
+
+    [Fact]
+    public void TypeScriptAugmentationDirtyNameTracking_ClearsOnceUntilRollbackAndRechecksOnceForNewFiles()
+    {
+        const int fileCount = 32;
+        var previousClearHook = DbWriter.TypeScriptAugmentationReadyClearForTesting;
+        var previousCheckHook = DbWriter.TypeScriptAugmentationReadyCheckForTesting;
+        var clearCount = 0;
+        var readyCheckCount = 0;
+        try
+        {
+            var files = Enumerable.Range(0, fileCount)
+                .Select(static index => new FileRecord
+                {
+                    Path = $"src/dirty-{index:D3}.ts",
+                    Lang = "typescript",
+                    Size = 80,
+                    Lines = 4,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                })
+                .ToArray();
+            foreach (var (file, index) in files.Select(static (file, index) => (file, index)))
+            {
+                var fileId = _writer.UpsertFile(file);
+                _writer.InsertSymbols([new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "interface",
+                    Name = $"DirtyInterface{index:D3}",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = $"interface DirtyInterface{index:D3} {{ value: number }}",
+                }]);
+            }
+            Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences("."));
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+
+            DbWriter.TypeScriptAugmentationReadyClearForTesting = () =>
+            {
+                clearCount++;
+                previousClearHook?.Invoke();
+            };
+            DbWriter.TypeScriptAugmentationReadyCheckForTesting = () =>
+            {
+                readyCheckCount++;
+                previousCheckHook?.Invoke();
+            };
+            using var dirtyNames = _writer.BeginTypeScriptAugmentationDirtyNameTracking();
+            using (_writer.BeginTransaction())
+                _writer.UpsertFile(files[0]);
+
+            Assert.Equal(1, clearCount);
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                for (var index = 0; index < fileCount; index++)
+                {
+                    var newFileId = _writer.UpsertFile(new FileRecord
+                    {
+                        Path = $"src/new-after-rollback-{index:D3}.ts",
+                        Lang = "typescript",
+                        Size = 80,
+                        Lines = 4,
+                        Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                    });
+                    _writer.InsertSymbols([new SymbolRecord
+                    {
+                        FileId = newFileId,
+                        Kind = "interface",
+                        Name = $"NewAfterRollback{index:D3}",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Signature = $"interface NewAfterRollback{index:D3} {{ value: number }}",
+                    }]);
+                }
+                Assert.Equal(2, clearCount);
+                Assert.Equal(1, readyCheckCount);
+                transaction.Commit();
+            }
+
+            Assert.Equal(2, clearCount);
+            Assert.Equal(1, readyCheckCount);
+            Assert.False(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+            Assert.True(dirtyNames.RequiresRefresh);
+            Assert.Equal(fileCount + 1, dirtyNames.DirtyNames.Count);
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationReadyClearForTesting = previousClearHook;
+            DbWriter.TypeScriptAugmentationReadyCheckForTesting = previousCheckHook;
+        }
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_CancellationBetweenNameBatchesRollsBack()
+    {
+        var previousBatchHook = DbWriter.TypeScriptAugmentationNameBatchForTesting;
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var firstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/cancel-first.ts"));
+            var secondFileId = _writer.UpsertFile(CreateTypeScriptFile("src/cancel-second.ts"));
+            _writer.InsertSymbols([
+                CreateInterface(firstFileId, "MergedInterface"),
+                CreateInterface(secondFileId, "MergedInterface"),
+            ]);
+            Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences("."));
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+
+            DbWriter.TypeScriptAugmentationNameBatchForTesting = batchNumber =>
+            {
+                previousBatchHook?.Invoke(batchNumber);
+                if (batchNumber == 1)
+                    cancellation.Cancel();
+            };
+            var dirtyNames = Enumerable.Range(0, 1_000)
+                .Select(static index => $"ZMissingInterface{index:D4}")
+                .Prepend("MergedInterface")
+                .ToArray();
+
+            var exception = Assert.Throws<OperationCanceledException>(() =>
+                _writer.RebuildTypeScriptAugmentationReferences(".", dirtyNames, cancellation.Token));
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(2L, (long)count.ExecuteScalar()!);
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+        }
+        finally
+        {
+            DbWriter.TypeScriptAugmentationNameBatchForTesting = previousBatchHook;
+        }
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = $"interface {name} {{ value: number }}",
+        };
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_CancellationInterruptsActiveDeleteStatementAndRollsBack()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var firstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/interrupt-first.ts"));
+        var secondFileId = _writer.UpsertFile(CreateTypeScriptFile("src/interrupt-second.ts"));
+        _writer.InsertSymbols([
+            CreateInterface(firstFileId, "InterruptedMerge"),
+            CreateInterface(secondFileId, "InterruptedMerge"),
+        ]);
+        Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences("."));
+        _db.Connection.CreateFunction("cancel_ts_augmentation", () =>
+        {
+            cancellation.Cancel();
+            return 0;
+        });
+        using (var trigger = _db.Connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TEMP TRIGGER cancel_ts_augmentation_delete
+                BEFORE DELETE ON symbol_references
+                WHEN OLD.reference_kind = 'augmentation'
+                BEGIN
+                    SELECT cancel_ts_augmentation();
+                END
+                """;
+            trigger.ExecuteNonQuery();
+        }
+
+        var exception = Assert.Throws<OperationCanceledException>(() =>
+            _writer.RebuildTypeScriptAugmentationReferences(
+                ".",
+                ["InterruptedMerge"],
+                cancellation.Token));
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        var sqliteException = Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.Equal(9, sqliteException.SqliteErrorCode);
+
+        using var count = _db.Connection.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+        Assert.Equal(2L, (long)count.ExecuteScalar()!);
+        Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = $"interface {name} {{ value: number }}",
+        };
+    }
+
+    [Fact]
+    public void TypeScriptAugmentationDirtyNameTracking_MixedSymbolBatchTracksOnlyTypeScriptInterfaces()
+    {
+        using var dirtyNames = _writer.BeginTypeScriptAugmentationDirtyNameTracking();
+        var csharpFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/mixed.cs",
+            Lang = "csharp",
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var typeScriptFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/mixed.ts",
+            Lang = "typescript",
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = csharpFileId, Kind = "interface", Name = "CSharpInterface", Line = 1 },
+            new SymbolRecord { FileId = typeScriptFileId, Kind = "class", Name = "TypeScriptClass", Line = 1 },
+            new SymbolRecord { FileId = typeScriptFileId, Kind = "interface", Name = "TypeScriptInterface", Line = 2 },
+        ]);
+
+        Assert.True(dirtyNames.RequiresRefresh);
+        Assert.Equal(["TypeScriptInterface"], dirtyNames.DirtyNames);
+    }
+
+    [Fact]
+    public void TypeScriptAugmentationDirtyNameTracking_ReadinessOnlyModeSkipsInterfaceNames()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/readiness-only.ts",
+            Lang = "typescript",
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = "ReadinessOnlyInterface",
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = "interface ReadinessOnlyInterface { value: number }",
+        }]);
+        Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences("."));
+
+        using var readiness = _writer.BeginTypeScriptAugmentationDirtyNameTracking(collectDirtyNames: false);
+        using (var transaction = _writer.BeginTransaction())
+        {
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/readiness-only.ts",
+                Lang = "csharp",
+                Modified = new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc),
+            });
+            transaction.Commit();
+        }
+
+        Assert.True(readiness.RequiresRefresh);
+        Assert.Empty(readiness.DirtyNames);
+        Assert.False(_writer.TypeScriptAugmentationVersionMatchesCurrent());
     }
 
     [Fact]
@@ -3968,6 +6618,23 @@ public class DatabaseTests : IDisposable
         return indexes;
     }
 
+    private static IReadOnlyList<string> ReadQueryPlanDetails(
+        SqliteConnection connection,
+        string sql,
+        params (string Name, object Value)[] parameters)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        foreach (var parameter in parameters)
+            cmd.Parameters.AddWithValue(parameter.Name, parameter.Value);
+
+        var details = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            details.Add(reader.GetString(3));
+        return details;
+    }
+
     private static void AssertIndexColumns(SqliteConnection connection, string indexName, IReadOnlyList<(string Name, string Collation)> expected)
     {
         using var cmd = connection.CreateCommand();
@@ -3984,6 +6651,16 @@ public class DatabaseTests : IDisposable
         }
 
         Assert.Equal(expected, actual);
+    }
+
+    private static void AssertIndexSqlContains(SqliteConnection connection, string indexName, string expectedSql)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = @indexName";
+        cmd.Parameters.AddWithValue("@indexName", indexName);
+
+        var sql = Assert.IsType<string>(cmd.ExecuteScalar());
+        Assert.Contains(expectedSql, sql, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -4237,6 +6914,526 @@ public class DatabaseTests : IDisposable
         Assert.Equal(0L, (long)orphanCount.ExecuteScalar()!);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InsertReferences_AtomicFileScopeSkipsBatchTransactionsWhilePublicApiKeepsThem(bool referenceLinesAreNew)
+    {
+        var publicFileId = UpsertTestFile(
+            $"src/public-reference-batches-{referenceLinesAreNew}.cs",
+            checksum: $"public-reference-batches-{referenceLinesAreNew}");
+        var atomicFileId = UpsertTestFile(
+            $"src/atomic-reference-batches-{referenceLinesAreNew}.cs",
+            checksum: $"atomic-reference-batches-{referenceLinesAreNew}");
+        var publicReferences = BuildAtomicScopeReferences(publicFileId, count: 143);
+        var atomicReferences = BuildAtomicScopeReferences(atomicFileId, count: 143);
+        var previousBatchHook = DbWriter.ReferenceBatchTransactionOpeningForTesting;
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var batchTransactionCount = 0;
+        var atomicCalls = new List<bool>();
+        try
+        {
+            DbWriter.ReferenceBatchTransactionOpeningForTesting = () =>
+            {
+                batchTransactionCount++;
+                previousBatchHook?.Invoke();
+            };
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCalls.Add(newFiles);
+                previousAtomicHook?.Invoke(newFiles);
+            };
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                if (referenceLinesAreNew)
+                {
+                    _writer.InsertReferencesForNewFiles(
+                        publicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                else
+                {
+                    _writer.InsertReferences(
+                        publicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                transaction.Commit();
+            }
+
+            Assert.Equal(3, batchTransactionCount);
+            batchTransactionCount = 0;
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                if (referenceLinesAreNew)
+                {
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        atomicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                else
+                {
+                    _writer.InsertReferencesInAtomicFileScope(
+                        atomicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                transaction.Commit();
+            }
+
+            Assert.Equal(0, batchTransactionCount);
+            Assert.Equal([referenceLinesAreNew], atomicCalls);
+        }
+        finally
+        {
+            DbWriter.ReferenceBatchTransactionOpeningForTesting = previousBatchHook;
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InsertReferences_AtomicFileScopeGroupsWholeBatchesWithoutMovingReferenceBoundaries(
+        bool referenceLinesAreNew)
+    {
+        const int ReferenceCount = (71 * 5) + 1;
+        var publicFileId = UpsertTestFile(
+            $"src/public-reference-window-{referenceLinesAreNew}.cs",
+            checksum: $"public-reference-window-{referenceLinesAreNew}");
+        var atomicFileId = UpsertTestFile(
+            $"src/atomic-reference-window-{referenceLinesAreNew}.cs",
+            checksum: $"atomic-reference-window-{referenceLinesAreNew}");
+        var publicReferences = BuildAtomicScopeReferences(publicFileId, ReferenceCount);
+        var atomicReferences = BuildAtomicScopeReferences(atomicFileId, ReferenceCount);
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        var progressRows = new List<int>();
+        var transactionCount = 0;
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        var previousProgressHook = DbWriter.BatchProgressCheckpointForTesting;
+        var previousTransactionHook = DbWriter.ReferenceBatchTransactionOpeningForTesting;
+        try
+        {
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (progress.Operation == "insert_references")
+                    progressRows.Add(progress.RowsProcessed);
+                previousProgressHook?.Invoke(progress);
+            };
+            DbWriter.ReferenceBatchTransactionOpeningForTesting = () =>
+            {
+                transactionCount++;
+                previousTransactionHook?.Invoke();
+            };
+
+            if (referenceLinesAreNew)
+            {
+                _writer.InsertReferencesForNewFiles(
+                    publicReferences,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+            else
+            {
+                _writer.InsertReferences(
+                    publicReferences,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+
+            Assert.Equal(6, transactionCount);
+            Assert.Equal([0, 71, 142, 213, 284, 355, 356], progressRows);
+            Assert.Equal(
+                [(71, 71), (71, 71), (71, 71), (71, 71), (71, 71), (1, 1)],
+                statements.Where(statement => statement.Operation == "insert_references")
+                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                    .ToArray());
+            var lineWriteOperation = referenceLinesAreNew
+                ? "insert_reference_lines"
+                : "upsert_reference_lines";
+            Assert.Equal(
+                [(71, 71), (71, 71), (71, 71), (71, 71), (71, 71), (1, 1)],
+                statements.Where(statement => statement.Operation == lineWriteOperation)
+                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                    .ToArray());
+            Assert.Equal(
+                referenceLinesAreNew ? 0 : 6,
+                statements.Count(statement => statement.Operation == "lookup_reference_lines"));
+
+            statements.Clear();
+            progressRows.Clear();
+            transactionCount = 0;
+            using (var transaction = _writer.BeginTransaction())
+            {
+                if (referenceLinesAreNew)
+                {
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        atomicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                else
+                {
+                    _writer.InsertReferencesInAtomicFileScope(
+                        atomicReferences,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                transaction.Commit();
+            }
+
+            Assert.Equal(0, transactionCount);
+            Assert.Equal([0, 71, 142, 213, 284, 355, 356], progressRows);
+            Assert.Equal(
+                [(71, 71), (71, 71), (71, 71), (71, 71), (71, 71), (1, 1)],
+                statements.Where(statement => statement.Operation == "insert_references")
+                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                    .ToArray());
+            Assert.Equal(
+                [(284, 284), (72, 72)],
+                statements.Where(statement => statement.Operation == lineWriteOperation)
+                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                    .ToArray());
+            Assert.Equal(
+                referenceLinesAreNew ? 0 : 2,
+                statements.Count(statement => statement.Operation == "lookup_reference_lines"));
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+            DbWriter.BatchProgressCheckpointForTesting = previousProgressHook;
+            DbWriter.ReferenceBatchTransactionOpeningForTesting = previousTransactionHook;
+        }
+    }
+
+    [Fact]
+    public void InsertReferences_AtomicFileScopeCapsReferenceLineWindowAtThirtyTwoBatches()
+    {
+        const int ReferenceCount = 71 * 33;
+        var fileId = UpsertTestFile(
+            "src/atomic-reference-window-cap.cs",
+            checksum: "atomic-reference-window-cap");
+        var references = Enumerable.Range(0, ReferenceCount)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"callee_{index}",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = index + 1,
+                Context = "shared context",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        try
+        {
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            using var transaction = _writer.BeginTransaction();
+            _writer.InsertReferencesInAtomicFileScope(
+                references,
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+        }
+
+        Assert.Equal(33, statements.Count(statement => statement.Operation == "insert_references"));
+        Assert.Equal(
+            [(1, 1), (1, 1)],
+            statements.Where(statement => statement.Operation == "upsert_reference_lines")
+                .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                .ToArray());
+        Assert.Equal(2, statements.Count(statement => statement.Operation == "lookup_reference_lines"));
+    }
+
+    [Theory]
+    [InlineData(false, 72)]
+    [InlineData(true, 142)]
+    public void InsertReferences_AtomicFileScopeFailureRollsBackEveryPriorBatch(
+        bool referenceLinesAreNew,
+        int failureIndex)
+    {
+        var fileId = UpsertTestFile(
+            $"src/atomic-reference-rollback-{referenceLinesAreNew}.cs",
+            checksum: $"atomic-reference-rollback-{referenceLinesAreNew}");
+        var references = BuildAtomicScopeReferences(fileId, count: 143, failureIndex);
+        using (var trigger = _db.Connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TRIGGER fail_atomic_file_reference_batch
+                BEFORE INSERT ON symbol_references
+                WHEN NEW.symbol_name = 'FAIL_ME'
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced atomic-file reference failure');
+                END
+                """;
+            trigger.ExecuteNonQuery();
+        }
+
+        try
+        {
+            var exception = Record.Exception(() =>
+            {
+                using var transaction = _writer.BeginTransaction();
+                if (referenceLinesAreNew)
+                {
+                    _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                        references,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                else
+                {
+                    _writer.InsertReferencesInAtomicFileScope(
+                        references,
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None);
+                }
+                transaction.Commit();
+            });
+
+            Assert.IsType<SqliteException>(exception);
+        }
+        finally
+        {
+            using var drop = _db.Connection.CreateCommand();
+            drop.CommandText = "DROP TRIGGER IF EXISTS fail_atomic_file_reference_batch";
+            drop.ExecuteNonQuery();
+        }
+
+        using var countCommand = _db.Connection.CreateCommand();
+        countCommand.Parameters.AddWithValue("@fileId", fileId);
+        countCommand.CommandText = """
+            SELECT (SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId),
+                   (SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId)
+            """;
+        using var counts = countCommand.ExecuteReader();
+        Assert.True(counts.Read());
+        Assert.Equal(0L, counts.GetInt64(0));
+        Assert.Equal(0L, counts.GetInt64(1));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InsertReferences_AtomicFileScopeReusesSameContextAcrossBatchBoundary(bool referenceLinesAreNew)
+    {
+        var fileId = UpsertTestFile(
+            $"src/atomic-reference-boundary-{referenceLinesAreNew}.cs",
+            checksum: $"atomic-reference-boundary-{referenceLinesAreNew}");
+        var references = Enumerable.Range(0, 143)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = index switch
+                {
+                    70 => "boundary_same_first",
+                    71 => "boundary_same_second",
+                    72 => "boundary_different_context",
+                    _ => $"callee_{index}",
+                },
+                ReferenceKind = "call",
+                Line = index is 70 or 71 or 72 ? 500 : index + 1,
+                Column = index + 1,
+                Context = index switch
+                {
+                    70 or 71 => "shared boundary context",
+                    72 => "different boundary context",
+                    _ => $"line {index}",
+                },
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+
+        using (var transaction = _writer.BeginTransaction())
+        {
+            if (referenceLinesAreNew)
+            {
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+            else
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+            }
+            transaction.Commit();
+        }
+
+        using var command = _db.Connection.CreateCommand();
+        command.Parameters.AddWithValue("@fileId", fileId);
+        command.CommandText = """
+            SELECT COUNT(DISTINCT reference_line_id)
+            FROM symbol_references
+            WHERE file_id = @fileId
+              AND symbol_name IN ('boundary_same_first', 'boundary_same_second')
+            """;
+        Assert.Equal(1L, (long)command.ExecuteScalar()!);
+
+        command.CommandText = """
+            SELECT COUNT(DISTINCT reference_line_id)
+            FROM symbol_references
+            WHERE file_id = @fileId
+              AND symbol_name IN ('boundary_same_first', 'boundary_same_second', 'boundary_different_context')
+            """;
+        Assert.Equal(2L, (long)command.ExecuteScalar()!);
+
+        command.CommandText = "SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId AND line = 500";
+        Assert.Equal(2L, (long)command.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public async Task InsertReferences_AtomicFileScopeRequiresLiveOwnedTransactionBeforeEmptyOrCancellationChecks()
+    {
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var previousAtomicHook = DbWriter.AtomicFileReferenceInsertForTesting;
+        var atomicCallCount = 0;
+        try
+        {
+            DbWriter.AtomicFileReferenceInsertForTesting = newFiles =>
+            {
+                atomicCallCount++;
+                previousAtomicHook?.Invoke(newFiles);
+            };
+
+            var missingTransaction = Assert.Throws<InvalidOperationException>(() =>
+                _writer.InsertReferencesInAtomicFileScope(
+                    [],
+                    refreshMutualRecursionFlags: false,
+                    cancelled.Token));
+            Assert.Contains("requires an active transaction", missingTransaction.Message, StringComparison.Ordinal);
+            Assert.Equal(0, atomicCallCount);
+
+            var publicEmptyException = Record.Exception(() =>
+                _writer.InsertReferences([], refreshMutualRecursionFlags: false, cancelled.Token));
+            Assert.Null(publicEmptyException);
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                var copiedContextException = await Task.Run(() => Record.Exception(() =>
+                    _writer.InsertReferencesInAtomicFileScope(
+                        [],
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None)));
+                Assert.IsType<InvalidOperationException>(copiedContextException);
+                Assert.Equal(0, atomicCallCount);
+            }
+
+            using (var transaction = _writer.BeginTransaction())
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    [],
+                    refreshMutualRecursionFlags: false,
+                    cancelled.Token);
+                transaction.Commit();
+            }
+            Assert.Equal(1, atomicCallCount);
+
+            using (var committedTransaction = _writer.BeginTransaction())
+            {
+                committedTransaction.Commit();
+                Assert.Throws<InvalidOperationException>(() =>
+                    _writer.InsertReferencesInAtomicFileScope(
+                        [],
+                        refreshMutualRecursionFlags: false,
+                        CancellationToken.None));
+            }
+            Assert.Equal(1, atomicCallCount);
+        }
+        finally
+        {
+            DbWriter.AtomicFileReferenceInsertForTesting = previousAtomicHook;
+        }
+    }
+
+    [Fact]
+    public void InsertReferences_AtomicFileScopeCancellationRollsBackReferenceAndContextRows()
+    {
+        var fileId = UpsertTestFile("src/atomic-reference-cancel.cs", checksum: "atomic-reference-cancel");
+        var references = BuildAtomicScopeReferences(fileId, count: 143);
+        using var cancellation = new CancellationTokenSource();
+        var previousProgressHook = DbWriter.BatchProgressCheckpointForTesting;
+        try
+        {
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (progress.Operation == "insert_references" && progress.RowsProcessed == 71)
+                    cancellation.Cancel();
+                previousProgressHook?.Invoke(progress);
+            };
+
+            var exception = Record.Exception(() =>
+            {
+                using var transaction = _writer.BeginTransaction();
+                _writer.InsertReferencesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    cancellation.Token);
+                transaction.Commit();
+            });
+            Assert.IsAssignableFrom<OperationCanceledException>(exception);
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = previousProgressHook;
+        }
+
+        using var command = _db.Connection.CreateCommand();
+        command.Parameters.AddWithValue("@fileId", fileId);
+        command.CommandText = """
+            SELECT (SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId),
+                   (SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId)
+            """;
+        using var counts = command.ExecuteReader();
+        Assert.True(counts.Read());
+        Assert.Equal(0L, counts.GetInt64(0));
+        Assert.Equal(0L, counts.GetInt64(1));
+    }
+
+    private static ReferenceRecord[] BuildAtomicScopeReferences(
+        long fileId,
+        int count,
+        int failureIndex = -1)
+        => Enumerable.Range(0, count)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = index == failureIndex ? "FAIL_ME" : $"callee_{index}",
+                ReferenceKind = "call",
+                Line = index + 1,
+                Column = index + 1,
+                Context = $"callee_{index}();",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+
     [Fact]
     public void CleanExistingFileData_PreventsFtsOrphans()
     {
@@ -4390,6 +7587,113 @@ public class DatabaseTests : IDisposable
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
+    }
+
+    [Fact]
+    public void FilePurgePlan_InvalidPersistedSizeDisablesByteEstimateWithoutDeletingEarly()
+    {
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "invalid-size.py",
+            Lang = "python",
+            Size = 42,
+            Lines = 1,
+            Modified = DateTime.UtcNow,
+        });
+        using (var corrupt = _db.Connection.CreateCommand())
+        {
+            corrupt.CommandText = "UPDATE files SET size = 'invalid' WHERE path = 'invalid-size.py'";
+            Assert.Equal(1, corrupt.ExecuteNonQuery());
+        }
+
+        var plan = _writer.PlanFilesOutsideRetainedSet(new HashSet<string>(StringComparer.Ordinal));
+
+        Assert.Equal(1, plan.Count);
+        Assert.False(plan.ByteEstimateComplete);
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+        Assert.Equal(1, _writer.ApplyFilePurgePlan(plan));
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+    }
+
+    [Fact]
+    public void FilePurgePlan_CancellationAfterFirstBatchRollsBackEveryDelete()
+    {
+        const int fileCount = 1_201;
+        SeedStaleFilesWithChildren(fileCount);
+        var plan = _writer.PlanFilesOutsideRetainedSet(new HashSet<string>(StringComparer.Ordinal));
+        var previousHook = DbWriter.FilePurgeBatchCompletedForTesting;
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            DbWriter.FilePurgeBatchCompletedForTesting = processed =>
+            {
+                previousHook?.Invoke(processed);
+                cancellation.Cancel();
+            };
+
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.ApplyFilePurgePlan(plan, cancellationToken: cancellation.Token));
+
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM chunks"));
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks"));
+        }
+        finally
+        {
+            DbWriter.FilePurgeBatchCompletedForTesting = previousHook;
+        }
+    }
+
+    [Fact]
+    public async Task FilePurgePlan_CancelledWhileTransactionGateHeld_StopsPromptlyWithoutDeleting()
+    {
+        const int fileCount = 1;
+        SeedStaleFilesWithChildren(fileCount);
+        var plan = _writer.PlanFilesOutsideRetainedSet(new HashSet<string>(StringComparer.Ordinal));
+        using var cancellation = new CancellationTokenSource();
+        var purgeStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var purgeCompleted = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var purgeThread = new Thread(() =>
+        {
+            purgeStarted.TrySetResult(true);
+            purgeCompleted.TrySetResult(Record.Exception(() =>
+                _writer.ApplyFilePurgePlan(plan, cancellationToken: cancellation.Token)));
+        })
+        {
+            IsBackground = true,
+            Name = "file-purge-gate-cancellation-test",
+        };
+
+        var held = _writer.BeginTransaction(CancellationToken.None, "file purge cancellation test owner");
+        var completedBeforeGateRelease = false;
+        var stopwatch = new Stopwatch();
+        try
+        {
+            purgeThread.Start();
+            await purgeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            stopwatch.Start();
+            cancellation.Cancel();
+            completedBeforeGateRelease = ReferenceEquals(
+                await Task.WhenAny(purgeCompleted.Task, Task.Delay(TimeSpan.FromSeconds(2))),
+                purgeCompleted.Task);
+            stopwatch.Stop();
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        var purgeException = await purgeCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(purgeThread.Join(TimeSpan.FromSeconds(2)), "File purge worker did not exit.");
+        Assert.True(
+            completedBeforeGateRelease,
+            $"File purge cancellation did not interrupt transaction gate contention within two seconds ({stopwatch.Elapsed}).");
+        var cancellationException = Assert.IsAssignableFrom<OperationCanceledException>(purgeException);
+        Assert.Equal(cancellation.Token, cancellationException.CancellationToken);
+        Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+        Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM chunks"));
+        Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks"));
     }
 
     [Fact]
@@ -4960,6 +8264,17 @@ public class DatabaseTests : IDisposable
 
     private long CountFtsSyncTriggers()
         => ExecuteScalarLong("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_ai', 'fts_chunks_ad', 'fts_chunks_au')");
+
+    private long CountFtsBulkLoadGenerationCleanupTriggers()
+        => ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type = 'trigger'
+              AND name IN (
+                  '{DbWriter.FtsBulkLoadGenerationClearInsertTriggerName}',
+                  '{DbWriter.FtsBulkLoadGenerationClearUpdateTriggerName}',
+                  '{DbWriter.FtsBulkLoadGenerationClearDeleteTriggerName}')
+            """);
 
     private string? ReadMeta(string key)
     {

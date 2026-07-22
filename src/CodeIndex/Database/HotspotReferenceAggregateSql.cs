@@ -7,6 +7,7 @@ namespace CodeIndex.Database;
 internal static class HotspotReferenceAggregateSql
 {
     internal const string TableName = "hotspot_reference_counts";
+    internal const string DeferredDirtyFilesTableName = "temp_hotspot_reference_dirty_files";
 
     internal const string ReferenceKindsSql = DbReader.CallGraphReferenceKindsSql;
 
@@ -43,6 +44,23 @@ internal static class HotspotReferenceAggregateSql
     {
         var deletePredicate = singleFile ? " WHERE file_id = @file_id" : string.Empty;
         var referencePredicate = singleFile ? " AND sr.file_id = @file_id" : string.Empty;
+        return BuildRefreshSqlCore(deletePredicate, referencePredicate, includeTestCheckpoint);
+    }
+
+    internal static string BuildDeferredRefreshSql(bool includeTestCheckpoint = false)
+    {
+        const string dirtyFilePredicate = "SELECT file_id FROM temp_hotspot_reference_dirty_files";
+        return BuildRefreshSqlCore(
+            $" WHERE file_id IN ({dirtyFilePredicate})",
+            $" AND sr.file_id IN ({dirtyFilePredicate})",
+            includeTestCheckpoint);
+    }
+
+    private static string BuildRefreshSqlCore(
+        string deletePredicate,
+        string referencePredicate,
+        bool includeTestCheckpoint)
+    {
         var logicalReferenceKindSql = DbReader.GetLogicalReferenceKindSql("sr.reference_kind");
         var referenceWeightSql = DbReader.GetHotspotReferenceWeightSql("sr.reference_kind");
         var testCheckpointPredicate = includeTestCheckpoint

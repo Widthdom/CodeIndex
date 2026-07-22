@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
@@ -62,6 +63,8 @@ public sealed record GitHeadCommitResult(
 /// </summary>
 public static partial class GitHelper
 {
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     public const string GitExecutableEnvironmentVariable = "CDIDX_GIT_EXECUTABLE";
 
     internal static Func<string, bool>? FileSystemIgnoreCaseProbeForTesting { get; set; }
@@ -116,6 +119,8 @@ public static partial class GitHelper
             redirectStandardOutput: true,
             redirectStandardError: true,
             createNoWindow: true);
+        startInfo.StandardOutputEncoding = Utf8NoBom;
+        startInfo.StandardErrorEncoding = Utf8NoBom;
         CodeIndex.SubprocessEnvironmentPolicy.ApplyGitEnvironment(startInfo);
         return startInfo;
     }
@@ -741,6 +746,7 @@ public static partial class GitHelper
         psi.ArgumentList.Add("-r");
         psi.ArgumentList.Add("-M");
         psi.ArgumentList.Add("--name-status");
+        psi.ArgumentList.Add("-z");
         psi.ArgumentList.Add(commitId);
 
         var (exitCode, output, error) = RunProcessCapturingOutput(psi, cancellationToken)
@@ -813,6 +819,7 @@ public static partial class GitHelper
         var psi = CreateGitStartInfoOrThrow(projectRoot);
         psi.ArgumentList.Add("diff");
         psi.ArgumentList.Add("--name-status");
+        psi.ArgumentList.Add("-z");
         psi.ArgumentList.Add("-M");
         psi.ArgumentList.Add(oldRef);
         psi.ArgumentList.Add(newRef);
@@ -832,6 +839,12 @@ public static partial class GitHelper
 
     private static void AddNameStatusPaths(string output, ICollection<string> paths)
     {
+        if (output.IndexOf('\0') >= 0)
+        {
+            AddNullDelimitedNameStatusPaths(output, paths);
+            return;
+        }
+
         var lineStart = 0;
         while (lineStart < output.Length)
         {
@@ -846,6 +859,55 @@ public static partial class GitHelper
 
             lineStart = newlineIndex + 1;
         }
+    }
+
+    private static void AddNullDelimitedNameStatusPaths(
+        string output,
+        ICollection<string> paths)
+    {
+        var offset = 0;
+        while (TryReadNullDelimitedField(output, ref offset, out var status))
+        {
+            if (status.IsEmpty
+                || !TryReadNullDelimitedField(output, ref offset, out var firstPath))
+            {
+                continue;
+            }
+
+            if ((status[0] is 'R' or 'C')
+                && TryReadNullDelimitedField(output, ref offset, out var secondPath))
+            {
+                paths.Add(FileIndexer.NormalizePathSeparators(firstPath.ToString()));
+                paths.Add(FileIndexer.NormalizePathSeparators(secondPath.ToString()));
+            }
+            else
+            {
+                paths.Add(FileIndexer.NormalizePathSeparators(firstPath.ToString()));
+            }
+        }
+    }
+
+    private static bool TryReadNullDelimitedField(
+        string output,
+        ref int offset,
+        out ReadOnlySpan<char> field)
+    {
+        field = default;
+        if (offset >= output.Length)
+            return false;
+
+        var remaining = output.AsSpan(offset);
+        var terminator = remaining.IndexOf('\0');
+        if (terminator < 0)
+        {
+            field = remaining;
+            offset = output.Length;
+            return true;
+        }
+
+        field = remaining[..terminator];
+        offset += terminator + 1;
+        return true;
     }
 
     private static void AddNameStatusLinePaths(ReadOnlySpan<char> line, ICollection<string> paths)
