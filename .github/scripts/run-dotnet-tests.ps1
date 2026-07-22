@@ -150,7 +150,7 @@ function Get-RetryFilterDecision {
 }
 
 $firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
-$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $false
+$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true
 if ($firstExitCode -eq 0) {
   exit 0
 }
@@ -166,7 +166,7 @@ Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning 
 if ($includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage on the flaky-classification retry."
 }
-Write-Host "Enabling crash diagnostics only on the failed-run retry so clean lanes avoid collector overhead."
+Write-Host "Reusing crash evidence from the initial attempt; the flaky-classification retry skips duplicate crash collection."
 $firstTrxPath = Join-Path $resultsDirectory "test_results_first.trx"
 $retryFilterDecision = Get-RetryFilterDecision -TrxPath $firstTrxPath
 $retryFilter = ""
@@ -181,7 +181,7 @@ else {
   Write-Host "Focused retry is unavailable ($($retryFilterDecision.reason)); using the full-suite retry fallback."
 }
 $retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
-$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false -IncludeCrashDiagnostics $true -TestFilter $retryFilter
+$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false -IncludeCrashDiagnostics $false -TestFilter $retryFilter
 if ($retryExitCode -eq 0) {
   "Initial test run failed, but the single retry passed. Retry scope: $retryScope. Treat this run as flaky and inspect TRX/blame artifacts." |
     Set-Content -Encoding UTF8 -Path (Join-Path $resultsDirectory "flaky-retry.txt")
