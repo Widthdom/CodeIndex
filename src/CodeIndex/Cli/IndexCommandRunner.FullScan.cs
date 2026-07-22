@@ -2180,11 +2180,35 @@ public static partial class IndexCommandRunner
             // The connection is writable, but failure diagnostics must not trigger the
             // DbReader constructor's interrupted-FTS recovery before the write barrier.
             using var signalReader = new DbReader(writer.Connection, isReadOnly: true);
+            var discoveredCSharpFiles = languageCounts.ContainsKey("csharp");
+            var discoveredSqlFiles = languageCounts.ContainsKey("sql");
+            var persistedCSharpFiles = writer.HasAnyFilesWithLanguage("csharp");
+            var persistedSqlFiles = writer.HasAnyFilesWithLanguage("sql");
+            var hasCSharpFiles = discoveredCSharpFiles || persistedCSharpFiles;
+            var hasSqlFiles = discoveredSqlFiles || persistedSqlFiles;
             var sqlGraphContractSignal = signalReader.GetSqlGraphContractSignal(lang: null);
+            if (!hasSqlFiles)
+            {
+                sqlGraphContractSignal = new SqlGraphContractSignal(
+                    Ready: true,
+                    Relevant: false,
+                    DegradedReason: null);
+            }
+            else if (!sqlGraphContractSignal.Relevant)
+            {
+                // The write barrier can fail after discovery but before the first target is
+                // persisted. Keep positive language evidence in the immediate response.
+                // write 前 barrier failure でも発見済み language の degraded signal を保持する。
+                sqlGraphContractSignal = new SqlGraphContractSignal(
+                    Ready: false,
+                    Relevant: true,
+                    DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason());
+            }
             var hotspotFamilySignal = signalReader.GetHotspotFamilySignal(lang: null);
-            var hasCSharpFiles = writer.HasAnyFilesWithLanguage("csharp");
-            var csharpSymbolNameReady = !hasCSharpFiles || csharpSymbolNameContractMatchesCurrent;
-            var csharpMetadataTargetReady = !hasCSharpFiles || priorMetadataTargetCsharpMatchesCurrent;
+            var csharpSymbolNameReady = !hasCSharpFiles
+                || (persistedCSharpFiles && csharpSymbolNameContractMatchesCurrent);
+            var csharpMetadataTargetReady = !hasCSharpFiles
+                || (persistedCSharpFiles && priorMetadataTargetCsharpMatchesCurrent);
             var foldReady = (priorReadiness & DbContext.FoldReadyFlag) != 0;
             var memoryTimeline = BuildMemoryTimeline(memorySamples);
 
@@ -3395,9 +3419,20 @@ public static partial class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var hasCSharpFilesAfter = startedWithNoIndexedFiles && !scanHadErrors && errors == 0
-            ? languageCounts.ContainsKey("csharp")
-            : writer.HasAnyFilesWithLanguage("csharp");
+        // A clean, complete fresh/rebuild run is authoritative for both presence and absence.
+        // With an incremental or partial discovery, positive evidence remains authoritative
+        // while absence falls back to persisted rows. This prevents readiness from depending
+        // on whether a failed C#/SQL target happened to persist before the failure.
+        // complete fresh/rebuild discovery は presence/absence の双方に使い、partial discovery
+        // でも発見済み language は保持する。absence だけを persisted row へ fallback する。
+        var freshLanguageAbsenceAuthoritative =
+            (options.Rebuild || startedWithNoIndexedFiles) && !scanHadErrors && errors == 0;
+        var discoveredCSharpFiles = languageCounts.ContainsKey("csharp");
+        var discoveredSqlFiles = languageCounts.ContainsKey("sql");
+        var hasCSharpFilesAfter = discoveredCSharpFiles
+            || (!freshLanguageAbsenceAuthoritative && writer.HasAnyFilesWithLanguage("csharp"));
+        var hasSqlFilesAfter = discoveredSqlFiles
+            || (!freshLanguageAbsenceAuthoritative && writer.HasAnyFilesWithLanguage("sql"));
         var graphTableAvailableAfter = false;
         var issuesTableAvailableAfter = false;
         var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter;
@@ -3658,6 +3693,23 @@ public static partial class IndexCommandRunner
         var referenceGraphCompleteAfter = referenceExtractionCapHitsAfter.StateAvailable
             && referenceExtractionCapHitsAfter.HitCount == 0;
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
+        if (!hasSqlFilesAfter)
+        {
+            sqlGraphContractSignalAfter = new SqlGraphContractSignal(
+                Ready: true,
+                Relevant: false,
+                DegradedReason: null);
+        }
+        else if (!sqlGraphContractSignalAfter.Relevant)
+        {
+            // A failed first SQL target leaves no persisted row for DbReader to classify.
+            // Preserve the discovered-language contract in this immediate index response.
+            // 最初の SQL target failure で row が無くても index response は degraded を返す。
+            sqlGraphContractSignalAfter = new SqlGraphContractSignal(
+                Ready: false,
+                Relevant: true,
+                DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason());
+        }
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
         var sqlGraphContractReadyAfter = sqlGraphContractSignalAfter.Ready;
         var sqlGraphContractDegradedReasonAfter = sqlGraphContractSignalAfter.DegradedReason;

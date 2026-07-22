@@ -9299,6 +9299,64 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_FreshSnapshotAbortRetainsDiscoveredLanguageFailuresWithoutRows()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_fresh_snapshot_language_failure_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_fresh_snapshot_language_failure");
+        var previousBarrierHook = McpServer.McpIndexInputSnapshotBarrierForTesting;
+        var ignorePath = Path.Combine(fixtureDir, ".cdidxignore");
+        var phases = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(ignorePath, "# snapshot-a\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Contract.cs"),
+                "public interface IContract { }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            var ignoreModifiedUtc = File.GetLastWriteTimeUtc(ignorePath);
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(fixtureDir);
+            McpServer.McpIndexInputSnapshotBarrierForTesting = phase =>
+            {
+                phases.Add(phase);
+                if (phase != "before_write")
+                    return;
+                File.WriteAllText(ignorePath, "# snapshot-b\n");
+                File.SetLastWriteTimeUtc(ignorePath, ignoreModifiedUtc);
+                Directory.SetLastWriteTimeUtc(fixtureDir, rootModifiedUtc);
+            };
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(1, structured["summary"]!["errors"]!.GetValue<int>());
+            Assert.Equal(["before_write"], phases);
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.False(structured["csharp_symbol_name_ready"]!.GetValue<bool>());
+            Assert.False(structured["csharp_metadata_target_ready"]!.GetValue<bool>());
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var reader = new DbReader(db.Connection);
+            Assert.Null(reader.GetFileByPath("Contract.cs"));
+            Assert.Null(reader.GetFileByPath("schema.sql"));
+        }
+        finally
+        {
+            McpServer.McpIndexInputSnapshotBarrierForTesting = previousBarrierHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_FirstSnapshotBarrierDriftPreservesRowsTrustAndRecoveryMarker()
     {
         var fixtureDir = Path.Combine(
@@ -9903,21 +9961,24 @@ public partial class McpServerTests
         {
             Directory.CreateDirectory(fixtureDir);
             var interfacePath = Path.Combine(fixtureDir, "IParseable.cs");
-            File.WriteAllText(interfacePath, "public interface IParseable<T> { }\n");
-            File.WriteAllText(
-                Path.Combine(fixtureDir, "Money.cs"),
+            var moneyPath = Path.Combine(fixtureDir, "Money.cs");
+            const string moneySource =
                 "public readonly struct Money : IParseable<Money>\n"
                 + "{\n"
                 + "    public static Money Parse(string s) => new();\n"
-                + "}\n");
+                + "}\n";
+            File.WriteAllText(interfacePath, "public interface IParseable<T> { }\n");
+            File.WriteAllText(moneyPath, moneySource);
             McpServer.McpIndexFileContentLoadForTesting = path =>
             {
-                if (path != "IParseable.cs" || interfaceRewritten)
+                if (interfaceRewritten)
                     return;
 
                 File.WriteAllText(
                     interfacePath,
                     "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+                if (path != "IParseable.cs")
+                    File.WriteAllText(moneyPath, moneySource + "// changed after workspace preflight\n");
                 interfaceRewritten = true;
             };
 
@@ -9929,6 +9990,7 @@ public partial class McpServerTests
             var partialStructured = partialResponse["result"]!["structuredContent"]!;
             Assert.Equal(1, partialStructured["summary"]!["errors"]!.GetValue<int>());
             Assert.False(partialStructured["csharp_symbol_name_ready"]!.GetValue<bool>());
+            Assert.False(partialStructured["csharp_metadata_target_ready"]!.GetValue<bool>());
             var failure = Assert.Single(partialStructured["failures"]!.AsArray());
             Assert.Equal("csharp_workspace_validation", failure!["stage"]!.GetValue<string>());
             Assert.Equal(0L, CountImplicitReferences());
@@ -9969,6 +10031,166 @@ public partial class McpServerTests
         finally
         {
             McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_InitialSqlReadFailureKeepsSqlReadinessPartial()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_initial_sql_failure_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_initial_sql_failure");
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            McpServer.McpIndexFileContentLoadForTesting = _ =>
+                throw new IOException("simulated initial SQL read failure");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(1, structured["summary"]!["errors"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_ExistingSqlReadFailureClearsDurableContractUntilCleanRetry()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_existing_sql_failure_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_existing_sql_failure");
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var sqlPath = Path.Combine(fixtureDir, "schema.sql");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(sqlPath, "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initialResponse.ToJsonString());
+            Assert.True(
+                initialResponse["result"]!["structuredContent"]!["sql_graph_contract_ready"]!
+                    .GetValue<bool>());
+
+            File.WriteAllText(
+                sqlPath,
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY, Name nvarchar(100));\n");
+            File.SetLastWriteTimeUtc(sqlPath, DateTime.UtcNow.AddSeconds(2));
+            McpServer.McpIndexFileContentLoadForTesting = path =>
+            {
+                if (path == "schema.sql")
+                    throw new IOException("simulated existing SQL read failure");
+            };
+
+            var partialResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(
+                partialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                partialResponse.ToJsonString());
+            var partialStructured = partialResponse["result"]!["structuredContent"]!;
+            Assert.Equal(1, partialStructured["summary"]!["errors"]!.GetValue<int>());
+            Assert.False(partialStructured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                partialStructured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            using (var partialDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Null(partialDb.GetMetaString(DbContext.SqlGraphContractVersionMetaKey));
+                var signal = new DbReader(partialDb.Connection).GetSqlGraphContractSignal();
+                Assert.True(signal.Relevant);
+                Assert.False(signal.Ready);
+            }
+
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            var recoveryResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                recoveryResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                recoveryResponse.ToJsonString());
+            Assert.True(
+                recoveryResponse["result"]!["structuredContent"]!["sql_graph_contract_ready"]!
+                    .GetValue<bool>());
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_PartialDiscoveryRetainsKnownLanguageReadinessFailures()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_partial_discovery_sql_failure_{Guid.NewGuid():N}");
+        var unreadableDirectory = Path.Combine(fixtureDir, "unreadable");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_partial_discovery_sql_failure");
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        UnixFileMode? originalMode = null;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "Contract.cs"),
+                "public interface IContract { }\n");
+            Directory.CreateDirectory(unreadableDirectory);
+            File.WriteAllText(Path.Combine(unreadableDirectory, "blocked.py"), "print('blocked')\n");
+            originalMode = File.GetUnixFileMode(unreadableDirectory);
+            File.SetUnixFileMode(unreadableDirectory, UnixFileMode.None);
+            McpServer.McpIndexFileContentLoadForTesting = path =>
+            {
+                if (path == "schema.sql")
+                    throw new IOException("simulated SQL read failure after partial discovery");
+            };
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.True(structured["summary"]!["errors"]!.GetValue<int>() >= 2);
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.False(structured["csharp_symbol_name_ready"]!.GetValue<bool>());
+            Assert.False(structured["csharp_metadata_target_ready"]!.GetValue<bool>());
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            if (originalMode.HasValue && Directory.Exists(unreadableDirectory))
+                File.SetUnixFileMode(unreadableDirectory, originalMode.Value);
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }

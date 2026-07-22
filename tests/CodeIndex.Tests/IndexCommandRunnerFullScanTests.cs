@@ -1626,6 +1626,236 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_FullScan_PostPrepassCsharpContractLeavesReadinessPartialUntilCleanRetry(
+        bool rebuildExisting)
+    {
+        var projectRoot = CreateTempProject();
+        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+        var moneyPath = Path.Combine(projectRoot, "Money.cs");
+        const string moneySource =
+            "public readonly struct Money : IParseable<Money>\n"
+            + "{\n"
+            + "    public static Money Parse(string s) => new();\n"
+            + "}\n";
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var interfaceRewritten = false;
+        try
+        {
+            if (rebuildExisting)
+            {
+                File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ready')\n");
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            }
+
+            File.WriteAllText(interfacePath, "public interface IParseable<T> { }\n");
+            File.WriteAllText(moneyPath, moneySource);
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (interfaceRewritten || !path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                File.WriteAllText(
+                    interfacePath,
+                    "public interface IParseable<T> { static abstract T Parse(string s); }\n");
+                if (path != "IParseable.cs")
+                    File.WriteAllText(moneyPath, moneySource + "// changed after workspace preflight\n");
+                interfaceRewritten = true;
+            };
+            var arguments = rebuildExisting
+                ? new[] { projectRoot, "--rebuild", "--yes", "--parallelism", "1", "--json", "--quiet" }
+                : new[] { projectRoot, "--parallelism", "1", "--json", "--quiet" };
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(arguments);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.False(partialJson.GetProperty("csharp_symbol_name_ready").GetBoolean());
+            Assert.False(partialJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+            Assert.Contains(
+                partialJson.GetProperty("file_errors").EnumerateArray(),
+                error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(arguments);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.True(recoveryJson.GetProperty("csharp_symbol_name_ready").GetBoolean());
+            Assert.True(recoveryJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_InitialSqlReadFailureKeepsSqlReadinessPartialUntilCleanRetry()
+    {
+        var projectRoot = CreateTempProject();
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            IndexCommandRunner.FullScanFileContentLoadForTesting = _ =>
+                throw new IOException("simulated initial SQL read failure");
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "1", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.Equal(1, partialJson.GetProperty("file_errors").GetArrayLength());
+            Assert.False(partialJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                partialJson.GetProperty("sql_graph_contract_degraded_reason").GetString());
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "1", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.True(recoveryJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("sql")]
+    public void Run_FullScan_RebuildFailureRetainsPersistedReadinessForReclassifiedLanguage(
+        string initialLanguage)
+    {
+        var projectRoot = CreateTempProject();
+        var configPath = Path.Combine(projectRoot, LanguageMapOverrides.WorkspaceFileName);
+        var sourcePath = Path.Combine(projectRoot, "sample.custom");
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            File.WriteAllText(
+                configPath,
+                $"entries:\n- extension: .custom\n  language: {initialLanguage}\n");
+            File.WriteAllText(
+                sourcePath,
+                initialLanguage == "csharp"
+                    ? "public interface IContract { }\n"
+                    : "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "1", "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(initialLanguage == "csharp"
+                ? initialJson.GetProperty("csharp_symbol_name_ready").GetBoolean()
+                : initialJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+
+            File.WriteAllText(
+                configPath,
+                "entries:\n- extension: .custom\n  language: python\n");
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (path == "sample.custom")
+                    throw new IOException("simulated rebuild read failure after language reclassification");
+            };
+
+            var (partialExitCode, partialJson) = RunAndCaptureJson(
+                [projectRoot, "--rebuild", "--yes", "--parallelism", "1", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            if (initialLanguage == "csharp")
+            {
+                Assert.False(partialJson.GetProperty("csharp_symbol_name_ready").GetBoolean());
+                Assert.False(partialJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+            }
+            else
+            {
+                Assert.False(partialJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+                Assert.Equal(
+                    DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                    partialJson.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            }
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.True(new DbWriter(db).HasAnyFilesWithLanguage(initialLanguage));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PartialDiscoveryRetainsKnownLanguageReadinessFailures()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var unreadableDirectory = Path.Combine(projectRoot, "unreadable");
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Contract.cs"),
+                "public interface IContract { }\n");
+            Directory.CreateDirectory(unreadableDirectory);
+            File.WriteAllText(Path.Combine(unreadableDirectory, "blocked.py"), "print('blocked')\n");
+            originalMode = File.GetUnixFileMode(unreadableDirectory);
+            File.SetUnixFileMode(unreadableDirectory, UnixFileMode.None);
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (path == "schema.sql")
+                    throw new IOException("simulated SQL read failure after partial discovery");
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--parallelism", "1", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.True(json.GetProperty("summary").GetProperty("errors").GetInt32() >= 2);
+            Assert.False(
+                json.GetProperty("sql_graph_contract_ready").GetBoolean(),
+                json.GetRawText());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            Assert.False(json.GetProperty("csharp_symbol_name_ready").GetBoolean());
+            Assert.False(json.GetProperty("csharp_metadata_target_ready").GetBoolean());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            if (originalMode.HasValue && Directory.Exists(unreadableDirectory))
+                File.SetUnixFileMode(unreadableDirectory, originalMode.Value);
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
     [Fact]
     public void Run_FullScan_PositiveCsharpNoOpLateRemovalRefreshesEveryCsharpReference()
     {
@@ -1811,6 +2041,60 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(["before_write", "before_readiness"], phases);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_FreshSnapshotAbortRetainsDiscoveredLanguageFailuresWithoutRows()
+    {
+        var projectRoot = CreateTempProject();
+        var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        var phases = new List<string>();
+        try
+        {
+            File.WriteAllText(ignorePath, "# snapshot-a\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Contract.cs"),
+                "public interface IContract { }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "schema.sql"),
+                "CREATE TABLE dbo.Widget (Id int PRIMARY KEY);\n");
+            var ignoreModifiedUtc = File.GetLastWriteTimeUtc(ignorePath);
+            var rootModifiedUtc = Directory.GetLastWriteTimeUtc(projectRoot);
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phase =>
+            {
+                phases.Add(phase);
+                if (phase != "before_write")
+                    return;
+                File.WriteAllText(ignorePath, "# snapshot-b\n");
+                File.SetLastWriteTimeUtc(ignorePath, ignoreModifiedUtc);
+                Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(["before_write"], phases);
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Equal(
+                DegradationReasonCodes.BuildSqlGraphContractDegradedReason(),
+                json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            Assert.False(json.GetProperty("csharp_symbol_name_ready").GetBoolean());
+            Assert.False(json.GetProperty("csharp_metadata_target_ready").GetBoolean());
+            using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
+                Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            var reader = new DbReader(db.Connection);
+            Assert.Null(reader.GetFileByPath("Contract.cs"));
+            Assert.Null(reader.GetFileByPath("schema.sql"));
         }
         finally
         {

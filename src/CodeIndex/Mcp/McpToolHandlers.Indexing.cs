@@ -1250,8 +1250,18 @@ public partial class McpServer
             if (memorySamples != null)
                 memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
 
-            var hasCSharpFiles = writer.HasAnyFilesWithLanguage("csharp");
-            var hasSqlFiles = writer.HasAnyFilesWithLanguage("sql");
+            var discoveredCSharpFiles = languageCounts.ContainsKey("csharp");
+            var discoveredSqlFiles = languageCounts.ContainsKey("sql");
+            var persistedCSharpFiles = writer.HasAnyFilesWithLanguage("csharp");
+            var persistedSqlFiles = writer.HasAnyFilesWithLanguage("sql");
+            var hasCSharpFiles = discoveredCSharpFiles || persistedCSharpFiles;
+            var hasSqlFiles = discoveredSqlFiles || persistedSqlFiles;
+            var sqlGraphContractReady = !hasSqlFiles
+                || (persistedSqlFiles && sqlGraphContractMatchesCurrent);
+            var csharpSymbolNameReady = !hasCSharpFiles
+                || (persistedCSharpFiles && csharpSymbolNameContractMatchesCurrent);
+            var csharpMetadataTargetReady = !hasCSharpFiles
+                || (persistedCSharpFiles && priorMetadataTargetCsharp == currentMetadataTargetVersion);
             var structured = new JsonObject
             {
                 ["path"] = projectPath,
@@ -1284,9 +1294,9 @@ public partial class McpServer
                 ["duration_ms"] = runStopwatch.ElapsedMilliseconds,
                 ["started_at"] = runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
                 ["completed_at"] = GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-                ["sql_graph_contract_ready"] = !hasSqlFiles || sqlGraphContractMatchesCurrent,
-                ["csharp_symbol_name_ready"] = !hasCSharpFiles || csharpSymbolNameContractMatchesCurrent,
-                ["csharp_metadata_target_ready"] = !hasCSharpFiles || priorMetadataTargetCsharp == currentMetadataTargetVersion,
+                ["sql_graph_contract_ready"] = sqlGraphContractReady,
+                ["csharp_symbol_name_ready"] = csharpSymbolNameReady,
+                ["csharp_metadata_target_ready"] = csharpMetadataTargetReady,
                 ["fold_ready"] = (priorReadiness & DbContext.FoldReadyFlag) != 0,
                 ["fold_ready_reason"] = (priorReadiness & DbContext.FoldReadyFlag) != 0
                     ? null
@@ -1315,7 +1325,7 @@ public partial class McpServer
             var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(
                 issuesStateAvailable: (priorReadiness & DbContext.IssuesReadyFlag) != 0);
             AddReferenceGraphCompletenessSignal(structured, referenceExtractionCapHits);
-            if (hasSqlFiles && !sqlGraphContractMatchesCurrent)
+            if (!sqlGraphContractReady)
             {
                 AddSqlGraphContractSignal(
                     structured,
@@ -1402,6 +1412,7 @@ public partial class McpServer
         writer.ClearReadyFlags();
         writer.ClearReferenceIdentityContractReady();
         writer.ClearHotspotFamilyReady();
+        writer.ClearSqlGraphContractReady();
         writer.ClearMetadataTargetReady();
         if (hadCSharpStaticInterfaceContractsBeforePurge
             || csharpWorkspace.HasStaticInterfaceContracts)
@@ -1974,13 +1985,19 @@ public partial class McpServer
                 writer.SetCSharpStaticInterfaceSourceEvidence(true);
             }
         }
-        var useFreshTargetLanguages = startedWithNoIndexedFiles && !scanHadErrors && errors == 0;
-        var hasCSharpFilesAfter = useFreshTargetLanguages
-            ? csharpPrepassTargets.Count > 0
-            : writer.HasAnyFilesWithLanguage("csharp");
-        var hasSqlFilesAfter = useFreshTargetLanguages
-            ? hasSqlTargets
-            : writer.HasAnyFilesWithLanguage("sql");
+        // A complete fresh/rebuild discovery is authoritative for both presence and absence.
+        // With a partial discovery, positive target evidence remains authoritative while
+        // absence falls back to persisted rows. This prevents readiness from depending on
+        // whether a failed C#/SQL target happened to persist before the failure.
+        // complete fresh/rebuild discovery は presence/absence の双方に使い、partial discovery
+        // でも発見済み target は保持する。absence だけを persisted row へ fallback する。
+        var freshLanguageAbsenceAuthoritative =
+            startedWithNoIndexedFiles && !scanHadErrors && errors == 0;
+        var discoveredCSharpFiles = csharpPrepassTargets.Count > 0;
+        var hasCSharpFilesAfter = discoveredCSharpFiles
+            || (!freshLanguageAbsenceAuthoritative && writer.HasAnyFilesWithLanguage("csharp"));
+        var hasSqlFilesAfter = hasSqlTargets
+            || (!freshLanguageAbsenceAuthoritative && writer.HasAnyFilesWithLanguage("sql"));
         var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter;
         var csharpMetadataTargetReadyAfter = !hasCSharpFilesAfter;
         var sqlGraphContractReadyAfter = !hasSqlFilesAfter;
@@ -2304,7 +2321,15 @@ public partial class McpServer
         AddReferenceGraphCompletenessSignal(structured, signalReader);
         if (!sqlGraphContractReadyAfter)
         {
-            AddSqlGraphContractSignal(structured, signalReader.GetSqlGraphContractSignal());
+            var sqlGraphContractSignal = signalReader.GetSqlGraphContractSignal();
+            AddSqlGraphContractSignal(
+                structured,
+                sqlGraphContractSignal.Relevant && !sqlGraphContractSignal.Ready
+                    ? sqlGraphContractSignal
+                    : new SqlGraphContractSignal(
+                        Ready: false,
+                        Relevant: true,
+                        DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason()));
         }
         return CreateToolResult(id,
             errors == 0 && !foldReadyAfter
