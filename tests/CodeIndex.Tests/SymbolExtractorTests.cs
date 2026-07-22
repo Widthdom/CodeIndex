@@ -3334,7 +3334,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_TypeScriptLargeExportedVariables_CompletesWithinPracticalBudget()
     {
-        const int variableCount = 1_000;
+        const int variableCount = 500;
         var lines = string.Join('\n', Enumerable.Range(0, variableCount).Select(i => $"export const value{i} = {i};"));
 
         var stopwatch = Stopwatch.StartNew();
@@ -3343,7 +3343,7 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value0" && s.Visibility == "export");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"value{variableCount - 1}" && s.Visibility == "export");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large TypeScript exported variable extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
@@ -14186,7 +14186,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget()
     {
-        const int propertyCount = 1_000;
+        const int propertyCount = 500;
         var properties = string.Join(", ", Enumerable.Range(0, propertyCount).Select(i => $"p{i}: {i}"));
         var content = $"export default {{ {properties} }};";
 
@@ -14198,7 +14198,7 @@ public partial class SymbolExtractorTests
         var last = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == $"p{propertyCount - 1}" && s.ContainerKind == "object" && s.ContainerName == "default"));
         Assert.Equal("p0: 0", first.Signature);
         Assert.Equal($"p{propertyCount - 1}: {propertyCount - 1}", last.Signature);
-        var runawayBudget = TimeSpan.FromSeconds(30);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large JavaScript exported object literal extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
