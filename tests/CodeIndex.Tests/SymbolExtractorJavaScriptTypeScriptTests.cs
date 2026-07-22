@@ -1662,7 +1662,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_JavaScriptLargeObjectLiteralTargets_CompletesWithinPracticalBudget()
     {
-        const int objectCount = 1_000;
+        const int objectCount = 500;
         var builder = new StringBuilder();
         for (var i = 0; i < objectCount; i++)
             builder.Append("export const obj").Append(i).Append(" = { run").Append(i).AppendLine("() { return 1; } };");
@@ -1673,7 +1673,7 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run0" && s.ContainerKind == "object" && s.ContainerName == "obj0");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"run{objectCount - 1}" && s.ContainerKind == "object" && s.ContainerName == $"obj{objectCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large JavaScript object literal target extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");

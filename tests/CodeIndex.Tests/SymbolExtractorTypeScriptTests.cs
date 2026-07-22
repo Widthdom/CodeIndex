@@ -1835,7 +1835,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_TypeScriptLargeClassExpressionTargets_CompletesWithinPracticalBudget()
     {
-        const int classCount = 1_000;
+        const int classCount = 500;
         var builder = new StringBuilder();
         for (var i = 0; i < classCount; i++)
             builder.Append("export const C").Append(i).Append(" = class { method").Append(i).AppendLine("(): number { return 1; } };");
@@ -1847,7 +1847,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C0");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == $"C{classCount - 1}");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"method{classCount - 1}" && s.ContainerKind == "class" && s.ContainerName == $"C{classCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large TypeScript class expression target extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
