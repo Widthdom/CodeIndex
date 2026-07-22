@@ -361,6 +361,28 @@ public class GitHelperTests : IDisposable
     }
 
     [ExternalProcessFact]
+    public void ChangedFileQueries_PreserveCanonicalUtf8Paths()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "base.txt"), "base\n");
+        RunGit(repoDir, "add", "base.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var baseCommit = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var unicodeDirectory = Path.Combine(repoDir, "日本");
+        Directory.CreateDirectory(unicodeDirectory);
+        File.WriteAllText(Path.Combine(unicodeDirectory, "é.cs"), "class Café { }\n");
+        RunGit(repoDir, "add", ".");
+        RunGit(repoDir, "commit", "-m", "add unicode path");
+        var headCommit = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        const string expectedPath = "日本/é.cs";
+        Assert.Equal([expectedPath], GitHelper.GetChangedFilesFromCommit(repoDir, headCommit));
+        Assert.Equal([expectedPath], GitHelper.GetChangedFilesBetweenRefs(repoDir, baseCommit, headCommit));
+    }
+
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_IncludesFilesForRootCommit()
     {
         var repoDir = CreateGitRepo();

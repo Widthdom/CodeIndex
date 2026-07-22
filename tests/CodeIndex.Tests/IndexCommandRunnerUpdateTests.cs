@@ -1974,9 +1974,9 @@ public partial class IndexCommandRunnerTests
                 CommandExitCodes.Success,
                 IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var oldIndexPath = FileIndexer.NormalizeRelativePathForCurrentPlatform(
+            var oldIndexPath = FileIndexer.NormalizePathSeparators(
                 $"{relativeDirectory}/{oldFileName}");
-            var retainedIndexPath = FileIndexer.NormalizeRelativePathForCurrentPlatform(
+            var retainedIndexPath = FileIndexer.NormalizePathSeparators(
                 $"{relativeDirectory}/{retainedFileName}");
             var oldChecksum = ReadIndexedChecksum(dbPath, oldIndexPath);
 

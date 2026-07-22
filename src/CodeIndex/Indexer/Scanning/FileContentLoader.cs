@@ -103,36 +103,41 @@ internal sealed partial class FileContentLoader(
         var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
         cancellationToken.ThrowIfCancellationRequested();
         var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
-        using var stream = _openReadForIndexContent(absolutePath);
-        var initialLength = stream.Length;
-        if (initialLength > maxFileSizeBytes)
-            throw new FileIndexer.FileTooLargeSkippedException(
-                normalizedRelativePath,
-                initialLength,
-                maxFileSizeBytes,
-                BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
-
-        var probe = CSharpStaticInterfacePrepass.CreateRawByteContractProbe();
-        var rawCandidate = RawByteChunksMayMatch(
-            stream,
-            initialLength,
-            normalizedRelativePath,
-            probe.AppendAndCheck,
-            cancellationToken);
         byte[]? bytes = null;
-        if (rawCandidate)
+        bool lengthChanged;
+        using (var stream = _openReadForIndexContent(absolutePath))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            stream.Seek(0, SeekOrigin.Begin);
-            (bytes, _) = ReadStreamBytesWithKnownInitialLength(
+            var initialLength = stream.Length;
+            if (initialLength > maxFileSizeBytes)
+                throw new FileIndexer.FileTooLargeSkippedException(
+                    normalizedRelativePath,
+                    initialLength,
+                    maxFileSizeBytes,
+                    BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
+
+            var probe = CSharpStaticInterfacePrepass.CreateRawByteContractProbe();
+            var rawCandidate = RawByteChunksMayMatch(
                 stream,
                 initialLength,
                 normalizedRelativePath,
+                probe.AppendAndCheck,
                 cancellationToken);
+            if (rawCandidate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                stream.Seek(0, SeekOrigin.Begin);
+                (bytes, _) = ReadStreamBytesWithKnownInitialLength(
+                    stream,
+                    initialLength,
+                    normalizedRelativePath,
+                    cancellationToken);
+            }
+
+            lengthChanged = stream.Length != initialLength;
         }
 
         var modifiedAfterRead = File.GetLastWriteTimeUtc(ioPath);
-        if (modifiedAfterRead != modifiedBeforeRead && retryOnMutation)
+        if (retryOnMutation && (modifiedAfterRead != modifiedBeforeRead || lengthChanged))
             return (null, RequiresRetry: true);
         if (bytes is null || IsGitLfsPointer(bytes))
             return (null, RequiresRetry: false);

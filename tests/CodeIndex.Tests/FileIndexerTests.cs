@@ -2020,6 +2020,7 @@ public partial class FileIndexerTests
         const string replacementSource = "interface I{static abstract int M();}";
         var originalSource = replacementSource + new string('x', 32 * 1024);
         var path = TestProjectHelper.WriteTextFile(project.Root, "Fixture.cs", originalSource);
+        var originalModifiedUtc = File.GetLastWriteTimeUtc(path);
         var replacementBytes = Encoding.UTF8.GetBytes(replacementSource);
         var openCount = 0;
         var authorizationCount = 0;
@@ -2042,13 +2043,15 @@ public partial class FileIndexerTests
                 {
                     afterFirstRead = () =>
                     {
-                        using var replacement = new FileStream(
-                            path,
-                            FileMode.Create,
-                            FileAccess.Write,
-                            FileShare.ReadWrite | FileShare.Delete);
-                        replacement.Write(replacementBytes);
-                        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(5));
+                        using (var replacement = new FileStream(
+                                   path,
+                                   FileMode.Create,
+                                   FileAccess.Write,
+                                   FileShare.ReadWrite | FileShare.Delete))
+                        {
+                            replacement.Write(replacementBytes);
+                        }
+                        File.SetLastWriteTimeUtc(path, originalModifiedUtc);
                     };
                 }
                 return new CountingCSharpPrepassFileStream(
@@ -2094,7 +2097,7 @@ public partial class FileIndexerTests
                     candidate,
                     maxReadBytes: 4 * 1024);
                 if (openCount == 1)
-                    File.Move(replacementPath, path, overwrite: true);
+                    File.Replace(replacementPath, path, destinationBackupFileName: null);
                 return stream;
             });
 
@@ -4213,6 +4216,7 @@ public partial class FileIndexerTests
         var ignorePath = Path.Combine(tempDir, ".gitignore");
         File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "public sealed class Program { }\n");
         File.WriteAllText(ignorePath, "ignored.cs\n");
+        var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
         var failedOpen = 0;
         var indexer = new FileIndexer(
             tempDir,
@@ -4227,6 +4231,7 @@ public partial class FileIndexerTests
                     && Interlocked.Exchange(ref failedOpen, 1) == 0)
                 {
                     File.Delete(ignorePath);
+                    Directory.SetLastWriteTimeUtc(tempDir, rootModifiedUtc.AddMinutes(1));
                     throw new FileNotFoundException("simulated ignore open race", path);
                 }
 
@@ -4586,11 +4591,15 @@ public partial class FileIndexerTests
         Directory.CreateDirectory(nestedDirectory);
         File.WriteAllText(Path.Combine(nestedDirectory, "Hidden.cs"), "public sealed class Hidden { }\n");
         var rootModifiedUtc = Directory.GetLastWriteTimeUtc(tempDir);
+        var nestedModifiedUtc = Directory.GetLastWriteTimeUtc(nestedDirectory);
         var created = 0;
         FileIndexer.NestedRepositoryListingCapturedBeforeProbeForTesting = observedPath =>
         {
             if (observedPath == markerPath && Interlocked.Exchange(ref created, 1) == 0)
+            {
                 Directory.CreateDirectory(markerPath);
+                Directory.SetLastWriteTimeUtc(nestedDirectory, nestedModifiedUtc.AddMinutes(1));
+            }
         };
         try
         {

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
@@ -62,6 +63,8 @@ public sealed record GitHeadCommitResult(
 /// </summary>
 public static partial class GitHelper
 {
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     public const string GitExecutableEnvironmentVariable = "CDIDX_GIT_EXECUTABLE";
 
     internal static Func<string, bool>? FileSystemIgnoreCaseProbeForTesting { get; set; }
@@ -116,6 +119,8 @@ public static partial class GitHelper
             redirectStandardOutput: true,
             redirectStandardError: true,
             createNoWindow: true);
+        startInfo.StandardOutputEncoding = Utf8NoBom;
+        startInfo.StandardErrorEncoding = Utf8NoBom;
         CodeIndex.SubprocessEnvironmentPolicy.ApplyGitEnvironment(startInfo);
         return startInfo;
     }
