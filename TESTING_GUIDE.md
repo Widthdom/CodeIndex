@@ -593,6 +593,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 Use the inventory below before adding or moving a test class:
 
 - SQLite pool resets, direct `SqliteConnection.ClearAllPools()` calls, process current-directory changes, or process-global environment variable mutation: put the class in the `SQLite pool sensitive` non-parallel collection.
+- Extractor plugin registry tests belong in the dedicated non-parallel `Plugin registry sensitive` collection: they mutate process-global registry reload state, worker inventories, staging hooks, and user plugin directory overrides. Keep `TrustedPluginAssemblyFixture` on that collection only, so ordinary console-sensitive tests do not build an unused plugin fixture.
 - Environment variables: use `EnvironmentVariableScope.Capture(...)` so setup failures and assertion failures restore the original values through one cleanup path.
 - `Console.Out` or `Console.Error` replacement: lock `TestConsoleLock.Gate` around the whole capture/swap window.
 - Console-only test classes do not need the SQLite-sensitive non-parallel collection once every capture/swap window, including writer-disposal checks, is protected by `TestConsoleLock.Gate`.
@@ -1379,6 +1380,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 テストクラスを追加または移動する前に、次の一覧を確認してください。
 
 - SQLite pool reset、`SqliteConnection.ClearAllPools()` の直接呼び出し、プロセスの current directory 変更、process-global な環境変数変更: クラスを non-parallel な `SQLite pool sensitive` collection に入れる。
+- extractor plugin registry testは専用のnon-parallelな`Plugin registry sensitive` collectionに置いてください。process-globalなregistry reload state、worker inventory、staging hook、user plugin directory overrideを変更します。通常のconsole-sensitive testが未使用plugin fixtureを構築しないよう、`TrustedPluginAssemblyFixture`はこのcollectionだけで所有します。
 - 環境変数: `EnvironmentVariableScope.Capture(...)` を使い、setup failure や assertion failure でも単一の cleanup 経路で元の値に戻す。
 - `Console.Out` / `Console.Error` の差し替え: capture / swap 期間全体を `TestConsoleLock.Gate` で lock する。
 - console だけを扱う test class は、writer disposal check を含むすべての capture / swap 期間が `TestConsoleLock.Gate` で保護されていれば、SQLite-sensitive non-parallel collection に入れる必要はない。

@@ -11,7 +11,7 @@ using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
-[Collection("Console sensitive")]
+[Collection("Plugin registry sensitive")]
 public class ExtractorPluginRegistryTests
 {
     private readonly string pluginAssemblyFixturePath;
