@@ -807,7 +807,7 @@ public static partial class SymbolExtractor
                 maxDepth: 1);
             return document.RootElement.GetString() ?? value;
         }
-        catch (Exception ex) when (ex is JsonException or System.IO.InvalidDataException)
+        catch (Exception ex) when (ex is JsonException or System.IO.InvalidDataException or InvalidOperationException)
         {
             return value;
         }

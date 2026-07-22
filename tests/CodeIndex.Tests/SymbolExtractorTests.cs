@@ -886,6 +886,7 @@ public partial class SymbolExtractorTests
         var content = $$"""
             {
               "root": {
+                "\ud800": "invalid surrogate",
                 "\u006c\u0065\u0061\u0066": "ok"
               }
               {{padding}}
@@ -895,6 +896,7 @@ public partial class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "json", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "leaf");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "\\ud800");
         Assert.DoesNotContain(symbols, symbol => symbol.Name == "root.leaf");
     }
 
