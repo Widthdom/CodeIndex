@@ -22,6 +22,7 @@ internal static class CSharpStaticInterfacePrepass
         Action<string?>? reportCurrentFile = null,
         Action<int, string?>? reportCandidateFile = null,
         int parallelism = 1,
+        IReadOnlyList<long>? excludedExistingFileIds = null,
         CancellationToken cancellationToken = default)
     {
         var targetCount = fileTargets.TryGetNonEnumeratedCount(out var count) ? count : 0;
@@ -113,7 +114,10 @@ internal static class CSharpStaticInterfacePrepass
 
         var hadPendingContracts = false;
         var symbols = includeExistingSymbols
-            ? writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths!, out hadPendingContracts)
+            ? writer.LoadCSharpStaticInterfaceContractSymbols(
+                pendingPaths!,
+                excludedExistingFileIds,
+                out hadPendingContracts)
             : [];
         symbols.AddRange(pendingSymbols);
         var hasStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts;
@@ -142,6 +146,7 @@ internal static class CSharpStaticInterfacePrepass
             reportCurrentFile: reportCurrentFile,
             reportCandidateFile: null,
             parallelism: 1,
+            excludedExistingFileIds: null,
             cancellationToken: cancellationToken);
     }
 

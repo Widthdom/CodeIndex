@@ -19,10 +19,13 @@ namespace CodeIndex.Database;
 public partial class DbWriter
 {
     public const string FtsIncrementalWritesSinceOptimizeMetaKey = "fts_incremental_writes_since_optimize";
+    public const string FtsIncrementalWritesSinceMergeMetaKey = "fts_incremental_writes_since_merge";
     public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
     public const string FtsLastOptimizeDurationMsMetaKey = "fts_last_optimize_duration_ms";
     public const string FtsBulkLoadInProgressMetaKey = "fts_bulk_load_in_progress";
     public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
+    public const int DefaultFtsMergeIncrementalWriteThreshold = 25;
+    public const int DefaultFtsIncrementalMergeWorkTargetPages = 1000;
 
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;

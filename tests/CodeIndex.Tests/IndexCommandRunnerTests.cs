@@ -2535,16 +2535,20 @@ public sealed class Caller
     }
 
     [Fact]
-    public void Run_IncrementalFullScan_DefersFtsOptimizeUntilWriteThreshold()
+    public void Run_IncrementalFullScan_DefersIncrementalFtsMergeUntilWriteThreshold()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_threshold");
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         var sourcePath = Path.Combine(projectRoot, "app.py");
+        var stablePath = Path.Combine(projectRoot, "stable.py");
         var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var previousMergeHook = IndexCommandRunner.FullScanFtsMergeForTesting;
         var optimizeCount = 0;
+        var mergeCount = 0;
         try
         {
             File.WriteAllText(sourcePath, "def run():\n    return 1\n");
+            File.WriteAllText(stablePath, "# " + new string('s', 1_000) + "\n");
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
@@ -2553,6 +2557,11 @@ public sealed class Caller
                 optimizeCount++;
                 previousOptimizeHook?.Invoke();
             };
+            IndexCommandRunner.FullScanFtsMergeForTesting = () =>
+            {
+                mergeCount++;
+                previousMergeHook?.Invoke();
+            };
             File.WriteAllText(sourcePath, "def run():\n    return 2\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
 
@@ -2560,30 +2569,477 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.Success, deferredExitCode);
             Assert.Equal(0, optimizeCount);
+            Assert.Equal(0, mergeCount);
             using (var deferredDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
-                Assert.Equal(1, new DbWriter(deferredDb).GetFtsIncrementalWritesSinceOptimize());
+                var deferredWriter = new DbWriter(deferredDb);
+                Assert.Equal(1, deferredWriter.GetFtsIncrementalWritesSinceOptimize());
+                Assert.Equal(1, deferredWriter.GetFtsIncrementalWritesSinceMerge());
             }
 
             using (var thresholdDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 new DbWriter(thresholdDb).SetMeta(
-                    DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
-                    (DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold - 1).ToString(CultureInfo.InvariantCulture));
+                    DbWriter.FtsIncrementalWritesSinceMergeMetaKey,
+                    (DbWriter.DefaultFtsMergeIncrementalWriteThreshold - 1).ToString(CultureInfo.InvariantCulture));
             }
             File.WriteAllText(sourcePath, "def run():\n    return 3\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(4));
 
-            var (optimizedExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            var (mergedExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, optimizedExitCode);
-            Assert.Equal(1, optimizeCount);
-            using var optimizedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
-            Assert.Equal(0, new DbWriter(optimizedDb).GetFtsIncrementalWritesSinceOptimize());
+            Assert.Equal(CommandExitCodes.Success, mergedExitCode);
+            Assert.Equal(0, optimizeCount);
+            Assert.Equal(1, mergeCount);
+            using var mergedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var mergedWriter = new DbWriter(mergedDb);
+            Assert.Equal(2, mergedWriter.GetFtsIncrementalWritesSinceOptimize());
+            Assert.Equal(0, mergedWriter.GetFtsIncrementalWritesSinceMerge());
         }
         finally
         {
             IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            IndexCommandRunner.FullScanFtsMergeForTesting = previousMergeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IncrementalFullScan_UsesBulkFtsAtThreeFifthsDirtyBytes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_bulk_boundary");
+        var dirtyPath = Path.Combine(projectRoot, "dirty.py");
+        var stablePath = Path.Combine(projectRoot, "stable.py");
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var previousMergeHook = IndexCommandRunner.FullScanFtsMergeForTesting;
+        var optimizeCount = 0;
+        var mergeCount = 0;
+        static string SizedSource(char fill, int size)
+            => "# " + new string(fill, size - 3) + "\n";
+        try
+        {
+            File.WriteAllText(dirtyPath, SizedSource('a', 600));
+            File.WriteAllText(stablePath, SizedSource('s', 400));
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+            {
+                optimizeCount++;
+                previousOptimizeHook?.Invoke();
+            };
+            IndexCommandRunner.FullScanFtsMergeForTesting = () =>
+            {
+                mergeCount++;
+                previousMergeHook?.Invoke();
+            };
+            File.WriteAllText(dirtyPath, SizedSource('b', 600));
+            File.SetLastWriteTimeUtc(dirtyPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.Equal(1, optimizeCount);
+            Assert.Equal(0, mergeCount);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            IndexCommandRunner.FullScanFtsMergeForTesting = previousMergeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(600, 400, true)]
+    [InlineData(599, 401, false)]
+    public void Run_IncrementalFullScan_UsesOldSizeForShrinkingFileDirtyByteBoundary(
+        int oldDirtySize,
+        int stableSize,
+        bool expectBulk)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_shrink_boundary");
+        var dirtyPath = Path.Combine(projectRoot, "dirty.py");
+        var stablePath = Path.Combine(projectRoot, "stable.py");
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var optimizeCount = 0;
+        static string SizedSource(char fill, int size)
+            => "# " + new string(fill, size - 3) + "\n";
+        try
+        {
+            File.WriteAllText(dirtyPath, SizedSource('a', oldDirtySize));
+            File.WriteAllText(stablePath, SizedSource('s', stableSize));
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+            {
+                optimizeCount++;
+                previousOptimizeHook?.Invoke();
+            };
+            File.WriteAllText(dirtyPath, SizedSource('b', 100));
+            File.SetLastWriteTimeUtc(dirtyPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.Equal(expectBulk ? 1 : 0, optimizeCount);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IncrementalFullScan_RolledBackBulkCandidateDoesNotRebuildOrOptimizeFts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_rollback_only");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var dirtyPath = Path.Combine(projectRoot, "dirty.py");
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var previousFilePhaseHook = IndexCommandRunner.FullScanFilePhaseForTesting;
+        var optimizeCount = 0;
+        var symbolPhaseCalls = 0;
+        static string SizedSource(string token, char fill, int size)
+        {
+            var prefix = $"# {token} ";
+            return prefix + new string(fill, size - prefix.Length - 1) + "\n";
+        }
+        try
+        {
+            File.WriteAllText(dirtyPath, SizedSource("rollback_old_token", 'a', 600));
+            File.WriteAllText(Path.Combine(projectRoot, "stable.py"), SizedSource("rollback_stable_token", 's', 400));
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+                    {
+                        optimizeCount++;
+                        previousOptimizeHook?.Invoke();
+                    };
+                    IndexCommandRunner.FullScanFilePhaseForTesting = (path, phase) =>
+                    {
+                        previousFilePhaseHook?.Invoke(path, phase);
+                        if (path == "dirty.py"
+                            && phase == "symbols"
+                            && Interlocked.Increment(ref symbolPhaseCalls) == 2)
+                        {
+                            throw new InvalidOperationException("Simulated post-upsert symbol extraction failure.");
+                        }
+                    };
+                    File.WriteAllText(dirtyPath, SizedSource("rollback_new_token", 'b', 600));
+                    File.SetLastWriteTimeUtc(dirtyPath, DateTime.UtcNow.AddSeconds(2));
+
+                    var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+                    Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+                    Assert.Equal(2, symbolPhaseCalls);
+                    Assert.Equal(0, optimizeCount);
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+                    IndexCommandRunner.FullScanFilePhaseForTesting = previousFilePhaseHook;
+                }
+            }
+
+            using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(verificationDb);
+            Assert.Equal(0, writer.GetFtsIncrementalWritesSinceOptimize());
+            Assert.Equal(0, writer.GetFtsIncrementalWritesSinceMerge());
+            using var command = verificationDb.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'rollback_old_token'";
+            Assert.Equal(1L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'rollback_new_token'";
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            IndexCommandRunner.FullScanFilePhaseForTesting = previousFilePhaseHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(600, 400, true, false)]
+    [InlineData(599, 401, false, false)]
+    [InlineData(600, 400, true, true)]
+    public void Run_IncrementalFullScan_AccountsForDeletedAndRenamedBytesBeforeFtsPurge(
+        int removedSize,
+        int retainedSize,
+        bool expectBulk,
+        bool rename)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_delete_boundary");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var removedPath = Path.Combine(projectRoot, "removed.py");
+        var retainedPath = Path.Combine(projectRoot, "retained.py");
+        var renamedPath = Path.Combine(projectRoot, "renamed.py");
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var previousPurgeHook = IndexCommandRunner.FullScanStaleFilePurgeForTesting;
+        var previousReferencePurgeHook = IndexCommandRunner.FullScanReferencePurgeForTesting;
+        var optimizeCount = 0;
+        var purgeBulkStates = new List<bool>();
+        var purgeOrder = new List<string>();
+        static string SizedSource(string token, char fill, int size)
+        {
+            var prefix = $"# {token} ";
+            return prefix + new string(fill, size - prefix.Length - 1) + "\n";
+        }
+        try
+        {
+            File.WriteAllText(removedPath, SizedSource("removed_boundary_token", 'r', removedSize));
+            File.WriteAllText(retainedPath, SizedSource("retained_boundary_token", 's', retainedSize));
+            Assert.Equal(removedSize, new FileInfo(removedPath).Length);
+            Assert.Equal(retainedSize, new FileInfo(retainedPath).Length);
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+            {
+                optimizeCount++;
+                previousOptimizeHook?.Invoke();
+            };
+            IndexCommandRunner.FullScanStaleFilePurgeForTesting = bulkEnabled =>
+            {
+                purgeOrder.Add("stale_files");
+                purgeBulkStates.Add(bulkEnabled);
+                previousPurgeHook?.Invoke(bulkEnabled);
+            };
+            IndexCommandRunner.FullScanReferencePurgeForTesting = () =>
+            {
+                purgeOrder.Add("references");
+                previousReferencePurgeHook?.Invoke();
+            };
+            if (rename)
+                File.Move(removedPath, renamedPath);
+            else
+                File.Delete(removedPath);
+
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(new[] { expectBulk }, purgeBulkStates);
+            Assert.Equal(new[] { "stale_files", "references" }, purgeOrder);
+            Assert.Equal(expectBulk ? 1 : 0, optimizeCount);
+            using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(verificationDb);
+            Assert.Equal(expectBulk ? 0 : 1, writer.GetFtsIncrementalWritesSinceOptimize());
+            Assert.Equal(expectBulk ? 0 : 1, writer.GetFtsIncrementalWritesSinceMerge());
+            using var command = verificationDb.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM files WHERE path = 'removed.py'";
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT COUNT(*) FROM files WHERE path = 'renamed.py'";
+            Assert.Equal(rename ? 1L : 0L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'removed_boundary_token'";
+            Assert.Equal(rename ? 1L : 0L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'retained_boundary_token'";
+            Assert.Equal(1L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_ai', 'fts_chunks_ad', 'fts_chunks_au')";
+            Assert.Equal(3L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            IndexCommandRunner.FullScanStaleFilePurgeForTesting = previousPurgeHook;
+            IndexCommandRunner.FullScanReferencePurgeForTesting = previousReferencePurgeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IncrementalFullScan_CombinesDeletedAndModifiedBytesAtBulkBoundary()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_combined_boundary");
+        var deletedPath = Path.Combine(projectRoot, "deleted.py");
+        var modifiedPath = Path.Combine(projectRoot, "modified.py");
+        var stablePath = Path.Combine(projectRoot, "stable.py");
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var previousPurgeHook = IndexCommandRunner.FullScanStaleFilePurgeForTesting;
+        var optimizeCount = 0;
+        var purgeBulkEnabled = false;
+        static string SizedSource(char fill, int size)
+            => "# " + new string(fill, size - 3) + "\n";
+        try
+        {
+            File.WriteAllText(deletedPath, SizedSource('d', 500));
+            File.WriteAllText(modifiedPath, SizedSource('m', 100));
+            File.WriteAllText(stablePath, SizedSource('s', 400));
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+            {
+                optimizeCount++;
+                previousOptimizeHook?.Invoke();
+            };
+            IndexCommandRunner.FullScanStaleFilePurgeForTesting = bulkEnabled =>
+            {
+                purgeBulkEnabled = bulkEnabled;
+                previousPurgeHook?.Invoke(bulkEnabled);
+            };
+            File.Delete(deletedPath);
+            File.WriteAllText(modifiedPath, SizedSource('n', 100));
+            File.SetLastWriteTimeUtc(modifiedPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.True(purgeBulkEnabled);
+            Assert.Equal(1, optimizeCount);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            IndexCommandRunner.FullScanStaleFilePurgeForTesting = previousPurgeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IncrementalFullScan_InvalidDeletedSizeFallsBackBeforeFtsPurge()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_incremental_fullscan_fts_invalid_deleted_size");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var deletedPath = Path.Combine(projectRoot, "deleted.py");
+        var stablePath = Path.Combine(projectRoot, "stable.py");
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
+        var previousPurgeHook = IndexCommandRunner.FullScanStaleFilePurgeForTesting;
+        var optimizeCount = 0;
+        var purgeBulkStates = new List<bool>();
+        static string SizedSource(char fill, int size)
+            => "# " + new string(fill, size - 3) + "\n";
+        try
+        {
+            File.WriteAllText(deletedPath, SizedSource('d', 600));
+            File.WriteAllText(stablePath, SizedSource('s', 400));
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var corrupt = db.Connection.CreateCommand())
+            {
+                corrupt.CommandText = "UPDATE files SET size = 'invalid' WHERE path = 'deleted.py'";
+                Assert.Equal(1, corrupt.ExecuteNonQuery());
+            }
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+            {
+                optimizeCount++;
+                previousOptimizeHook?.Invoke();
+            };
+            IndexCommandRunner.FullScanStaleFilePurgeForTesting = bulkEnabled =>
+            {
+                purgeBulkStates.Add(bulkEnabled);
+                previousPurgeHook?.Invoke(bulkEnabled);
+            };
+            File.Delete(deletedPath);
+
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(new[] { false }, purgeBulkStates);
+            Assert.Equal(0, optimizeCount);
+            using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(verificationDb);
+            Assert.Equal(1, writer.GetFtsIncrementalWritesSinceOptimize());
+            Assert.Equal(1, writer.GetFtsIncrementalWritesSinceMerge());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
+            IndexCommandRunner.FullScanStaleFilePurgeForTesting = previousPurgeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FilesUpdate_ReportsIncrementalFtsMergeAndPreservesOptimizeRecommendationCounter()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_update_fts_merge");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var sourcePath = Path.Combine(projectRoot, "app.py");
+        try
+        {
+            File.WriteAllText(sourcePath, "def run():\n    return 1\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db);
+                writer.SetMeta(
+                    DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+                    (DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold - 1).ToString(CultureInfo.InvariantCulture));
+                writer.SetMeta(
+                    DbWriter.FtsIncrementalWritesSinceMergeMetaKey,
+                    (DbWriter.DefaultFtsMergeIncrementalWriteThreshold - 1).ToString(CultureInfo.InvariantCulture));
+            }
+
+            File.WriteAllText(sourcePath, "def run():\n    return 2\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--db", dbPath, "--files", sourcePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            var summary = updateJson.GetProperty("summary");
+            Assert.Equal(1, summary.GetProperty("updated").GetInt32());
+            Assert.False(summary.GetProperty("fts_optimize_ran").GetBoolean());
+            Assert.True(summary.GetProperty("fts_merge_ran").GetBoolean());
+            using (var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var verificationWriter = new DbWriter(verificationDb);
+                Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, verificationWriter.GetFtsIncrementalWritesSinceOptimize());
+                Assert.Equal(0, verificationWriter.GetFtsIncrementalWritesSinceMerge());
+            }
+
+            SqliteConnection.ClearAllPools();
+            int previewExitCode;
+            JsonElement previewJson;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    previewExitCode = IndexCommandRunner.RunOptimizeFts(
+                        ["--db", dbPath, "--dry-run", "--json"],
+                        _jsonOptions,
+                        forceLogicalObjectSizeFallbackForTesting: true);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    previewJson = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, previewExitCode);
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                previewJson.GetProperty("writes_since_optimize_before").GetInt32());
+            Assert.True(previewJson.GetProperty("optimization_recommended").GetBoolean());
+        }
+        finally
+        {
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

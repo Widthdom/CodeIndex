@@ -1088,14 +1088,17 @@ public class DatabaseTests : IDisposable
     public void RebuildFtsFromChunks_CanLeaveIncrementalCounterForImmediateOptimize()
     {
         _writer.SetMeta(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "7");
+        _writer.SetMeta(DbWriter.FtsIncrementalWritesSinceMergeMetaKey, "3");
 
         _writer.RebuildFtsFromChunks(resetIncrementalWriteCounter: false);
 
         Assert.Equal(7, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(3, _writer.GetFtsIncrementalWritesSinceMerge());
 
         _writer.RebuildFtsFromChunks();
 
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceMerge());
     }
 
     [Fact]
@@ -1111,6 +1114,70 @@ public class DatabaseTests : IDisposable
         }
 
         Assert.Equal(3L, CountFtsSyncTriggers());
+    }
+
+    [Fact]
+    public void FtsBulkLoadTriggerGuard_StartPartialDropFailureDowngradesMarkerAndRecoversSameProcess()
+    {
+        var fileId = UpsertTestFile("src/failed-drop-bulk-fts.cs", checksum: "failed-drop-bulk-fts");
+        const string token = "faileddropcleanupbulktoken";
+        var previousHook = DbWriter.FtsMaintenanceBeforeExecuteForTesting;
+        var injectedException = new InvalidOperationException("simulated partial trigger-drop failure");
+        var injectedCount = 0;
+        FtsBulkLoadTriggerGuard? guard = null;
+
+        try
+        {
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = phase =>
+            {
+                previousHook?.Invoke(phase);
+                if (phase != DbWriter.FtsDropTriggersMaintenancePhase
+                    || Interlocked.Exchange(ref injectedCount, 1) != 0)
+                {
+                    return;
+                }
+
+                using var dropTrigger = _db.Connection.CreateCommand();
+                dropTrigger.CommandText = "DROP TRIGGER IF EXISTS fts_chunks_ai";
+                dropTrigger.ExecuteNonQuery();
+                throw injectedException;
+            };
+
+            var thrown = Assert.Throws<InvalidOperationException>(() =>
+                guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true));
+
+            Assert.Same(injectedException, thrown);
+            Assert.Null(guard);
+            Assert.Equal(1, injectedCount);
+            Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(2L, CountFtsSyncTriggers());
+
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = token,
+                },
+            ]);
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+            Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+            Assert.Equal(3L, CountFtsSyncTriggers());
+            Assert.Equal(1L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+        }
+        finally
+        {
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+            guard?.Dispose();
+        }
     }
 
     [Fact]
@@ -1140,6 +1207,79 @@ public class DatabaseTests : IDisposable
 
         Assert.Equal(3L, CountFtsSyncTriggers());
         Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'abandonedbulktoken'"));
+    }
+
+    [Theory]
+    [InlineData(DbWriter.FtsRestoreTriggersMaintenancePhase, 0L)]
+    [InlineData(DbWriter.FtsRebuildMaintenancePhase, 3L)]
+    public void FtsBulkLoadTriggerGuard_DisposeCleanupFailureDowngradesMarkerAndRecoversSameProcess(
+        string failurePhase,
+        long expectedTriggersAfterFailure)
+    {
+        var fileId = UpsertTestFile(
+            $"src/failed-{failurePhase}-bulk-fts.cs",
+            checksum: $"failed-{failurePhase}-bulk-fts");
+        var token = failurePhase == DbWriter.FtsRestoreTriggersMaintenancePhase
+            ? "failedrestorecleanupbulktoken"
+            : "failedrebuildcleanupbulktoken";
+        var previousHook = DbWriter.FtsMaintenanceBeforeExecuteForTesting;
+        var injectedException = new InvalidOperationException($"simulated {failurePhase} cleanup failure");
+        var injectedCount = 0;
+        var ftsMutated = false;
+        var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated);
+
+        try
+        {
+            Assert.NotNull(guard);
+            Assert.StartsWith("pid:", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey), StringComparison.Ordinal);
+            Assert.Equal(0L, CountFtsSyncTriggers());
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = token,
+                },
+            ]);
+            ftsMutated = true;
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = phase =>
+            {
+                previousHook?.Invoke(phase);
+                if (phase == failurePhase && Interlocked.Exchange(ref injectedCount, 1) == 0)
+                    throw injectedException;
+            };
+
+            var thrown = Assert.Throws<InvalidOperationException>(() => guard!.Dispose());
+
+            Assert.Same(injectedException, thrown);
+            Assert.Equal(1, injectedCount);
+            Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(expectedTriggersAfterFailure, CountFtsSyncTriggers());
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+
+            guard.Dispose();
+            Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(expectedTriggersAfterFailure, CountFtsSyncTriggers());
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+            Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+            Assert.Equal(3L, CountFtsSyncTriggers());
+            Assert.Equal(1L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+        }
+        finally
+        {
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+            guard?.Dispose();
+        }
     }
 
     [Fact]
@@ -1787,10 +1927,12 @@ public class DatabaseTests : IDisposable
         Assert.Equal(1, _writer.RecordFtsIncrementalWrite());
         Assert.False(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
         Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceMerge());
 
         Assert.Equal(2, _writer.RecordFtsIncrementalWrite());
         Assert.True(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceMerge());
     }
 
     [Fact]
@@ -1802,13 +1944,126 @@ public class DatabaseTests : IDisposable
             () => optimizeCount++,
             threshold: 2));
         Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceMerge());
         Assert.Equal(0, optimizeCount);
 
         Assert.True(_writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
             () => optimizeCount++,
             threshold: 2));
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceMerge());
         Assert.Equal(1, optimizeCount);
+    }
+
+    [Fact]
+    public void RecordFtsIncrementalWriteAndMergeIfThresholdReached_UsesMinimumWorkTargetAndKeepsSearchableRows()
+    {
+        var fileId = UpsertTestFile("src/fts-merge.cs", "fts_merge");
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "adaptive_merge_token",
+            },
+        ]);
+        var mergeCount = 0;
+
+        Assert.False(_writer.RecordFtsIncrementalWriteAndMergeIfThresholdReached(
+            () => mergeCount++,
+            threshold: 2,
+            mergeWorkTargetPages: 1));
+        Assert.True(_writer.RecordFtsIncrementalWriteAndMergeIfThresholdReached(
+            () => mergeCount++,
+            threshold: 2,
+            mergeWorkTargetPages: 1));
+
+        Assert.Equal(1, mergeCount);
+        Assert.Equal(2, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceMerge());
+        using var search = _db.Connection.CreateCommand();
+        search.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'adaptive_merge_token'";
+        Assert.Equal(1L, (long)search.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void MergeFtsSegments_PreCancelledOrInvalidWorkTargetDoesNotResetPendingWrites()
+    {
+        Assert.Equal(1, _writer.RecordFtsIncrementalWrite());
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => _writer.MergeFtsSegments(cancellationToken: cts.Token));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _writer.MergeFtsSegments(workTargetPages: 0));
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceMerge());
+    }
+
+    [Fact]
+    public void FtsMergeCounter_MissingOnLegacyDatabaseInheritsOptimizeCadence()
+    {
+        _writer.SetMeta(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "7");
+
+        Assert.Equal(7, _writer.GetFtsIncrementalWritesSinceMerge());
+        Assert.Equal(8, _writer.RecordFtsIncrementalWrite());
+        Assert.Equal(8, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.Equal(8, _writer.GetFtsIncrementalWritesSinceMerge());
+    }
+
+    [Theory]
+    [InlineData(0, 100, false)]
+    [InlineData(60, 0, false)]
+    [InlineData(5, 10, false)]
+    [InlineData(6, 10, true)]
+    [InlineData(6, 11, false)]
+    [InlineData(7, 11, true)]
+    [InlineData(100, 100, true)]
+    public void FtsBulkLoadDirtyBytePlanner_UsesCeilingThreeFifthsBoundary(
+        long dirtyBytes,
+        long totalBytes,
+        bool expected)
+        => Assert.Equal(expected, FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(dirtyBytes, totalBytes));
+
+    [Fact]
+    public void FtsBulkLoadDirtyBytePlanner_DoesNotOverflowLongByteCounts()
+    {
+        var quotient = long.MaxValue / FtsBulkLoadTriggerGuard.DirtyByteThresholdDenominator;
+        var remainder = long.MaxValue % FtsBulkLoadTriggerGuard.DirtyByteThresholdDenominator;
+        var threshold = quotient * FtsBulkLoadTriggerGuard.DirtyByteThresholdNumerator
+            + (remainder * FtsBulkLoadTriggerGuard.DirtyByteThresholdNumerator
+                + FtsBulkLoadTriggerGuard.DirtyByteThresholdDenominator - 1)
+                / FtsBulkLoadTriggerGuard.DirtyByteThresholdDenominator;
+
+        Assert.False(FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(threshold - 1, long.MaxValue));
+        Assert.True(FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(threshold, long.MaxValue));
+    }
+
+    [Fact]
+    public void FtsBulkLoadKnownByteAccumulator_DetectsAdditionAndReplacementOverflow()
+    {
+        Assert.True(FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
+            totalBytes: 100,
+            previousBytes: 10,
+            currentBytes: 20,
+            out var replacedTotal));
+        Assert.Equal(110, replacedTotal);
+
+        Assert.False(FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
+            totalBytes: long.MaxValue - 5,
+            previousBytes: null,
+            currentBytes: 6,
+            out var addedOverflowTotal));
+        Assert.Equal(long.MaxValue, addedOverflowTotal);
+
+        Assert.False(FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
+            totalBytes: long.MaxValue,
+            previousBytes: 10,
+            currentBytes: 11,
+            out var replacementOverflowTotal));
+        Assert.Equal(long.MaxValue, replacementOverflowTotal);
     }
 
     [Fact]
@@ -3831,6 +4086,18 @@ public class DatabaseTests : IDisposable
         Assert.Equal(modified, valid.Value.ModifiedUtc);
         Assert.Equal(20, valid.Value.Size);
         Assert.Equal("csharp", valid.Value.Language);
+        Assert.Equal(
+            new PersistedIndexedFileSize(Exists: true, SizeKnown: true, 20),
+            reusableStats.GetPersistedSize("src/stale.py"));
+        Assert.Equal(
+            new PersistedIndexedFileSize(Exists: true, SizeKnown: false, 0),
+            reusableStats.GetPersistedSize("src/null-size.cs"));
+        Assert.Equal(
+            new PersistedIndexedFileSize(Exists: true, SizeKnown: false, 0),
+            reusableStats.GetPersistedSize("src/text-size.cs"));
+        Assert.Equal(
+            new PersistedIndexedFileSize(Exists: true, SizeKnown: true, 20),
+            reusableStats.GetPersistedSize("src/invalid-modified.cs"));
     }
 
     [Fact]
@@ -3850,6 +4117,45 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbWriter.ReusableStatSnapshotReadForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void LoadReusableIndexedFileStats_FilterPreparationCancellationCleansTempTable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var previousBatchHook = DbWriter.ReusableStatSnapshotFilterBatchForTesting;
+        try
+        {
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/filter-cancel.cs",
+                Lang = "csharp",
+                Size = 20,
+                Lines = 1,
+                Modified = DateTime.UtcNow,
+                Checksum = "filter-cancel",
+            });
+            DbWriter.ReusableStatSnapshotFilterBatchForTesting = () =>
+            {
+                previousBatchHook?.Invoke();
+                cancellation.Cancel();
+            };
+
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.LoadReusableIndexedFileStats(
+                    maxSymbolsPerFile: 10,
+                    maxReferencesPerFile: 10,
+                    cancellation.Token,
+                    includedPaths: new HashSet<string>(["src/filter-cancel.cs"], StringComparer.Ordinal)));
+
+            using var command = _db.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_temp_master WHERE type = 'table' AND name = 'reusable_stat_snapshot_filter'";
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.ReusableStatSnapshotFilterBatchForTesting = previousBatchHook;
         }
     }
 
@@ -6319,6 +6625,61 @@ public class DatabaseTests : IDisposable
         finally
         {
             TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void FilePurgePlan_InvalidPersistedSizeDisablesByteEstimateWithoutDeletingEarly()
+    {
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "invalid-size.py",
+            Lang = "python",
+            Size = 42,
+            Lines = 1,
+            Modified = DateTime.UtcNow,
+        });
+        using (var corrupt = _db.Connection.CreateCommand())
+        {
+            corrupt.CommandText = "UPDATE files SET size = 'invalid' WHERE path = 'invalid-size.py'";
+            Assert.Equal(1, corrupt.ExecuteNonQuery());
+        }
+
+        var plan = _writer.PlanFilesOutsideRetainedSet(new HashSet<string>(StringComparer.Ordinal));
+
+        Assert.Equal(1, plan.Count);
+        Assert.False(plan.ByteEstimateComplete);
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+        Assert.Equal(1, _writer.ApplyFilePurgePlan(plan));
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+    }
+
+    [Fact]
+    public void FilePurgePlan_CancellationAfterFirstBatchRollsBackEveryDelete()
+    {
+        const int fileCount = 1_201;
+        SeedStaleFilesWithChildren(fileCount);
+        var plan = _writer.PlanFilesOutsideRetainedSet(new HashSet<string>(StringComparer.Ordinal));
+        var previousHook = DbWriter.FilePurgeBatchCompletedForTesting;
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            DbWriter.FilePurgeBatchCompletedForTesting = processed =>
+            {
+                previousHook?.Invoke(processed);
+                cancellation.Cancel();
+            };
+
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.ApplyFilePurgePlan(plan, cancellationToken: cancellation.Token));
+
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM chunks"));
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks"));
+        }
+        finally
+        {
+            DbWriter.FilePurgeBatchCompletedForTesting = previousHook;
         }
     }
 

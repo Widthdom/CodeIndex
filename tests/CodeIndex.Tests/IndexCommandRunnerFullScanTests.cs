@@ -160,7 +160,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, fullExitCode);
             var fullSamples = fullJson.GetProperty("memory_timeline").GetProperty("samples").EnumerateArray().ToArray();
             Assert.Equal(
-                ["start", "scan", "purge", "csharp_prepass", "extraction", "reference_graph", "text_index", "finalize", "commit"],
+                ["start", "scan", "csharp_prepass", "purge", "extraction", "reference_graph", "text_index", "finalize", "commit"],
                 fullSamples.Select(sample => sample.GetProperty("phase").GetString()));
             AssertPhaseSamplesAreMonotonic(fullSamples);
 
@@ -707,10 +707,9 @@ public partial class IndexCommandRunnerTests
                     Assert.DoesNotContain("app.cs", loadedPaths);
                     Assert.DoesNotContain("app.ts", loadedPaths);
                     Assert.Contains("feature.cs", loadedPaths);
-                    Assert.Equal(1, statLookups["app.cs"]);
-                    Assert.Equal(1, statLookups["app.ts"]);
+                    Assert.Equal(2, statLookups["app.cs"]);
+                    Assert.Equal(2, statLookups["app.ts"]);
                     Assert.Equal(1, statLookups["feature.cs"]);
-                    Assert.All(statLookups, lookup => Assert.Equal(1, lookup.Value));
                     Assert.Equal(1, statSnapshotReads);
                     Assert.Equal(1, foldBackfillVerifications);
                 }
@@ -727,6 +726,67 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DenseDeletionCapsReusableStatSnapshotCapacityToRetainedRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_reuse_capacity");
+        var previousCapacityHook = DbWriter.ReusableStatSnapshotInitialCapacityForTesting;
+        var previousFilterModeHook = DbWriter.ReusableStatSnapshotFilterModeForTesting;
+        var previousCandidateRowHook = DbWriter.ReusableStatSnapshotCandidateRowForTesting;
+        int? reusableSnapshotInitialCapacity = null;
+        var filterModes = new List<string>();
+        var candidateRows = new List<string>();
+        try
+        {
+            var retainedPath = Path.Combine(projectRoot, "retained.py");
+            File.WriteAllText(retainedPath, "def retained():\n    return 1\n");
+            var stalePaths = Enumerable.Range(0, 32)
+                .Select(index => Path.Combine(projectRoot, $"stale-{index:D2}.py"))
+                .ToArray();
+            foreach (var stalePath in stalePaths)
+                File.WriteAllText(stalePath, "def stale():\n    return 1\n");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(stalePaths.Length + 1, initialJson.GetProperty("summary").GetProperty("files_scanned").GetInt32());
+
+            foreach (var stalePath in stalePaths)
+                File.Delete(stalePath);
+            DbWriter.ReusableStatSnapshotInitialCapacityForTesting = capacity =>
+            {
+                reusableSnapshotInitialCapacity = capacity;
+                previousCapacityHook?.Invoke(capacity);
+            };
+            DbWriter.ReusableStatSnapshotFilterModeForTesting = mode =>
+            {
+                filterModes.Add(mode);
+                previousFilterModeHook?.Invoke(mode);
+            };
+            DbWriter.ReusableStatSnapshotCandidateRowForTesting = path =>
+            {
+                candidateRows.Add(path);
+                previousCandidateRowHook?.Invoke(path);
+            };
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal(1, reusableSnapshotInitialCapacity);
+            Assert.Equal(new[] { "excluded_ids" }, filterModes);
+            Assert.Equal(new[] { "retained.py" }, candidateRows);
+            Assert.Equal(stalePaths.Length, refreshJson.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+        }
+        finally
+        {
+            DbWriter.ReusableStatSnapshotInitialCapacityForTesting = previousCapacityHook;
+            DbWriter.ReusableStatSnapshotFilterModeForTesting = previousFilterModeHook;
+            DbWriter.ReusableStatSnapshotCandidateRowForTesting = previousCandidateRowHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -1350,6 +1410,67 @@ public partial class IndexCommandRunnerTests
         finally
         {
             ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = previousLookupHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DeletedCsharpStaticInterfaceContractDoesNotRegenerateImplicitReference()
+    {
+        var projectRoot = CreateTempProject();
+        var previousPreflightHook = DbWriter.CSharpContractPreflightForTesting;
+        var preflightCount = 0;
+        try
+        {
+            DbWriter.CSharpContractPreflightForTesting = () =>
+            {
+                preflightCount++;
+                previousPreflightHook?.Invoke();
+            };
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            File.WriteAllText(
+                interfacePath,
+                """
+                public interface IParseable<T>
+                {
+                    static abstract T Parse(string s);
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                """
+                public readonly struct Money : IParseable<Money>
+                {
+                    public static Money Parse(string s) => new();
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(0, preflightCount);
+
+            File.Delete(interfacePath);
+
+            var updateExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Equal(1, preflightCount);
+
+            var noStaleExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, noStaleExitCode);
+            Assert.Equal(1, preflightCount);
+
+            using var conn = OpenNonPoolingConnection(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'IParseable'";
+            Assert.Equal(0L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.CSharpContractPreflightForTesting = previousPreflightHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }

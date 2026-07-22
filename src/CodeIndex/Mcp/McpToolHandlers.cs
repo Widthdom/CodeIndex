@@ -60,6 +60,13 @@ public partial class McpServer
     internal static Action<string>? McpIndexDirectoryEnumerationCompletedForTesting { get; set; }
     internal static Action? McpIndexPostExtractionHookDiscoveryForTesting { get; set; }
     internal static Action? McpIndexFtsOptimizeForTesting { get; set; }
+    internal static Action? McpIndexFtsMergeForTesting { get; set; }
+    internal static Action<int>? McpIndexFtsStatPreflightBufferAllocatedForTesting { get; set; }
+    internal static Action<int>? McpIndexRetainedPathFilterAllocatedForTesting { get; set; }
+    internal static Action<int>? McpIndexStaleFilePurgePlannedForTesting { get; set; }
+    internal static Action<bool>? McpIndexStaleFilePurgeForTesting { get; set; }
+    internal static Func<CancellationToken, Task>? McpIndexStaleFilePurgedForTesting { get; set; }
+    internal static Action? McpIndexReferencePurgeForTesting { get; set; }
     internal static Action? McpIndexCSharpPrepassForTesting { get; set; }
     internal static Action? McpIndexCSharpMetadataResolveForTesting { get; set; }
     internal static Action? McpIndexTypeScriptAugmentationRebuildForTesting { get; set; }

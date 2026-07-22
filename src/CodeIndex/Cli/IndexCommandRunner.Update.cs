@@ -1209,10 +1209,10 @@ public static partial class IndexCommandRunner
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
             CommandOutputWriter.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
-        var ftsOptimizeRan = false;
+        var ftsMergeRan = false;
         if (ftsMutated)
         {
-            ftsOptimizeRan = writer.RecordFtsIncrementalWriteAndOptimizeIfThresholdReached(
+            ftsMergeRan = writer.RecordFtsIncrementalWriteAndMergeIfThresholdReached(
                 cancellationToken: cancellationToken);
         }
         if (options.MemoryTrace)
@@ -1467,7 +1467,8 @@ public static partial class IndexCommandRunner
                     Warnings = warnings,
                     Errors = errors,
                     SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
-                    FtsOptimizeRan = ftsOptimizeRan,
+                    FtsOptimizeRan = false,
+                    FtsMergeRan = ftsMergeRan,
                 },
                 SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 GraphTableAvailable = graphTableAvailableAfter,
@@ -1519,7 +1520,7 @@ public static partial class IndexCommandRunner
             if (warnings > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", ConsoleUi.FormatNumber(warnings), indent: "  "));
             if (errors > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Errors", ConsoleUi.FormatNumber(errors), indent: "  "));
             if (symbolsDroppedByKindFilter > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", ConsoleUi.FormatNumber(symbolsDroppedByKindFilter), indent: "  "));
-            if (ftsOptimizeRan) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("FTS optimize", "completed", indent: "  "));
+            if (ftsMergeRan) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("FTS merge", "completed", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));

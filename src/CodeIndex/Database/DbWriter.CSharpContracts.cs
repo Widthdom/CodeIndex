@@ -25,6 +25,15 @@ public partial class DbWriter
     internal List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(
         IReadOnlySet<string>? excludedPaths,
         out bool excludedPathsHaveContracts)
+        => LoadCSharpStaticInterfaceContractSymbols(
+            excludedPaths,
+            excludedExistingFileIds: null,
+            out excludedPathsHaveContracts);
+
+    internal List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(
+        IReadOnlySet<string>? excludedPaths,
+        IReadOnlyList<long>? excludedExistingFileIds,
+        out bool excludedPathsHaveContracts)
     {
         excludedPathsHaveContracts = false;
         var symbols = new List<SymbolRecord>();
@@ -50,6 +59,14 @@ public partial class DbWriter
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
+                var fileId = reader.GetInt64(1);
+                // Purge plans guarantee ascending IDs. Skip those rows before path-based
+                // bookkeeping: deleted contracts must not make pending paths look changed.
+                // purge plan は ID 昇順を保証する。削除対象 contract を pending path の
+                // 変更扱いにしないよう、path based bookkeeping より先に除外する。
+                if (FilePurgePlan.ContainsSortedFileId(excludedExistingFileIds, fileId))
+                    continue;
+
                 var path = reader.GetString(0);
                 var kind = reader.GetString(2);
                 if (excludedPaths?.Contains(path) == true)
@@ -61,7 +78,7 @@ public partial class DbWriter
 
                 symbols.Add(new SymbolRecord
                 {
-                    FileId = reader.GetInt64(1),
+                    FileId = fileId,
                     Kind = kind,
                     Name = reader.GetString(3),
                     Line = reader.GetInt32(4),
