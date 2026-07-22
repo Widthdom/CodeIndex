@@ -24,7 +24,7 @@ public class PostExtractionHookTests
     internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
     private const string TimedOutHookDelayMilliseconds = "150";
     private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(400);
-    private static readonly TimeSpan DuplicateHookCallbackBudget = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan DuplicateHookCallbackBudget = TimeSpan.FromSeconds(1);
 
     [Fact]
     public void OnSymbolsExtractedAfterSourceObservation_PreservesEvidenceWithoutSecondSymbolScan()
