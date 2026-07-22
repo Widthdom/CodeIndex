@@ -3987,7 +3987,7 @@ public class HttpMcpTransportTests : IDisposable
     public async Task HttpTransport_EventsStream_AllowsPostsAndRemovesDisconnectedStreams_Issue3815()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-        harness.SetKeepAlive(TimeSpan.FromSeconds(1), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
+        harness.SetKeepAlive(TimeSpan.FromMilliseconds(10), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
         using (var initialize = await harness.InitializeAsync())
             Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
         using var client = CreateHttpClient();
