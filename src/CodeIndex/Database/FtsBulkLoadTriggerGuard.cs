@@ -6,6 +6,7 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
     internal const int DirtyByteThresholdDenominator = 5;
 
     private readonly Func<bool>? _shouldRebuildOnAbandon;
+    private readonly long _durableCommitGenerationAtStart;
     private DbWriter? _writer;
 
     private FtsBulkLoadTriggerGuard(DbWriter writer, Func<bool>? shouldRebuildOnAbandon)
@@ -13,6 +14,7 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
         _writer = writer;
         _shouldRebuildOnAbandon = shouldRebuildOnAbandon;
         writer.SuspendFtsSyncTriggersForBulkLoad();
+        _durableCommitGenerationAtStart = writer.CaptureDurableCommitGeneration();
     }
 
     public static FtsBulkLoadTriggerGuard? Start(
@@ -105,6 +107,7 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
         try
         {
             writer.RestoreFtsSyncTriggers(cancellationToken);
+            rebuild |= writer.HasDurableCommitSince(_durableCommitGenerationAtStart);
             if (rebuild)
                 writer.RebuildFtsFromChunks(
                     resetIncrementalWriteCounter: false,
@@ -146,7 +149,8 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
             // bulk load 中断時も trigger を復元する。trigger 無効中に commit 済み行があれば
             // FTS を再構築し、Complete まで進まなかった commit 済み progress も検索可能に保つ。
             var hasAbandonPolicy = _shouldRebuildOnAbandon != null;
-            var rebuild = _shouldRebuildOnAbandon?.Invoke() == true;
+            var rebuild = _shouldRebuildOnAbandon?.Invoke() == true
+                || writer.HasDurableCommitSince(_durableCommitGenerationAtStart);
             writer.RestoreFtsSyncTriggers();
             if (rebuild)
                 writer.RebuildFtsFromChunks();

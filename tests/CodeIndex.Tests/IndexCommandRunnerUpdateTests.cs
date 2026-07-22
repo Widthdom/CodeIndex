@@ -4566,6 +4566,94 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithChangedBetween_ExpandedExactCleanupPathReappearancePreservesPriorRow()
+    {
+        var projectRoot = CreateTempProject();
+        var previousExpansionHook = IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting;
+        var previousContentLoadHook = IndexCommandRunner.UpdateFileContentLoadForTesting;
+        try
+        {
+            RunGit(projectRoot, "init");
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            const string reappearedContent = "public sealed class Reappeared { }\n";
+            var reappearedPath = Path.Combine(projectRoot, "Reappeared.cs");
+            File.WriteAllText(reappearedPath, reappearedContent);
+            var unrelatedPath = Path.Combine(projectRoot, "unrelated.py");
+            File.WriteAllText(unrelatedPath, "print('before')\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "base with reappearance candidate");
+            RunGit(projectRoot, "branch", "range-before");
+
+            File.WriteAllText(unrelatedPath, "print('after')\n");
+            RunGit(projectRoot, "add", "unrelated.py");
+            RunGit(projectRoot, "commit", "-m", "unrelated range change");
+            RunGit(projectRoot, "branch", "range-after");
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var originalChecksum = ReadIndexedChecksum(dbPath, "Reappeared.cs");
+            Assert.NotNull(originalChecksum);
+
+            File.Delete(reappearedPath);
+            var expansionHookCalls = 0;
+            IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = () =>
+            {
+                Assert.Equal(1, Interlocked.Increment(ref expansionHookCalls));
+                File.WriteAllText(reappearedPath, reappearedContent);
+            };
+            var reappearedContentLoads = 0;
+            IndexCommandRunner.UpdateFileContentLoadForTesting = path =>
+            {
+                if (!string.Equals(path, "Reappeared.cs", StringComparison.Ordinal))
+                    return;
+
+                Interlocked.Increment(ref reappearedContentLoads);
+                throw new IOException("Injected extraction failure after cleanup planning.");
+            };
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--changed-between", "range-before", "range-after", "--json"]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, updateExitCode);
+            Assert.Equal("partial", updateJson.GetProperty("status").GetString());
+            Assert.False(updateJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(updateJson.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.Equal(1, expansionHookCalls);
+            Assert.Equal(0, reappearedContentLoads);
+            Assert.Equal(originalChecksum, ReadIndexedChecksum(dbPath, "Reappeared.cs"));
+            Assert.True(IndexedFileExists(projectRoot, "Reappeared.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+
+            IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = null;
+            IndexCommandRunner.UpdateFileContentLoadForTesting = null;
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            Assert.True(IndexedFileExists(projectRoot, "Reappeared.cs"));
+            Assert.Equal(1, CountMoneyParseImplicitImplementationReferences(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = previousExpansionHook;
+            IndexCommandRunner.UpdateFileContentLoadForTesting = previousContentLoadHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateCommits_ExactCleanupPathReappearingAfterSnapshotBarrierPreservesPriorRow()
     {
         var projectRoot = CreateTempProject();

@@ -23,6 +23,7 @@ public partial class DbWriter
     public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
     public const string FtsLastOptimizeDurationMsMetaKey = "fts_last_optimize_duration_ms";
     public const string FtsBulkLoadInProgressMetaKey = "fts_bulk_load_in_progress";
+    public const string FtsBulkLoadOwnerGenerationMetaKey = "fts_bulk_load_owner_generation";
     public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
     public const int DefaultFtsMergeIncrementalWriteThreshold = 25;
     public const int DefaultFtsIncrementalMergeWorkTargetPages = 1000;
@@ -164,6 +165,7 @@ public partial class DbWriter
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private int _rowSkipSavepointCounter;
     private long _batchRowsSkipped;
+    private long _durableCommitGeneration;
     private int _transactionDepth;
     private int _transactionOwnerThreadId;
     private Guid _transactionOwnerToken;

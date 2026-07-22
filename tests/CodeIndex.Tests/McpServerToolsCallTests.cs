@@ -10442,6 +10442,90 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_PostCommitCheckpointFailureRebuildsBulkFtsBeforeClearingMarker()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_fts_post_commit_failure_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_fts_post_commit_failure");
+        var previousCheckpointHook = DbWriter.BeforePassiveWalCheckpointForTesting;
+        var previousPurgeHook = McpServer.McpIndexStaleFilePurgeForTesting;
+        var checkpointFailureCount = 0;
+        var bulkPurgeStarted = false;
+        static string SizedSource(string token, char fill, int size)
+        {
+            var prefix = $"# {token} ";
+            return prefix + new string(fill, size - prefix.Length - 1) + "\n";
+        }
+
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            var deletedPath = Path.Combine(fixtureDir, "deleted.py");
+            var retainedPath = Path.Combine(fixtureDir, "retained.py");
+            File.WriteAllText(deletedPath, SizedSource("mcp_post_commit_deleted_token", 'd', 600));
+            File.WriteAllText(retainedPath, SizedSource("mcp_post_commit_retained_token", 's', 400));
+
+            JsonNode updateResponse;
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion()))
+            {
+                var initialResponse = CallIndex(server, fixtureDir);
+                Assert.False(
+                    initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                    initialResponse.ToJsonString());
+                File.Delete(deletedPath);
+                McpServer.McpIndexStaleFilePurgeForTesting = bulkEnabled =>
+                {
+                    previousPurgeHook?.Invoke(bulkEnabled);
+                    bulkPurgeStarted = bulkEnabled;
+                };
+                DbWriter.BeforePassiveWalCheckpointForTesting = () =>
+                {
+                    previousCheckpointHook?.Invoke();
+                    if (bulkPurgeStarted
+                        && Interlocked.Exchange(ref checkpointFailureCount, 1) == 0)
+                    {
+                        throw new InvalidOperationException(
+                            "simulated MCP post-commit WAL checkpoint failure");
+                    }
+                };
+
+                updateResponse = CallIndex(server, fixtureDir);
+            }
+
+            Assert.True(
+                updateResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                updateResponse.ToJsonString());
+            Assert.Equal(1, checkpointFailureCount);
+            DbWriter.BeforePassiveWalCheckpointForTesting = previousCheckpointHook;
+
+            using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var command = verificationDb.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM files WHERE path = 'deleted.py'";
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'mcp_post_commit_deleted_token'";
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'mcp_post_commit_retained_token'";
+            Assert.Equal(1L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_ai', 'fts_chunks_ad', 'fts_chunks_au')";
+            Assert.Equal(3L, (long)command.ExecuteScalar()!);
+            command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            command.Parameters.AddWithValue("@key", DbWriter.FtsBulkLoadInProgressMetaKey);
+            var bulkLoadMarker = command.ExecuteScalar();
+            Assert.True(
+                bulkLoadMarker is null or DBNull
+                || string.IsNullOrEmpty((string)bulkLoadMarker));
+        }
+        finally
+        {
+            DbWriter.BeforePassiveWalCheckpointForTesting = previousCheckpointHook;
+            McpServer.McpIndexStaleFilePurgeForTesting = previousPurgeHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public async Task ToolsCall_Index_CancellationAfterCommittedBulkPurgeRebuildsFtsOnAbandon()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fts_purge_cancel_{Guid.NewGuid():N}");

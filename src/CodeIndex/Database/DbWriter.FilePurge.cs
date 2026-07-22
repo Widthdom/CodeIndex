@@ -403,7 +403,7 @@ public partial class DbWriter
         // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する。
         try
         {
-            using var txn = BeginTransaction();
+            using var txn = BeginTransaction(cancellationToken, "file purge");
             cancellationToken.ThrowIfCancellationRequested();
             using (RegisterSqliteInterrupt(cancellationToken))
             {

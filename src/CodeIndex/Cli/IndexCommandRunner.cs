@@ -95,6 +95,7 @@ public static partial class IndexCommandRunner
     internal static Action? FullScanCSharpMetadataResolveForTesting { get; set; }
     internal static Action? FullScanTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Action? UpdateCSharpPrepassForTesting { get; set; }
+    internal static Action? UpdateCSharpExpansionScanStartingForTesting { get; set; }
     internal static Action<string>? UpdateCleanupChecksumReadForTesting { get; set; }
     internal static Action? UpdateCSharpMetadataResolveForTesting { get; set; }
     internal static Action? UpdateTypeScriptAugmentationRebuildForTesting { get; set; }

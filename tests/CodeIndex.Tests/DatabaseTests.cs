@@ -1491,6 +1491,53 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void FtsBulkLoadOwnerMarker_RemainsLegacyReadableAndCleanupTriggersInvalidateGeneration()
+    {
+        var pid = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var expectedMarker = "pid:" + pid;
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        try
+        {
+            var marker = Assert.IsType<string>(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(expectedMarker, marker);
+            Assert.True(int.TryParse(
+                marker.AsSpan("pid:".Length),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var legacyParsedPid));
+            Assert.Equal(Environment.ProcessId, legacyParsedPid);
+            Assert.StartsWith(
+                expectedMarker + ":",
+                ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey),
+                StringComparison.Ordinal);
+            Assert.Equal(3L, CountFtsBulkLoadGenerationCleanupTriggers());
+
+            // Model an older writer updating, deleting, and reinserting only the primary key.
+            _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, "true");
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+
+            _writer.SetMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey, expectedMarker + ":start:1");
+            using (var deletePrimary = _db.Connection.CreateCommand())
+            {
+                deletePrimary.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                deletePrimary.Parameters.AddWithValue("@key", DbWriter.FtsBulkLoadInProgressMetaKey);
+                Assert.Equal(1, deletePrimary.ExecuteNonQuery());
+            }
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+
+            _writer.SetMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey, expectedMarker + ":start:1");
+            _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, expectedMarker);
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+        }
+        finally
+        {
+            _writer.RestoreFtsSyncTriggers();
+            _writer.ClearFtsBulkLoadInProgress();
+        }
+    }
+
+    [Fact]
     public void FtsBulkLoadTriggerGuard_StartPartialDropFailureDowngradesMarkerAndRecoversSameProcess()
     {
         var fileId = UpsertTestFile("src/failed-drop-bulk-fts.cs", checksum: "failed-drop-bulk-fts");
@@ -1689,6 +1736,64 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void FtsBulkLoadTriggerGuard_CompleteRebuildsAfterPostCommitCheckpointFailure()
+    {
+        var fileId = UpsertTestFile(
+            "src/post-commit-checkpoint-bulk-fts.cs",
+            checksum: "post-commit-checkpoint-bulk-fts");
+        const string token = "postcommitcheckpointbulktoken";
+        var previousHook = DbWriter.BeforePassiveWalCheckpointForTesting;
+        var injectedException = new InvalidOperationException("simulated post-commit WAL checkpoint failure");
+        var ftsMutated = false;
+        FtsBulkLoadTriggerGuard? guard = null;
+
+        try
+        {
+            guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated);
+            Assert.NotNull(guard);
+            using (var txn = _writer.BeginTransaction())
+            {
+                _writer.InsertChunks(
+                [
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = token,
+                    },
+                ]);
+                DbWriter.BeforePassiveWalCheckpointForTesting = () => throw injectedException;
+
+                var thrown = Assert.Throws<InvalidOperationException>(() => txn.Commit());
+
+                Assert.Same(injectedException, thrown);
+            }
+
+            Assert.False(ftsMutated);
+            Assert.Equal(0L, CountFtsSyncTriggers());
+            Assert.Equal(0L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.StartsWith(
+                "pid:",
+                ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey),
+                StringComparison.Ordinal);
+
+            DbWriter.BeforePassiveWalCheckpointForTesting = previousHook;
+            guard.Complete(rebuild: false);
+
+            Assert.Equal(3L, CountFtsSyncTriggers());
+            Assert.Equal(1L, ExecuteScalarLong($"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        }
+        finally
+        {
+            DbWriter.BeforePassiveWalCheckpointForTesting = previousHook;
+            guard?.Dispose();
+        }
+    }
+
+    [Fact]
     public void FtsBulkLoadTriggerGuard_CancelledCompleteDefersRecoveryWithoutActiveOwner_Issue4591()
     {
         var fileId = UpsertTestFile("src/cancelled-complete-bulk-fts.cs", checksum: "cancelled-complete-bulk-fts");
@@ -1785,6 +1890,124 @@ public class DatabaseTests : IDisposable
         _writer.RestoreFtsSyncTriggers();
         _writer.RebuildFtsFromChunks();
         _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Theory]
+    [InlineData("start:1")]
+    [InlineData("token:00000000000000000000000000000001")]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_RebuildsWhenPidGenerationDoesNotMatch(
+        string generation)
+    {
+        var fileId = UpsertTestFile(
+            "src/reused-pid-bulk-fts.cs",
+            checksum: "reused-pid-bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "reusedpidbulktoken",
+            },
+        ]);
+        var pid = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _writer.SetMeta(
+            DbWriter.FtsBulkLoadOwnerGenerationMetaKey,
+            $"pid:{pid}:{generation}");
+
+        Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong(
+            "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'reusedpidbulktoken'"));
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_SkipsMismatchedGenerationAssociationConservatively()
+    {
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.SetMeta(
+            DbWriter.FtsBulkLoadOwnerGenerationMetaKey,
+            "pid:2147483647:start:1");
+
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(
+            $"pid:{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        _writer.RestoreFtsSyncTriggers();
+        _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_SkipsGenerationWhenCleanupTriggerSetIsIncomplete()
+    {
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        ExecuteNonQuery(
+            _db.Connection,
+            $"DROP TRIGGER {DbWriter.FtsBulkLoadGenerationClearDeleteTriggerName}");
+        _writer.SetMeta(
+            DbWriter.FtsBulkLoadOwnerGenerationMetaKey,
+            $"pid:{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}:start:1");
+
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(2L, CountFtsBulkLoadGenerationCleanupTriggers());
+        _writer.RestoreFtsSyncTriggers();
+        _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_WithoutMetaTableIsNoOpAndObservesPreCancellation()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        var writer = new DbWriter(connection);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var cancellationException = Assert.Throws<OperationCanceledException>(() =>
+            writer.RecoverInterruptedFtsBulkLoadIfNeeded(cancellation.Token));
+
+        Assert.Equal(cancellation.Token, cancellationException.CancellationToken);
+        Assert.False(writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_SkipsLegacyPidOnlyActiveOwnerConservatively()
+    {
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.SetMeta(
+            DbWriter.FtsBulkLoadInProgressMetaKey,
+            $"pid:{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(
+            $"pid:{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadOwnerGenerationMetaKey));
+        _writer.RestoreFtsSyncTriggers();
+        _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Fact]
+    public void FtsBulkLoadOwnerGeneration_StartMarkerDoesNotMatchTokenFallbackIncarnation()
+    {
+        Assert.False(DbWriter.IsFtsBulkLoadOwnerGenerationMatch(
+            expectedStartTimeUtcTicks: 1,
+            expectedIncarnationToken: null,
+            currentProcessStartTimeUtcTicks: null,
+            currentProcessIncarnationToken: Guid.NewGuid()));
     }
 
     [Fact]
@@ -2629,6 +2852,149 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbWriter.TransactionStateContentionTimeoutForTesting = originalTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task TransactionScope_DisposeWaitsForPostCommitCheckpointFinalization()
+    {
+        var previousHook = DbWriter.BeforePassiveWalCheckpointForTesting;
+        var previousTimeout = DbWriter.TransactionStateContentionTimeoutForTesting;
+        using var checkpointEntered = new ManualResetEventSlim();
+        using var releaseCheckpoint = new ManualResetEventSlim();
+        var scope = _writer.BeginTransaction(CancellationToken.None, "post-commit finalization owner");
+        Task<Exception>? commitTask = null;
+        Task? disposeTask = null;
+
+        try
+        {
+            DbWriter.TransactionStateContentionTimeoutForTesting = TimeSpan.FromMilliseconds(25);
+            _writer.SetMeta("test_post_commit_finalization", "1");
+            DbWriter.BeforePassiveWalCheckpointForTesting = () =>
+            {
+                checkpointEntered.Set();
+                if (!releaseCheckpoint.Wait(TimeSpan.FromSeconds(5)))
+                    throw new TimeoutException("Timed out waiting to release the post-commit checkpoint hook.");
+            };
+
+            commitTask = Task.Run(() => Record.Exception(scope.Commit));
+            Assert.True(
+                checkpointEntered.Wait(TimeSpan.FromSeconds(2)),
+                "Transaction commit did not reach post-commit checkpoint finalization.");
+
+            var disposeStarted = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            disposeTask = Task.Run(() =>
+            {
+                disposeStarted.TrySetResult(true);
+                scope.Dispose();
+            });
+            await disposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.NotSame(
+                disposeTask,
+                await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromMilliseconds(200))));
+
+            releaseCheckpoint.Set();
+            Assert.Null(await commitTask.WaitAsync(TimeSpan.FromSeconds(2)));
+            await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+            using var next = _writer.BeginTransaction(
+                CancellationToken.None,
+                "post-commit finalization successor");
+        }
+        finally
+        {
+            releaseCheckpoint.Set();
+            DbWriter.BeforePassiveWalCheckpointForTesting = previousHook;
+            DbWriter.TransactionStateContentionTimeoutForTesting = previousTimeout;
+            scope.Dispose();
+            if (commitTask != null)
+                await commitTask.WaitAsync(TimeSpan.FromSeconds(2));
+            if (disposeTask != null)
+                await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
+    public async Task TransactionScope_RollbackClearsActiveTransactionBeforeDisposeReleasesGate()
+    {
+        var previousHook = DbWriter.BeforeRollbackTerminalStateForTesting;
+        using var rollbackFinalizationEntered = new ManualResetEventSlim();
+        using var releaseRollbackFinalization = new ManualResetEventSlim();
+        var activeTransactionField = typeof(DbWriter).GetField(
+            "_activeTransaction",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("DbWriter._activeTransaction field was not found.");
+        var scope = _writer.BeginTransaction(CancellationToken.None, "rollback finalization owner");
+        Task<Exception>? rollbackTask = null;
+        Task? disposeTask = null;
+        Task? successorTask = null;
+        object? activeTransactionAtFinalization = null;
+
+        try
+        {
+            _writer.SetMeta("test_rollback_finalization", "rolled-back");
+            DbWriter.BeforeRollbackTerminalStateForTesting = () =>
+            {
+                activeTransactionAtFinalization = activeTransactionField.GetValue(_writer);
+                rollbackFinalizationEntered.Set();
+                if (!releaseRollbackFinalization.Wait(TimeSpan.FromSeconds(5)))
+                    throw new TimeoutException("Timed out waiting to release rollback finalization.");
+            };
+
+            rollbackTask = Task.Run(() => Record.Exception(scope.Rollback));
+            Assert.True(
+                rollbackFinalizationEntered.Wait(TimeSpan.FromSeconds(2)),
+                "Transaction rollback did not reach terminal-state finalization.");
+            Assert.Null(activeTransactionAtFinalization);
+
+            var disposeStarted = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            disposeTask = Task.Run(() =>
+            {
+                disposeStarted.TrySetResult(true);
+                scope.Dispose();
+            });
+            await disposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var successorAttempting = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var successorEntered = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            successorTask = Task.Run(() =>
+            {
+                successorAttempting.TrySetResult(true);
+                using var successor = _writer.BeginTransaction(
+                    CancellationToken.None,
+                    "rollback finalization successor");
+                successorEntered.TrySetResult(true);
+                _writer.SetMeta("test_rollback_finalization", "successor");
+                successor.Commit();
+            });
+            await successorAttempting.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            Assert.False(disposeTask.IsCompleted);
+            Assert.False(successorEntered.Task.IsCompleted);
+
+            releaseRollbackFinalization.Set();
+            Assert.Null(await rollbackTask.WaitAsync(TimeSpan.FromSeconds(2)));
+            await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+            await successorTask.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal("successor", ReadMeta("test_rollback_finalization"));
+        }
+        finally
+        {
+            releaseRollbackFinalization.Set();
+            DbWriter.BeforeRollbackTerminalStateForTesting = previousHook;
+            scope.Dispose();
+            if (rollbackTask != null)
+                await rollbackTask.WaitAsync(TimeSpan.FromSeconds(2));
+            if (disposeTask != null)
+                await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+            if (successorTask != null)
+                await successorTask.WaitAsync(TimeSpan.FromSeconds(2));
         }
     }
 
@@ -7279,6 +7645,58 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public async Task FilePurgePlan_CancelledWhileTransactionGateHeld_StopsPromptlyWithoutDeleting()
+    {
+        const int fileCount = 1;
+        SeedStaleFilesWithChildren(fileCount);
+        var plan = _writer.PlanFilesOutsideRetainedSet(new HashSet<string>(StringComparer.Ordinal));
+        using var cancellation = new CancellationTokenSource();
+        var purgeStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var purgeCompleted = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var purgeThread = new Thread(() =>
+        {
+            purgeStarted.TrySetResult(true);
+            purgeCompleted.TrySetResult(Record.Exception(() =>
+                _writer.ApplyFilePurgePlan(plan, cancellationToken: cancellation.Token)));
+        })
+        {
+            IsBackground = true,
+            Name = "file-purge-gate-cancellation-test",
+        };
+
+        var held = _writer.BeginTransaction(CancellationToken.None, "file purge cancellation test owner");
+        var completedBeforeGateRelease = false;
+        var stopwatch = new Stopwatch();
+        try
+        {
+            purgeThread.Start();
+            await purgeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            stopwatch.Start();
+            cancellation.Cancel();
+            completedBeforeGateRelease = ReferenceEquals(
+                await Task.WhenAny(purgeCompleted.Task, Task.Delay(TimeSpan.FromSeconds(2))),
+                purgeCompleted.Task);
+            stopwatch.Stop();
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        var purgeException = await purgeCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(purgeThread.Join(TimeSpan.FromSeconds(2)), "File purge worker did not exit.");
+        Assert.True(
+            completedBeforeGateRelease,
+            $"File purge cancellation did not interrupt transaction gate contention within two seconds ({stopwatch.Elapsed}).");
+        var cancellationException = Assert.IsAssignableFrom<OperationCanceledException>(purgeException);
+        Assert.Equal(cancellation.Token, cancellationException.CancellationToken);
+        Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+        Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM chunks"));
+        Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks"));
+    }
+
+    [Fact]
     public void PurgeFilesOutsideRetainedSetWithinListedDirectories_PurgesDeepDescendantsUnderSymlinkPrunedDirectory()
     {
         // Regression for #190 follow-up: earlier symlink-following runs can leave entries like
@@ -7846,6 +8264,17 @@ public class DatabaseTests : IDisposable
 
     private long CountFtsSyncTriggers()
         => ExecuteScalarLong("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_ai', 'fts_chunks_ad', 'fts_chunks_au')");
+
+    private long CountFtsBulkLoadGenerationCleanupTriggers()
+        => ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type = 'trigger'
+              AND name IN (
+                  '{DbWriter.FtsBulkLoadGenerationClearInsertTriggerName}',
+                  '{DbWriter.FtsBulkLoadGenerationClearUpdateTriggerName}',
+                  '{DbWriter.FtsBulkLoadGenerationClearDeleteTriggerName}')
+            """);
 
     private string? ReadMeta(string key)
     {

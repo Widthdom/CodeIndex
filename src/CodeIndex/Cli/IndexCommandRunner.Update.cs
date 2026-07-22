@@ -1036,6 +1036,7 @@ public static partial class IndexCommandRunner
             var expandHeartbeat = StartIndexJsonPhaseHeartbeat(options, "expanding C# update set for static interface contracts");
             try
             {
+                UpdateCSharpExpansionScanStartingForTesting?.Invoke();
                 var scanWithDirectorySnapshots =
                     indexer.ScanFilesDetailedWithDirectoryListingSnapshots(
                     cancellationToken: cancellationToken);
@@ -1294,10 +1295,12 @@ public static partial class IndexCommandRunner
             UpdateScanInputSnapshotBarrierForTesting?.Invoke("before_cleanup_apply");
             Dictionary<string, HashSet<FileIndexer.FileIdentity>>?
                 retainedFileIdentitiesByCaseFold = null;
+            var retainedPathsExact = new HashSet<string>(StringComparer.Ordinal);
             foreach (var retainedTargetPath in targetPaths)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var retainedTarget = UpdateFileTarget.Create(projectRoot, retainedTargetPath);
+                retainedPathsExact.Add(retainedTarget.IndexPath);
                 var ioPath = LongPath.EnsureWindowsPrefix(retainedTarget.FilePath);
                 if (!File.Exists(ioPath))
                     continue;
@@ -1324,7 +1327,7 @@ public static partial class IndexCommandRunner
             var reappearedCleanupPath = writer.FindReappearedFileInScopedCleanupPlan(
                 projectRoot,
                 scopedCleanupPlan.FileIds,
-                targetPaths,
+                retainedPathsExact,
                 retainedFileIdentitiesByCaseFold,
                 cancellationToken);
             if (reappearedCleanupPath != null)
