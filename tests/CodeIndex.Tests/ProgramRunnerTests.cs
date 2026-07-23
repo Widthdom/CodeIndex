@@ -1167,6 +1167,21 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunDoctor_BareEnvironmentInventoryPreservesFollowingGlobalJsonFlags_Issue4713()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--env-inventory", "--pretty", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains(Environment.NewLine + "  \"api_version\"", stdout, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.True(document.RootElement.TryGetProperty("environment_inventory_summary", out _));
+        Assert.False(document.RootElement.TryGetProperty("environment_inventory", out _));
+    }
+
+    [Fact]
     public void RunDoctor_EnvironmentInventoryFull_PrintsAuditView()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(

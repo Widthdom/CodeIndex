@@ -196,6 +196,21 @@ internal static partial class ProgramRunner
                 return true;
             }
 
+            var unsupportedArg = licenseArgs.FirstOrDefault(static arg => arg != "--json");
+            if (unsupportedArg is not null)
+            {
+                exitCode = CommandErrorWriter.WriteJsonOrHuman(
+                    wantsJson,
+                    context.JsonOptions,
+                    $"Unknown license argument: {unsupportedArg}",
+                    CommandExitCodes.InvalidArgument,
+                    "use `cdidx license` for human-readable terms or `cdidx license --json` for structured output.",
+                    usage: "cdidx license [--json]");
+                GlobalToolLog.Info($"command_complete exit_code={exitCode} license_argument_unsupported=true");
+                EmitCommandMetric("license", args, context.StartTimestamp, context.Stopwatch, exitCode);
+                return true;
+            }
+
             if (wantsJson)
             {
                 var payload = ConsoleUi.BuildLicenseJsonResult();

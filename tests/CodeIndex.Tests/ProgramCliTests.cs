@@ -1048,6 +1048,7 @@ public class ProgramCliTests
 
     [ProductionRuntimeTheory]
     [InlineData(CommandExitCodes.UsageError, "license supports --json only; --json=<format> is not supported.", "license", "--json=array")]
+    [InlineData(CommandExitCodes.InvalidArgument, "Unknown license argument: --bogus", "license", "--json", "--bogus")]
     [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "--json")]
     [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "zsh", "--json")]
     [InlineData(CommandExitCodes.InvalidArgument, "config show supports --json only; --json=<format> is not supported.", "config", "show", "--json=array")]

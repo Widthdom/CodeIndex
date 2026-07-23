@@ -364,7 +364,7 @@ internal static class CliFlagSchema
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search/Audit grouped output: representative matches per file", Commands = Set("search", "audit") },
             new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search/Audit recipes: cap emitted rows across all child queries", Commands = Set("search", "audit") },
-            new() { Name = "--env-inventory", ValuePlaceholder = "<compact|full>", Description = "Doctor: include a compact environment-variable summary or the full inventory", Commands = Set("doctor") },
+            new() { Name = "--env-inventory", Description = "Doctor: include a compact environment-variable summary; use --env-inventory=full for the full inventory", Commands = Set("doctor") },
             new() { Name = "--env-domain", ValuePlaceholder = "<domain>", Description = "Doctor full environment inventory: filter by exact domain", Commands = Set("doctor") },
             new() { Name = "--env-category", ValuePlaceholder = "<category>", Description = "Doctor full environment inventory: filter by exact category", Commands = Set("doctor") },
             new() { Name = "--env-sensitivity", ValuePlaceholder = "<sensitivity>", Description = "Doctor full environment inventory: filter by exact sensitivity", Commands = Set("doctor") },

@@ -61,7 +61,8 @@ public class ConsoleUiTests
     [Fact]
     public void DoctorAndLicense_HelpAndCompletionExposeStructuredOutputControls_Issue4713()
     {
-        var doctorFlags = CliFlagSchema.GetCompletionFlagsForCommand("doctor")
+        var doctorCompletionFlags = CliFlagSchema.GetCompletionFlagsForCommand("doctor");
+        var doctorFlags = doctorCompletionFlags
             .Select(static flag => flag.Name)
             .ToHashSet(StringComparer.Ordinal);
         Assert.Contains("--json", doctorFlags);
@@ -70,6 +71,9 @@ public class ConsoleUiTests
         Assert.Contains("--env-category", doctorFlags);
         Assert.Contains("--env-sensitivity", doctorFlags);
         Assert.Contains("--max-json-bytes", doctorFlags);
+        Assert.False(Assert.Single(
+            doctorCompletionFlags,
+            static flag => flag.Name == "--env-inventory").IsValueBearing);
 
         var licenseFlags = CliFlagSchema.GetCompletionFlagsForCommand("license")
             .Select(static flag => flag.Name)
