@@ -77,7 +77,7 @@ public static class ReportCommandRunner
                 CommandErrorWriter.WriteWarning(outputExtensionWarning);
 
             var summary = new ReportBundleSummary(
-                options.Json ? RedactedPlaceholder : fullOutputPath,
+                options.Json ? Path.GetFileName(fullOutputPath) : fullOutputPath,
                 resolvedVersion,
                 BundleArtifactFormat,
                 BundleArtifactMediaType,
