@@ -1147,7 +1147,7 @@ public class ConsoleUiTests
     {
         var output = ConsoleCompletionRenderer.GetCompletionScript(shell);
 
-        foreach (var command in CliCommandCatalog.Commands)
+        foreach (var command in CliCommandCatalog.PublicCommandNames)
         {
             switch (shell)
             {

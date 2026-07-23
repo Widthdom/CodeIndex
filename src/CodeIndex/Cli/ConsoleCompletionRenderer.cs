@@ -5,7 +5,7 @@ namespace CodeIndex.Cli;
 
 internal static class ConsoleCompletionRenderer
 {
-    private static string[] Commands => CliCommandCatalog.Commands;
+    private static readonly string[] ShellCommandNames = [.. CliCommandMetadata.PublicCommandNames];
 
     internal static string GetCompletionScript(string shell) =>
         shell.ToLowerInvariant() switch
@@ -53,7 +53,7 @@ internal static class ConsoleCompletionRenderer
     private static readonly string[] EnumeratedCompletionCommands =
     [
         "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions",
-        .. CliCommandCatalog.Commands.Except(["find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions", "search"]),
+        .. CliCommandMetadata.PublicCommandNames.Except(["find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions", "search"]),
         "search",
     ];
 
@@ -68,7 +68,7 @@ internal static class ConsoleCompletionRenderer
 
     private static string GetBashCompletions()
     {
-        var cmds = string.Join(" ", Commands);
+        var cmds = string.Join(" ", ShellCommandNames);
         var topLevelFlags = string.Join(" ", BuildTopLevelFlagList());
         var langs = GetCompletionLangs();
         var kinds = GetCompletionKinds();
@@ -90,10 +90,10 @@ internal static class ConsoleCompletionRenderer
         sb.Append("    fi\n");
         sb.Append("\n");
         sb.Append("    case \"$prev\" in\n");
-        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
+        foreach (var (command, subcommands) in CliCommandMetadata.CommandSubcommands)
         {
             var candidates = string.Join(' ', subcommands);
-            if (CliCommandCatalog.HasOptionalSubcommand(command))
+            if (CliCommandMetadata.OptionalSubcommandCommands.Contains(command))
                 candidates += $" {BuildBashFlagList(command)}";
             sb.Append($"        {command}) COMPREPLY=($(compgen -W \"{candidates}\" -- \"$cur\")); return ;;\n");
         }
@@ -178,7 +178,7 @@ internal static class ConsoleCompletionRenderer
 
     private static string GetZshCompletions()
     {
-        var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
+        var cmds = string.Join(" ", ShellCommandNames.Select(c => $"'{c}:{c} command'"));
         var langs = GetCompletionLangs();
         var kinds = GetCompletionKinds();
         var version = ConsoleUi.LoadVersion();
@@ -203,7 +203,7 @@ internal static class ConsoleCompletionRenderer
         sb.Append("        args)\n");
         sb.Append("            local subcmd\n");
         sb.Append("            subcmd=$words[2]\n");
-        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
+        foreach (var (command, subcommands) in CliCommandMetadata.CommandSubcommands)
         {
             sb.Append($"            if [[ $subcmd == {command} && $CURRENT -le 3 ]]; then\n");
             sb.Append("                local -a subcommands\n");
@@ -211,7 +211,7 @@ internal static class ConsoleCompletionRenderer
             sb.Append($"                    {string.Join(' ', subcommands.Select(subcommand => $"'{subcommand}:{subcommand} subcommand'"))}\n");
             sb.Append("                )\n");
             sb.Append("                _describe 'subcommand' subcommands\n");
-            if (CliCommandCatalog.HasOptionalSubcommand(command))
+            if (CliCommandMetadata.OptionalSubcommandCommands.Contains(command))
                 AppendZshArguments(sb, BuildZshArgsForCommand(command, langs, kinds));
             sb.Append("                return\n");
             sb.Append("            fi\n");
@@ -340,9 +340,9 @@ internal static class ConsoleCompletionRenderer
             $"# cdidx fish completions generated for version {ConsoleUi.LoadVersion()}",
             "# Regenerate this script after upgrading cdidx.",
         };
-        foreach (var cmd in Commands)
+        foreach (var cmd in ShellCommandNames)
             lines.Add($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
-        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
+        foreach (var (command, subcommands) in CliCommandMetadata.CommandSubcommands)
             lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {command}' -a '{string.Join(' ', subcommands)}' -d '{command} subcommand'");
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
@@ -372,18 +372,18 @@ internal static class ConsoleCompletionRenderer
         // という対応で生成する。`--group-by-name` のみ既存テストが期待する短い tooltip を維持。
         foreach (var flag in CliFlagSchema.All)
         {
-            if (flag.Commands.Count == 0)
+            if (flag.PrimaryCommands.Count == 0)
                 continue;
             if (flag.Name == "--format")
             {
-                foreach (var command in flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)))
+                foreach (var command in flag.PrimaryCommands.OrderBy(c => Array.IndexOf(ShellCommandNames, c)))
                 {
                     var values = GetFormatValues(command) ?? [];
                     lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {command}' -l format -r -a '{string.Join(' ', values)}' -d '{flag.Description.Replace("'", "\\'")}'");
                 }
                 continue;
             }
-            var commands = string.Join(' ', flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)));
+            var commands = string.Join(' ', flag.PrimaryCommands.OrderBy(c => Array.IndexOf(ShellCommandNames, c)));
             var name = flag.Name.TrimStart('-');
             // Token order is `-l name (-r)? (-a 'values')? -d 'description'` - matches the
             // pre-refactor hand-written script so the ConsoleUiTests fish-extractor regex
@@ -413,7 +413,7 @@ internal static class ConsoleCompletionRenderer
 
     private static string GetPowerShellCompletions()
     {
-        var cmds = FormatPowerShellArray(Commands);
+        var cmds = FormatPowerShellArray(ShellCommandNames);
         var langs = FormatPowerShellArray(GetCompletionLangs().Split(' ', StringSplitOptions.RemoveEmptyEntries));
         var kinds = FormatPowerShellArray(GetCompletionKinds().Split(' ', StringSplitOptions.RemoveEmptyEntries));
         var topLevelFlags = FormatPowerShellArray(BuildTopLevelFlagList());
@@ -438,11 +438,11 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("    }");
         sb.AppendLine($"    $topLevelFlags = @({topLevelFlags})");
         sb.AppendLine("    $subcommands = @{");
-        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
+        foreach (var (command, subcommands) in CliCommandMetadata.CommandSubcommands)
             sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(subcommands)})");
         sb.AppendLine("    }");
         sb.AppendLine("    $optionalSubcommandFlags = @{");
-        foreach (var command in CliCommandCatalog.OptionalSubcommandCommands)
+        foreach (var command in CliCommandMetadata.OptionalSubcommandCommands)
             sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(BuildPowerShellFlagList(command))})");
         sb.AppendLine("    }");
         sb.AppendLine("    $elements = @($commandAst.CommandElements)");

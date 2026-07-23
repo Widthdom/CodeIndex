@@ -176,6 +176,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Symbols JSON array, LSP, quickfix, and SARIF location formats share one editor-format fixture; definition SARIF severity coverage reuses that fixture and asserts informational `note` output separately from warning-level diagnostic output.
   Validate JSON, compact, count, and SARIF pagination/severity coverage shares one mixed informational/actionable fixture so authoritative totals, limited rows, SARIF levels, and actionability metadata cannot drift across formats; keep missing-`file_issues` degradation coverage in a separate legacy-schema fixture because availability is a distinct mutable state.
   Command-specific output format coverage uses a command/format matrix that checks both parser acceptance and the matching usage line; recognized shared formats without a command implementation need a separate usage-error assertion.
+  Recipe SARIF coverage must assert bounded result counts, `recipe/query` rule identity, source locations, severity mapping, confidence, conservative truncation metadata, and stable `fingerprints.cdidx/v1` values across identical runs.
   Unused default-suppression row, JSON count, summary-only, and text count envelopes, including the `--all` count control, share one unused-symbol fixture.
   Unused default-suppressed and `--all` JSON cursor pagination share one unused-symbol fixture.
   Unused full and compact `--by-bucket` JSON envelopes share one taxonomy fixture.
@@ -630,6 +631,7 @@ Use the inventory below before adding or moving a test class:
 - Separate pure `ProcessStartInfo` construction contracts from subprocess-environment filtering tests; only the latter mutate the parent process environment and require the non-parallel collection.
 - Keep freshness diagnostic classification parallel; isolate only the stamped-case probe test that temporarily replaces `GitHelper` and `FileIndexer` test hooks.
 - Production source-policy scans for direct environment access are read-only and parallel-safe; isolate the separate `CdidxEnvironment` mutation contract that changes a real process variable.
+- Dependency-boundary source audits are also read-only and parallel-safe. Keep the CLI command metadata and config-source resolution assertions in the ordinary collection so changes that reconnect rendering, command routing, config loading, and environment access fail without adding process-global test state.
 - The reflection-only SQLite collection registration contract is parallel-safe; keep only fixture lifecycle tests that replace the global pool-clear callback in the sensitive collection.
 - Isolate config CLI cases that change current directory or real environment variables; ordinary config parsing and validation uses injected environment readers and independent temporary roots, so the main suite remains parallelizable.
 - JSON API-version fixtures use locked console capture and scoped project cleanup; deleting the project before an unconditional pool reset makes that reset both redundant and too late, so keep this contract suite parallelizable.
@@ -994,6 +996,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   symbols JSON array、LSP、quickfix、SARIF location format は1つの editor-format fixture を共有し、definition SARIF severity のテストも同じ fixture を再利用して、情報レベルの `note` 出力を warning レベルの診断出力とは分けて検証してください。
   validate の JSON、compact、count、SARIF における pagination / severity coverage は、informational finding と actionable finding が混在する1つの fixture を共有し、authoritative な総件数、limited row、SARIF level、actionability metadata が format 間で drift しないことを検証してください。`file_issues` 欠落時の degradation coverage は availability が独立した mutable state なので、別の legacy-schema fixture に分けてください。
   コマンド別の出力形式 coverage は command / format matrix で parser の受理と対応する usage line の両方を検証してください。共通 parser が認識してもコマンド側に実装がない形式には、別途 usage error の assertion が必要です。
+  Recipe SARIF coverage では、上限付き result count、`recipe/query` rule identity、source location、severity mapping、confidence、保守的な truncation metadata、同一 run 間で安定する `fingerprints.cdidx/v1` を検証してください。
   unused default-suppressionのrow、JSON count、summary-only、text count envelopeは、`--all` count controlも含めて1つのunused-symbol fixtureを共有してください。
   unusedのdefault-suppressed JSON cursor paginationと`--all` JSON cursor paginationは1つのunused-symbol fixtureを共有してください。
   unusedのfull JSONとcompact `--by-bucket` JSON envelopeは1つのtaxonomy fixtureを共有してください。
@@ -1440,6 +1443,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - pure な `ProcessStartInfo` construction contract と subprocess environment filtering test を分離する。parent process environment を変更して non-parallel collection が必要なのは後者だけである。
 - freshness diagnostic classification は parallel 実行し、`GitHelper` / `FileIndexer` test hook を一時的に置き換える stamped-case probe test だけを隔離する。
 - production source の direct environment access policy scan は read-only で parallel-safe である。実 process variable を変更する別の `CdidxEnvironment` mutation contract だけを隔離する。
+- dependency boundary の source audit も read-only で parallel-safe である。CLI command metadata と config-source resolution の assertion は通常の collection に置き、rendering、command routing、config loading、environment access を再接続する変更が process-global test state を追加せず失敗するようにする。
 - reflection だけを行う SQLite collection registration contract は parallel-safe である。global pool-clear callback を置き換える fixture lifecycle test だけを sensitive collection に残す。
 - current directory または実 environment variable を変更する config CLI case を隔離する。通常の config parse / validation は注入された environment reader と独立 temporary root を使うため、main suite は parallel 実行可能に保つ。
 - JSON API-version fixture は locked console capture と scoped project cleanup を使う。project 削除後の無条件 pool reset は冗長なうえ遅すぎるため、この contract suite は parallel 実行可能な状態を保つ。
