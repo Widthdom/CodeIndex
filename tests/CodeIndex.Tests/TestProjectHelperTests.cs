@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -85,19 +87,38 @@ public class TestProjectHelperTests
     }
 
     [Fact]
-    public void InsertIndexedFile_ReleasePoolForFileAccess_AllowsExclusiveRawRead()
+    public void InsertIndexedFile_ReleasePoolForFileAccess_AllowsStandaloneRawRead()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_fixture_database_raw_read");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        const string content = "public class App {}\n";
         TestProjectHelper.InsertIndexedFile(
             dbPath,
             "src/App.cs",
             "csharp",
-            "public class App {}\n",
+            content,
             releasePoolForFileAccess: true);
 
-        using var stream = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.None);
-        Assert.True(stream.Length > 0);
+        using (var stream = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.True(stream.Length > 0);
+        }
+
+        var standaloneDbPath = Path.Combine(project.Root, "standalone.db");
+        File.Copy(dbPath, standaloneDbPath);
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = standaloneDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString();
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT checksum FROM files WHERE path = 'src/App.cs'";
+        var expectedChecksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)))
+            .ToLowerInvariant();
+        Assert.Equal(expectedChecksum, Assert.IsType<string>(command.ExecuteScalar()));
     }
 
     [Fact]
