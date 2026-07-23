@@ -254,6 +254,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Production-runtime C# nullable-suffix boundaries keep array-rank and tuple sources in one indexed workspace, with path filters preserving per-source assertions.
   Seeded C# generic type-pattern coverage keeps designation and no-designation sources in one query database, with path filters preserving exact empty-result contracts.
   C# query range-variable scope coverage keeps after-query and query-argument sources in one seeded database and folds the production order-by-comma scope case into its existing workspace.
+  Seeded C# foreach shadowing coverage keeps multiline embedded, same-line embedded, and else-branch sources in one database, with path filters preserving per-source scope assertions.
   C# postfix-expression coverage before parenthesized terminal select shares null-forgiving and increment forms in one extraction pass.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
@@ -1062,6 +1063,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   production-runtime C# nullable-suffix boundary は array-rank / tuple sourceを1つのindexed workspaceで共有し、path filterでsourceごとのassertionを維持してください。
   seed済みC# generic type-pattern coverageはdesignation有無のsourceを1つのquery databaseで共有し、path filterでexact empty-result contractを維持してください。
   C# query range-variable scope coverageはafter-query / query-argument sourceを1つのseed済みdatabaseで共有し、production order-by-comma scope caseも既存workspaceへ統合してください。
+  seed済みC# foreach shadowing coverageはmultiline embedded、same-line embedded、else-branch sourceを1つのdatabaseで共有し、path filterでsourceごとのscope assertionを維持してください。
   C# parenthesized terminal select 前のpostfix-expression coverage は null-forgiving / increment 形式を1回の extraction pass で共有してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
