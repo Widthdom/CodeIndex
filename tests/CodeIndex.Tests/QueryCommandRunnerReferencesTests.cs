@@ -5330,14 +5330,14 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpCastedLocalSelectCallInOrderByDoesNotLeakReferenceContext()
+    public void RunReferences_ExactJson_CSharpCastedLocalSelectCallsShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_casted_select_local_function");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_casted_local_select_calls");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
+                Path.Combine(projectRoot, "src", "object-cast.cs"),
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -5365,35 +5365,8 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpSimpleIdentifierCastedLocalSelectCallInOrderByPreservesLaterEnumReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_simple_casted_select_local_function");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
+                Path.Combine(projectRoot, "src", "simple-cast.cs"),
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -5431,35 +5404,8 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            var rows = ParseJsonLines(stdout);
-            var row = Assert.Single(rows).RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
-            Assert.Equal("Read", row.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpMultilineSimpleIdentifierCastedLocalSelectCallInOrderByPreservesLaterEnumReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_multiline_simple_casted_select_local_function");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
+                Path.Combine(projectRoot, "src", "multiline-cast.cs"),
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -5498,19 +5444,69 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "lowercase-alias.cs"),
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+                using customType = Demo.CustomType;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Sink
+                {
+                    public static Status Pick(object left, Status right) => right;
+                }
+
+                public sealed class CustomType
+                {
+                }
+
+                public sealed class Uses
+                {
+                    public Status Read(IEnumerable<object> items)
+                    {
+                        static customType select(IEnumerable<object> xs) => new();
+                        return Sink.Pick(from Status in items
+                                         orderby (customType)select(items)
+                                         select Status.Ready,
+                                         Demo.Status.Ready);
+                    }
+                }
+                """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            var rows = ParseJsonLines(stdout);
-            var row = Assert.Single(rows).RootElement;
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
-            Assert.Equal("Read", row.GetProperty("container_name").GetString());
+
+            var (objectExitCode, objectStdout, objectStderr) = RunReferencesInProcess(
+                "Ready", dbPath, "csharp", true, "--path", "src/object-cast.cs");
+            using var objectDocument = ParseJsonOutput(objectStdout);
+            Assert.Equal(CommandExitCodes.Success, objectExitCode);
+            Assert.Equal(string.Empty, objectStderr);
+            Assert.Equal(0, objectDocument.RootElement.GetProperty("count").GetInt32());
+
+            AssertSingleReference("src/simple-cast.cs");
+            AssertSingleReference("src/multiline-cast.cs");
+            AssertSingleReference("src/lowercase-alias.cs");
+
+            void AssertSingleReference(string path)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    "Ready", dbPath, "csharp", true, "--path", path);
+                var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
+                Assert.Equal("Read", row.GetProperty("container_name").GetString());
+            }
         }
         finally
         {
@@ -5623,68 +5619,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, parsedRows.Count);
             Assert.All(parsedRows, row => Assert.Equal("Read", row.GetProperty("container_name").GetString()));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpLowercaseAliasCastedLocalSelectCallInOrderByPreservesLaterEnumReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_lowercase_alias_casted_select_local_function");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-                using customType = Demo.CustomType;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public static class Sink
-                {
-                    public static Status Pick(object left, Status right) => right;
-                }
-
-                public sealed class CustomType
-                {
-                }
-
-                public sealed class Uses
-                {
-                    public Status Read(IEnumerable<object> items)
-                    {
-                        static customType select(IEnumerable<object> xs) => new();
-                        return Sink.Pick(from Status in items
-                                         orderby (customType)select(items)
-                                         select Status.Ready,
-                                         Demo.Status.Ready);
-                    }
-                }
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            var rows = ParseJsonLines(stdout);
-            var row = Assert.Single(rows).RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
-            Assert.Equal("Read", row.GetProperty("container_name").GetString());
         }
         finally
         {
