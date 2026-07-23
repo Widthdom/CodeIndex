@@ -1282,6 +1282,12 @@ public static partial class SymbolExtractor
         if (IsCSharpNonMemberHeaderLine(matchLine))
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
 
+        if (TryFindCSharpExpressionArrow(lines, startLineIndex, startLineIndex, out var sameLineArrowLineIndex, out var sameLineArrowColumn))
+        {
+            var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(lines, sameLineArrowLineIndex, sameLineArrowColumn);
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex, null, expressionEndLineIndex);
+        }
+
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
         var isMethodHeaderPrefix = !isPropertyHeaderPrefix
             && (CSharpMethodHeaderPrefixRegex.IsMatch(matchLine)
@@ -1311,12 +1317,6 @@ public static partial class SymbolExtractor
             // 生の matchLine を返してモディファイア行ではパターンに失敗させ、名前行のみが
             // シンボルを emit するようにする。Closes #348.
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
-        }
-
-        if (TryFindCSharpExpressionArrow(lines, startLineIndex, startLineIndex, out var sameLineArrowLineIndex, out var sameLineArrowColumn))
-        {
-            var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(lines, sameLineArrowLineIndex, sameLineArrowColumn);
-            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex, null, expressionEndLineIndex);
         }
 
         var builder = new StringBuilder(matchLine.TrimEnd());
@@ -1995,6 +1995,60 @@ public static partial class SymbolExtractor
         arrowLineIndex = -1;
         arrowColumn = -1;
         return false;
+    }
+
+    private static bool IsCSharpFunctionMatchInsideExpressionBody(string matchLine, int nameIndex)
+    {
+        var boundedNameIndex = Math.Min(Math.Max(0, nameIndex), matchLine.Length);
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        int? expressionBraceDepth = null;
+
+        for (int i = 0; i < boundedNameIndex; i++)
+        {
+            var ch = matchLine[i];
+            if (ch == '='
+                && i + 1 < boundedNameIndex
+                && matchLine[i + 1] == '>'
+                && parenDepth == 0
+                && bracketDepth == 0)
+            {
+                expressionBraceDepth ??= braceDepth;
+                i++;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')' when parenDepth > 0:
+                    parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    break;
+                case ';' when expressionBraceDepth.HasValue
+                    && parenDepth == 0
+                    && bracketDepth == 0
+                    && braceDepth <= expressionBraceDepth.Value:
+                    expressionBraceDepth = null;
+                    break;
+            }
+        }
+
+        return expressionBraceDepth.HasValue;
     }
 
     private static bool IsCSharpMultilineExpressionBodiedMember(string[] lines, int startLineIndex, int startColumn)

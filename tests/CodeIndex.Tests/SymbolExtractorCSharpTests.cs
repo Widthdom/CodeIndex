@@ -459,6 +459,66 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_Issue4729InterpolatedTemplatesPreserveClassScopeAndSuppressPhantomSymbols()
+    {
+        // Regression for #4729: SQL raw strings with nested ordinary strings and completion
+        // templates with nested interpolated strings must preserve the enclosing class scope.
+        // SQL/template content must stay masked, and calls inside a later expression-bodied
+        // property must not become duplicate method declarations.
+        // #4729 の回帰: 通常文字列を含む SQL raw string と、nested interpolated string を
+        // 含む補完 template の後でも enclosing class scope を維持する。SQL/template 本文は
+        // mask されたままにし、後続の式本体 property 内の呼び出しを重複 method として
+        // 抽出してはならない。
+        var content = """""
+            public class FixtureHost
+            {
+                public string BuildSql(string[] parameterNames)
+                {
+                    return $"""
+                        SELECT value AS projected
+                        FROM symbols
+                        WHERE name IN ({string.Join(", ", parameterNames)})
+                        """;
+                }
+
+                public string BuildCompletion(string[] items) =>
+                    $"items: {string.Join(' ', items.Select(item => $"'{item}:{item} item'"))}";
+
+                private bool HasSymbolIndex(string indexName) => indexName.Length > 0;
+
+                private bool SymbolNameExactIndexAvailable =>
+                    true
+                        ? HasSymbolIndex("idx_symbols_name_folded")
+                        : HasSymbolIndex("idx_symbols_name_nocase");
+
+                public int BeforeSameLine() => 1; public bool InlineAvailability => HasSymbolIndex("idx_symbols_inline"); public int SameLineSibling() => 2;
+                public int AfterTemplates() => 1;
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var fixtureHost = Assert.Single(symbols.Where(symbol => symbol.Kind == "class" && symbol.Name == "FixtureHost"));
+        Assert.Equal(content.Split('\n').Length, fixtureHost.EndLine);
+        Assert.Equal(fixtureHost.EndLine, fixtureHost.BodyEndLine);
+
+        foreach (var name in new[] { "SymbolNameExactIndexAvailable", "InlineAvailability" })
+        {
+            var property = Assert.Single(symbols.Where(symbol => symbol.Kind == "property" && symbol.Name == name));
+            Assert.Equal("class", property.ContainerKind);
+            Assert.Equal("FixtureHost", property.ContainerName);
+        }
+
+        foreach (var name in new[] { "BuildSql", "BuildCompletion", "HasSymbolIndex", "BeforeSameLine", "SameLineSibling", "AfterTemplates" })
+        {
+            var method = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == name));
+            Assert.Equal("class", method.ContainerKind);
+            Assert.Equal("FixtureHost", method.ContainerName);
+        }
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "AS");
+    }
+
+    [Fact]
     public void Extract_CSharp_InterpolatedVerbatimStringWithEscapedBraces_DoesNotLeakPhantomSymbols()
     {
         var content = """

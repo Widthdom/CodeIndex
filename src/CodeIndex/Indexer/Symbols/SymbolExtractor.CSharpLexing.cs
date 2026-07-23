@@ -90,7 +90,7 @@ public static partial class SymbolExtractor
                 }
 
                 if (ch == '"')
-                    state = state with { Mode = CSharpLexMode.Code };
+                    state = CloseCSharpString(state, clearRawDelimiter: false);
 
                 i++;
                 continue;
@@ -170,17 +170,7 @@ public static partial class SymbolExtractor
                 }
 
                 if (ch == '"')
-                {
-                    state = state with { Mode = CSharpLexMode.Code };
-                    if (state.InterpolationReturnMode == CSharpLexMode.Code || state.InterpolationBraceDepth == 0)
-                    {
-                        state = state with
-                        {
-                            IsInterpolated = false,
-                            InterpolationDollarCount = 0,
-                        };
-                    }
-                }
+                    state = CloseCSharpString(state, clearRawDelimiter: false);
 
                 i++;
                 continue;
@@ -244,16 +234,7 @@ public static partial class SymbolExtractor
                     for (var j = 0; j < quoteRunLength && i + j < line.Length; j++)
                         sanitized[i + j] = ' ';
 
-                    state = state with { Mode = CSharpLexMode.Code };
-                    if (state.InterpolationReturnMode == CSharpLexMode.Code || state.InterpolationBraceDepth == 0)
-                    {
-                        state = state with
-                        {
-                            RawDelimiterLength = 0,
-                            IsInterpolated = false,
-                            InterpolationDollarCount = 0,
-                        };
-                    }
+                    state = CloseCSharpString(state, clearRawDelimiter: true);
                     i += quoteRunLength;
                     continue;
                 }
@@ -389,13 +370,19 @@ public static partial class SymbolExtractor
                 for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < line.Length; j++)
                     sanitized[i + j] = ' ';
 
-                state = state with
-                {
-                    Mode = CSharpLexMode.RawString,
-                    RawDelimiterLength = rawDelimiterLength,
-                    IsInterpolated = rawPrefixLength > 0,
-                    InterpolationDollarCount = rawPrefixLength,
-                };
+                state = rawPrefixLength > 0
+                    ? OpenCSharpInterpolatedString(
+                        state,
+                        CSharpLexMode.RawString,
+                        rawDelimiterLength,
+                        rawPrefixLength)
+                    : state with
+                    {
+                        Mode = CSharpLexMode.RawString,
+                        RawDelimiterLength = rawDelimiterLength,
+                        IsInterpolated = false,
+                        InterpolationDollarCount = 0,
+                    };
                 i += rawPrefixLength + rawDelimiterLength;
                 continue;
             }
@@ -419,12 +406,11 @@ public static partial class SymbolExtractor
                 sanitized[i] = ' ';
                 sanitized[i + 1] = ' ';
                 sanitized[i + 2] = '"';
-                state = state with
-                {
-                    Mode = CSharpLexMode.VerbatimString,
-                    IsInterpolated = true,
-                    InterpolationDollarCount = 1,
-                };
+                state = OpenCSharpInterpolatedString(
+                    state,
+                    CSharpLexMode.VerbatimString,
+                    rawDelimiterLength: 0,
+                    dollarCount: 1);
                 i += 3;
                 continue;
             }
@@ -434,12 +420,11 @@ public static partial class SymbolExtractor
                 sanitized[i] = ' ';
                 sanitized[i + 1] = ' ';
                 sanitized[i + 2] = '"';
-                state = state with
-                {
-                    Mode = CSharpLexMode.VerbatimString,
-                    IsInterpolated = true,
-                    InterpolationDollarCount = 1,
-                };
+                state = OpenCSharpInterpolatedString(
+                    state,
+                    CSharpLexMode.VerbatimString,
+                    rawDelimiterLength: 0,
+                    dollarCount: 1);
                 i += 3;
                 continue;
             }
@@ -448,16 +433,11 @@ public static partial class SymbolExtractor
             {
                 sanitized[i] = ' ';
                 sanitized[i + 1] = '"';
-                state = state with
-                {
-                    Mode = CSharpLexMode.String,
-                    IsInterpolated = true,
-                    InterpolationBraceDepth = 0,
-                    InterpolationDollarCount = 1,
-                    InterpolationReturnMode = CSharpLexMode.Code,
-                    InterpolationReturnRawDelimiterLength = 0,
-                    InterpolationReturnDollarCount = 0
-                };
+                state = OpenCSharpInterpolatedString(
+                    state,
+                    CSharpLexMode.String,
+                    rawDelimiterLength: 0,
+                    dollarCount: 1);
                 i += 2;
                 continue;
             }
@@ -483,6 +463,53 @@ public static partial class SymbolExtractor
         }
 
         return new CSharpLexedLine(new string(sanitized), state);
+    }
+
+    private static CSharpLexState OpenCSharpInterpolatedString(
+        CSharpLexState state,
+        CSharpLexMode mode,
+        int rawDelimiterLength,
+        int dollarCount)
+    {
+        var parent = state.InterpolationReturnMode != CSharpLexMode.Code
+            && state.InterpolationBraceDepth > 0
+                ? new CSharpInterpolationFrame(state)
+                : state.InterpolationParent;
+
+        return state with
+        {
+            Mode = mode,
+            EscapeNext = false,
+            RawDelimiterLength = rawDelimiterLength,
+            IsInterpolated = true,
+            InterpolationDollarCount = dollarCount,
+            InterpolationBraceDepth = 0,
+            InterpolationReturnMode = CSharpLexMode.Code,
+            InterpolationReturnRawDelimiterLength = 0,
+            InterpolationReturnDollarCount = 0,
+            InterpolationParent = parent,
+        };
+    }
+
+    private static CSharpLexState CloseCSharpString(CSharpLexState state, bool clearRawDelimiter)
+    {
+        if (state.IsInterpolated && state.InterpolationParent is { } parent)
+            return parent.State;
+
+        state = state with { Mode = CSharpLexMode.Code, EscapeNext = false };
+        if (state.InterpolationReturnMode != CSharpLexMode.Code
+            && state.InterpolationBraceDepth > 0)
+        {
+            return state;
+        }
+
+        return state with
+        {
+            RawDelimiterLength = clearRawDelimiter ? 0 : state.RawDelimiterLength,
+            IsInterpolated = false,
+            InterpolationDollarCount = 0,
+            InterpolationParent = null,
+        };
     }
 
     private static bool TryReadCSharpRawStringStart(string line, int index, out int prefixLength, out int delimiterLength)

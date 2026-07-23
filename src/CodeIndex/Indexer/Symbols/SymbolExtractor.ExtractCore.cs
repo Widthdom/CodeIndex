@@ -663,6 +663,23 @@ public static partial class SymbolExtractor
                             continue;
                         }
                         if (lang == "csharp"
+                            && pattern.Kind == "function"
+                            && csharpPropertyCandidate.ExpressionBodyEndLineIndex.HasValue
+                            && IsCSharpFunctionMatchInsideExpressionBody(
+                                patternMatchLine,
+                                absoluteStartColumn + match.Groups["name"].Index))
+                        {
+                            // The property/function header merger is shared by all C# member
+                            // patterns. Once it has identified an expression body, a function-shaped
+                            // call after `=>` is an expression, not a declaration. Preserve a real
+                            // same-line sibling after the terminating `;`.
+                            // C# の property/function header merger は全 member pattern で共有される。
+                            // 式本体を特定した後、`=>` より後の function 形呼び出しは宣言ではなく式である。
+                            // 終端 `;` より後にある本物の same-line sibling は維持する。
+                            lineOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            continue;
+                        }
+                        if (lang == "csharp"
                             && pattern.BodyStyle == BodyStyle.None
                           && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
                           && GetCSharpCallableParameterScope().IsInsideParameterListAt(i, csharpGateRawStartColumn))
