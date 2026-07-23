@@ -1386,7 +1386,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock ではなく明示的に進めてください。ランダム入力は `TestDeterminism.CreateRandom` を使い、同じ timeline とデータを再実行できるようにします。境界付きポーリング / 最終的な条件成立のアサーションには、ローカルの `Task.Delay` loop や固定 sleep ではなく `TestDeterminism.WaitUntilAsync` または同期版の `WaitUntil` を使い、短い不在・安定性の観測には `AssertConditionRemainsTrue` を使ってください。ワーカーを同じ gate から開始したい場合は `TestDeterminism.RunConcurrentlyAsync` を使ってください。
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
-- denseなC# primary-constructorとJava recordのrunaway guardは、それぞれ20,000／13,000宣言を使い、全抽出memberと両endpointを検証して5秒上限を共有します。任意に大きいfixtureは新しい境界を覆わず同じ線形pathを反復するだけなので増やさないでください。
+- denseなC# primary-constructorとJava recordのrunaway guardは、それぞれ20,000／13,000宣言を使い、全抽出memberと両endpointを検証して10秒上限を共有し、coverage instrumentationでも従来のCI余裕を維持します。任意に大きいfixtureは新しい境界を覆わず同じ線形pathを反復するだけなので増やさないでください。
 - TypeScriptとSwiftのalias-expansion runaway guardは500件のalias useを使い、先頭・末尾のexpanded reference assertionと5秒上限を維持します。対応する言語fixtureは同期してください。
 - JavaScript object-literalとTypeScript class-expressionのrunaway guardは500件のexport targetを使い、先頭・末尾のnested-member assertionと5秒上限を維持します。
 - JavaScriptのexported-object propertyとTypeScriptのexported variableは500宣言を使い、先頭・末尾のsignatureまたはvisibility assertionと5秒上限を維持します。
@@ -1398,6 +1398,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Java recordとKotlin primary-constructorのrunaway guardは1型内500 componentを使い、Kotlinでは20,000個の独立型も覆います。endpointまたは正確なaggregate assertionと5秒上限を維持します。
 - file-indexer テストが同じ初回 index 後の normalized path と結果だけを検証する場合は、独立した file mutation を 1 回の `--files` update にまとめてください。
 - 関連する index invalidation の各中間状態を assertion する場合は 1 fixture にまとめてください。static-interface contract の追加、除去、復元、削除を同等の project 再構築へ分割しないでください。
+- MCP positive-C# actual-skip race coverageは、最終workspace validation後かつfile loop前のreference-purge barrierでsource driftを注入し、期待するstat-revalidation経路をnative directory enumeration順序に依存させないでください。
 - cap issue lifecycle test は low/high boundary の変更ごとに issue を assertion する場合、full-scan と update の遷移で 1 つの indexed fixture を再利用してください。
 - unreadable-directory の full-scan coverage は JSON/human diagnostics、purge protection、checkpoint 非作成、全体を再走査する successful retry を 1 fixture に保ち、共通の partial scan setup を再構築しないでください。
 - legacy checkpoint coverage は save hook が呼ばれないことを固定し、旧fileを手動で配置してstable-snapshotのfile read failure後にも削除される経路とboundedなdelete-failure warningの両方を扱い、authoritative full scanがHEADだけの状態から再開しないことを検証してください。
