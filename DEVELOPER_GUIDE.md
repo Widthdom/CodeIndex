@@ -438,8 +438,11 @@ bounded `window/logMessage` warning. Progress notifications drain through a
 separate two-item channel while symbol items are enumerated, so notification
 memory stays bounded and work-done `begin` reaches the client before symbol
 materialization completes. A full request queue rejects excess requests with
-`-32000` (`Server busy`) while the reader continues to accept cancellation, and
-an output-worker failure cancels the pending input read before propagating.
+`-32000` (`Server busy`), but document-sync and control notifications wait for
+ordered processing instead of being rejected. Rejection responses use a bounded
+output channel; capacity keeps cancellation readable, and output backpressure
+pauses input rather than dropping a response. An output-worker failure cancels
+the pending input read before propagating.
 
 ### Extractor performance contract
 
@@ -3342,8 +3345,10 @@ work-done の end message または上限付き `window/logMessage` warning で�
 notification は symbol item の列挙中に独立した2 item channel から drain するため、notification
 memory は bounded のままで、symbol materialization の完了前に work-done `begin` が client へ
 届く。request queue が満杯の場合は超過 request を `-32000`（`Server busy`）で拒否しながら
-reader は cancellation を受け付け続け、output worker の failure は伝播前に pending input read
-を cancel する。
+document-sync notification と control notification は拒否せず順序どおりの処理を待たせる。
+rejection response は上限付き output channel を使い、空きがある間は cancellation を読み取り、
+output backpressure 時は response を破棄せず input を一時停止する。output worker の failure は
+伝播前に pending input read を cancel する。
 
 ### 抽出器の性能契約
 

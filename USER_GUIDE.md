@@ -2740,8 +2740,10 @@ work-done token was supplied. `$/cancelRequest` matches the original string or
 integer request ID, ends any active work-done progress, and returns LSP
 `RequestCancelled` (`-32800`) for a cancelled symbol request.
 If the bounded pending-request queue is full, the server rejects additional
-requests with `-32000` (`Server busy`) and continues reading input, so a
-following cancellation notification can still reach the active request.
+requests with `-32000` (`Server busy`) while preserving document-sync and
+control notifications for ordered processing. The bounded rejection path keeps
+reading cancellations while it has capacity; if output is backpressured, it
+pauses input instead of dropping a required JSON-RPC response.
 `textDocument/hover` renders indexed paths relative to the project/workspace
 root when possible and uses `[outside workspace]` for absolute paths outside the
 known roots.
@@ -5824,8 +5826,10 @@ message、work-done token がない場合は `window/logMessage` で通知しま
 元の string / integer request ID と型を含めて一致させ、active な work-done progress を終了し、
 cancel された symbol request に LSP `RequestCancelled` (`-32800`) を返します。
 上限付き pending-request queue が満杯の場合、server は追加 request を `-32000`
-（`Server busy`）で拒否して input の読み取りを続けるため、後続の cancellation notification
-は active request に到達できます。
+（`Server busy`）で拒否する一方、document-sync notification と control notification は
+順序どおり処理するため保持します。上限付き rejection 経路に空きがある間は cancellation
+の読み取りを継続し、output が backpressure された場合は必要な JSON-RPC response を
+破棄せず input を一時停止します。
 `textDocument/hover` は indexed path を可能な場合は project / workspace root からの相対 path として
 表示し、既知の root 外の absolute path は `[outside workspace]` に置き換えます。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、

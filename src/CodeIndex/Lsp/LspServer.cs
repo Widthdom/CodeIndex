@@ -261,10 +261,27 @@ internal sealed class LspServer : IDisposable
                 if (messages.Writer.TryWrite(inbound))
                     continue;
 
-                ReleaseInboundMessage(inbound);
                 var busyResponse = CreateServerBusyResponse(read.Payload);
                 if (busyResponse != null)
-                    overloadResponses.Writer.TryWrite(busyResponse);
+                {
+                    ReleaseInboundMessage(inbound);
+                    await overloadResponses.Writer
+                        .WriteAsync(busyResponse, readCancellation.Token)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                try
+                {
+                    await messages.Writer
+                        .WriteAsync(inbound, readCancellation.Token)
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    ReleaseInboundMessage(inbound);
+                    throw;
+                }
             }
         }
         catch (OperationCanceledException) when (exitCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -1170,39 +1187,46 @@ internal sealed class LspServer : IDisposable
     {
         var emittedCount = 0;
         var chunk = new JsonArray();
-        foreach (var item in items)
+        try
         {
-            if (cancellationToken.IsCancellationRequested)
-                return new PartialResultEmission(emittedCount, false, true);
-
-            chunk.Add(item);
-            var measuredNotification = CreateProgressNotification(
-                partialResultToken,
-                chunk.DeepClone());
-            var exceedsChunkBudget = chunk.Count > MaxSymbolProgressChunkItems
-                || MeasureJsonUtf8Bytes(measuredNotification) > MaxSymbolProgressChunkBytes;
-            if (exceedsChunkBudget)
+            foreach (var item in items)
             {
-                chunk.RemoveAt(chunk.Count - 1);
-                if (chunk.Count > 0)
-                {
-                    EmitPartialResultChunk(
-                        outbound,
-                        partialResultToken,
-                        workDoneToken,
-                        chunk,
-                        ref emittedCount,
-                        totalCount);
-                }
+                if (cancellationToken.IsCancellationRequested)
+                    return new PartialResultEmission(emittedCount, false, true);
 
-                chunk = [];
                 chunk.Add(item);
-                measuredNotification = CreateProgressNotification(
+                var measuredNotification = CreateProgressNotification(
                     partialResultToken,
                     chunk.DeepClone());
-                if (MeasureJsonUtf8Bytes(measuredNotification) > MaxSymbolProgressChunkBytes)
-                    return new PartialResultEmission(emittedCount, true, false);
+                var exceedsChunkBudget = chunk.Count > MaxSymbolProgressChunkItems
+                    || MeasureJsonUtf8Bytes(measuredNotification) > MaxSymbolProgressChunkBytes;
+                if (exceedsChunkBudget)
+                {
+                    chunk.RemoveAt(chunk.Count - 1);
+                    if (chunk.Count > 0)
+                    {
+                        EmitPartialResultChunk(
+                            outbound,
+                            partialResultToken,
+                            workDoneToken,
+                            chunk,
+                            ref emittedCount,
+                            totalCount);
+                    }
+
+                    chunk = [];
+                    chunk.Add(item);
+                    measuredNotification = CreateProgressNotification(
+                        partialResultToken,
+                        chunk.DeepClone());
+                    if (MeasureJsonUtf8Bytes(measuredNotification) > MaxSymbolProgressChunkBytes)
+                        return new PartialResultEmission(emittedCount, true, false);
+                }
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new PartialResultEmission(emittedCount, false, true);
         }
 
         if (chunk.Count > 0)
