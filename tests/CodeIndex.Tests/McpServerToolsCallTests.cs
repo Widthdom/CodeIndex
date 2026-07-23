@@ -4753,6 +4753,82 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Status_FieldsProjectsExactCompactFields_Issue4724()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact","fields":["summary","readiness","summary"]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!.AsObject();
+        Assert.Equal(new[] { "summary", "readiness", "api_version" }, structured.Select(property => property.Key).ToArray());
+        Assert.Contains("1 files, 2 symbols, 0 refs", structured["summary"]!.GetValue<string>());
+        Assert.True(structured["readiness"]!["issues_table_available"]!.GetValue<bool>());
+        Assert.True(Encoding.UTF8.GetByteCount(structured.ToJsonString()) < 1_000);
+
+        var fullRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{"format":"full","fields":["files","sql_graph_contract_ready"]}}}""")!;
+        var fullResponse = _server.HandleMessage(fullRequest)!;
+        var fullStructured = fullResponse["result"]!["structuredContent"]!.AsObject();
+
+        Assert.Equal(new[] { "files", "sql_graph_contract_ready", "api_version" }, fullStructured.Select(property => property.Key).ToArray());
+        Assert.Equal(1, fullStructured["files"]!.GetValue<long>());
+        Assert.True(fullStructured["sql_graph_contract_ready"]!.GetValue<bool>());
+    }
+
+    [Theory]
+    [InlineData("missing_field", "is not available in compact format")]
+    [InlineData("readiness.graph_table_available", "top-level field names only")]
+    public void ToolsCall_Status_FieldsRejectsInvalidProjection_Issue4724(string field, string expectedMessage)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "status",
+                ["arguments"] = new JsonObject
+                {
+                    ["format"] = "compact",
+                    ["fields"] = field,
+                },
+            },
+        };
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains(expectedMessage, result["content"]![0]!["text"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("invalid_argument", result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Status_FieldsRejectsOversizedProjection_Issue4724()
+    {
+        var fields = new JsonArray(
+            Enumerable.Range(0, McpServer.MaxStatusProjectionFields + 1)
+                .Select(index => (JsonNode?)$"field_{index}")
+                .ToArray());
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "status",
+                ["arguments"] = new JsonObject { ["fields"] = fields },
+            },
+        };
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains(
+            $"between 1 and {McpServer.MaxStatusProjectionFields}",
+            response["result"]!["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolsCall_Validate_FiltersSeverityAndSupportsCompactCount_Issue3541()
     {
         InsertValidationIssues(
