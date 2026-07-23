@@ -245,6 +245,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# nested-query order-by coverage shares plain and parenthesized comma boundaries in one extractor source.
   C# casted local-select order-by coverage shares object, simple, multiline, and lowercase-alias forms in one extraction pass.
   Query range-variable order-by coverage keeps anonymous-type and object-initializer comma forms in the shared order-by fixture.
+  Production-runtime C# order-by comma boundaries keep anonymous-type, nested-query, and parenthesized keyword-local forms in one indexed workspace.
   C# postfix-expression coverage before parenthesized terminal select shares null-forgiving and increment forms in one extraction pass.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
@@ -1044,6 +1045,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# nested-query order-by coverage は plain / parenthesized comma boundary を1つの extractor source で共有してください。
   C# casted local-select order-by coverage は object、simple、multiline、lowercase-alias 形式を1回の extraction pass で共有してください。
   query range-variable order-by coverage は anonymous-type / object-initializer comma 形式を共有のorder-by fixtureに併置してください。
+  production-runtime C# order-by comma boundary は anonymous-type、nested-query、parenthesized keyword-local 形式を1つのindexed workspaceで共有してください。
   C# parenthesized terminal select 前のpostfix-expression coverage は null-forgiving / increment 形式を1回の extraction pass で共有してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。

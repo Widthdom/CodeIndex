@@ -7,6 +7,7 @@ affected:
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TestProjectHelperTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerFullScanTests.cs
+  - tests/CodeIndex.Tests/QueryCommandRunnerReferencesTests.cs
   - tests/CodeIndex.Tests/InstallScriptTests.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowDockerContractTests.cs
   - TESTING_GUIDE.md
@@ -20,6 +21,7 @@ affected:
 - **SQLite fixture cleanup releases pools only after a failure** — Seeded-file writes and clean database deletion no longer trigger unconditional process-wide pool clearing; Windows retries still release pools when a file is actually locked.
 - **Hook scheduling coverage uses a compact assembly** — Full-scan scheduling tests now stage the dedicated hook-isolation fixture instead of copying the much larger test assembly into a worker directory.
 - **Unix shell tests skip before Windows fixture setup** — Installer and container-entrypoint cases now skip during discovery on Windows instead of constructing temporary directories and returning from the test body.
+- **Production query boundaries reuse indexed workspaces** — Related C# order-by comma cases now share one production CLI indexing subprocess while retaining distinct syntax assertions.
 
 ## 日本語
 
@@ -29,3 +31,4 @@ affected:
 - **SQLite fixture cleanupは失敗後だけpoolを解放します** — seed fileのwriteと正常なdatabase削除ではprocess-wide pool clearを行わず、実際にfileがlockされたWindows retryでは引き続きpoolを解放します。
 - **hook scheduling coverageで小型assemblyを使います** — full-scan scheduling testは巨大なtest assemblyをworker directoryへcopyせず、専用のhook-isolation fixtureをstageします。
 - **Unix shell testはWindowsのfixture setup前にskipします** — installerとcontainer entrypointのcaseはtemporary directoryを作ってtest bodyからreturnせず、Windowsではdiscovery時にskipします。
+- **production query boundaryでindexed workspaceを再利用します** — 関連するC# order-by comma caseは個別の構文assertionを保ちながら、production CLI indexing subprocessを1回だけ共有します。

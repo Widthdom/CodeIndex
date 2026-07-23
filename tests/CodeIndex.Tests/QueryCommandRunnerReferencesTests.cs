@@ -3437,9 +3437,9 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpQueryRangeVariableOrderByAnonymousTypeCommaDoesNotLeakReferenceContext()
+    public void RunReferences_ExactJson_CSharpOrderByCommaBoundariesShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_orderby_anonymous_type_collision");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_orderby_comma_boundaries");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
@@ -3451,95 +3451,84 @@ public partial class QueryCommandRunnerTests
 
                 namespace Demo;
 
-                public enum Status
+                public enum AnonymousStatus
                 {
-                    Ready
+                    AnonymousReady
                 }
 
-                public sealed class Holder
+                public sealed class AnonymousHolder
                 {
-                    public int Ready { get; set; }
+                    public int AnonymousReady { get; set; }
+                }
+
+                public enum NestedStatus
+                {
+                    NestedReady
+                }
+
+                public sealed class NestedHolder
+                {
+                    public int NestedReady { get; set; }
+                }
+
+                public enum ParenthesizedStatus
+                {
+                    ParenthesizedReady
+                }
+
+                public sealed class ParenthesizedHolder
+                {
+                    public int ParenthesizedReady { get; set; }
                 }
 
                 public sealed class Uses
                 {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
+                    public IEnumerable<int> ReadAnonymous(IEnumerable<AnonymousHolder> items)
                     {
-                        return from Status in items
-                               orderby new { X = Status.Ready, Y = items.Count() }, items.Count()
-                               select Status.Ready;
+                        return from AnonymousStatus in items
+                               orderby new { X = AnonymousStatus.AnonymousReady, Y = items.Count() }, items.Count()
+                               select AnonymousStatus.AnonymousReady;
                     }
-                }
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpQueryRangeVariableNestedQueryBeforeOrderByCommaDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_nested_query_orderby_collision");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items, IEnumerable<int> others)
+                    public IEnumerable<int> ReadNested(IEnumerable<NestedHolder> items, IEnumerable<int> others)
                     {
-                        return from Status in items
+                        return from NestedStatus in items
                                let nested = from x in others select x
                                orderby items.Count(), nested.Count()
-                               select Status.Ready;
+                               select NestedStatus.NestedReady;
+                    }
+
+                    public IEnumerable<int> ReadParenthesized(IEnumerable<ParenthesizedHolder> items)
+                    {
+                        static int select(IEnumerable<ParenthesizedHolder> xs) => xs.Count();
+                        return from ParenthesizedStatus in items
+                               orderby select(items), items.Count()
+                               select ParenthesizedStatus.ParenthesizedReady;
                     }
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
+
+            AssertNoReferences("AnonymousReady");
+            AssertNoReferences("NestedReady");
+            AssertNoReferences("ParenthesizedReady");
+
+            void AssertNoReferences(string query)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(query, dbPath, "csharp");
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.True(json.TryGetProperty("count", out var count), stdout);
+                Assert.Equal(0, count.GetInt32());
+                Assert.Empty(json.GetProperty("references").EnumerateArray());
+            }
         }
         finally
         {
@@ -3718,62 +3707,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
             Assert.Equal(25, row.GetProperty("line").GetInt32());
             Assert.Contains("Status.Ready", row.GetProperty("context").GetString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpQueryKeywordNamedLocalFunctionInParenthesizedOrderByExpressionDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_keyword_local_function");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
-                    {
-                        static int select(IEnumerable<Holder> xs) => xs.Count();
-                        return from Status in items
-                               orderby select(items), items.Count()
-                               select Status.Ready;
-                    }
-                }
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
         }
         finally
         {
