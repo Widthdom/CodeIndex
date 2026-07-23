@@ -40,7 +40,7 @@ Development contracts:
 | Target frameworks | The production CLI and NuGet tool packaging target `net8.0`. The test project multi-targets `net8.0;net9.0`, and CI runs the test suite on both frameworks across Linux, Windows, and macOS. Use a .NET SDK that can restore and run both target frameworks when validating the full CI-equivalent test matrix. |
 | SDK selection | `global.json` pins the repository SDK to `9.0.301` with `rollForward` disabled. CI installs both `8.0.413` and `9.0.301` explicitly: `8.0.413` provides the `net8.0` runtime lane, while `9.0.301` is the selected SDK for restore, build, test, publish, and changelog validation. When rolling SDKs, update `global.json`, every `actions/setup-dotnet` version list, the Docker build image, and this guide together. |
 | GitHub Actions policy | Workflows pin hosted runners to versioned labels (`ubuntu-24.04`, `windows-2022`, `macos-14`), keep the top-level `contents` permission read-only by default, limit `continue-on-error` to failure-path diagnostic artifact upload, give every upload artifact explicit retention, bound every artifact download by pattern and path, and scope cache keys to workflow + runner OS + `packages.lock.json` / `global.json` without broad restore-key fallbacks. `CiWorkflowTests.GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy` enforces this checklist. |
-| Test diagnostics | CI uses `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` plus VSTest blame crash/hang collection and a bounded one-time retry to distinguish repeatable failures from pass-on-retry flakes. The Build and Test workflow collects XPlat Code Coverage only on `ubuntu-24.04` / `net8.0`; the remaining OS/framework lanes run the full suite without coverage collector overhead. For test suite structure, shared helpers, state-isolation rules, timeout diagnostics, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md). |
+| Test diagnostics | CI uses `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` plus VSTest blame crash/hang collection and a bounded one-time retry to distinguish repeatable failures from pass-on-retry flakes. The Build and Test workflow splits `ubuntu-24.04` / `net8.0` into complementary coverage shards; Windows and macOS use the same complementary net8 split without coverage overhead, while the Ubuntu net9 compatibility lane runs the full suite. For test suite structure, shared helpers, state-isolation rules, timeout diagnostics, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md). |
 | Mutation testing | The weekly `Mutation testing` workflow runs Stryker.NET against `src/CodeIndex/Database/DbWriter.cs` using `stryker-config.json`. Keep this scope focused on transaction, savepoint, rollback, and batch-write behavior unless the runtime budget is intentionally expanded. The workflow caches the pinned `dotnet-stryker` 4.14.0 tool and NuGet packages, updates the tool only on cache misses, and keeps mutation score gates at high 75, low 70, and break 65 so changes that weaken rollback or savepoint coverage fail outside the regular PR test path. |
 
 ## CI / Artifact Distribution
@@ -374,6 +374,11 @@ single JSON summary or structured error, while the tag file itself remains the
 artifact. The summary includes resolved output/database paths, tag/emitted/
 skipped counts, filters, and advertised metadata field names so editor
 integrations can validate filtered exports without parsing human output.
+`skip_reason_counts` is a bounded object with stable reason keys; every skipped
+candidate contributes to exactly one reason, and its values sum to
+`skipped_count`. Generated files follow the query-command contract: exclude by
+default, opt in with `--include-generated`, and report `unavailable` without
+referencing `files.generated` when a legacy database lacks that column.
 
 Interactive terminal controls are allowed only when stdout is not redirected or captured, terminal capability hints are present, and the environment has not opted out. Treat `TERM=dumb`, truthy `CI`, missing Unix terminal hints, `NO_COLOR`, and `CLICOLOR=0` as reasons to suppress ANSI/progress controls unless an explicitly human-facing override is documented for that control.
 
@@ -422,6 +427,27 @@ to the stored column, then to character zero when no column was indexed. Type
 inlay hints are emitted only when the indexed return type is not already written
 before the declaration identifier, so explicit method return, local, and field
 types remain suppressed.
+
+Document/workspace symbol providers advertise work-done support and honor
+bounded string/integer `partialResultToken` and `workDoneToken` values. Partial
+results preserve the provider's deterministic order and use `$/progress`
+notifications capped at 100 items and 64 KiB of JSON body each; document-symbol
+partial results deliberately use flat `SymbolInformation` items, while the
+token-free response keeps the existing hierarchical `DocumentSymbol` contract.
+The stdio reader and the single response worker are separated by a bounded
+queue, so `$/cancelRequest` can cancel an active or queued symbol request without
+making database-backed request processing concurrent. Cancellation IDs retain
+their JSON type, cancelled requests end work-done progress and return `-32800`,
+and every result/progress cap is surfaced through the work-done end message or a
+bounded `window/logMessage` warning. Progress notifications drain through a
+separate two-item channel while symbol items are enumerated, so notification
+memory stays bounded and work-done `begin` reaches the client before symbol
+materialization completes. A full request queue rejects excess requests with
+`-32000` (`Server busy`), but document-sync and control notifications wait for
+ordered processing instead of being rejected. Rejection responses use a bounded
+output channel; capacity keeps cancellation readable, and output backpressure
+pauses input rather than dropping a response. An output-worker failure cancels
+the pending input read before propagating.
 
 ### Extractor performance contract
 
@@ -1468,7 +1494,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 | [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues API client (best-effort) |
 | [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` handler |
 | [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | Tool schema definition |
-| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | Local suggestion listing, export, issue-draft generation, and open-issue duplicate preflight |
+| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | Local suggestion listing, audited lifecycle transitions, bounded atomic export, issue-draft generation, and open-issue duplicate preflight |
 
 ### What is sent (when GitHub token is configured)
 
@@ -1495,7 +1521,11 @@ Local suggestion retention is bounded by `CDIDX_SUGGESTION_MAX_AGE_DAYS` and `CD
 
 ### Local lifecycle fields
 
-Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. Every GitHub submission attempt also stamps `last_submit_attempt`, increments `submit_attempt_count`, and records `last_submit_error` on failure; success clears the last error. GitHub rate-limit responses also stamp `next_retry_at`, and duplicate unsubmitted suggestions are not retried until that timestamp has passed. The remaining additive states are reserved for follow-up sync/listing flows: `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, and `superseded`. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
+Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. Every GitHub submission attempt also stamps `last_submit_attempt`, increments `submit_attempt_count`, and records `last_submit_error` on failure; success clears the last error. GitHub rate-limit responses also stamp `next_retry_at`, and duplicate unsubmitted suggestions are not retried until that timestamp has passed. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
+
+`SuggestionStore.TryTransitionStatus` is the atomic manual-transition boundary used by `suggestions update <id> --status <state>`. `submitted_pending_triage` is automatic-only. `open_in_upstream` and `resolved_in_upstream` require existing upstream evidence; `draft` requires the absence of upstream evidence; and `wont_fix`, `duplicate`, or `superseded` are local maintainer dispositions. Local dispositions suppress automatic duplicate resubmission without setting `AlreadySubmitted` or an upstream-submission response flag. Same-state transitions and transitions during an active submission reservation fail closed. The store rechecks the expected revision under its file lock, stamps the latest `previous_status`, UTC `status_changed_at`, bounded/redacted `status_changed_by`, and optional bounded/redacted `status_change_reason`, updates `resolved_at` for `resolved_in_upstream`, and recomputes `revision_hash`. Full audit values are redacted before a surrogate-safe final cap so a credential crossing the cap boundary cannot evade redaction. Content edits and lifecycle transitions are separate CLI operations so one audit event has one unambiguous meaning.
+
+`suggestions export --format markdown|issue-drafts --output <path>` renders the bounded payload in memory, rejects payloads over 16 MiB before writing, and refuses the selected database or suggestion-store path. For existing files it compares filesystem identities as well as normalized path spelling, so symlinked parents, mount aliases, and hard links cannot bypass source protection. Existing destinations are rejected unless `--overwrite` is explicit. Publication uses a sibling temporary file, flushes its contents, and performs a same-filesystem no-overwrite move or atomic replacement; failed publication cleans the temporary file. The writer emits UTF-8 without a BOM, creates missing parent directories, and keeps JSON-format suggestion exports on stdout. Tests cover the store transition/revision contract, CLI validation and filtering, source-target alias rejection, no-overwrite race safety, replacement, and temporary-file cleanup.
 
 ### GitHub retry idempotency
 
@@ -2902,7 +2932,7 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 | target framework | 製品版 CLI と NuGet tool packaging は `net8.0` を対象にしています。test project は `net8.0;net9.0` の multi-target で、CI は Linux、Windows、macOS の各 lane で両方の framework に対して test suite を実行します。CI 相当の full matrix を検証する場合は、両方の target framework を restore / 実行できる .NET SDK を使ってください。 |
 | SDK selection | `global.json` は repository SDK を `9.0.301` に固定し、`rollForward` を無効化します。CI は `8.0.413` と `9.0.301` を明示的に install します。`8.0.413` は `net8.0` runtime lane を提供し、`9.0.301` は restore、build、test、publish、changelog 検証で選択される SDK です。SDK を更新する場合は、`global.json`、すべての `actions/setup-dotnet` version list、Docker build image、この guide を同じ変更で更新してください。 |
 | GitHub Actions policy | workflow は hosted runner を version 付き label（`ubuntu-24.04`、`windows-2022`、`macos-14`）に固定し、top-level の `contents` permission は既定で read-only に保ちます。`continue-on-error` は failure path の diagnostic artifact upload に限定し、すべての upload artifact に明示的な retention を付け、artifact download は pattern と path で境界を絞ります。cache key は workflow + runner OS + `packages.lock.json` / `global.json` に scope し、広い restore-key fallback は使いません。`CiWorkflowTests.GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy` がこの checklist を強制します。 |
-| test diagnostics | CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` と VSTest の crash/hang blame collection、上限付きの 1 回だけの retry を使い、再現性のある失敗と retry で通る flake を区別します。Build and Test workflow は XPlat Code Coverage を `ubuntu-24.04` / `net8.0` でのみ収集し、それ以外の OS/framework lane は coverage collector overhead なしで full suite を実行します。test suite の構成、共有 helper、state-isolation rule、timeout diagnostics、test-writing convention については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。 |
+| test diagnostics | CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` と VSTest の crash/hang blame collection、上限付きの 1 回だけの retry を使い、再現性のある失敗と retry で通る flake を区別します。Build and Test workflow は `ubuntu-24.04` / `net8.0` を補完的な coverage shard に分割します。Windows と macOS も同じ補完的な net8 分割を coverage overhead なしで使い、Ubuntu net9 compatibility lane は full suite を実行します。test suite の構成、共有 helper、state-isolation rule、timeout diagnostics、test-writing convention については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。 |
 | mutation testing | weekly の `Mutation testing` workflow は `stryker-config.json` を使い、`src/CodeIndex/Database/DbWriter.cs` に対して Stryker.NET を実行します。runtime budget を意図的に広げる場合を除き、transaction、savepoint、rollback、batch-write behavior に scope を集中させてください。workflow は pinned `dotnet-stryker` 4.14.0 tool と NuGet package を cache し、cache miss のときだけ tool を update します。mutation score gate は high 75、low 70、break 65 で、rollback や savepoint coverage を弱める変更は通常の PR test path の外で失敗します。 |
 
 ## CI / アーティファクト配布
@@ -3265,6 +3295,11 @@ process-internal protocol のいずれかなので、それぞれの bounded ser
 structured error だけを含み、tags file 自体は artifact として残します。summary には解決済みの
 output / database path、tag / emitted / skipped counts、filters、metadata field names を含め、
 editor integration が human output を parse せず filtered export を検証できるようにします。
+`skip_reason_counts` は安定した reason key だけを持つ上限付き object です。skip された各候補は
+必ず1つの理由にだけ計上され、値の合計は `skipped_count` と一致します。generated file は
+query command と同じ contract に従い、既定で除外し、`--include-generated` で opt in します。
+legacy database に `files.generated` column がない場合はその column を参照せず
+`unavailable` と報告します。
 
 interactive terminal control は stdout が redirected / captured されておらず、terminal
 capability hint があり、environment が opt out していない場合にだけ許可します。`TERM=dumb`、
@@ -3310,6 +3345,24 @@ identifier を確認して、古い不正確な column にも対応する。sour
 保存済み column に fallback し、column も無い場合だけ character 0 を使う。type inlay hint は
 indexed return type が declaration identifier の前に明示されていない場合だけ返すため、method の
 明示 return type、local、field の明示型は表示しない。
+
+document/workspace symbol provider は work-done 対応を advertise し、上限付きの string /
+integer `partialResultToken` と `workDoneToken` を処理する。partial result は provider の
+決定的な順序を維持し、1 notification あたり最大100 item・64 KiB JSON body の
+`$/progress` で送る。document-symbol の partial result は意図的に flat な
+`SymbolInformation` item を使い、token のない response は既存の階層化された
+`DocumentSymbol` contract を維持する。stdio reader と単一 response worker は上限付き queue
+で分離するため、database-backed request processing を並行化せずに `$/cancelRequest` で active
+または queued symbol request を cancel できる。cancellation ID は JSON 型を保持し、cancel
+された request は work-done progress を終了して `-32800` を返す。result / progress cap は
+work-done の end message または上限付き `window/logMessage` warning で必ず通知する。progress
+notification は symbol item の列挙中に独立した2 item channel から drain するため、notification
+memory は bounded のままで、symbol materialization の完了前に work-done `begin` が client へ
+届く。request queue が満杯の場合は超過 request を `-32000`（`Server busy`）で拒否しながら
+document-sync notification と control notification は拒否せず順序どおりの処理を待たせる。
+rejection response は上限付き output channel を使い、空きがある間は cancellation を読み取り、
+output backpressure 時は response を破棄せず input を一時停止する。output worker の failure は
+伝播前に pending input read を cancel する。
 
 ### 抽出器の性能契約
 
@@ -4401,7 +4454,7 @@ Unlist しても exact version restore は不可能になりません。これ�
 | [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues APIクライアント（ベストエフォート） |
 | [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` ハンドラ |
 | [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | ツールスキーマ定義 |
-| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | ローカル提案の一覧、export、issue draft 生成、open issue duplicate preflight |
+| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | ローカル提案の一覧、監査付き lifecycle 遷移、上限付き原子的 export、issue draft 生成、open issue duplicate preflight |
 
 ### 送信されるデータ（GitHubトークン設定時）
 
@@ -4428,7 +4481,11 @@ suggestion sidecar は `DataDirectorySecurity.ResolveSensitiveSidecarDirectoryFo
 
 ### ローカルライフサイクルフィールド
 
-ローカルの提案レコードは、送信済みかどうかの二値フラグではなく `status` ライフサイクルフィールドを使う。新規レコードは `draft` で始まり、GitHub への送信が成功すると `submitted_pending_triage` へ移行し、判明している範囲で `upstream_url`、`upstream_issue_number`、`last_synced_at` を記録する。GitHub 送信を試みるたびに `last_submit_attempt` を stamp し、`submit_attempt_count` を増やし、失敗時は `last_submit_error` を記録します。成功時は最後の error を clear します。GitHub の rate-limit 応答では `next_retry_at` も記録し、未送信の重複提案はその時刻を過ぎるまで再送しない。残りの追加状態は後続の sync / listing フロー向けに予約されている: `open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded`。`submitted_to_github` / `github_issue_url` を含む古いレコードは、読み取り時に新しいライフサイクルフィールドへ正規化される。
+ローカルの提案レコードは、送信済みかどうかの二値フラグではなく `status` ライフサイクルフィールドを使う。新規レコードは `draft` で始まり、GitHub への送信が成功すると `submitted_pending_triage` へ移行し、判明している範囲で `upstream_url`、`upstream_issue_number`、`last_synced_at` を記録する。GitHub 送信を試みるたびに `last_submit_attempt` を stamp し、`submit_attempt_count` を増やし、失敗時は `last_submit_error` を記録します。成功時は最後の error を clear します。GitHub の rate-limit 応答では `next_retry_at` も記録し、未送信の重複提案はその時刻を過ぎるまで再送しない。`submitted_to_github` / `github_issue_url` を含む古いレコードは、読み取り時に新しいライフサイクルフィールドへ正規化される。
+
+`SuggestionStore.TryTransitionStatus` は `suggestions update <id> --status <state>` が使う原子的な手動遷移境界です。`submitted_pending_triage` は自動設定専用です。`open_in_upstream` と `resolved_in_upstream` には既存の upstream 根拠が必要で、`draft` には upstream 根拠がないことが必要です。`wont_fix`、`duplicate`、`superseded` はメンテナーによるローカルの判断です。ローカルの判断は重複提案の自動再送を抑止しますが、`AlreadySubmitted` や upstream 送信済み response flag は設定しません。同じ状態への遷移、および送信 reservation が active な間の遷移は fail closed になります。store は file lock 内で expected revision を再確認し、最新の `previous_status`、UTC の `status_changed_at`、上限・redaction 付きの `status_changed_by`、任意の上限・redaction 付き `status_change_reason` を stamp し、`resolved_in_upstream` では `resolved_at` を更新して、`revision_hash` を再計算します。監査値全体を redaction してから surrogate-safe な最終上限を適用するため、上限境界をまたぐ credential も redaction を回避できません。1件の監査 event の意味を曖昧にしないため、content 編集と lifecycle 遷移は別々の CLI 操作です。
+
+`suggestions export --format markdown|issue-drafts --output <path>` は上限付き payload をメモリ上で描画し、書き込み前に 16 MiB 超過を拒否し、選択中の database または suggestion-store path も拒否します。既存ファイルでは正規化した path 表記に加えて filesystem identity も比較するため、symlink 付き親 directory、mount alias、hard link で source 保護を迂回できません。既存の出力先は `--overwrite` を明示しない限り拒否します。公開処理は兄弟一時ファイルを使い、内容を flush してから同一 filesystem 上で no-overwrite move または原子的置換を行い、失敗時は一時ファイルを片付けます。writer は BOM なし UTF-8 を出力し、不足している親 directory を作成し、JSON 形式の suggestion export は stdout のままです。test は store の遷移・revision 契約、CLI validation と filtering、source target alias 拒否、no-overwrite の race safety、置換、一時ファイル cleanup を網羅します。
 
 ### GitHub 再試行の冪等性
 

@@ -9064,6 +9064,54 @@ public sealed class Caller
     }
 
     [Fact]
+    public void SuggestImprovement_LocalDispositionIsNotReportedAsSubmitted_Issue4719()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", null);
+        var uniqueDesc = $"Local disposition remains local {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "symbol_extraction",
+                    ["language"] = "typescript",
+                    ["description"] = uniqueDesc,
+                },
+            },
+        };
+        var firstResponse = _server.HandleMessage(request)!;
+        var firstStructured = firstResponse["result"]!["structuredContent"]!;
+        var id = firstStructured["id"]!.GetValue<string>();
+        var revisionHash = firstStructured["revision_hash"]!.GetValue<string>();
+        var store = new SuggestionStore(
+            DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(_dbPath, "suggestions"),
+            Path.GetFileNameWithoutExtension(_dbPath));
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            store.TryTransitionStatus(
+                id,
+                revisionHash,
+                SuggestionStatus.WontFix,
+                "maintainer",
+                null,
+                out _));
+
+        var duplicateResponse = _server.HandleMessage(request)!;
+        var duplicate = duplicateResponse["result"]!["structuredContent"]!;
+
+        Assert.Equal("duplicate", duplicate["status"]!.GetValue<string>());
+        Assert.Equal("wont_fix", duplicate["lifecycle_status"]!.GetValue<string>());
+        Assert.False(duplicate["submitted_to_github"]!.GetValue<bool>());
+        Assert.Equal("local_disposition", duplicate["github_submission_reason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void SuggestImprovement_CrashReport_ReturnsSuccess()
     {
         var uniqueDesc = $"NullReferenceException when searching with empty query {Guid.NewGuid():N}";

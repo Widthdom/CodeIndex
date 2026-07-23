@@ -6,6 +6,7 @@ using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -1510,6 +1511,61 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_UpdateStatusPersistsAuditMetadataAndValidatesLifecycle_Issue4719()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var draft = fixture.Add("bug", "csharp", "Lifecycle state needs maintainer curation", submitted: false);
+        var submitted = fixture.Add("bug", "csharp", "Upstream issue has been resolved", submitted: true);
+
+        var (transitionExitCode, transitionStdout, transitionStderr) = RunCliInSubprocess([
+            "suggestions", "update", draft.Hash[..12], "--db", fixture.DbPath, "--json",
+            "--status", "wont_fix", "--actor", "widthdom", "--reason", "Outside the supported scope"
+        ]);
+        var (filterExitCode, filterStdout, filterStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--json", "--status", "wont_fix"
+        ]);
+        var (resolvedExitCode, resolvedStdout, resolvedStderr) = RunCliInSubprocess([
+            "suggestions", "update", submitted.Hash[..12], "--db", fixture.DbPath, "--json",
+            "--status", "resolved_in_upstream", "--actor", "widthdom"
+        ]);
+        var (invalidExitCode, invalidStdout, invalidStderr) = RunCliInSubprocess([
+            "suggestions", "update", draft.Hash[..12], "--db", fixture.DbPath,
+            "--status", "submitted_pending_triage"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, transitionExitCode);
+        Assert.Equal(CommandExitCodes.Success, filterExitCode);
+        Assert.Equal(CommandExitCodes.Success, resolvedExitCode);
+        Assert.Equal(CommandExitCodes.UsageError, invalidExitCode);
+        Assert.Equal(string.Empty, transitionStderr);
+        Assert.Equal(string.Empty, filterStderr);
+        Assert.Equal(string.Empty, resolvedStderr);
+        Assert.Equal(string.Empty, invalidStdout);
+        Assert.Contains("managed by GitHub submission", invalidStderr);
+
+        using var transitionDoc = JsonDocument.Parse(transitionStdout);
+        var transitioned = transitionDoc.RootElement.GetProperty("suggestion");
+        Assert.Equal("status_changed", transitionDoc.RootElement.GetProperty("action").GetString());
+        Assert.Equal("wont_fix", transitioned.GetProperty("status").GetString());
+        Assert.Equal("draft", transitioned.GetProperty("previous_status").GetString());
+        Assert.Equal("widthdom", transitioned.GetProperty("status_changed_by").GetString());
+        Assert.Equal("Outside the supported scope", transitioned.GetProperty("status_change_reason").GetString());
+        Assert.NotEqual(default, transitioned.GetProperty("status_changed_at").GetDateTime());
+
+        using var filterDoc = JsonDocument.Parse(filterStdout);
+        var filtered = Assert.Single(filterDoc.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal(draft.Hash, filtered.GetProperty("id").GetString());
+        Assert.Equal("wont_fix", filtered.GetProperty("status").GetString());
+        Assert.False(filtered.GetProperty("submitted_to_github").GetBoolean());
+
+        using var resolvedDoc = JsonDocument.Parse(resolvedStdout);
+        var resolved = resolvedDoc.RootElement.GetProperty("suggestion");
+        Assert.Equal("resolved_in_upstream", resolved.GetProperty("status").GetString());
+        Assert.Equal("submitted_pending_triage", resolved.GetProperty("previous_status").GetString());
+        Assert.Equal(resolved.GetProperty("status_changed_at").GetDateTime(), resolved.GetProperty("resolved_at").GetDateTime());
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_DeleteRemovesDraft_Issue4441()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1661,6 +1717,138 @@ public class ProgramCliTests
         Assert.Contains("- submit_attempt_count: `1`", stdout);
         Assert.Contains("- last_submit_error: `HttpRequestException: network unavailable`", stdout);
         Assert.DoesNotContain("Add parser support", stdout);
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_ExportMarkdownOutputIsAtomicAndRequiresExplicitOverwrite_Issue4719()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add("output_format", "csharp", "Write suggestions to a bounded file", submitted: false);
+        var outputPath = fixture.GetPath("exports", "suggestions.md");
+
+        var (createExitCode, createStdout, createStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown", "--output", outputPath
+        ]);
+        var originalBytes = File.ReadAllBytes(outputPath);
+        var (refuseExitCode, refuseStdout, refuseStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown", "--output", outputPath
+        ]);
+        fixture.Add("documentation", null, "Document explicit overwrite behavior", submitted: false);
+        var (overwriteExitCode, overwriteStdout, overwriteStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown",
+            "--output", outputPath, "--overwrite"
+        ]);
+        var jsonOutputPath = fixture.GetPath("exports", "suggestions-summary.md");
+        var (jsonExitCode, jsonStdout, jsonStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown",
+            "--output", jsonOutputPath, "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, createExitCode);
+        Assert.Equal(CommandExitCodes.UsageError, refuseExitCode);
+        Assert.Equal(CommandExitCodes.Success, overwriteExitCode);
+        Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+        Assert.Equal(string.Empty, createStderr);
+        Assert.Equal(string.Empty, refuseStdout);
+        Assert.Equal(string.Empty, overwriteStderr);
+        Assert.Equal(string.Empty, jsonStderr);
+        Assert.Contains("Wrote 1 suggestion", createStdout);
+        Assert.Contains("already exists", refuseStderr);
+        Assert.Contains("--overwrite", refuseStderr);
+        Assert.Contains("Wrote 2 suggestions", overwriteStdout);
+        Assert.False(originalBytes.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }));
+        Assert.Contains("Write suggestions to a bounded file", Encoding.UTF8.GetString(originalBytes));
+        Assert.Contains("Document explicit overwrite behavior", File.ReadAllText(outputPath, Encoding.UTF8));
+        using var jsonSummary = JsonDocument.Parse(jsonStdout);
+        Assert.Equal("success", jsonSummary.RootElement.GetProperty("status").GetString());
+        Assert.Equal("markdown", jsonSummary.RootElement.GetProperty("format").GetString());
+        Assert.Equal(Path.GetFullPath(jsonOutputPath), jsonSummary.RootElement.GetProperty("output_path").GetString());
+        Assert.Contains("Document explicit overwrite behavior", File.ReadAllText(jsonOutputPath, Encoding.UTF8));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(outputPath)!, "*.tmp"));
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_ExportRejectsProtectedDatabaseThroughDirectoryAlias_Issue4719()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add("output_format", "csharp", "Protect export source aliases", submitted: false);
+        File.WriteAllText(fixture.DbPath, "database sentinel", Encoding.UTF8);
+        var databaseDirectory = Path.GetDirectoryName(fixture.DbPath)!;
+        var aliasDirectory = fixture.GetPath("database-alias");
+        try
+        {
+            Directory.CreateSymbolicLink(aliasDirectory, databaseDirectory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var originalBytes = File.ReadAllBytes(fixture.DbPath);
+        try
+        {
+            var aliasPath = Path.Combine(aliasDirectory, Path.GetFileName(fixture.DbPath));
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([
+                "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown",
+                "--output", aliasPath, "--overwrite"
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("must not replace", stderr);
+            Assert.Equal(originalBytes, File.ReadAllBytes(fixture.DbPath));
+        }
+        finally
+        {
+            Directory.Delete(aliasDirectory);
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_ExportIssueDraftOutputWritesJsonAndRejectsStoreTargets_Issue4719()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add(
+            "output_format",
+            "csharp",
+            "Write issue drafts to a file",
+            submitted: false,
+            sampledTitle: "Add file output");
+        var openIssuesPath = fixture.WriteOpenIssuesJson("[]");
+        var outputPath = fixture.GetPath("exports", "issue-drafts.json");
+
+        var (writeExitCode, writeStdout, writeStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts",
+            "--open-issues", openIssuesPath, "--output", outputPath, "--json"
+        ]);
+        var (dbExitCode, dbStdout, dbStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown",
+            "--output", fixture.DbPath, "--overwrite"
+        ]);
+        var (storeExitCode, storeStdout, storeStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown",
+            "--output", fixture.StorePath, "--overwrite"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, writeExitCode);
+        Assert.Equal(CommandExitCodes.UsageError, dbExitCode);
+        Assert.Equal(CommandExitCodes.UsageError, storeExitCode);
+        Assert.Equal(string.Empty, writeStderr);
+        Assert.Equal(string.Empty, dbStdout);
+        Assert.Equal(string.Empty, storeStdout);
+        Assert.Contains("must not replace the selected database", dbStderr);
+        Assert.Contains("must not replace the selected database", storeStderr);
+        using var summary = JsonDocument.Parse(writeStdout);
+        Assert.Equal("success", summary.RootElement.GetProperty("status").GetString());
+        Assert.Equal("issue-drafts", summary.RootElement.GetProperty("format").GetString());
+        Assert.Equal(1, summary.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal(Path.GetFullPath(outputPath), summary.RootElement.GetProperty("output_path").GetString());
+        Assert.True(summary.RootElement.GetProperty("bytes").GetInt32() > 0);
+        using var document = JsonDocument.Parse(File.ReadAllText(outputPath, Encoding.UTF8));
+        Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal(
+            "[AI Suggestion] output_format: Add file output",
+            document.RootElement.GetProperty("drafts")[0].GetProperty("title").GetString());
     }
 
     [ProductionRuntimeFact]
@@ -2188,6 +2376,8 @@ public class ProgramCliTests
 
         public string DbPath { get; }
 
+        public string StorePath => Path.Combine(_root, ".cdidx", "suggestions-codeindex.json");
+
         public static SuggestionFixture Create()
         {
             var root = TestProjectHelper.CreateTempProject("cdidx_suggestions_cli");
@@ -2235,6 +2425,9 @@ public class ProgramCliTests
             File.WriteAllText(path, json);
             return path;
         }
+
+        public string GetPath(params string[] segments)
+            => segments.Aggregate(_root, Path.Combine);
 
         private void Write()
         {

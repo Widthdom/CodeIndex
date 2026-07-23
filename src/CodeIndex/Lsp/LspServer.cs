@@ -1,8 +1,10 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
@@ -37,6 +39,11 @@ internal sealed class LspServer : IDisposable
     internal const int MaxDocumentSymbolDetailChars = 512;
     internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
     internal static int? DocumentSymbolResponseBytesForTesting { get; set; }
+    internal const int MaxSymbolProgressChunkItems = 100;
+    internal const int MaxSymbolProgressChunkBytes = 64 * 1024;
+    private const int MaxPendingLspMessages = 16;
+    private const int MaxPendingSymbolNotifications = 2;
+    private const int MaxPendingOverloadResponses = 16;
     internal const int MaxPositionLineChars = 16 * 1024;
     internal const int MaxCompletionItems = 100;
     internal const int MaxInlayHintItems = 200;
@@ -45,8 +52,12 @@ internal sealed class LspServer : IDisposable
     internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
+    private const int JsonRpcRequestCancelledCode = -32800;
+    private const int JsonRpcServerBusyCode = -32000;
     private const string JsonRpcInvalidParamsMessage = "Invalid params";
     private const string JsonRpcInternalErrorMessage = "Internal error";
+    private const string JsonRpcRequestCancelledMessage = "Request cancelled";
+    private const string JsonRpcServerBusyMessage = "Server busy";
     private const string LspLookupFailureEventName = "lsp.lookup_failed";
     private const string LspLookupFailureReasonTag = "lsp.lookup.failure_reason";
     private const string LspMethodTag = "lsp.method";
@@ -123,11 +134,21 @@ internal sealed class LspServer : IDisposable
     private bool _exitRequestedBeforeShutdown;
     private readonly List<string> _workspaceFolders = [];
     private readonly LspLiveDocumentStore _liveDocumentStore;
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _requestCancellations = new(StringComparer.Ordinal);
     private long _contentChangeEntriesDropped;
+    internal Action<CancellationToken>? BeforeSymbolRequestForTesting { get; set; }
 
     private readonly record struct PositionTokenContext(string Token, string ResolvedPath, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
     private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
     private readonly record struct IndexedDocumentContext(string DocumentPath, string ResolvedPath, string IndexedPath, string? WorkspaceRoot);
+    private readonly record struct InboundMessage(string Payload, string? RequestKey, CancellationTokenSource? RequestCancellation);
+    private readonly record struct SymbolResponse(
+        JsonArray FinalItems,
+        IEnumerable<JsonNode> PartialItems,
+        int ReturnedCount,
+        bool Truncated);
+    private readonly record struct DocumentSymbolTreeResult(JsonArray Roots, int RemovedCount);
+    private readonly record struct PartialResultEmission(int EmittedCount, bool Truncated, bool Cancelled);
     internal readonly record struct MessageReadResult(bool Success, string Payload);
     internal readonly record struct LspMessageReadDiagnostic(
         string Code,
@@ -193,25 +214,106 @@ internal sealed class LspServer : IDisposable
 
     public async Task<int> RunAsync(Stream input, Stream output, CancellationToken cancellationToken = default)
     {
-        while (true)
+        var messages = Channel.CreateBounded<InboundMessage>(new BoundedChannelOptions(MaxPendingLspMessages)
         {
-            var read = await TryReadMessageAsync(input, cancellationToken).ConfigureAwait(false);
-            if (!read.Success)
-                break;
+            SingleReader = true,
+            SingleWriter = true,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+        var overloadResponses = Channel.CreateBounded<JsonObject>(
+            new BoundedChannelOptions(MaxPendingOverloadResponses)
+            {
+                SingleReader = true,
+                SingleWriter = true,
+                FullMode = BoundedChannelFullMode.Wait,
+            });
+        using var exitCancellation = new CancellationTokenSource();
+        using var readCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            exitCancellation.Token);
+        using var outputGate = new SemaphoreSlim(1, 1);
+        var processor = ProcessInboundMessagesAsync(
+            messages.Reader,
+            output,
+            outputGate,
+            exitCancellation,
+            cancellationToken);
+        var overloadResponseDrain = DrainServerResponsesAsync(
+            overloadResponses.Reader,
+            output,
+            outputGate,
+            exitCancellation,
+            cancellationToken);
 
-            cancellationToken.ThrowIfCancellationRequested();
-            var response = HandleMessage(read.Payload);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (response != null)
-                await WriteResponseMessageAsync(output, response, cancellationToken).ConfigureAwait(false);
-            if (_exitRequested)
-                break;
+        try
+        {
+            while (true)
+            {
+                var read = await TryReadMessageAsync(input, readCancellation.Token).ConfigureAwait(false);
+                if (!read.Success)
+                    break;
+
+                cancellationToken.ThrowIfCancellationRequested();
+                if (TryHandleCancellationNotification(read.Payload))
+                    continue;
+
+                var inbound = CreateInboundMessage(read.Payload, cancellationToken);
+                if (messages.Writer.TryWrite(inbound))
+                    continue;
+
+                var busyResponse = CreateServerBusyResponse(read.Payload);
+                if (busyResponse != null)
+                {
+                    ReleaseInboundMessage(inbound);
+                    await overloadResponses.Writer
+                        .WriteAsync(busyResponse, readCancellation.Token)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                try
+                {
+                    await messages.Writer
+                        .WriteAsync(inbound, readCancellation.Token)
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    ReleaseInboundMessage(inbound);
+                    throw;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (exitCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // The exit notification stops a pending frame read. / exit notification で pending frame read を停止する。
+        }
+        finally
+        {
+            messages.Writer.TryComplete();
+            overloadResponses.Writer.TryComplete();
+            try
+            {
+                await Task.WhenAll(processor, overloadResponseDrain).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Preserve the public Run/RunAsync cancellation contract below.
+                // 下の public Run/RunAsync cancellation contract を維持する。
+            }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return _exitRequestedBeforeShutdown ? CommandExitCodes.UsageError : CommandExitCodes.Success;
     }
 
-    internal JsonObject? HandleMessage(string payload)
+    internal JsonObject? HandleMessage(string payload) =>
+        HandleMessage(payload, outbound: null, CancellationToken.None);
+
+    private JsonObject? HandleMessage(
+        string payload,
+        Action<JsonObject>? outbound,
+        CancellationToken requestCancellation)
     {
         // Run() normally obtains payloads through TryReadMessage, but internal callers can bypass
         // that frame reader; keep the JSON parse under the same byte budget either way.
@@ -259,8 +361,19 @@ internal sealed class LspServer : IDisposable
                     "textDocument/didOpen" => HandleDidOpenTextDocument(root),
                     "textDocument/didChange" => HandleDidChangeTextDocument(root),
                     "textDocument/didClose" => HandleDidCloseTextDocument(root),
-                    "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
-                    "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
+                    "$/cancelRequest" => null,
+                    "workspace/symbol" => HandleSymbolRequest(
+                        id,
+                        root,
+                        documentSymbols: false,
+                        outbound,
+                        requestCancellation),
+                    "textDocument/documentSymbol" => HandleSymbolRequest(
+                        id,
+                        root,
+                        documentSymbols: true,
+                        outbound,
+                        requestCancellation),
                     "textDocument/definition" => Result(id, Definition(root, "textDocument/definition")),
                     "textDocument/declaration" => Result(id, Definition(root, "textDocument/declaration")),
                     "textDocument/references" => Result(id, References(root, "textDocument/references")),
@@ -281,6 +394,271 @@ internal sealed class LspServer : IDisposable
                 return hasId ? Error(id, JsonRpcInternalErrorCode, JsonRpcInternalErrorMessage) : null;
             }
         }
+    }
+
+    private async Task ProcessInboundMessagesAsync(
+        ChannelReader<InboundMessage> reader,
+        Stream output,
+        SemaphoreSlim outputGate,
+        CancellationTokenSource exitCancellation,
+        CancellationToken serverCancellation)
+    {
+        try
+        {
+            await foreach (var inbound in reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                try
+                {
+                    var notifications = Channel.CreateBounded<JsonObject>(
+                        new BoundedChannelOptions(MaxPendingSymbolNotifications)
+                        {
+                            SingleReader = true,
+                            SingleWriter = true,
+                            FullMode = BoundedChannelFullMode.Wait,
+                        });
+                    using var notificationCancellation =
+                        CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
+                    using var processingCancellation =
+                        CancellationTokenSource.CreateLinkedTokenSource(
+                            inbound.RequestCancellation?.Token ?? serverCancellation,
+                            notificationCancellation.Token);
+                    var notificationDrain = DrainServerNotificationsAsync(
+                        notifications.Reader,
+                        output,
+                        outputGate,
+                        notificationCancellation);
+                    JsonObject? response;
+                    try
+                    {
+                        response = HandleMessage(
+                            inbound.Payload,
+                            notification => notifications.Writer
+                                .WriteAsync(notification, notificationCancellation.Token)
+                                .AsTask()
+                                .GetAwaiter()
+                                .GetResult(),
+                            processingCancellation.Token);
+                    }
+                    finally
+                    {
+                        notifications.Writer.TryComplete();
+                        await notificationDrain.ConfigureAwait(false);
+                    }
+
+                    if (response != null)
+                    {
+                        await WriteResponseMessageAsync(
+                            output,
+                            outputGate,
+                            response,
+                            serverCancellation).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    ReleaseInboundMessage(inbound);
+                }
+
+                if (_exitRequested)
+                {
+                    exitCancellation.Cancel();
+                    break;
+                }
+            }
+        }
+        catch
+        {
+            exitCancellation.Cancel();
+            throw;
+        }
+        finally
+        {
+            while (reader.TryRead(out var pending))
+                ReleaseInboundMessage(pending);
+        }
+    }
+
+    private async Task DrainServerNotificationsAsync(
+        ChannelReader<JsonObject> notifications,
+        Stream output,
+        SemaphoreSlim outputGate,
+        CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await foreach (var notification in notifications
+                .ReadAllAsync(cancellation.Token)
+                .ConfigureAwait(false))
+            {
+                await WriteServerNotificationAsync(
+                    output,
+                    outputGate,
+                    notification,
+                    cancellation.Token).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            cancellation.Cancel();
+            throw;
+        }
+    }
+
+    private async Task DrainServerResponsesAsync(
+        ChannelReader<JsonObject> responses,
+        Stream output,
+        SemaphoreSlim outputGate,
+        CancellationTokenSource exitCancellation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var response in responses
+                .ReadAllAsync(cancellationToken)
+                .ConfigureAwait(false))
+            {
+                await WriteResponseMessageAsync(
+                    output,
+                    outputGate,
+                    response,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            exitCancellation.Cancel();
+            throw;
+        }
+    }
+
+    private InboundMessage CreateInboundMessage(string payload, CancellationToken serverCancellation)
+    {
+        if (!TryGetRequestKey(payload, out var requestKey))
+            return new InboundMessage(payload, null, null);
+
+        var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
+        if (!_requestCancellations.TryAdd(requestKey, requestCancellation))
+        {
+            requestCancellation.Dispose();
+            return new InboundMessage(payload, null, null);
+        }
+
+        return new InboundMessage(payload, requestKey, requestCancellation);
+    }
+
+    private void ReleaseInboundMessage(InboundMessage inbound)
+    {
+        if (inbound.RequestCancellation == null)
+            return;
+
+        if (inbound.RequestKey != null
+            && _requestCancellations.TryGetValue(inbound.RequestKey, out var registered)
+            && ReferenceEquals(registered, inbound.RequestCancellation))
+        {
+            _requestCancellations.TryRemove(inbound.RequestKey, out _);
+        }
+
+        inbound.RequestCancellation.Dispose();
+    }
+
+    private bool TryHandleCancellationNotification(string payload)
+    {
+        try
+        {
+            using var document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("method", out var method)
+                || method.ValueKind != JsonValueKind.String
+                || !string.Equals(method.GetString(), "$/cancelRequest", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (TryGet(root, out var requestId, "params", "id")
+                && TryGetRequestKey(requestId, out var requestKey)
+                && _requestCancellations.TryGetValue(requestKey, out var requestCancellation))
+            {
+                try
+                {
+                    requestCancellation.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The request completed while cancellation was being dispatched.
+                    // cancellation dispatch 中に request が完了した。
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static JsonObject? CreateServerBusyResponse(string payload)
+    {
+        try
+        {
+            using var document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("method", out var method)
+                || method.ValueKind != JsonValueKind.String
+                || !root.TryGetProperty("id", out var requestId)
+                || !LspProtocol.TryParseRequestId(payload, requestId, out var id, out _))
+            {
+                return null;
+            }
+
+            return Error(id, JsonRpcServerBusyCode, JsonRpcServerBusyMessage);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryGetRequestKey(string payload, out string requestKey)
+    {
+        requestKey = string.Empty;
+        try
+        {
+            using var document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("method", out var method)
+                && method.ValueKind == JsonValueKind.String
+                && root.TryGetProperty("id", out var requestId)
+                && TryGetRequestKey(requestId, out requestKey);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetRequestKey(JsonElement requestId, out string requestKey)
+    {
+        requestKey = string.Empty;
+        if (requestId.ValueKind == JsonValueKind.String)
+        {
+            var value = requestId.GetString() ?? string.Empty;
+            if (value.Length > MaxRequestIdStringChars)
+                return false;
+            requestKey = "s:" + value;
+            return true;
+        }
+
+        if (requestId.ValueKind == JsonValueKind.Number && requestId.TryGetInt64(out var integer))
+        {
+            requestKey = "n:" + integer.ToString(CultureInfo.InvariantCulture);
+            return true;
+        }
+
+        return false;
     }
 
     private void RefreshOwnedQuerySnapshot()
@@ -471,8 +849,14 @@ internal sealed class LspServer : IDisposable
             ["definitionProvider"] = true,
             ["declarationProvider"] = true,
             ["referencesProvider"] = true,
-            ["documentSymbolProvider"] = true,
-            ["workspaceSymbolProvider"] = true,
+            ["documentSymbolProvider"] = new JsonObject
+            {
+                ["workDoneProgress"] = true,
+            },
+            ["workspaceSymbolProvider"] = new JsonObject
+            {
+                ["workDoneProgress"] = true,
+            },
             ["hoverProvider"] = true,
             ["completionProvider"] = new JsonObject
             {
@@ -523,7 +907,16 @@ internal sealed class LspServer : IDisposable
         return array;
     }
 
-    private JsonArray WorkspaceSymbol(JsonElement root)
+    private JsonArray WorkspaceSymbol(JsonElement root) =>
+        CreateWorkspaceSymbolResponse(
+            root,
+            createPartialItems: false,
+            CancellationToken.None).FinalItems;
+
+    private SymbolResponse CreateWorkspaceSymbolResponse(
+        JsonElement root,
+        bool createPartialItems,
+        CancellationToken cancellationToken)
     {
         var query = GetString(root, "params", "query");
         if (query != null && query.Length > QueryLimits.MaxQueryLength)
@@ -532,7 +925,20 @@ internal sealed class LspServer : IDisposable
         var limit = GetLimit(root, DefaultLimit, MaxWorkspaceSymbols, "params", "limit")
             ?? GetLimit(root, DefaultLimit, MaxWorkspaceSymbols, "params", "maxResults")
             ?? DefaultLimit;
-        IReadOnlyList<SymbolResult> symbols = limit == 0 ? [] : _reader.SearchSymbols(query, limit);
+        IReadOnlyList<SymbolResult> candidates = limit == 0
+            ? []
+            : _reader.SearchSymbols(query, checked(limit + 1));
+        var truncated = candidates.Count > limit;
+        var symbols = candidates.Take(limit).ToList();
+        if (createPartialItems)
+        {
+            return new SymbolResponse(
+                [],
+                EnumerateWorkspaceSymbolItems(symbols, cancellationToken),
+                symbols.Count,
+                truncated);
+        }
+
         var identifiers = new (int Line, int StartColumn, int EndColumn)[symbols.Count];
         var pathComparer = _pathStringComparison == StringComparison.OrdinalIgnoreCase
             ? StringComparer.OrdinalIgnoreCase
@@ -544,19 +950,64 @@ internal sealed class LspServer : IDisposable
             var resolvedPath = TryResolveIndexedFilePath(pathGroup.Key, out var path) ? path : null;
             var lineCache = new Dictionary<int, string?>();
             foreach (var item in pathGroup)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 identifiers[item.Index] = GetSymbolIdentifierPosition(item.Symbol, resolvedPath, lineCache);
+            }
         }
 
         var array = new JsonArray();
         for (var index = 0; index < symbols.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             array.Add((JsonNode)ToWorkspaceSymbol(symbols[index], identifiers[index]));
-        return array;
+        }
+
+        return new SymbolResponse(array, [], array.Count, truncated);
     }
 
-    private JsonArray DocumentSymbol(JsonElement root)
+    private IEnumerable<JsonNode> EnumerateWorkspaceSymbolItems(
+        IReadOnlyList<SymbolResult> symbols,
+        CancellationToken cancellationToken)
+    {
+        var pathComparer = _pathStringComparison == StringComparison.OrdinalIgnoreCase
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        var pathContexts = new Dictionary<
+            string,
+            (string? ResolvedPath, Dictionary<int, string?> LineCache)>(pathComparer);
+        foreach (var symbol in symbols)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!pathContexts.TryGetValue(symbol.Path, out var context))
+            {
+                context = (
+                    TryResolveIndexedFilePath(symbol.Path, out var path) ? path : null,
+                    new Dictionary<int, string?>());
+                pathContexts.Add(symbol.Path, context);
+            }
+
+            var identifier = GetSymbolIdentifierPosition(
+                symbol,
+                context.ResolvedPath,
+                context.LineCache);
+            yield return ToWorkspaceSymbol(symbol, identifier);
+        }
+    }
+
+    private JsonArray DocumentSymbol(JsonElement root) =>
+        CreateDocumentSymbolResponse(
+            root,
+            createPartialItems: false,
+            CancellationToken.None).FinalItems;
+
+    private SymbolResponse CreateDocumentSymbolResponse(
+        JsonElement root,
+        bool createPartialItems,
+        CancellationToken cancellationToken)
     {
         if (!TryResolveIndexedDocument(root, out var document))
-            return [];
+            return new SymbolResponse([], [], 0, false);
 
         var candidates = _reader.SearchSymbols((string?)null, MaxDocumentSymbolMaterialization + 1, pathPatterns: [document.IndexedPath]);
         var materializationTruncated = candidates.Count > MaxDocumentSymbolMaterialization;
@@ -571,18 +1022,51 @@ internal sealed class LspServer : IDisposable
             .ThenBy(s => s.ContainerName == null ? 0 : 1)
             .ThenBy(s => s.Name, StringComparer.Ordinal)
             .ToList();
-        var roots = BuildDocumentSymbolTree(document, symbols);
-        Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", roots.Count);
-        return roots;
+
+        if (createPartialItems)
+        {
+            Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", 0);
+            Activity.Current?.SetTag("lsp.document_symbols.returned_partial_count", symbols.Count);
+            return new SymbolResponse(
+                [],
+                EnumerateDocumentSymbolItems(document, symbols, cancellationToken),
+                symbols.Count,
+                materializationTruncated);
+        }
+
+        var tree = BuildDocumentSymbolTree(document, symbols, cancellationToken);
+        Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", tree.Roots.Count);
+        return new SymbolResponse(
+            tree.Roots,
+            [],
+            Math.Max(0, symbols.Count - tree.RemovedCount),
+            materializationTruncated || tree.RemovedCount > 0);
     }
 
-    private JsonArray BuildDocumentSymbolTree(IndexedDocumentContext document, IReadOnlyList<SymbolResult> symbols)
+    private IEnumerable<JsonNode> EnumerateDocumentSymbolItems(
+        IndexedDocumentContext document,
+        IReadOnlyList<SymbolResult> symbols,
+        CancellationToken cancellationToken)
+    {
+        var lineCache = new Dictionary<int, string?>();
+        foreach (var symbol in symbols)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return ToDocumentSymbolInformation(document, symbol, lineCache);
+        }
+    }
+
+    private DocumentSymbolTreeResult BuildDocumentSymbolTree(
+        IndexedDocumentContext document,
+        IReadOnlyList<SymbolResult> symbols,
+        CancellationToken cancellationToken)
     {
         var roots = new JsonArray();
         var nodes = new List<DocumentSymbolNode>(symbols.Count);
         var lineCache = new Dictionary<int, string?>();
         foreach (var symbol in symbols)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var item = ToDocumentSymbol(document, symbol, lineCache);
             var node = new DocumentSymbolNode(symbol, item);
             var parent = FindDocumentSymbolParent(nodes, symbol);
@@ -593,9 +1077,282 @@ internal sealed class LspServer : IDisposable
             nodes.Add(node);
         }
 
-        TrimDocumentSymbolsToBudget(roots);
-        return roots;
+        return new DocumentSymbolTreeResult(roots, TrimDocumentSymbolsToBudget(roots));
     }
+
+    private JsonObject HandleSymbolRequest(
+        JsonNode? id,
+        JsonElement root,
+        bool documentSymbols,
+        Action<JsonObject>? outbound,
+        CancellationToken cancellationToken)
+    {
+        var partialResultToken = GetProgressToken(root, "partialResultToken");
+        var workDoneToken = GetProgressToken(root, "workDoneToken");
+        if (outbound == null)
+            return Result(id, documentSymbols ? DocumentSymbol(root) : WorkspaceSymbol(root));
+
+        var title = documentSymbols ? "CodeIndex document symbols" : "CodeIndex workspace symbols";
+        if (workDoneToken != null)
+            outbound(CreateProgressNotification(workDoneToken, CreateWorkDoneBegin(title)));
+
+        var emittedCount = 0;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            BeforeSymbolRequestForTesting?.Invoke(cancellationToken);
+            var response = documentSymbols
+                ? CreateDocumentSymbolResponse(
+                    root,
+                    createPartialItems: partialResultToken != null,
+                    cancellationToken)
+                : CreateWorkspaceSymbolResponse(
+                    root,
+                    createPartialItems: partialResultToken != null,
+                    cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var truncated = response.Truncated;
+            JsonNode? finalResult = response.FinalItems;
+            if (partialResultToken != null)
+            {
+                var emission = EmitPartialResultChunks(
+                    outbound,
+                    partialResultToken,
+                    workDoneToken,
+                    response.PartialItems,
+                    response.ReturnedCount,
+                    cancellationToken);
+                emittedCount = emission.EmittedCount;
+                truncated |= emission.Truncated;
+                if (emission.Cancelled)
+                {
+                    return CompleteCancelledSymbolRequest(
+                        id,
+                        outbound,
+                        workDoneToken,
+                        emittedCount);
+                }
+
+                finalResult = null;
+            }
+            else
+            {
+                emittedCount = response.ReturnedCount;
+                if (workDoneToken != null)
+                {
+                    outbound(CreateProgressNotification(
+                        workDoneToken,
+                        CreateWorkDoneReport(100, $"Prepared {emittedCount} symbols.")));
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var summary = CreateSymbolProgressSummary(emittedCount, truncated);
+            if (workDoneToken != null)
+                outbound(CreateProgressNotification(workDoneToken, CreateWorkDoneEnd(summary)));
+            else if (truncated)
+                outbound(CreateLogMessage(summary));
+
+            return Result(id, finalResult);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CompleteCancelledSymbolRequest(
+                id,
+                outbound,
+                workDoneToken,
+                emittedCount);
+        }
+        catch
+        {
+            if (workDoneToken != null)
+            {
+                outbound(CreateProgressNotification(
+                    workDoneToken,
+                    CreateWorkDoneEnd("Symbol request failed.")));
+            }
+
+            throw;
+        }
+    }
+
+    private PartialResultEmission EmitPartialResultChunks(
+        Action<JsonObject> outbound,
+        JsonNode partialResultToken,
+        JsonNode? workDoneToken,
+        IEnumerable<JsonNode> items,
+        int totalCount,
+        CancellationToken cancellationToken)
+    {
+        var emittedCount = 0;
+        var chunk = new JsonArray();
+        try
+        {
+            foreach (var item in items)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return new PartialResultEmission(emittedCount, false, true);
+
+                chunk.Add(item);
+                var measuredNotification = CreateProgressNotification(
+                    partialResultToken,
+                    chunk.DeepClone());
+                var exceedsChunkBudget = chunk.Count > MaxSymbolProgressChunkItems
+                    || MeasureJsonUtf8Bytes(measuredNotification) > MaxSymbolProgressChunkBytes;
+                if (exceedsChunkBudget)
+                {
+                    chunk.RemoveAt(chunk.Count - 1);
+                    if (chunk.Count > 0)
+                    {
+                        EmitPartialResultChunk(
+                            outbound,
+                            partialResultToken,
+                            workDoneToken,
+                            chunk,
+                            ref emittedCount,
+                            totalCount);
+                    }
+
+                    chunk = [];
+                    chunk.Add(item);
+                    measuredNotification = CreateProgressNotification(
+                        partialResultToken,
+                        chunk.DeepClone());
+                    if (MeasureJsonUtf8Bytes(measuredNotification) > MaxSymbolProgressChunkBytes)
+                        return new PartialResultEmission(emittedCount, true, false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new PartialResultEmission(emittedCount, false, true);
+        }
+
+        if (chunk.Count > 0)
+        {
+            EmitPartialResultChunk(
+                outbound,
+                partialResultToken,
+                workDoneToken,
+                chunk,
+                ref emittedCount,
+                totalCount);
+        }
+        else if (totalCount == 0 && workDoneToken != null)
+        {
+            outbound(CreateProgressNotification(
+                workDoneToken,
+                CreateWorkDoneReport(100, "Prepared 0 symbols.")));
+        }
+
+        return new PartialResultEmission(emittedCount, false, cancellationToken.IsCancellationRequested);
+    }
+
+    private static void EmitPartialResultChunk(
+        Action<JsonObject> outbound,
+        JsonNode partialResultToken,
+        JsonNode? workDoneToken,
+        JsonArray chunk,
+        ref int emittedCount,
+        int totalCount)
+    {
+        var chunkCount = chunk.Count;
+        outbound(CreateProgressNotification(partialResultToken, chunk));
+        emittedCount += chunkCount;
+        if (workDoneToken == null)
+            return;
+
+        var percentage = totalCount == 0
+            ? 100
+            : Math.Clamp((int)((long)emittedCount * 100 / totalCount), 0, 100);
+        outbound(CreateProgressNotification(
+            workDoneToken,
+            CreateWorkDoneReport(percentage, $"Streamed {emittedCount} symbols.")));
+    }
+
+    private static JsonObject CompleteCancelledSymbolRequest(
+        JsonNode? id,
+        Action<JsonObject> outbound,
+        JsonNode? workDoneToken,
+        int emittedCount)
+    {
+        if (workDoneToken != null)
+        {
+            outbound(CreateProgressNotification(
+                workDoneToken,
+                CreateWorkDoneEnd($"Cancelled after {emittedCount} symbols.")));
+        }
+
+        return Error(id, JsonRpcRequestCancelledCode, JsonRpcRequestCancelledMessage);
+    }
+
+    private static JsonNode? GetProgressToken(JsonElement root, string propertyName)
+    {
+        if (!TryGet(root, out var token, "params", propertyName))
+            return null;
+
+        if (token.ValueKind == JsonValueKind.String)
+        {
+            var value = token.GetString() ?? string.Empty;
+            if (value.Length <= MaxRequestIdStringChars)
+                return JsonValue.Create(value);
+        }
+        else if (token.ValueKind == JsonValueKind.Number && token.TryGetInt64(out var integer))
+        {
+            return JsonValue.Create(integer);
+        }
+
+        throw new ArgumentException($"{propertyName} must be a bounded string or integer.");
+    }
+
+    private static JsonObject CreateProgressNotification(JsonNode token, JsonNode? value) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["method"] = "$/progress",
+        ["params"] = new JsonObject
+        {
+            ["token"] = token.DeepClone(),
+            ["value"] = value,
+        },
+    };
+
+    private static JsonObject CreateWorkDoneBegin(string title) => new()
+    {
+        ["kind"] = "begin",
+        ["title"] = title,
+        ["cancellable"] = true,
+        ["percentage"] = 0,
+    };
+
+    private static JsonObject CreateWorkDoneReport(int percentage, string message) => new()
+    {
+        ["kind"] = "report",
+        ["percentage"] = percentage,
+        ["message"] = message,
+    };
+
+    private static JsonObject CreateWorkDoneEnd(string message) => new()
+    {
+        ["kind"] = "end",
+        ["message"] = message,
+    };
+
+    private static JsonObject CreateLogMessage(string message) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["method"] = "window/logMessage",
+        ["params"] = new JsonObject
+        {
+            ["type"] = 2,
+            ["message"] = message,
+        },
+    };
+
+    private static string CreateSymbolProgressSummary(int returnedCount, bool truncated) =>
+        truncated
+            ? $"Returned {returnedCount} symbols; truncated at a configured result or progress-frame limit."
+            : $"Returned {returnedCount} symbols.";
 
     private JsonArray Definition(JsonElement root, string method)
     {
@@ -1423,14 +2180,16 @@ internal sealed class LspServer : IDisposable
         children.Add((JsonNode)child);
     }
 
-    private void TrimDocumentSymbolsToBudget(JsonArray roots)
+    private int TrimDocumentSymbolsToBudget(JsonArray roots)
     {
+        var removedCount = 0;
         var responseBudget = DocumentSymbolResponseBytesForTesting ?? MaxDocumentSymbolResponseBytes;
         var responseBytes = MeasureJsonUtf8Bytes(roots);
         while (roots.Count > 0 && responseBytes > responseBudget)
         {
             if (!RemoveLastDocumentSymbol(roots, out var removedBytes))
                 break;
+            removedCount++;
 
             if (_jsonOptions.WriteIndented)
                 responseBytes = MeasureJsonUtf8Bytes(roots);
@@ -1439,6 +2198,8 @@ internal sealed class LspServer : IDisposable
                     ? Math.Max(0, responseBytes - removedBytes)
                     : MeasureJsonUtf8Bytes(roots);
         }
+
+        return removedCount;
     }
 
     private bool RemoveLastDocumentSymbol(JsonArray symbols, out int removedBytes)
@@ -2290,6 +3051,27 @@ internal sealed class LspServer : IDisposable
         };
     }
 
+    private JsonObject ToDocumentSymbolInformation(
+        IndexedDocumentContext document,
+        SymbolResult symbol,
+        Dictionary<int, string?> lineCache)
+    {
+        var identifier = GetSymbolIdentifierPosition(symbol, document.ResolvedPath, lineCache);
+        return new JsonObject
+        {
+            ["name"] = symbol.Name,
+            ["kind"] = SymbolKind(symbol.Kind),
+            ["location"] = ToLocation(
+                symbol.Path,
+                identifier.Line,
+                identifier.StartColumn,
+                identifier.Line,
+                identifier.EndColumn,
+                document.WorkspaceRoot),
+            ["containerName"] = symbol.ContainerName,
+        };
+    }
+
     private (int Line, int StartColumn, int EndColumn) GetSymbolIdentifierPosition(SymbolResult symbol)
     {
         var resolvedPath = TryResolveIndexedFilePath(symbol.Path, out var path) ? path : null;
@@ -2530,16 +3312,47 @@ internal sealed class LspServer : IDisposable
     private static LspMessageReadDiagnostic ToServerDiagnostic(LspProtocol.ReadDiagnostic diagnostic)
         => new(diagnostic.Code, diagnostic.Message, diagnostic.ContentLength, diagnostic.MaxContentLength);
 
-    private async Task WriteResponseMessageAsync(Stream output, JsonObject response, CancellationToken cancellationToken)
+    private async Task WriteResponseMessageAsync(
+        Stream output,
+        SemaphoreSlim outputGate,
+        JsonObject response,
+        CancellationToken cancellationToken)
     {
-        var payload = response.ToJsonString(_jsonOptions);
-        if (await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
-            return;
+        await outputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var payload = response.ToJsonString(_jsonOptions);
+            if (await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
+                return;
 
-        var id = response["id"]?.DeepClone();
-        var errorPayload = Error(id, JsonRpcInternalErrorCode, "Response too large").ToJsonString(_jsonOptions);
-        if (!await LspProtocol.TryWriteMessageAsync(output, errorPayload, cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException("LSP response error exceeded the response frame byte limit.");
+            var id = response["id"]?.DeepClone();
+            var errorPayload = Error(id, JsonRpcInternalErrorCode, "Response too large").ToJsonString(_jsonOptions);
+            if (!await LspProtocol.TryWriteMessageAsync(output, errorPayload, cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("LSP response error exceeded the response frame byte limit.");
+        }
+        finally
+        {
+            outputGate.Release();
+        }
+    }
+
+    private async Task WriteServerNotificationAsync(
+        Stream output,
+        SemaphoreSlim outputGate,
+        JsonObject notification,
+        CancellationToken cancellationToken)
+    {
+        await outputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var payload = notification.ToJsonString(_jsonOptions);
+            if (!await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("LSP server notification exceeded the response frame byte limit.");
+        }
+        finally
+        {
+            outputGate.Release();
+        }
     }
 
     internal static void WriteMessage(Stream output, string payload) =>

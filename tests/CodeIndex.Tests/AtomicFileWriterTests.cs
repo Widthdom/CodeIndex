@@ -30,6 +30,61 @@ public class AtomicFileWriterTests
     }
 
     [Fact]
+    public void WriteText_NoOverwritePreservesExistingFileAndCleansTemporaryFile_Issue4719()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_no_overwrite");
+        try
+        {
+            var path = Path.Combine(projectRoot, "suggestions.md");
+            File.WriteAllText(path, "existing", Utf8NoBom);
+
+            Assert.Throws<AtomicFileWriter.DestinationAlreadyExistsException>(() =>
+                AtomicFileWriter.WriteText(
+                    path,
+                    "replacement",
+                    Utf8NoBom,
+                    AtomicFileWriter.WriteProfile.Public,
+                    overwrite: false));
+
+            Assert.Equal("existing", File.ReadAllText(path, Utf8NoBom));
+            Assert.Empty(Directory.GetFiles(projectRoot, "*.tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WriteText_NoOverwriteFlushFailureReportsPublishedFile_Issue4719()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_no_overwrite_flush");
+        try
+        {
+            var path = Path.Combine(projectRoot, "suggestions.md");
+            AtomicFileWriter.FlushParentDirectoryForTesting = _ => throw new IOException("flush failed");
+
+            var ex = Assert.Throws<IOException>(() =>
+                AtomicFileWriter.WriteText(
+                    path,
+                    "published",
+                    Utf8NoBom,
+                    AtomicFileWriter.WriteProfile.Public,
+                    overwrite: false));
+
+            Assert.Contains("Atomic file publish completed", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("target file was already published", ex.Message, StringComparison.Ordinal);
+            Assert.Equal("published", File.ReadAllText(path, Utf8NoBom));
+            Assert.Empty(Directory.GetFiles(projectRoot, "*.tmp"));
+        }
+        finally
+        {
+            AtomicFileWriter.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void WriteText_ModeFailureBeforeReplace_LeavesExistingFile()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("atomic_mode_failure");
