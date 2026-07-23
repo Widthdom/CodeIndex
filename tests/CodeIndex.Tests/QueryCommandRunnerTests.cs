@@ -945,10 +945,10 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.Success, summary.GetProperty("exit_code").GetInt32());
         Assert.Equal(stdout.Length, summary.GetProperty("output_chars").GetInt32());
         Assert.Equal(
-            QueryCommandRunner.BatchMaxTotalOutputChars,
+            QueryCommandRunner.BatchDefaultTotalOutputChars,
             summary.GetProperty("output_char_limit").GetInt32());
         Assert.False(summary.GetProperty("output_limit_reached").GetBoolean());
-        Assert.Equal(QueryCommandRunner.BatchMaxInputLines, summary.GetProperty("input_line_limit").GetInt32());
+        Assert.Equal(QueryCommandRunner.BatchDefaultInputLines, summary.GetProperty("input_line_limit").GetInt32());
         Assert.False(summary.GetProperty("input_limit_reached").GetBoolean());
     }
 
@@ -994,7 +994,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, lineError.GetProperty("exit_code").GetInt32());
         Assert.Equal(string.Empty, lineError.GetProperty("stdout").GetString());
         Assert.Equal(string.Empty, lineError.GetProperty("stderr").GetString());
-        Assert.Contains("batch line 2 must be a non-empty JSON string array", lineError.GetProperty("error").GetProperty("message").GetString());
+        Assert.Contains("batch line 2 must be a non-empty JSON string array or a command object", lineError.GetProperty("error").GetProperty("message").GetString());
 
         var unsupportedRecord = unsupportedRecordDocument.RootElement;
         Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
@@ -1222,7 +1222,7 @@ public partial class QueryCommandRunnerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_total_output_limit");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
-        var largeLine = new string('"', QueryCommandRunner.BatchMaxTotalOutputChars * 3 / 5);
+        var largeLine = new string('"', QueryCommandRunner.BatchDefaultTotalOutputChars * 3 / 5);
         TestProjectHelper.InsertIndexedFile(dbPath, "docs/large.txt", "text", largeLine);
         var input = """
         ["excerpt","docs/large.txt","--start","1","--max-line-width","0"]
@@ -1247,7 +1247,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("batch", error.GetProperty("scope").GetString());
         Assert.Equal("batch_output_limit", error.GetProperty("category").GetString());
         Assert.Equal(
-            QueryCommandRunner.BatchMaxTotalOutputChars,
+            QueryCommandRunner.BatchDefaultTotalOutputChars,
             error.GetProperty("max_chars").GetInt32());
 
         var summary = summaryDocument.RootElement;
@@ -1255,9 +1255,9 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
         Assert.True(summary.GetProperty("output_limit_reached").GetBoolean());
         Assert.Equal(stdout.Length, summary.GetProperty("output_chars").GetInt32());
-        Assert.InRange(stdout.Length, 1, QueryCommandRunner.BatchMaxTotalOutputChars);
+        Assert.InRange(stdout.Length, 1, QueryCommandRunner.BatchDefaultTotalOutputChars);
         Assert.Equal(
-            QueryCommandRunner.BatchMaxTotalOutputChars,
+            QueryCommandRunner.BatchDefaultTotalOutputChars,
             summary.GetProperty("output_char_limit").GetInt32());
     }
 
@@ -1266,7 +1266,7 @@ public partial class QueryCommandRunnerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_input_line_limit");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
-        var input = string.Concat(Enumerable.Repeat("[]\n", QueryCommandRunner.BatchMaxInputLines + 1));
+        var input = string.Concat(Enumerable.Repeat("[]\n", QueryCommandRunner.BatchDefaultInputLines + 1));
 
         var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
             input,
@@ -1276,7 +1276,7 @@ public partial class QueryCommandRunnerTests
         {
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(QueryCommandRunner.BatchMaxInputLines + 2, lines.Count);
+            Assert.Equal(QueryCommandRunner.BatchDefaultInputLines + 2, lines.Count);
             var limitRecord = lines[^2].RootElement;
             Assert.Equal("batch_error", limitRecord.GetProperty("record").GetString());
             Assert.Equal(
@@ -1284,12 +1284,12 @@ public partial class QueryCommandRunnerTests
                 limitRecord.GetProperty("error").GetProperty("category").GetString());
 
             var summary = lines[^1].RootElement;
-            Assert.Equal(QueryCommandRunner.BatchMaxInputLines + 1, summary.GetProperty("input_lines_read").GetInt32());
-            Assert.Equal(QueryCommandRunner.BatchMaxInputLines + 1, summary.GetProperty("line_errors").GetInt32());
+            Assert.Equal(QueryCommandRunner.BatchDefaultInputLines + 1, summary.GetProperty("input_lines_read").GetInt32());
+            Assert.Equal(QueryCommandRunner.BatchDefaultInputLines + 1, summary.GetProperty("line_errors").GetInt32());
             Assert.True(summary.GetProperty("input_limit_reached").GetBoolean());
             Assert.False(summary.GetProperty("output_limit_reached").GetBoolean());
             Assert.Equal(stdout.Length, summary.GetProperty("output_chars").GetInt32());
-            Assert.InRange(stdout.Length, 1, QueryCommandRunner.BatchMaxTotalOutputChars);
+            Assert.InRange(stdout.Length, 1, QueryCommandRunner.BatchDefaultTotalOutputChars);
         }
         finally
         {

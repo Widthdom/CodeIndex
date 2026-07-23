@@ -11,11 +11,29 @@ namespace CodeIndex;
 internal static class PathUriNormalizer
 {
     internal static bool TryDecodeRelativeUriPath(string encodedPath, bool allowBackslash, out string decodedPath)
+        => TryDecodeRelativeUriPath(
+            encodedPath,
+            allowBackslash,
+            rejectEncodedPathBoundaries: true,
+            out decodedPath);
+
+    internal static bool TryDecodeTemplateRelativeUriPath(string encodedPath, out string decodedPath)
+        => TryDecodeRelativeUriPath(
+            encodedPath,
+            allowBackslash: false,
+            rejectEncodedPathBoundaries: false,
+            out decodedPath);
+
+    private static bool TryDecodeRelativeUriPath(
+        string encodedPath,
+        bool allowBackslash,
+        bool rejectEncodedPathBoundaries,
+        out string decodedPath)
     {
         decodedPath = string.Empty;
         if (string.IsNullOrWhiteSpace(encodedPath)
             || ContainsInvalidPercentEscape(encodedPath)
-            || ContainsEncodedPathBoundary(encodedPath))
+            || (rejectEncodedPathBoundaries && ContainsEncodedPathBoundary(encodedPath)))
         {
             return false;
         }

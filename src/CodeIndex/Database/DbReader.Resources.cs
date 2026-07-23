@@ -23,7 +23,10 @@ public partial class DbReader
         int limit,
         long? afterFileId = null,
         long? expectedGeneration = null,
-        int legacyOffset = 0)
+        int legacyOffset = 0,
+        IReadOnlyList<string>? pathPatterns = null,
+        string? lang = null,
+        bool includeGenerated = false)
     {
         if (limit <= 0)
             throw new ArgumentOutOfRangeException(nameof(limit), limit, "Limit must be positive.");
@@ -31,6 +34,21 @@ public partial class DbReader
             throw new ArgumentOutOfRangeException(nameof(legacyOffset), legacyOffset, "Offset must be non-negative.");
         if (afterFileId is not null && legacyOffset != 0)
             throw new ArgumentException("A keyset anchor and legacy offset cannot be combined.", nameof(legacyOffset));
+
+        EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns: null);
+        lang = NormalizeQueryLanguage(lang);
+        var resourceFilterSql = string.Empty;
+        if (!includeGenerated && _fileColumns.Contains("generated"))
+            resourceFilterSql += " AND COALESCE(f.generated, 0) = 0";
+        if (lang is not null)
+            resourceFilterSql += " AND f.lang = @resourceLang";
+        if (pathPatterns is { Count: > 0 })
+        {
+            var pathPredicates = new List<string>(pathPatterns.Count);
+            for (var i = 0; i < pathPatterns.Count; i++)
+                pathPredicates.Add(BuildPathFilterPredicate("f", "resourcePathPattern", i, pathPatterns[i]));
+            resourceFilterSql += " AND (" + string.Join(" OR ", pathPredicates) + ")";
+        }
 
         using var transaction = _conn.BeginTransaction(deferred: true);
         var generation = TryReadResourceListGeneration(transaction);
@@ -52,9 +70,6 @@ public partial class DbReader
 
         int? afterBucket = null;
         string? afterPath = null;
-        var excludeGeneratedPredicate = _fileColumns.Contains("generated")
-            ? "COALESCE(f.generated, 0) = 0"
-            : null;
         if (afterFileId is not null)
         {
             using (var anchorCommand = _conn.CreateCommand())
@@ -64,9 +79,10 @@ public partial class DbReader
                     SELECT {PathBucketOrder} AS path_bucket, f.path
                     FROM files f
                     WHERE f.id = @afterFileId
-                    {(excludeGeneratedPredicate is null ? string.Empty : $"AND {excludeGeneratedPredicate}")}
+                    {resourceFilterSql}
                     """;
                 SqliteCommandPolicy.Add(anchorCommand, "@afterFileId", afterFileId.Value);
+                AddResourceFilterParameters(anchorCommand, pathPatterns, lang);
                 using var anchorReader = anchorCommand.ExecuteTrackedReader();
                 if (anchorReader.TrackedRead())
                 {
@@ -84,15 +100,6 @@ public partial class DbReader
 
         using var command = _conn.CreateCommand();
         command.Transaction = transaction;
-        // Match the established resources/read visibility contract: generated files remain
-        // outside the resource surface when the schema can identify them. Build this into the
-        // keyset source so omitted rows neither consume the page limit nor become cursor anchors.
-        // schema で generated file を識別できる場合は、既存 resources/read の可視性契約に
-        // 合わせて resource surface から除外する。省略行が page limit や cursor anchor を
-        // 消費しないよう keyset source 自体へ条件を組み込む。
-        var sourcePredicate = excludeGeneratedPredicate is null
-            ? string.Empty
-            : $"WHERE {excludeGeneratedPredicate}";
         var seekPredicate = afterFileId is null
             ? string.Empty
             : "WHERE path_bucket > @afterBucket OR (path_bucket = @afterBucket AND path > @afterPath)";
@@ -101,7 +108,8 @@ public partial class DbReader
             WITH resource_files AS (
                 SELECT f.id, f.path, f.lang, f.lines, {PathBucketOrder} AS path_bucket
                 FROM files f
-                {sourcePredicate}
+                WHERE 1 = 1
+                {resourceFilterSql}
             )
             SELECT id, path, lang, lines
             FROM resource_files
@@ -110,6 +118,7 @@ public partial class DbReader
             LIMIT @limit {offsetClause}
             """;
         SqliteCommandPolicy.Add(command, "@limit", limit);
+        AddResourceFilterParameters(command, pathPatterns, lang);
         if (afterFileId is not null)
         {
             SqliteCommandPolicy.Add(command, "@afterBucket", afterBucket!.Value);
@@ -135,6 +144,17 @@ public partial class DbReader
 
         transaction.Commit();
         return new ResourceFilePage(trustedGeneration, files, CursorRestartRequired: false);
+    }
+
+    private static void AddResourceFilterParameters(
+        SqliteCommand command,
+        IReadOnlyList<string>? pathPatterns,
+        string? lang)
+    {
+        if (lang is not null)
+            SqliteCommandPolicy.Add(command, "@resourceLang", lang);
+        if (pathPatterns is { Count: > 0 })
+            AddPathFilterParameterSet(command, "resourcePathPattern", pathPatterns);
     }
 
     private long? TryReadResourceListGeneration(SqliteTransaction transaction)
