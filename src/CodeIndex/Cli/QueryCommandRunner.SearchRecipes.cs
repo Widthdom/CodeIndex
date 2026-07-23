@@ -647,7 +647,9 @@ public static partial class QueryCommandRunner
         {
             ["format"] = "audit-recipe",
             ["recipe"] = recipe.Name,
-            ["scope"] = scope.Name,
+            ["scope"] = JsonSerializer.SerializeToNode(
+                scope,
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeScopeJsonResult),
             ["query_count"] = queryResults.Count,
             ["result_count"] = total,
             ["limit_per_query"] = options.Limit,

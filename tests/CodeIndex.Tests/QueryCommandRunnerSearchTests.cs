@@ -4655,6 +4655,9 @@ public partial class QueryCommandRunnerTests
                 "--format", "sarif",
                 "--origin", "code",
                 "--limit", "1",
+                "--path", "src/**",
+                "--exclude-path", "src/generated/**",
+                "--show-excluded",
             ];
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
@@ -4709,6 +4712,15 @@ public partial class QueryCommandRunnerTests
             var runProperties = run.GetProperty("properties");
             Assert.Equal("audit-recipe", runProperties.GetProperty("format").GetString());
             Assert.Equal("risky-code", runProperties.GetProperty("recipe").GetString());
+            var scope = runProperties.GetProperty("scope");
+            Assert.Equal("source", scope.GetProperty("name").GetString());
+            Assert.Contains(scope.GetProperty("path_patterns").EnumerateArray(), pattern => pattern.GetString() == "src/**");
+            Assert.Contains(scope.GetProperty("exclude_paths").EnumerateArray(), pattern => pattern.GetString() == "src/generated/**");
+            Assert.True(scope.GetProperty("exclude_tests").GetBoolean());
+            Assert.Contains(
+                scope.GetProperty("excluded_diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("reason").GetString() == "user_exclude_paths"
+                              && diagnostic.GetProperty("applied").GetBoolean());
             Assert.Equal(1, runProperties.GetProperty("query_count").GetInt32());
             Assert.Equal(1, runProperties.GetProperty("result_count").GetInt32());
             Assert.Equal(1, runProperties.GetProperty("limit_per_query").GetInt32());
