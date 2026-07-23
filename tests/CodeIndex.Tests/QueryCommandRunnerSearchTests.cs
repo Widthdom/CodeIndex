@@ -2175,6 +2175,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("source", recipe.GetProperty("default_scope").GetString());
         Assert.Contains(recipe.GetProperty("default_path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
         Assert.Contains(recipe.GetProperty("default_exclude_paths").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Cli/SearchAuditRecipes.cs");
+        Assert.Contains(recipe.GetProperty("supported_formats").EnumerateArray(), format => format.GetString() == "sarif");
         Assert.Contains(recipe.GetProperty("supported_formats").EnumerateArray(), format => format.GetString() == "issue-drafts");
         Assert.True(recipe.GetProperty("filter_support").GetProperty("exclude_tests").GetBoolean());
         Assert.True(recipe.GetProperty("filter_support").GetProperty("guard_filters").GetBoolean());
@@ -4294,6 +4295,17 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(query.GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "docs/private/**");
             Assert.Equal("docs/public.md", result.GetProperty("path").GetString());
 
+            var (sarifExitCode, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "query-scoped", "--db", dbPath, "--format", "sarif", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, sarifExitCode);
+            Assert.Equal(string.Empty, sarifStderr);
+            using var sarifDocument = ParseJsonOutput(sarifStdout);
+            var sarifResult = Assert.Single(sarifDocument.RootElement.GetProperty("runs")[0].GetProperty("results").EnumerateArray());
+            Assert.Equal("error", sarifResult.GetProperty("level").GetString());
+            Assert.Equal("high", sarifResult.GetProperty("properties").GetProperty("severity").GetString());
+
             TestProjectHelper.InsertIndexedFile(dbPath, "docs/other.md", "markdown", "BoundaryNeedle in another public doc.\n");
 
             var (userPathExitCode, userPathStdout, userPathStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -4612,6 +4624,113 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(0, unboundedJsonParse.GetProperty("omitted_count").GetInt32());
             Assert.Equal("JsonDocument.Parse", unboundedJsonParse.GetProperty("query").GetString());
             Assert.Equal("src/app.cs", unboundedJsonParse.GetProperty("results")[0].GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeSarifPreservesBoundedAuditMetadataAndStableIdentifiers_Issue4715()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_sarif_4715");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                "public sealed class A { void Run(Exception ex) { JsonDocument.Parse(\"{}\"); Console.WriteLine(ex.Message); } }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/b.cs",
+                "csharp",
+                "public sealed class B { void Run(Exception ex) { Console.WriteLine(ex.Message); } }");
+            string[] args =
+            [
+                "--recipe", "risky-code/raw-diagnostic-echo",
+                "--db", dbPath,
+                "--format", "sarif",
+                "--origin", "code",
+                "--limit", "1",
+            ];
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+            var (repeatExitCode, repeatStdout, repeatStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+            var (totalLimitExitCode, totalLimitStdout, totalLimitStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code",
+                    "--include-query", "unbounded-json-parse",
+                    "--include-query", "raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "sarif",
+                    "--origin", "code",
+                    "--limit", "10",
+                    "--total-limit", "1",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.Success, repeatExitCode);
+            Assert.Equal(CommandExitCodes.Success, totalLimitExitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(string.Empty, repeatStderr);
+            Assert.Equal(string.Empty, totalLimitStderr);
+            using var document = ParseJsonOutput(stdout);
+            using var repeatDocument = ParseJsonOutput(repeatStdout);
+            var run = document.RootElement.GetProperty("runs")[0];
+            var repeatRun = repeatDocument.RootElement.GetProperty("runs")[0];
+            var rule = Assert.Single(run.GetProperty("tool").GetProperty("driver").GetProperty("rules").EnumerateArray());
+            var result = Assert.Single(run.GetProperty("results").EnumerateArray());
+            var resultProperties = result.GetProperty("properties");
+            var fingerprint = result.GetProperty("fingerprints").GetProperty("cdidx/v1").GetString();
+
+            Assert.Equal("2.1.0", document.RootElement.GetProperty("version").GetString());
+            Assert.Equal("risky-code/raw-diagnostic-echo", rule.GetProperty("id").GetString());
+            Assert.Equal("raw-diagnostic-echo", rule.GetProperty("name").GetString());
+            Assert.Equal("warning", rule.GetProperty("defaultConfiguration").GetProperty("level").GetString());
+            Assert.Contains(rule.GetProperty("properties").GetProperty("tags").EnumerateArray(), tag => tag.GetString() == "audit-recipe");
+            Assert.Equal("risky-code/raw-diagnostic-echo", result.GetProperty("ruleId").GetString());
+            Assert.Equal("warning", result.GetProperty("level").GetString());
+            Assert.StartsWith("src/", result.GetProperty("locations")[0].GetProperty("physicalLocation").GetProperty("artifactLocation").GetProperty("uri").GetString(), StringComparison.Ordinal);
+            Assert.True(result.GetProperty("locations")[0].GetProperty("physicalLocation").GetProperty("region").GetProperty("startLine").GetInt32() >= 1);
+            Assert.NotNull(fingerprint);
+            Assert.Equal(64, fingerprint!.Length);
+            Assert.Equal(fingerprint, resultProperties.GetProperty("stable_result_id").GetString());
+            Assert.Equal("risky-code", resultProperties.GetProperty("recipe").GetString());
+            Assert.Equal("raw-diagnostic-echo", resultProperties.GetProperty("query_name").GetString());
+            Assert.Equal("medium", resultProperties.GetProperty("severity").GetString());
+            Assert.Equal("low", resultProperties.GetProperty("confidence").GetString());
+            Assert.True(resultProperties.GetProperty("query_truncated").GetBoolean());
+            Assert.True(resultProperties.GetProperty("minimum_omitted_result_count").GetInt32() >= 1);
+
+            var runProperties = run.GetProperty("properties");
+            Assert.Equal("audit-recipe", runProperties.GetProperty("format").GetString());
+            Assert.Equal("risky-code", runProperties.GetProperty("recipe").GetString());
+            Assert.Equal(1, runProperties.GetProperty("query_count").GetInt32());
+            Assert.Equal(1, runProperties.GetProperty("result_count").GetInt32());
+            Assert.Equal(1, runProperties.GetProperty("limit_per_query").GetInt32());
+            Assert.True(runProperties.GetProperty("truncation").GetProperty("truncated").GetBoolean());
+            var querySummary = Assert.Single(runProperties.GetProperty("queries").EnumerateArray());
+            Assert.Equal("raw-diagnostic-echo", querySummary.GetProperty("name").GetString());
+            Assert.True(querySummary.GetProperty("truncated").GetBoolean());
+            Assert.True(querySummary.GetProperty("minimum_omitted_result_count").GetInt32() >= 1);
+            Assert.False(string.IsNullOrWhiteSpace(querySummary.GetProperty("next_cursor").GetString()));
+            Assert.Equal(
+                fingerprint,
+                Assert.Single(repeatRun.GetProperty("results").EnumerateArray())
+                    .GetProperty("fingerprints")
+                    .GetProperty("cdidx/v1")
+                    .GetString());
+
+            using var totalLimitDocument = ParseJsonOutput(totalLimitStdout);
+            var totalLimitRun = totalLimitDocument.RootElement.GetProperty("runs")[0];
+            Assert.Single(totalLimitRun.GetProperty("results").EnumerateArray());
+            Assert.Equal(2, totalLimitRun.GetProperty("properties").GetProperty("query_count").GetInt32());
+            Assert.Equal(1, totalLimitRun.GetProperty("properties").GetProperty("result_count").GetInt32());
+            Assert.Equal(1, totalLimitRun.GetProperty("properties").GetProperty("total_limit").GetInt32());
         }
         finally
         {
@@ -7075,7 +7194,34 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--format csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
+        Assert.Contains("--format csv/tsv/lsp/qf is not supported with --recipe", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_RecipeSarifRejectsIncompatibleResultShapes_Issue4715()
+    {
+        string[][] incompatibleControls =
+        [
+            ["--count"],
+            ["--summary-only"],
+            ["--count-by", "path"],
+            ["--results-only"],
+            ["--search-fields", "path,line"],
+            ["--json=ndjson"],
+        ];
+
+        foreach (var controls in incompatibleControls)
+        {
+            var args = new List<string> { "--recipe", "risky-code" };
+            args.AddRange(controls);
+            args.AddRange(["--format", "sarif"]);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch([.. args], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("Error:", stderr, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

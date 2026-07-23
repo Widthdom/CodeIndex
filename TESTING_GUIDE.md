@@ -175,6 +175,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Symbols JSON array, LSP, quickfix, and SARIF location formats share one editor-format fixture; definition SARIF severity coverage reuses that fixture and asserts informational `note` output separately from warning-level diagnostic output.
   Validate JSON, compact, count, and SARIF pagination/severity coverage shares one mixed informational/actionable fixture so authoritative totals, limited rows, SARIF levels, and actionability metadata cannot drift across formats; keep missing-`file_issues` degradation coverage in a separate legacy-schema fixture because availability is a distinct mutable state.
   Command-specific output format coverage uses a command/format matrix that checks both parser acceptance and the matching usage line; recognized shared formats without a command implementation need a separate usage-error assertion.
+  Recipe SARIF coverage must assert bounded result counts, `recipe/query` rule identity, source locations, severity mapping, confidence, conservative truncation metadata, and stable `fingerprints.cdidx/v1` values across identical runs.
   Unused default-suppression row, JSON count, summary-only, and text count envelopes, including the `--all` count control, share one unused-symbol fixture.
   Unused default-suppressed and `--all` JSON cursor pagination share one unused-symbol fixture.
   Unused full and compact `--by-bucket` JSON envelopes share one taxonomy fixture.
@@ -992,6 +993,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   symbols JSON array、LSP、quickfix、SARIF location format は1つの editor-format fixture を共有し、definition SARIF severity のテストも同じ fixture を再利用して、情報レベルの `note` 出力を warning レベルの診断出力とは分けて検証してください。
   validate の JSON、compact、count、SARIF における pagination / severity coverage は、informational finding と actionable finding が混在する1つの fixture を共有し、authoritative な総件数、limited row、SARIF level、actionability metadata が format 間で drift しないことを検証してください。`file_issues` 欠落時の degradation coverage は availability が独立した mutable state なので、別の legacy-schema fixture に分けてください。
   コマンド別の出力形式 coverage は command / format matrix で parser の受理と対応する usage line の両方を検証してください。共通 parser が認識してもコマンド側に実装がない形式には、別途 usage error の assertion が必要です。
+  Recipe SARIF coverage では、上限付き result count、`recipe/query` rule identity、source location、severity mapping、confidence、保守的な truncation metadata、同一 run 間で安定する `fingerprints.cdidx/v1` を検証してください。
   unused default-suppressionのrow、JSON count、summary-only、text count envelopeは、`--all` count controlも含めて1つのunused-symbol fixtureを共有してください。
   unusedのdefault-suppressed JSON cursor paginationと`--all` JSON cursor paginationは1つのunused-symbol fixtureを共有してください。
   unusedのfull JSONとcompact `--by-bucket` JSON envelopeは1つのtaxonomy fixtureを共有してください。

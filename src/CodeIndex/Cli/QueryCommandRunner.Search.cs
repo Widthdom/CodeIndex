@@ -361,12 +361,12 @@ public static partial class QueryCommandRunner
                     "Remove --prefix, or run the individual query from the recipe list yourself.");
                 return CommandExitCodes.UsageError;
             }
-            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount and not OutputFormatCompact and not OutputFormatIssueDrafts)
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount and not OutputFormatCompact and not OutputFormatSarif and not OutputFormatIssueDrafts)
             {
                 WriteUsageError(
-                    "--format csv/tsv/lsp/qf/sarif is not supported with --recipe.",
+                    "--format csv/tsv/lsp/qf is not supported with --recipe.",
                     GetUsageLineOrThrow("search"),
-                    "Use `--count` / `--format count` for count-only recipe output, `--json` for grouped recipe results, `--format compact` for summary-first compact JSON, or `--format issue-drafts` for draft exports.");
+                    "Use `--count` / `--format count` for count-only recipe output, `--json` for grouped recipe results, `--format compact` for summary-first compact JSON, `--format sarif` for audit findings, or `--format issue-drafts` for draft exports.");
                 return CommandExitCodes.UsageError;
             }
             if (options.JsonOutputFormat == JsonOutputFormatArray)
@@ -375,6 +375,22 @@ public static partial class QueryCommandRunner
                     "--json=array is not supported with --recipe because recipe output is grouped by query.",
                     GetUsageLineOrThrow("search"),
                     "Use plain `--json` for the grouped recipe object.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.OutputFormat == OutputFormatSarif
+                && (options.CountOnly
+                    || options.SummaryOnly
+                    || options.GroupBy != null
+                    || options.CountBy != null
+                    || options.UniqueBy != null
+                    || options.ResultsOnly
+                    || options.SearchFields != null
+                    || (options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson)))
+            {
+                WriteUsageError(
+                    "--format sarif cannot be combined with recipe count, summary, aggregation, projection, or NDJSON row controls.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--recipe <name> --format sarif` with result filters and `--limit` / `--total-limit`, or choose the JSON/count output shape instead.");
                 return CommandExitCodes.UsageError;
             }
             if (options.MaxJsonBytes.HasValue && !SupportsSearchJsonByteLimit(options))
