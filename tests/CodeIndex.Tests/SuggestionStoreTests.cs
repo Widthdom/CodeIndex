@@ -192,6 +192,21 @@ public class SuggestionStoreTests : IDisposable
         record.ToolInvocationContext = null;
         record.SampledTags = ["changed-tag"];
         Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.SampledTags = null;
+        record.Status = SuggestionStatus.WontFix;
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.Status = SuggestionStatus.Draft;
+        record.PreviousStatus = SuggestionStatus.WontFix;
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.PreviousStatus = null;
+        record.StatusChangedAt = new DateTime(2035, 6, 7, 8, 9, 10, DateTimeKind.Utc);
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.StatusChangedAt = null;
+        record.StatusChangedBy = "maintainer";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.StatusChangedBy = null;
+        record.StatusChangeReason = "curated";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
     }
 
     private static void CreateSparseFile(string path, long length)
@@ -789,6 +804,118 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryTransitionStatus_ValidatesTransitionsAndPersistsAuditMetadata_Issue4719()
+    {
+        var changedAt = new DateTimeOffset(2035, 6, 7, 8, 9, 10, TimeSpan.Zero);
+        var clock = new ManualTimeProvider(changedAt);
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var record = MakeRecord("bug", "csharp", "Manual lifecycle transition");
+        Assert.True(store.TryAdd(record));
+        var draftRevision = record.RevisionHash;
+
+        Assert.Equal(
+            SuggestionStore.MutationResult.InvalidTransition,
+            store.TryTransitionStatus(
+                record.Id,
+                draftRevision,
+                SuggestionStatus.OpenInUpstream,
+                "maintainer",
+                "No upstream issue exists",
+                out var invalid));
+        Assert.Null(invalid);
+
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            store.TryTransitionStatus(
+                record.Id,
+                draftRevision,
+                SuggestionStatus.WontFix,
+                "  widthdom  ",
+                "  Outside the supported scope.  ",
+                out var transitioned));
+
+        Assert.NotNull(transitioned);
+        Assert.Equal(SuggestionStatus.Draft, transitioned.PreviousStatus);
+        Assert.Equal(SuggestionStatus.WontFix, transitioned.Status);
+        Assert.Equal(changedAt.UtcDateTime, transitioned.StatusChangedAt);
+        Assert.Equal("widthdom", transitioned.StatusChangedBy);
+        Assert.Equal("Outside the supported scope.", transitioned.StatusChangeReason);
+        Assert.NotEqual(draftRevision, transitioned.RevisionHash);
+        Assert.Null(transitioned.ResolvedAt);
+
+        Assert.Equal(
+            SuggestionStore.MutationResult.RevisionConflict,
+            store.TryTransitionStatus(
+                record.Id,
+                draftRevision,
+                SuggestionStatus.Duplicate,
+                "maintainer",
+                null,
+                out var stale));
+        Assert.Null(stale);
+
+        var persisted = Assert.Single(new SuggestionStore(_tempDir).LoadAll());
+        Assert.Equal(transitioned.RevisionHash, persisted.RevisionHash);
+        Assert.Equal(SuggestionStatus.Draft, persisted.PreviousStatus);
+        Assert.Equal(SuggestionStatus.WontFix, persisted.Status);
+        Assert.Equal("widthdom", persisted.StatusChangedBy);
+        Assert.Equal("Outside the supported scope.", persisted.StatusChangeReason);
+    }
+
+    [Fact]
+    public void TryUpdate_CannotBypassValidatedLifecycleTransition_Issue4719()
+    {
+        var record = MakeRecord("bug", "csharp", "Lifecycle metadata must remain store-owned");
+        Assert.True(_store.TryAdd(record));
+
+        var replacement = Assert.Single(_store.LoadAll());
+        replacement.Description = "Content edit remains allowed";
+        replacement.Status = SuggestionStatus.WontFix;
+        replacement.PreviousStatus = SuggestionStatus.ResolvedInUpstream;
+        replacement.StatusChangedAt = DateTime.UtcNow;
+        replacement.StatusChangedBy = "unvalidated caller";
+        replacement.StatusChangeReason = "bypass";
+
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryUpdate(record.Id, record.RevisionHash, replacement, out var updated));
+
+        Assert.NotNull(updated);
+        Assert.Equal("Content edit remains allowed", updated.Description);
+        Assert.Equal(SuggestionStatus.Draft, updated.Status);
+        Assert.Null(updated.PreviousStatus);
+        Assert.Null(updated.StatusChangedAt);
+        Assert.Null(updated.StatusChangedBy);
+        Assert.Null(updated.StatusChangeReason);
+    }
+
+    [Fact]
+    public void TryTransitionStatus_RedactsAuditMetadataBeforePersistence_Issue4719()
+    {
+        const string actorSecret = "actor-secret-4719";
+        const string reasonSecret = "reason-secret-4719";
+        var record = MakeRecord("security", "csharp", "Audit metadata must be redacted");
+        Assert.True(_store.TryAdd(record));
+
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryTransitionStatus(
+                record.Id,
+                record.RevisionHash,
+                SuggestionStatus.WontFix,
+                $"api_key={actorSecret}",
+                $"token={reasonSecret}",
+                out var transitioned));
+
+        Assert.NotNull(transitioned);
+        Assert.Equal("api_key=[REDACTED:credential]", transitioned.StatusChangedBy);
+        Assert.Equal("token=[REDACTED:credential]", transitioned.StatusChangeReason);
+        var persistedJson = File.ReadAllText(Path.Combine(_tempDir, "suggestions-codeindex.json"));
+        Assert.DoesNotContain(actorSecret, persistedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(reasonSecret, persistedJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryAdd_EditThenReAddOriginalContentAllocatesDistinctStableId_Issue4588()
     {
         var first = MakeRecord("bug", "csharp", "Original reusable content");
@@ -872,7 +999,10 @@ public class SuggestionStoreTests : IDisposable
         Assert.Null(result.SubmissionError);
         var saved = Assert.Single(_store.LoadAll());
         Assert.Equal(SuggestionStatus.SubmittedPendingTriage, saved.Status);
-        Assert.Equal(submittedRevision, saved.RevisionHash);
+        Assert.NotEqual(submittedRevision, saved.RevisionHash);
+        Assert.Equal(SuggestionStatus.Draft, saved.PreviousStatus);
+        Assert.Equal("github_submission", saved.StatusChangedBy);
+        Assert.Equal("GitHub issue submission succeeded.", saved.StatusChangeReason);
         Assert.Null(saved.Context);
     }
 

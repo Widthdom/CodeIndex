@@ -30,6 +30,32 @@ public class AtomicFileWriterTests
     }
 
     [Fact]
+    public void WriteText_NoOverwritePreservesExistingFileAndCleansTemporaryFile_Issue4719()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_no_overwrite");
+        try
+        {
+            var path = Path.Combine(projectRoot, "suggestions.md");
+            File.WriteAllText(path, "existing", Utf8NoBom);
+
+            Assert.Throws<IOException>(() =>
+                AtomicFileWriter.WriteText(
+                    path,
+                    "replacement",
+                    Utf8NoBom,
+                    AtomicFileWriter.WriteProfile.Public,
+                    overwrite: false));
+
+            Assert.Equal("existing", File.ReadAllText(path, Utf8NoBom));
+            Assert.Empty(Directory.GetFiles(projectRoot, "*.tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void WriteText_ModeFailureBeforeReplace_LeavesExistingFile()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("atomic_mode_failure");

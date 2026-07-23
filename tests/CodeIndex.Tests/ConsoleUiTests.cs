@@ -1387,7 +1387,7 @@ public class ConsoleUiTests
         Assert.Equal(expected, flagSets.Fish);
 
         Assert.Contains("-o", ExtractBetween(flagSets.BashScript, "[ \"$cmd\" = \"report\" ]; then", "[ \"$cmd\" = \"suggestions\" ]; then"));
-        Assert.Contains("'-o[Output bundle path]:file:_files'", ExtractBetween(flagSets.ZshScript, "[[ $subcmd == report ]]; then", "[[ $subcmd == suggestions ]]; then"));
+        Assert.Contains("'-o[Report bundle or suggestions export output path]:file:_files'", ExtractBetween(flagSets.ZshScript, "[[ $subcmd == report ]]; then", "[[ $subcmd == suggestions ]]; then"));
         Assert.Contains("-l output -s o -r", flagSets.FishScript);
     }
 

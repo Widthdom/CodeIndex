@@ -4,17 +4,19 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions [list|show|export|add|update|delete] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
+    private const string Usage = "Usage: cdidx suggestions [list|show|export|add|update|delete] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--actor <name>] [--reason <text>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--output <path>] [--overwrite] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
     internal const int MaxSuggestionExportTextFieldLength = 4096;
     internal const int MaxSuggestionIssueDraftBodyLength = 24 * 1024;
+    internal const int MaxSuggestionExportFileBytes = 16 * 1024 * 1024;
     private const string SuggestionOutputTruncationMarker = "\n[truncated]";
 
     private static string AddHelp => $$"""
@@ -85,6 +87,14 @@ internal static class SuggestionsCommandRunner
             return WriteUsageError("--issue-state can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
         if (verb == "show" && options.HasPagination)
             return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.", options.Json, jsonOptions);
+        if (options.OutputPath != null && string.IsNullOrWhiteSpace(options.OutputPath))
+            return WriteUsageError("--output must not be empty.", options.Json, jsonOptions);
+        if (options.OutputPath != null && (verb != "export" || options.ExportFormat is not ("markdown" or "issue-drafts")))
+            return WriteUsageError("--output can only be used with `suggestions export --format markdown` or `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
+        if (options.Overwrite && options.OutputPath == null)
+            return WriteUsageError("--overwrite requires --output <path>.", options.Json, jsonOptions);
+        if ((options.ActorSpecified || options.ReasonSpecified) && (verb != "update" || !options.StatusSpecified))
+            return WriteUsageError("--actor and --reason can only be used with `suggestions update <id> --status <state>`.", options.Json, jsonOptions);
         if (verb == "export" && options.Json && options.ExportFormat == "markdown")
             return WriteUsageError(
                 "`suggestions export --format markdown` cannot be combined with --json; use --format json or remove --json.",
@@ -93,9 +103,14 @@ internal static class SuggestionsCommandRunner
                 "Use `suggestions export --format json --json` for JSON output, or remove `--json` to export Markdown.");
 
         List<SuggestionRecord> records;
+        string? suggestionStorePath = null;
+        string? databasePath = null;
         try
         {
-            var store = CreateStore(options.DbPath);
+            var storeContext = CreateStore(options.DbPath);
+            var store = storeContext.Store;
+            suggestionStorePath = store.FilePath;
+            databasePath = storeContext.DatabasePath;
             if (verb == "add")
                 return RunAdd(store, options, jsonOptions);
             if (verb == "update")
@@ -120,7 +135,13 @@ internal static class SuggestionsCommandRunner
         {
             "list" => RunList(outputRecords, records.Count, options, jsonOptions),
             "show" => RunShow(records, options, jsonOptions),
-            "export" => RunExport(outputRecords, options, jsonOptions, cancellationToken),
+            "export" => RunExport(
+                outputRecords,
+                options,
+                jsonOptions,
+                cancellationToken,
+                suggestionStorePath!,
+                databasePath!),
             _ => WriteUsageError($"Unknown suggestions subcommand: {verb}", options.Json, jsonOptions)
         };
     }
@@ -129,9 +150,11 @@ internal static class SuggestionsCommandRunner
     {
         if (string.IsNullOrWhiteSpace(options.Id))
             return WriteUsageError("suggestions update requires an id.", options.Json, jsonOptions);
+        if (options.StatusSpecified)
+            return RunStatusTransition(store, records, options, jsonOptions);
         if (options.HasQueryOnlyOptions)
             return WriteUsageError("suggestions update cannot be combined with query or export options.", options.Json, jsonOptions);
-        if (!options.HasEditableFields)
+        if (!options.HasContentEditableFields)
             return WriteUsageError("suggestions update requires at least one of --description, --context, --title, --evidence-path, --category, --language, or --agent.", options.Json, jsonOptions);
 
         var record = ResolveById(records, options.Id);
@@ -183,11 +206,57 @@ internal static class SuggestionsCommandRunner
         return WriteMutationSuccess("updated", updated, options, jsonOptions);
     }
 
+    private static int RunStatusTransition(
+        SuggestionStore store,
+        List<SuggestionRecord> records,
+        Options options,
+        JsonSerializerOptions jsonOptions)
+    {
+        if (options.HasContentEditableFields)
+            return WriteUsageError("A status transition cannot be combined with suggestion content edits.", options.Json, jsonOptions);
+        if (options.HasQueryOnlyOptionsExceptStatus)
+            return WriteUsageError("A status transition cannot be combined with query or export options.", options.Json, jsonOptions);
+        if (!TryParseLifecycleStatus(options.Status, out var targetStatus))
+            return WriteUsageError(
+                "--status for `suggestions update` must be one of draft, open_in_upstream, resolved_in_upstream, wont_fix, duplicate, or superseded; submitted_pending_triage is managed by GitHub submission.",
+                options.Json,
+                jsonOptions);
+
+        var actor = NormalizeOptional(options.Actor) ?? "cdidx-cli";
+        if (options.ActorSpecified && NormalizeOptional(options.Actor) == null)
+            return WriteUsageError("--actor must not be empty.", options.Json, jsonOptions);
+        var reason = NormalizeOptional(options.Reason);
+        if (options.ReasonSpecified && reason == null)
+            return WriteUsageError("--reason must not be empty.", options.Json, jsonOptions);
+
+        var record = ResolveById(records, options.Id!);
+        if (record == null)
+            return WriteMutationNotFound(options, jsonOptions);
+
+        var result = store.TryTransitionStatus(
+            record.Id,
+            record.RevisionHash,
+            targetStatus,
+            actor,
+            reason,
+            out var updated);
+        if (result == SuggestionStore.MutationResult.InvalidTransition)
+            return WriteInvalidStatusTransition(record, targetStatus, options, jsonOptions);
+        if (result == SuggestionStore.MutationResult.SubmissionInFlight)
+            return WriteMutationSubmissionInFlight(options, jsonOptions);
+        if (result == SuggestionStore.MutationResult.RevisionConflict)
+            return WriteMutationRevisionConflict(options, jsonOptions);
+        if (result == SuggestionStore.MutationResult.NotFound || updated == null)
+            return WriteMutationNotFound(options, jsonOptions);
+
+        return WriteMutationSuccess("status_changed", updated, options, jsonOptions);
+    }
+
     private static int RunDelete(SuggestionStore store, List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
     {
         if (string.IsNullOrWhiteSpace(options.Id))
             return WriteUsageError("suggestions delete requires an id.", options.Json, jsonOptions);
-        if (options.HasQueryOnlyOptions || options.HasEditableFields)
+        if (options.HasQueryOnlyOptions || options.HasContentEditableFields || options.ActorSpecified || options.ReasonSpecified)
             return WriteUsageError("suggestions delete accepts only an id, --db, and --json.", options.Json, jsonOptions);
 
         var record = ResolveById(records, options.Id);
@@ -239,6 +308,21 @@ internal static class SuggestionsCommandRunner
             CommandExitCodes.UsageError,
             "Wait for the bounded submission attempt to finish, then reload the suggestion before editing or deleting it.",
             category: "submission_in_flight");
+
+    private static int WriteInvalidStatusTransition(
+        SuggestionRecord record,
+        SuggestionStatus targetStatus,
+        Options options,
+        JsonSerializerOptions jsonOptions)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            options.Json,
+            jsonOptions,
+            $"Invalid suggestion status transition from {GetStatus(record)} to {ToSnakeCase(targetStatus)}.",
+            CommandExitCodes.UsageError,
+            targetStatus is SuggestionStatus.OpenInUpstream or SuggestionStatus.ResolvedInUpstream
+                ? "Upstream lifecycle states require a stored upstream issue URL or number; submitted_pending_triage is set only by successful GitHub submission."
+                : "Choose a different lifecycle state; repeating the current state is not a transition.",
+            category: "invalid_status_transition");
 
     private static bool IsMutableDraft(SuggestionRecord record)
         => record.Status == SuggestionStatus.Draft
@@ -379,6 +463,14 @@ internal static class SuggestionsCommandRunner
         Console.WriteLine($"revision_hash: {record.RevisionHash}");
         Console.WriteLine($"created_at: {record.CreatedAt:O}");
         Console.WriteLine($"status: {GetStatus(record)}");
+        if (record.PreviousStatus != null)
+            Console.WriteLine($"previous_status: {ToSnakeCase(record.PreviousStatus.Value)}");
+        if (record.StatusChangedAt != null)
+            Console.WriteLine($"status_changed_at: {record.StatusChangedAt:O}");
+        if (!string.IsNullOrWhiteSpace(record.StatusChangedBy))
+            Console.WriteLine($"status_changed_by: {record.StatusChangedBy}");
+        if (!string.IsNullOrWhiteSpace(record.StatusChangeReason))
+            Console.WriteLine($"status_change_reason: {record.StatusChangeReason}");
         Console.WriteLine($"category: {record.Category}");
         Console.WriteLine($"language: {record.Language ?? "-"}");
         var agent = GetAgent(record);
@@ -418,15 +510,32 @@ internal static class SuggestionsCommandRunner
         List<SuggestionRecord> records,
         Options options,
         JsonSerializerOptions jsonOptions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string suggestionStorePath,
+        string databasePath)
     {
         if (options.ExportFormat == "markdown")
         {
-            Console.WriteLine(FormatMarkdown(records));
+            var markdown = FormatMarkdown(records);
+            if (options.OutputPath != null)
+                return WriteSuggestionExportFile(
+                    markdown,
+                    records.Count,
+                    options,
+                    jsonOptions,
+                    suggestionStorePath,
+                    databasePath);
+            Console.WriteLine(markdown);
             return CommandExitCodes.Success;
         }
         if (options.ExportFormat == "issue-drafts")
-            return RunIssueDraftExport(records, options, jsonOptions, cancellationToken);
+            return RunIssueDraftExport(
+                records,
+                options,
+                jsonOptions,
+                cancellationToken,
+                suggestionStorePath,
+                databasePath);
 
         var payload = new SuggestionExportJsonResult(
             JsonOutputContract.ApiVersion,
@@ -442,7 +551,9 @@ internal static class SuggestionsCommandRunner
         List<SuggestionRecord> records,
         Options options,
         JsonSerializerOptions jsonOptions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string suggestionStorePath,
+        string databasePath)
     {
         var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
                 options.OpenIssuesPath,
@@ -466,13 +577,121 @@ internal static class SuggestionsCommandRunner
                 options.DuplicateConfidence,
                 options.DuplicateThreshold),
             drafts);
+        if (options.OutputPath != null)
+        {
+            var contents = JsonSerializer.Serialize(
+                payload,
+                CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionIssueDraftExportJsonResult);
+            return WriteSuggestionExportFile(
+                contents,
+                drafts.Count,
+                options,
+                jsonOptions,
+                suggestionStorePath,
+                databasePath);
+        }
         CommandOutputWriter.WriteJson(
             payload,
             CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionIssueDraftExportJsonResult);
         return CommandExitCodes.Success;
     }
 
-    private static SuggestionStore CreateStore(string? dbPath)
+    private static int WriteSuggestionExportFile(
+        string contents,
+        int recordCount,
+        Options options,
+        JsonSerializerOptions jsonOptions,
+        string suggestionStorePath,
+        string databasePath)
+    {
+        var terminatedContents = contents.EndsWith('\n') ? contents : contents + Environment.NewLine;
+        var byteCount = Encoding.UTF8.GetByteCount(terminatedContents);
+        if (byteCount > MaxSuggestionExportFileBytes)
+        {
+            return WriteUsageError(
+                $"Suggestion export is {byteCount} bytes; --output is limited to {MaxSuggestionExportFileBytes} bytes.",
+                options.Json,
+                jsonOptions,
+                "Use --limit and --offset to export bounded pages.");
+        }
+
+        string? fullOutputPath = null;
+        try
+        {
+            fullOutputPath = Path.GetFullPath(options.OutputPath!);
+            if (PathCasing.PathsEqual(fullOutputPath, suggestionStorePath)
+                || PathCasing.PathsEqual(fullOutputPath, databasePath))
+            {
+                return WriteUsageError(
+                    "--output must not replace the selected database or its suggestion store.",
+                    options.Json,
+                    jsonOptions,
+                    "Choose a separate export path.");
+            }
+
+            if (!options.Overwrite && File.Exists(LongPath.EnsureWindowsPrefix(fullOutputPath)))
+            {
+                return WriteUsageError(
+                    $"Suggestion export output already exists: {ConsoleUi.FormatBoundedValue(fullOutputPath)}",
+                    options.Json,
+                    jsonOptions,
+                    "Choose another path or pass --overwrite to replace it atomically.");
+            }
+
+            var directory = Path.GetDirectoryName(fullOutputPath);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(directory));
+            AtomicFileWriter.WriteText(
+                fullOutputPath,
+                terminatedContents,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                AtomicFileWriter.WriteProfile.Public,
+                options.Overwrite);
+        }
+        catch (Exception ex) when (IsSuggestionStoreFileSystemException(ex))
+        {
+            if (!options.Overwrite
+                && fullOutputPath != null
+                && File.Exists(LongPath.EnsureWindowsPrefix(fullOutputPath)))
+            {
+                return WriteUsageError(
+                    $"Suggestion export output already exists: {ConsoleUi.FormatBoundedValue(options.OutputPath)}",
+                    options.Json,
+                    jsonOptions,
+                    "Choose another path or pass --overwrite to replace it atomically.");
+            }
+
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
+                $"Suggestion export output is unavailable ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+                CommandExitCodes.RuntimeError,
+                "Check the output path and directory permissions, then retry.",
+                category: FileSystemBoundary.ClassifyProbeFailure(ex));
+        }
+
+        if (options.Json)
+        {
+            var summary = new JsonObject
+            {
+                ["api_version"] = JsonOutputContract.ApiVersion,
+                ["status"] = "success",
+                ["format"] = options.ExportFormat,
+                ["count"] = recordCount,
+                ["output_path"] = fullOutputPath,
+                ["bytes"] = byteCount,
+            };
+            CommandOutputWriter.WriteRawJson(summary.ToJsonString(jsonOptions));
+        }
+        else
+        {
+            Console.WriteLine(
+                $"Wrote {recordCount} suggestion{(recordCount == 1 ? string.Empty : "s")} to {ConsoleUi.FormatBoundedValue(fullOutputPath!)} ({byteCount} bytes).");
+        }
+        return CommandExitCodes.Success;
+    }
+
+    private static SuggestionStoreContext CreateStore(string? dbPath)
     {
         var normalizedDbPath = string.IsNullOrWhiteSpace(dbPath)
             ? DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath
@@ -480,7 +699,7 @@ internal static class SuggestionsCommandRunner
         var fullDbPath = Path.GetFullPath(normalizedDbPath);
         var cdidxDir = DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(fullDbPath, "suggestions");
         var dbName = Path.GetFileNameWithoutExtension(fullDbPath);
-        return new SuggestionStore(cdidxDir, dbName);
+        return new SuggestionStoreContext(new SuggestionStore(cdidxDir, dbName), fullDbPath);
     }
 
     private static bool IsSuggestionStoreFileSystemException(Exception ex)
@@ -543,8 +762,11 @@ internal static class SuggestionsCommandRunner
     private static string GetStatus(SuggestionRecord record) => ToSnakeCase(record.Status);
 
     private static bool IsSubmitted(SuggestionRecord record) =>
-        record.Status != SuggestionStatus.Draft
+        (record.Status is SuggestionStatus.SubmittedPendingTriage
+            or SuggestionStatus.OpenInUpstream
+            or SuggestionStatus.ResolvedInUpstream)
         || record.SubmittedToGitHub == true
+        || record.UpstreamIssueNumber != null
         || !string.IsNullOrWhiteSpace(record.UpstreamUrl)
         || !string.IsNullOrWhiteSpace(record.GitHubIssueUrl);
 
@@ -571,6 +793,26 @@ internal static class SuggestionsCommandRunner
 
     private static bool IsValidStatusFilter(string status) =>
         status is "all" or "submitted" or "unsubmitted" or "draft" or "submitted_pending_triage" or "open_in_upstream" or "resolved_in_upstream" or "wont_fix" or "duplicate" or "superseded";
+
+    private static bool TryParseLifecycleStatus(string status, out SuggestionStatus parsed)
+    {
+        parsed = status switch
+        {
+            "draft" => SuggestionStatus.Draft,
+            "open_in_upstream" => SuggestionStatus.OpenInUpstream,
+            "resolved_in_upstream" => SuggestionStatus.ResolvedInUpstream,
+            "wont_fix" => SuggestionStatus.WontFix,
+            "duplicate" => SuggestionStatus.Duplicate,
+            "superseded" => SuggestionStatus.Superseded,
+            _ => default,
+        };
+        return status is "draft"
+            or "open_in_upstream"
+            or "resolved_in_upstream"
+            or "wont_fix"
+            or "duplicate"
+            or "superseded";
+    }
 
     private static string? GetAgent(SuggestionRecord record)
     {
@@ -622,7 +864,11 @@ internal static class SuggestionsCommandRunner
         record.UpstreamIssueNumber,
         record.LastSubmitAttempt,
         record.SubmitAttemptCount,
-        record.LastSubmitError);
+        record.LastSubmitError,
+        record.PreviousStatus == null ? null : ToSnakeCase(record.PreviousStatus.Value),
+        record.StatusChangedAt,
+        record.StatusChangedBy,
+        record.StatusChangeReason);
 
     private static SuggestionDetailJsonResult ToDetail(SuggestionRecord record) => ToDetail(record, capTextFields: false);
 
@@ -657,7 +903,11 @@ internal static class SuggestionsCommandRunner
         record.SupersededBy,
         record.LastSubmitAttempt,
         record.SubmitAttemptCount,
-        record.LastSubmitError);
+        record.LastSubmitError,
+        record.PreviousStatus == null ? null : ToSnakeCase(record.PreviousStatus.Value),
+        record.StatusChangedAt,
+        record.StatusChangedBy,
+        BoundSuggestionOutputValue(record.StatusChangeReason, capTextFields));
 
     private static SuggestionIssueDraftJsonResult ToIssueDraft(SuggestionRecord record, IssueDuplicatePreflight preflight, Options options)
     {
@@ -687,7 +937,11 @@ internal static class SuggestionsCommandRunner
                 record.Language,
                 GetStatus(record),
                 GetAgent(record),
-                record.CreatedAt),
+                record.CreatedAt,
+                record.PreviousStatus == null ? null : ToSnakeCase(record.PreviousStatus.Value),
+                record.StatusChangedAt,
+                record.StatusChangedBy,
+                BoundSuggestionOutputValue(record.StatusChangeReason, capTextFields: true)),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
                 preflight.Checked,
                 duplicateMatches.Count,
@@ -788,6 +1042,14 @@ internal static class SuggestionsCommandRunner
         sb.AppendLine($"- suggestion_id: `{record.Id}`");
         sb.AppendLine($"- revision_hash: `{record.RevisionHash}`");
         sb.AppendLine($"- status: `{GetStatus(record)}`");
+        if (record.PreviousStatus != null)
+            sb.AppendLine($"- previous_status: `{ToSnakeCase(record.PreviousStatus.Value)}`");
+        if (record.StatusChangedAt != null)
+            sb.AppendLine($"- status_changed_at: `{record.StatusChangedAt:O}`");
+        if (!string.IsNullOrWhiteSpace(record.StatusChangedBy))
+            sb.AppendLine($"- status_changed_by: `{record.StatusChangedBy}`");
+        if (!string.IsNullOrWhiteSpace(record.StatusChangeReason))
+            sb.AppendLine($"- status_change_reason: {BoundSuggestionOutputValue(record.StatusChangeReason, capTextFields: true)}");
         sb.AppendLine($"- created_at: `{record.CreatedAt:O}`");
         var agent = GetAgent(record);
         if (!string.IsNullOrWhiteSpace(agent))
@@ -837,6 +1099,14 @@ internal static class SuggestionsCommandRunner
             sb.AppendLine($"- revision_hash: `{record.RevisionHash}`");
             sb.AppendLine($"- created_at: `{record.CreatedAt:O}`");
             sb.AppendLine($"- status: `{GetStatus(record)}`");
+            if (record.PreviousStatus != null)
+                sb.AppendLine($"- previous_status: `{ToSnakeCase(record.PreviousStatus.Value)}`");
+            if (record.StatusChangedAt != null)
+                sb.AppendLine($"- status_changed_at: `{record.StatusChangedAt:O}`");
+            if (!string.IsNullOrWhiteSpace(record.StatusChangedBy))
+                sb.AppendLine($"- status_changed_by: `{record.StatusChangedBy}`");
+            if (!string.IsNullOrWhiteSpace(record.StatusChangeReason))
+                sb.AppendLine($"- status_change_reason: {BoundSuggestionOutputValue(record.StatusChangeReason, capTextFields: true)}");
             sb.AppendLine($"- category: `{record.Category}`");
             sb.AppendLine($"- language: `{record.Language ?? "-"}`");
             var agent = GetAgent(record);
@@ -1054,6 +1324,24 @@ internal static class SuggestionsCommandRunner
                     options.Agent = agent;
                     options.AgentSpecified = true;
                     break;
+                case "--actor":
+                    if (!TryReadSchemaValue("--actor", out var actor, out var actorError))
+                    {
+                        options.Error = actorError;
+                        return options;
+                    }
+                    options.Actor = actor;
+                    options.ActorSpecified = true;
+                    break;
+                case "--reason":
+                    if (!TryReadSchemaValue("--reason", out var reason, out var reasonError))
+                    {
+                        options.Error = reasonError;
+                        return options;
+                    }
+                    options.Reason = reason;
+                    options.ReasonSpecified = true;
+                    break;
                 case "--limit":
                     if (!TryReadSchemaValue("--limit", out var limit, out var limitError))
                     {
@@ -1102,6 +1390,18 @@ internal static class SuggestionsCommandRunner
                     if (!IsValidExportFormat(options.ExportFormat))
                         options.Error = "Error: --format must be one of json, markdown, issue-drafts.";
                     options.FormatSpecified = true;
+                    break;
+                case "--output":
+                case "-o":
+                    if (!TryReadSchemaValue(normalizedArg, out var outputPath, out var outputPathError))
+                    {
+                        options.Error = outputPathError;
+                        return options;
+                    }
+                    options.OutputPath = outputPath;
+                    break;
+                case "--overwrite":
+                    options.Overwrite = true;
                     break;
                 case "--open-issues":
                     if (!TryReadSchemaValue("--open-issues", out var openIssuesPath, out var openIssuesError))
@@ -1234,6 +1534,8 @@ internal static class SuggestionsCommandRunner
         return true;
     }
 
+    private sealed record SuggestionStoreContext(SuggestionStore Store, string DatabasePath);
+
     private sealed class Options
     {
         public string? Id { get; set; }
@@ -1248,6 +1550,10 @@ internal static class SuggestionsCommandRunner
         public string? Title { get; set; }
         public List<string> EvidencePaths { get; } = [];
         public string? Agent { get; set; }
+        public string? Actor { get; set; }
+        public string? Reason { get; set; }
+        public string? OutputPath { get; set; }
+        public bool Overwrite { get; set; }
         public bool LanguageSpecified { get; set; }
         public bool CategorySpecified { get; set; }
         public bool DescriptionSpecified { get; set; }
@@ -1255,6 +1561,8 @@ internal static class SuggestionsCommandRunner
         public bool TitleSpecified { get; set; }
         public bool EvidencePathsSpecified { get; set; }
         public bool AgentSpecified { get; set; }
+        public bool ActorSpecified { get; set; }
+        public bool ReasonSpecified { get; set; }
         public int? Limit { get; set; }
         public int Offset { get; set; }
         public bool OffsetSpecified { get; set; }
@@ -1270,8 +1578,9 @@ internal static class SuggestionsCommandRunner
         public DateTimeOffset? Since { get; set; }
         public string? Error { get; set; }
         public bool HasPagination => Limit.HasValue || OffsetSpecified;
-        public bool HasEditableFields => LanguageSpecified || CategorySpecified || DescriptionSpecified || ContextSpecified || TitleSpecified || EvidencePathsSpecified || AgentSpecified;
-        public bool HasQueryOnlyOptions => HasPagination || Since != null || StatusSpecified || FormatSpecified || OpenIssuesPath != null || OpenIssuesRepository != null || IssueState != IssueDuplicatePreflight.DefaultIssueState || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
+        public bool HasContentEditableFields => LanguageSpecified || CategorySpecified || DescriptionSpecified || ContextSpecified || TitleSpecified || EvidencePathsSpecified || AgentSpecified;
+        public bool HasQueryOnlyOptions => HasQueryOnlyOptionsExceptStatus || StatusSpecified;
+        public bool HasQueryOnlyOptionsExceptStatus => HasPagination || Since != null || FormatSpecified || OutputPath != null || Overwrite || OpenIssuesPath != null || OpenIssuesRepository != null || IssueState != IssueDuplicatePreflight.DefaultIssueState || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
     }
 }
 
@@ -1306,7 +1615,11 @@ internal sealed record SuggestionListItemJsonResult(
     [property: JsonPropertyName("upstream_issue_number")] int? UpstreamIssueNumber,
     [property: JsonPropertyName("last_submit_attempt")] DateTime? LastSubmitAttempt,
     [property: JsonPropertyName("submit_attempt_count")] int SubmitAttemptCount,
-    [property: JsonPropertyName("last_submit_error")] string? LastSubmitError);
+    [property: JsonPropertyName("last_submit_error")] string? LastSubmitError,
+    [property: JsonPropertyName("previous_status")] string? PreviousStatus,
+    [property: JsonPropertyName("status_changed_at")] DateTime? StatusChangedAt,
+    [property: JsonPropertyName("status_changed_by")] string? StatusChangedBy,
+    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason);
 
 internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -1337,7 +1650,11 @@ internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("superseded_by")] string? SupersededBy,
     [property: JsonPropertyName("last_submit_attempt")] DateTime? LastSubmitAttempt,
     [property: JsonPropertyName("submit_attempt_count")] int SubmitAttemptCount,
-    [property: JsonPropertyName("last_submit_error")] string? LastSubmitError);
+    [property: JsonPropertyName("last_submit_error")] string? LastSubmitError,
+    [property: JsonPropertyName("previous_status")] string? PreviousStatus,
+    [property: JsonPropertyName("status_changed_at")] DateTime? StatusChangedAt,
+    [property: JsonPropertyName("status_changed_by")] string? StatusChangedBy,
+    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason);
 
 internal sealed record SuggestionExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -1380,7 +1697,11 @@ internal sealed record SuggestionIssueDraftSourceJsonResult(
     [property: JsonPropertyName("language")] string? Language,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("agent")] string? Agent,
-    [property: JsonPropertyName("created_at")] DateTime CreatedAt);
+    [property: JsonPropertyName("created_at")] DateTime CreatedAt,
+    [property: JsonPropertyName("previous_status")] string? PreviousStatus,
+    [property: JsonPropertyName("status_changed_at")] DateTime? StatusChangedAt,
+    [property: JsonPropertyName("status_changed_by")] string? StatusChangedBy,
+    [property: JsonPropertyName("status_change_reason")] string? StatusChangeReason);
 
 internal sealed record SuggestionIssueDraftDuplicatePreflightJsonResult(
     [property: JsonPropertyName("checked")] bool Checked,

@@ -43,6 +43,20 @@ internal static class AtomicFileWriter
             profile);
     }
 
+    public static void WriteText(string path, string contents, Encoding encoding, WriteProfile profile, bool overwrite)
+    {
+        Write(
+            path,
+            stream =>
+            {
+                using var writer = new StreamWriter(stream, encoding, bufferSize: 1024, leaveOpen: true);
+                writer.Write(contents);
+                writer.Flush();
+            },
+            profile,
+            overwrite);
+    }
+
     public static void WriteJson<T>(string path, T value, JsonSerializerOptions? options = null, Action<string>? applyFileMode = null)
     {
         Write(path, stream => JsonSerializer.Serialize(stream, value, options), applyFileMode);
@@ -59,16 +73,20 @@ internal static class AtomicFileWriter
     }
 
     public static void Write(string path, Action<Stream> writeContents, Action<string>? applyFileMode = null)
-        => WriteCore(path, writeContents, applyFileMode, WriteProfile.Public);
+        => WriteCore(path, writeContents, applyFileMode, WriteProfile.Public, overwrite: true);
 
     public static void Write(string path, Action<Stream> writeContents, WriteProfile profile)
-        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile);
+        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite: true);
+
+    public static void Write(string path, Action<Stream> writeContents, WriteProfile profile, bool overwrite)
+        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite);
 
     private static void WriteCore(
         string path,
         Action<Stream> writeContents,
         Action<string>? applyFileMode,
-        WriteProfile profile)
+        WriteProfile profile,
+        bool overwrite)
     {
         ArgumentNullException.ThrowIfNull(writeContents);
 
@@ -85,7 +103,15 @@ internal static class AtomicFileWriter
                 stream.Flush(flushToDisk: true);
             }
 
-            MoveReplacing(tempPath, path);
+            if (overwrite)
+            {
+                MoveReplacing(tempPath, path);
+            }
+            else
+            {
+                MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
+                FlushParentDirectoryAfterCreate(path);
+            }
             moved = true;
         }
         catch
@@ -183,6 +209,12 @@ internal static class AtomicFileWriter
             path,
             "Atomic replace completed",
             "the target file was already replaced");
+
+    private static void FlushParentDirectoryAfterCreate(string path)
+        => FlushParentDirectory(
+            path,
+            "Atomic file publish completed",
+            "the target file was already published");
 
     private static void FlushParentDirectoryAfterDirectoryPublish(string path)
         => FlushParentDirectory(
