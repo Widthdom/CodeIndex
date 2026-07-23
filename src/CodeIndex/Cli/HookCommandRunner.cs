@@ -83,6 +83,7 @@ public static class HookCommandRunner
         string? projectPath = null;
         var json = false;
         var force = false;
+        var dryRun = false;
         var showHelp = false;
         string? parseError = null;
 
@@ -98,6 +99,9 @@ public static class HookCommandRunner
                     break;
                 case "--force":
                     force = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
                     break;
                 case "--project" when i + 1 < args.Length:
                     projectPath = args[++i];
@@ -116,12 +120,27 @@ public static class HookCommandRunner
             }
         }
 
-        return new HookCommandOptions(command, projectPath, json, force, showHelp, parseError);
+        if (dryRun && !string.Equals(command, "install", StringComparison.Ordinal))
+            parseError ??= "--dry-run is supported only for hooks install";
+
+        return new HookCommandOptions(command, projectPath, json, force, dryRun, showHelp, parseError);
     }
 
     private static int Install(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string gitDir, string hooksDir, string hookPath, string chainedHookPath)
     {
         var warnings = new List<HookCommandWarningJsonResult>();
+        var hookScript = BuildHookScript(chainedHookPath, projectPath);
+        if (options.DryRun)
+        {
+            return PreviewInstall(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                chainedHookPath,
+                hookScript);
+        }
+
         Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(hooksDir));
         if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
             return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
@@ -130,7 +149,24 @@ public static class HookCommandRunner
         var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
         if (File.Exists(ioHookPath))
         {
-            if (!IsManagedHookFile(ioHookPath))
+            var existingHook = ReadHookFileWithinLimit(ioHookPath);
+            if (existingHook is not null && IsManagedHook(existingHook))
+            {
+                if (IsExactHookScriptFile(ioHookPath, hookScript)
+                    && IsExecutableHook(ioHookPath))
+                {
+                    return WriteResult(
+                        options.Json,
+                        jsonOptions,
+                        "already_installed",
+                        "cdidx pre-commit hook is already installed",
+                        projectPath,
+                        hookPath,
+                        File.Exists(ioChainedHookPath) ? chainedHookPath : null,
+                        CommandExitCodes.Success);
+                }
+            }
+            else
             {
                 if (File.Exists(ioChainedHookPath) && !options.Force)
                     return WriteResult(options.Json, jsonOptions, "error", $"chained hook already exists: {chainedHookPath}", projectPath, hookPath, chainedHookPath, CommandExitCodes.UsageError);
@@ -148,16 +184,99 @@ public static class HookCommandRunner
                     return WriteResult(options.Json, jsonOptions, "error", message, projectPath, hookPath, chainedHookPath, CommandExitCodes.InstallError, warnings);
                 }
 
-                return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success, warnings);
+                return WriteResult(options.Json, jsonOptions, "updated", "cdidx pre-commit hook updated", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success, warnings);
             }
         }
 
         if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
             return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError);
 
-        AtomicFileWriter.WriteText(hookPath, BuildHookScript(chainedHookPath, projectPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
+        ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
+        hookScript = BuildHookScript(chainedHookPath, projectPath);
+        var status = File.Exists(ioHookPath) ? "updated" : "installed";
+        var resultMessage = status == "updated"
+            ? "cdidx pre-commit hook updated"
+            : "cdidx pre-commit hook installed";
+        AtomicFileWriter.WriteText(hookPath, hookScript, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
 
-        return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success, warnings);
+        return WriteResult(options.Json, jsonOptions, status, resultMessage, projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success, warnings);
+    }
+
+    private static int PreviewInstall(
+        HookCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string projectPath,
+        string hookPath,
+        string chainedHookPath,
+        string hookScript)
+    {
+        var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
+        var chainedHookExists = File.Exists(ioChainedHookPath);
+        var status = "installed";
+        var message = "cdidx pre-commit hook would be installed";
+        var plannedAction = "create";
+        string? reportedChainedHookPath = chainedHookExists ? chainedHookPath : null;
+
+        if (File.Exists(ioHookPath))
+        {
+            var existingHook = ReadHookFileWithinLimit(ioHookPath);
+            if (existingHook is not null && IsManagedHook(existingHook))
+            {
+                if (IsExactHookScriptFile(ioHookPath, hookScript)
+                    && IsExecutableHook(ioHookPath))
+                {
+                    status = "already_installed";
+                    message = "cdidx pre-commit hook is already installed";
+                    plannedAction = "none";
+                }
+                else
+                {
+                    status = "updated";
+                    message = "cdidx pre-commit hook would be updated";
+                    plannedAction = "replace_managed";
+                }
+
+                reportedChainedHookPath = chainedHookExists ? chainedHookPath : null;
+            }
+            else
+            {
+                if (chainedHookExists && !options.Force)
+                {
+                    return WriteResult(
+                        options.Json,
+                        jsonOptions,
+                        "error",
+                        $"chained hook already exists: {chainedHookPath}",
+                        projectPath,
+                        hookPath,
+                        chainedHookPath,
+                        CommandExitCodes.UsageError,
+                        dryRun: true,
+                        plannedAction: "blocked",
+                        managedHookPreview: hookScript);
+                }
+
+                status = "updated";
+                message = "cdidx pre-commit hook would be updated";
+                plannedAction = "chain_existing";
+                reportedChainedHookPath = chainedHookPath;
+            }
+        }
+
+        return WriteResult(
+            options.Json,
+            jsonOptions,
+            status,
+            message,
+            projectPath,
+            hookPath,
+            reportedChainedHookPath,
+            CommandExitCodes.Success,
+            dryRun: true,
+            plannedAction: plannedAction,
+            managedHookPreview: hookScript);
     }
 
     private static bool TryResolveHookWritePaths(
@@ -267,8 +386,21 @@ public static class HookCommandRunner
 
     private static bool IsManagedHookFile(string ioHookPath)
     {
-        var content = DataDirectorySecurity.ReadTextWithinLimit(ioHookPath, MaxHookMarkerBytes, FileShare.ReadWrite);
+        var content = ReadHookFileWithinLimit(ioHookPath);
         return content is not null && IsManagedHook(content);
+    }
+
+    private static string? ReadHookFileWithinLimit(string ioHookPath)
+        => DataDirectorySecurity.ReadTextWithinLimit(ioHookPath, MaxHookMarkerBytes, FileShare.ReadWrite);
+
+    private static bool IsExactHookScriptFile(string ioHookPath, string hookScript)
+    {
+        var bytes = DataDirectorySecurity.ReadBytesWithinLimit(
+            ioHookPath,
+            MaxHookMarkerBytes,
+            FileShare.ReadWrite);
+        return bytes is not null
+            && bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(hookScript));
     }
 
     private static void ReplaceCustomHookWithManagedHook(
@@ -406,6 +538,10 @@ fi
             UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
 
+    private static bool IsExecutableHook(string path)
+        => OperatingSystem.IsWindows()
+            || (File.GetUnixFileMode(path) & UnixFileMode.UserExecute) != 0;
+
     private static int WriteResult(
         bool json,
         JsonSerializerOptions jsonOptions,
@@ -415,7 +551,10 @@ fi
         string? hookPath,
         string? chainedHookPath,
         int exitCode,
-        IReadOnlyList<HookCommandWarningJsonResult>? warnings = null)
+        IReadOnlyList<HookCommandWarningJsonResult>? warnings = null,
+        bool? dryRun = null,
+        string? plannedAction = null,
+        string? managedHookPreview = null)
     {
         var hasWarnings = warnings is { Count: > 0 };
         if (json)
@@ -430,7 +569,10 @@ fi
                     DiagnosticSanitizer.ForPath(projectPath),
                     hookPath == null ? null : DiagnosticSanitizer.ForPath(hookPath),
                     chainedHookPath == null ? null : DiagnosticSanitizer.ForPath(chainedHookPath),
-                    hasWarnings ? warnings : null),
+                    hasWarnings ? warnings : null,
+                    dryRun,
+                    plannedAction,
+                    managedHookPreview),
                 CliJsonSerializerContextFactory.Create(jsonOptions).HookCommandJsonResult));
         }
         else
@@ -453,16 +595,23 @@ fi
             {
                 CommandErrorWriter.WriteStderr($"Error: {message}");
             }
+
+            if (dryRun == true)
+            {
+                CommandErrorWriter.WriteStdout($"Planned action: {plannedAction}");
+                CommandErrorWriter.WriteStdout("Managed hook preview:");
+                CommandErrorWriter.WriteStdout(managedHookPreview ?? string.Empty);
+            }
         }
 
         return exitCode;
     }
 
     private static void PrintUsage()
-        => CommandErrorWriter.WriteStderr("Usage: cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]");
+        => CommandErrorWriter.WriteStderr("Usage: cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--dry-run] [--json]");
 }
 
-public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool ShowHelp, string? ParseError);
+public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool DryRun, bool ShowHelp, string? ParseError);
 
 public sealed record HookCommandWarningJsonResult(
     [property: JsonPropertyName("category")] string Category,
@@ -480,4 +629,7 @@ public sealed record HookCommandJsonResult(
     string? DiagnosticHookPath,
     string? DiagnosticChainedHookPath,
     IReadOnlyList<HookCommandWarningJsonResult>? Warnings = null,
+    bool? DryRun = null,
+    string? PlannedAction = null,
+    string? ManagedHookPreview = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;

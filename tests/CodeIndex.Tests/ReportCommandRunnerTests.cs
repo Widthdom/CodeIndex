@@ -1010,7 +1010,7 @@ public class ReportCommandRunnerTests
             ]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("output_path").GetString());
+            Assert.Equal(Path.GetFileName(output), json.GetProperty("output_path").GetString());
             Assert.Equal(ReportCommandRunner.BundleArtifactFormat, json.GetProperty("artifact_format").GetString());
             Assert.Equal(ReportCommandRunner.BundleArtifactMediaType, json.GetProperty("artifact_media_type").GetString());
             Assert.True(JsonArrayContains(json.GetProperty("recommended_extensions"), ".tgz"));
@@ -1046,7 +1046,7 @@ public class ReportCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             using var document = JsonDocument.Parse(stdout);
-            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, document.RootElement.GetProperty("output_path").GetString());
+            Assert.Equal(Path.GetFileName(output), document.RootElement.GetProperty("output_path").GetString());
             Assert.False(document.RootElement.GetProperty("log_included").GetBoolean());
             Assert.False(document.RootElement.GetProperty("db_included").GetBoolean());
             Assert.DoesNotContain("Bug report bundle", stdout, StringComparison.Ordinal);
@@ -1082,7 +1082,7 @@ public class ReportCommandRunnerTests
 
             using var json = JsonDocument.Parse(stdout);
             var root = json.RootElement;
-            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, root.GetProperty("output_path").GetString());
+            Assert.Equal("bundle.json", root.GetProperty("output_path").GetString());
             Assert.Equal(ReportCommandRunner.BundleArtifactFormat, root.GetProperty("artifact_format").GetString());
             Assert.Equal(ReportCommandRunner.BundleArtifactMediaType, root.GetProperty("artifact_media_type").GetString());
             Assert.True(root.GetProperty("json_metadata_stdout_only").GetBoolean());
@@ -1103,7 +1103,7 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
-    public void Run_JsonMode_RedactsLocalSummaryPaths_Issue3554()
+    public void Run_JsonMode_PreservesArtifactNameAndRedactsDiagnosticPaths_Issues3554And4718()
     {
         var workDir = CreateWorkDir();
         var dbPath = Path.Combine(workDir, "codeindex.db");
@@ -1122,8 +1122,9 @@ public class ReportCommandRunnerTests
             ]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("output_path").GetString());
+            Assert.Equal(Path.GetFileName(output), json.GetProperty("output_path").GetString());
             Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("db_path").GetString());
+            Assert.DoesNotContain(workDir, json.GetRawText(), StringComparison.Ordinal);
             Assert.True(json.GetProperty("db_included").GetBoolean());
         }
         finally
@@ -1157,7 +1158,7 @@ public class ReportCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             using var document = JsonDocument.Parse(stdout);
             var root = document.RootElement;
-            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, root.GetProperty("output_path").GetString());
+            Assert.Equal(Path.GetFileName(output), root.GetProperty("output_path").GetString());
             Assert.Equal(ReportCommandRunner.RedactedPlaceholder, root.GetProperty("db_path").GetString());
             Assert.DoesNotContain(workDir, stdout, StringComparison.Ordinal);
             Assert.True(File.Exists(output));

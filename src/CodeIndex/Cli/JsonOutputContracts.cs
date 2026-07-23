@@ -284,6 +284,22 @@ internal sealed record DbCheckpointListEntryJsonResult(
     [property: JsonPropertyName("bytes")] long Bytes,
     [property: JsonPropertyName("files_truncated")] bool FilesTruncated = false);
 
+internal sealed record DbCheckpointCleanupJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("operation")] string Operation,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("keep")] int? Keep,
+    [property: JsonPropertyName("dry_run")] bool DryRun,
+    [property: JsonPropertyName("deleted")] int Deleted,
+    [property: JsonPropertyName("retained")] int Retained,
+    [property: JsonPropertyName("deleted_paths")] List<string> DeletedPaths,
+    [property: JsonPropertyName("retained_paths")] List<string> RetainedPaths,
+    [property: JsonPropertyName("truncated")] bool Truncated = false,
+    [property: JsonPropertyName("checkpoint_limit")] int CheckpointLimit = 0,
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+
 internal sealed record DbRestoreJsonResult(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("db_path")] string DbPath,
@@ -295,6 +311,27 @@ internal sealed record DbRestoreJsonResult(
     [property: JsonPropertyName("hint")] string? Hint = null,
     [property: JsonPropertyName("rollback_failed")] bool RollbackFailed = false,
     [property: JsonPropertyName("rollback_failure")] DbDiagnosticJsonResult? RollbackFailure = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+
+internal sealed record DbRestoreDryRunJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
+    [property: JsonPropertyName("dry_run")] bool DryRun,
+    [property: JsonPropertyName("ready")] bool Ready,
+    [property: JsonPropertyName("manifest_valid")] bool ManifestValid,
+    [property: JsonPropertyName("paths_valid")] bool PathsValid,
+    [property: JsonPropertyName("space_check_available")] bool SpaceCheckAvailable,
+    [property: JsonPropertyName("space_sufficient")] bool? SpaceSufficient,
+    [property: JsonPropertyName("required_space_bytes")] long RequiredSpaceBytes,
+    [property: JsonPropertyName("available_space_bytes")] long? AvailableSpaceBytes,
+    [property: JsonPropertyName("files")] List<string> Files,
+    [property: JsonPropertyName("bytes")] long Bytes,
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult> Diagnostics,
+    [property: JsonPropertyName("message")] string? Message = null,
+    [property: JsonPropertyName("error_code")] string? ErrorCode = null,
+    [property: JsonPropertyName("hint")] string? Hint = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbRestoreBackupEntryJsonResult(
@@ -317,8 +354,11 @@ internal sealed record DbRestoreBackupPruneJsonResult(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("keep")] int Keep,
+    [property: JsonPropertyName("dry_run")] bool DryRun,
     [property: JsonPropertyName("deleted")] int Deleted,
     [property: JsonPropertyName("retained")] int Retained,
+    [property: JsonPropertyName("deleted_paths")] List<string> DeletedPaths,
+    [property: JsonPropertyName("retained_paths")] List<string> RetainedPaths,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("backup_limit")] int BackupLimit = 0,
     [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
@@ -915,6 +955,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(ConfigFileStatusJsonResult))]
 [JsonSerializable(typeof(ConfigEffectiveValueJsonResult))]
 [JsonSerializable(typeof(DbCheckpointJsonResult))]
+[JsonSerializable(typeof(DbCheckpointCleanupJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListEntryJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListJsonResult))]
 [JsonSerializable(typeof(DbDiagnosticJsonResult))]
@@ -923,6 +964,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(DbRestoreBackupEntryJsonResult))]
 [JsonSerializable(typeof(DbRestoreBackupListJsonResult))]
 [JsonSerializable(typeof(DbRestoreBackupPruneJsonResult))]
+[JsonSerializable(typeof(DbRestoreDryRunJsonResult))]
 [JsonSerializable(typeof(DbRestoreJsonResult))]
 [JsonSerializable(typeof(DbSchemaEntryJsonResult))]
 [JsonSerializable(typeof(DbSchemaJsonResult))]
