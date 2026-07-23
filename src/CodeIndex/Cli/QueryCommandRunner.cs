@@ -156,6 +156,7 @@ public sealed class QueryCommandOptions
     public bool ResultsOnly { get; init; }
     public bool NextSteps { get; init; }
     public int GroupedPerFileLimit { get; init; } = 3;
+    public bool GroupedPerFileLimitExplicit { get; init; }
     public int? SampleSize { get; init; }
     public int? MaxJsonBytes { get; init; }
     public bool RawBytes { get; init; }

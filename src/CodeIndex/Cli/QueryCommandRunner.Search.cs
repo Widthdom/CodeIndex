@@ -385,10 +385,13 @@ public static partial class QueryCommandRunner
                     || options.UniqueBy != null
                     || options.ResultsOnly
                     || options.SearchFields != null
+                    || options.FirstPerFile
+                    || options.SampleSize.HasValue
+                    || options.GroupedPerFileLimitExplicit
                     || (options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson)))
             {
                 WriteUsageError(
-                    "--format sarif cannot be combined with recipe count, summary, aggregation, projection, or NDJSON row controls.",
+                    "--format sarif cannot be combined with recipe count, summary, aggregation, projection, row-selection, or NDJSON controls.",
                     GetUsageLineOrThrow("search"),
                     "Use `--recipe <name> --format sarif` with result filters and `--limit` / `--total-limit`, or choose the JSON/count output shape instead.");
                 return CommandExitCodes.UsageError;

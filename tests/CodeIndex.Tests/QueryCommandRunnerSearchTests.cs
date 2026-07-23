@@ -7220,6 +7220,9 @@ public partial class QueryCommandRunnerTests
             ["--results-only"],
             ["--search-fields", "path,line"],
             ["--json=ndjson"],
+            ["--first-per-file"],
+            ["--sample", "1"],
+            ["--per-file-limit", "3"],
         ];
 
         foreach (var controls in incompatibleControls)
