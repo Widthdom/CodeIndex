@@ -6223,13 +6223,13 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpDeclarationPatternVariableDoesNotLeakReferenceContext()
+    public void RunReferences_ExactJson_CSharpDeclarationPatternStatementsShareDatabaseFixture()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_declaration_pattern_collision");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_declaration_pattern_statements");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/if.cs", "csharp",
                 """
                 namespace Demo;
 
@@ -6256,35 +6256,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal(22, json.GetProperty("line").GetInt32());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpMultiLineIfDeclarationPatternVariableDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_multiline_if_declaration_pattern_collision");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/multiline-if.cs", "csharp",
                 """
                 namespace Demo;
 
@@ -6312,35 +6284,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal(23, json.GetProperty("line").GetInt32());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpMultiLineWhileDeclarationPatternVariableDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_multiline_while_declaration_pattern_collision");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/multiline-while.cs", "csharp",
                 """
                 namespace Demo;
 
@@ -6371,18 +6315,22 @@ public partial class QueryCommandRunnerTests
                 """);
             MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
+            AssertSingleReference("src/if.cs", expectedLine: 22);
+            AssertSingleReference("src/multiline-if.cs", expectedLine: 23);
+            AssertSingleReference("src/multiline-while.cs", expectedLine: 24);
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            void AssertSingleReference(string path, int expectedLine)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    "Ready", dbPath, "csharp", true, "--path", path);
+                var json = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal(24, json.GetProperty("line").GetInt32());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+                Assert.Equal(expectedLine, json.GetProperty("line").GetInt32());
+                Assert.Equal("Read", json.GetProperty("container_name").GetString());
+            }
         }
         finally
         {
