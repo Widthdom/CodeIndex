@@ -434,7 +434,12 @@ queue, so `$/cancelRequest` can cancel an active or queued symbol request withou
 making database-backed request processing concurrent. Cancellation IDs retain
 their JSON type, cancelled requests end work-done progress and return `-32800`,
 and every result/progress cap is surfaced through the work-done end message or a
-bounded `window/logMessage` warning.
+bounded `window/logMessage` warning. Progress notifications drain through a
+separate two-item channel while symbol items are enumerated, so notification
+memory stays bounded and work-done `begin` reaches the client before symbol
+materialization completes. A full request queue rejects excess requests with
+`-32000` (`Server busy`) while the reader continues to accept cancellation, and
+an output-worker failure cancels the pending input read before propagating.
 
 ### Extractor performance contract
 
@@ -3333,7 +3338,12 @@ integer `partialResultToken` と `workDoneToken` を処理する。partial resul
 で分離するため、database-backed request processing を並行化せずに `$/cancelRequest` で active
 または queued symbol request を cancel できる。cancellation ID は JSON 型を保持し、cancel
 された request は work-done progress を終了して `-32800` を返す。result / progress cap は
-work-done の end message または上限付き `window/logMessage` warning で必ず通知する。
+work-done の end message または上限付き `window/logMessage` warning で必ず通知する。progress
+notification は symbol item の列挙中に独立した2 item channel から drain するため、notification
+memory は bounded のままで、symbol materialization の完了前に work-done `begin` が client へ
+届く。request queue が満杯の場合は超過 request を `-32000`（`Server busy`）で拒否しながら
+reader は cancellation を受け付け続け、output worker の failure は伝播前に pending input read
+を cancel する。
 
 ### 抽出器の性能契約
 

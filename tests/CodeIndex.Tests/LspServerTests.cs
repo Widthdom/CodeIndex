@@ -1128,6 +1128,61 @@ public class LspServerTests
     }
 
     [Fact]
+    public async Task RunAsync_DocumentSymbol_WritesWorkDoneBeginBeforeSymbolWorkCompletes_Issue4721()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_live_progress");
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot)
+            {
+                BeforeSymbolRequestForTesting = cancellationToken =>
+                {
+                    entered.Set();
+                    release.Wait(cancellationToken);
+                },
+            };
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 47213,
+                method = "workspace/symbol",
+                @params = new
+                {
+                    query = "",
+                    workDoneToken = "live-progress-4721",
+                },
+            });
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(request)));
+            using var output = new SignalingMemoryStream();
+
+            var runTask = server.RunAsync(input, output);
+
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            await output.WaitForWriteAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(runTask.IsCompleted);
+            release.Set();
+            Assert.Equal(CommandExitCodes.Success, await runTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+            var messages = ReadLspMessages(output);
+            var progress = messages
+                .Where(entry => HasProgressToken(entry.Message, "live-progress-4721"))
+                .Select(entry => entry.Message["params"]!["value"]!["kind"]!.GetValue<string>())
+                .ToArray();
+            Assert.Equal("begin", progress[0]);
+            Assert.Equal("end", progress[^1]);
+        }
+        finally
+        {
+            release.Set();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_WorkspaceSymbol_SurfacesPartialResultTruncation_Issue4721()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_symbol_progress");
@@ -1234,6 +1289,88 @@ public class LspServerTests
                 entry => entry.Message["id"]?.GetValue<string>() == "request-4721");
             Assert.Equal(-32800, response.Message["error"]!["code"]!.GetValue<int>());
             Assert.Equal("Request cancelled", response.Message["error"]!["message"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_CancelRequestBypassesFullInboundQueue_Issue4721()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_cancel_full_queue");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot)
+            {
+                BeforeSymbolRequestForTesting = cancellationToken =>
+                {
+                    cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+                    cancellationToken.ThrowIfCancellationRequested();
+                },
+            };
+            var frames = new StringBuilder();
+            frames.Append(Frame(
+                """
+                {"jsonrpc":"2.0","id":"active-4721","method":"workspace/symbol","params":{"query":""}}
+                """));
+            for (var i = 0; i < 40; i++)
+            {
+                frames.Append(Frame(JsonSerializer.Serialize(new
+                {
+                    jsonrpc = "2.0",
+                    id = 5000 + i,
+                    method = "initialize",
+                    @params = new { },
+                })));
+            }
+            frames.Append(Frame(
+                """
+                {"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"active-4721"}}
+                """));
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(frames.ToString()));
+            using var output = new MemoryStream();
+
+            Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
+
+            var messages = ReadLspMessages(output);
+            var cancelled = Assert.Single(
+                messages,
+                entry => entry.Message["id"] is JsonValue id
+                    && id.TryGetValue<string>(out var value)
+                    && value == "active-4721");
+            Assert.Equal(-32800, cancelled.Message["error"]!["code"]!.GetValue<int>());
+            Assert.Contains(
+                messages,
+                entry => entry.Message["error"]?["code"]?.GetValue<int>() == -32000);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_ResponseWriteFailureCancelsPendingRead_Issue4721()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_output_failure");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            const string request = """{"jsonrpc":"2.0","id":47214,"method":"initialize","params":{}}""";
+            using var input = new PrefixThenPendingReadStream(Encoding.UTF8.GetBytes(Frame(request)));
+            using var output = new ThrowingWriteStream();
+
+            var exception = await Assert.ThrowsAsync<IOException>(
+                async () => await server.RunAsync(input, output).WaitAsync(TimeSpan.FromSeconds(5)));
+
+            Assert.Equal("Injected write failure.", exception.Message);
+            await input.WaitForPendingReadAsync().WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
         {
@@ -3169,6 +3306,130 @@ public class LspServerTests
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
+    }
+
+    private sealed class SignalingMemoryStream : MemoryStream
+    {
+        private readonly TaskCompletionSource writeObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task WaitForWriteAsync() => writeObserved.Task;
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await base.WriteAsync(buffer, cancellationToken);
+            writeObserved.TrySetResult();
+        }
+
+        public override async Task WriteAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            await base.WriteAsync(buffer, offset, count, cancellationToken);
+            writeObserved.TrySetResult();
+        }
+    }
+
+    private sealed class PrefixThenPendingReadStream(byte[] prefix) : Stream
+    {
+        private readonly TaskCompletionSource pendingRead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int offset;
+
+        internal Task WaitForPendingReadAsync() => pendingRead.Task;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int bufferOffset, int count)
+            => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (offset < prefix.Length)
+            {
+                var count = Math.Min(buffer.Length, prefix.Length - offset);
+                prefix.AsMemory(offset, count).CopyTo(buffer);
+                offset += count;
+                return ValueTask.FromResult(count);
+            }
+
+            pendingRead.TrySetResult();
+            return new ValueTask<int>(WaitForCancellationAsync(cancellationToken));
+        }
+
+        public override long Seek(long seekOffset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int bufferOffset, int count)
+            => throw new NotSupportedException();
+
+        private static async Task<int> WaitForCancellationAsync(CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+    }
+
+    private sealed class ThrowingWriteStream : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new IOException("Injected write failure.");
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException(new IOException("Injected write failure."));
+
+        public override Task WriteAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+            => Task.FromException(new IOException("Injected write failure."));
     }
 
     private sealed class PendingReadStream : Stream

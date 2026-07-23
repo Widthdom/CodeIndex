@@ -42,6 +42,8 @@ internal sealed class LspServer : IDisposable
     internal const int MaxSymbolProgressChunkItems = 100;
     internal const int MaxSymbolProgressChunkBytes = 64 * 1024;
     private const int MaxPendingLspMessages = 16;
+    private const int MaxPendingSymbolNotifications = 2;
+    private const int MaxPendingOverloadResponses = 16;
     internal const int MaxPositionLineChars = 16 * 1024;
     internal const int MaxCompletionItems = 100;
     internal const int MaxInlayHintItems = 200;
@@ -51,9 +53,11 @@ internal sealed class LspServer : IDisposable
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
     private const int JsonRpcRequestCancelledCode = -32800;
+    private const int JsonRpcServerBusyCode = -32000;
     private const string JsonRpcInvalidParamsMessage = "Invalid params";
     private const string JsonRpcInternalErrorMessage = "Internal error";
     private const string JsonRpcRequestCancelledMessage = "Request cancelled";
+    private const string JsonRpcServerBusyMessage = "Server busy";
     private const string LspLookupFailureEventName = "lsp.lookup_failed";
     private const string LspLookupFailureReasonTag = "lsp.lookup.failure_reason";
     private const string LspMethodTag = "lsp.method";
@@ -132,12 +136,17 @@ internal sealed class LspServer : IDisposable
     private readonly LspLiveDocumentStore _liveDocumentStore;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _requestCancellations = new(StringComparer.Ordinal);
     private long _contentChangeEntriesDropped;
+    internal Action<CancellationToken>? BeforeSymbolRequestForTesting { get; set; }
 
     private readonly record struct PositionTokenContext(string Token, string ResolvedPath, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
     private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
     private readonly record struct IndexedDocumentContext(string DocumentPath, string ResolvedPath, string IndexedPath, string? WorkspaceRoot);
     private readonly record struct InboundMessage(string Payload, string? RequestKey, CancellationTokenSource? RequestCancellation);
-    private readonly record struct SymbolResponse(JsonArray FinalItems, JsonArray PartialItems, int ReturnedCount, bool Truncated);
+    private readonly record struct SymbolResponse(
+        JsonArray FinalItems,
+        IEnumerable<JsonNode> PartialItems,
+        int ReturnedCount,
+        bool Truncated);
     private readonly record struct DocumentSymbolTreeResult(JsonArray Roots, int RemovedCount);
     private readonly record struct PartialResultEmission(int EmittedCount, bool Truncated, bool Cancelled);
     internal readonly record struct MessageReadResult(bool Success, string Payload);
@@ -211,13 +220,28 @@ internal sealed class LspServer : IDisposable
             SingleWriter = true,
             FullMode = BoundedChannelFullMode.Wait,
         });
+        var overloadResponses = Channel.CreateBounded<JsonObject>(
+            new BoundedChannelOptions(MaxPendingOverloadResponses)
+            {
+                SingleReader = true,
+                SingleWriter = true,
+                FullMode = BoundedChannelFullMode.Wait,
+            });
         using var exitCancellation = new CancellationTokenSource();
         using var readCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             exitCancellation.Token);
+        using var outputGate = new SemaphoreSlim(1, 1);
         var processor = ProcessInboundMessagesAsync(
             messages.Reader,
             output,
+            outputGate,
+            exitCancellation,
+            cancellationToken);
+        var overloadResponseDrain = DrainServerResponsesAsync(
+            overloadResponses.Reader,
+            output,
+            outputGate,
             exitCancellation,
             cancellationToken);
 
@@ -234,15 +258,13 @@ internal sealed class LspServer : IDisposable
                     continue;
 
                 var inbound = CreateInboundMessage(read.Payload, cancellationToken);
-                try
-                {
-                    await messages.Writer.WriteAsync(inbound, readCancellation.Token).ConfigureAwait(false);
-                }
-                catch
-                {
-                    ReleaseInboundMessage(inbound);
-                    throw;
-                }
+                if (messages.Writer.TryWrite(inbound))
+                    continue;
+
+                ReleaseInboundMessage(inbound);
+                var busyResponse = CreateServerBusyResponse(read.Payload);
+                if (busyResponse != null)
+                    overloadResponses.Writer.TryWrite(busyResponse);
             }
         }
         catch (OperationCanceledException) when (exitCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -252,7 +274,16 @@ internal sealed class LspServer : IDisposable
         finally
         {
             messages.Writer.TryComplete();
-            await processor.ConfigureAwait(false);
+            overloadResponses.Writer.TryComplete();
+            try
+            {
+                await Task.WhenAll(processor, overloadResponseDrain).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Preserve the public Run/RunAsync cancellation contract below.
+                // 下の public Run/RunAsync cancellation contract を維持する。
+            }
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -351,6 +382,7 @@ internal sealed class LspServer : IDisposable
     private async Task ProcessInboundMessagesAsync(
         ChannelReader<InboundMessage> reader,
         Stream output,
+        SemaphoreSlim outputGate,
         CancellationTokenSource exitCancellation,
         CancellationToken serverCancellation)
     {
@@ -360,21 +392,50 @@ internal sealed class LspServer : IDisposable
             {
                 try
                 {
-                    var outbound = new List<JsonObject>();
-                    var response = HandleMessage(
-                        inbound.Payload,
-                        outbound.Add,
-                        inbound.RequestCancellation?.Token ?? serverCancellation);
-                    foreach (var notification in outbound)
+                    var notifications = Channel.CreateBounded<JsonObject>(
+                        new BoundedChannelOptions(MaxPendingSymbolNotifications)
+                        {
+                            SingleReader = true,
+                            SingleWriter = true,
+                            FullMode = BoundedChannelFullMode.Wait,
+                        });
+                    using var notificationCancellation =
+                        CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
+                    using var processingCancellation =
+                        CancellationTokenSource.CreateLinkedTokenSource(
+                            inbound.RequestCancellation?.Token ?? serverCancellation,
+                            notificationCancellation.Token);
+                    var notificationDrain = DrainServerNotificationsAsync(
+                        notifications.Reader,
+                        output,
+                        outputGate,
+                        notificationCancellation);
+                    JsonObject? response;
+                    try
                     {
-                        await WriteServerNotificationAsync(
-                            output,
-                            notification,
-                            serverCancellation).ConfigureAwait(false);
+                        response = HandleMessage(
+                            inbound.Payload,
+                            notification => notifications.Writer
+                                .WriteAsync(notification, notificationCancellation.Token)
+                                .AsTask()
+                                .GetAwaiter()
+                                .GetResult(),
+                            processingCancellation.Token);
+                    }
+                    finally
+                    {
+                        notifications.Writer.TryComplete();
+                        await notificationDrain.ConfigureAwait(false);
                     }
 
                     if (response != null)
-                        await WriteResponseMessageAsync(output, response, serverCancellation).ConfigureAwait(false);
+                    {
+                        await WriteResponseMessageAsync(
+                            output,
+                            outputGate,
+                            response,
+                            serverCancellation).ConfigureAwait(false);
+                    }
                 }
                 finally
                 {
@@ -388,10 +449,68 @@ internal sealed class LspServer : IDisposable
                 }
             }
         }
+        catch
+        {
+            exitCancellation.Cancel();
+            throw;
+        }
         finally
         {
             while (reader.TryRead(out var pending))
                 ReleaseInboundMessage(pending);
+        }
+    }
+
+    private async Task DrainServerNotificationsAsync(
+        ChannelReader<JsonObject> notifications,
+        Stream output,
+        SemaphoreSlim outputGate,
+        CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await foreach (var notification in notifications
+                .ReadAllAsync(cancellation.Token)
+                .ConfigureAwait(false))
+            {
+                await WriteServerNotificationAsync(
+                    output,
+                    outputGate,
+                    notification,
+                    cancellation.Token).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            cancellation.Cancel();
+            throw;
+        }
+    }
+
+    private async Task DrainServerResponsesAsync(
+        ChannelReader<JsonObject> responses,
+        Stream output,
+        SemaphoreSlim outputGate,
+        CancellationTokenSource exitCancellation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var response in responses
+                .ReadAllAsync(cancellationToken)
+                .ConfigureAwait(false))
+            {
+                await WriteResponseMessageAsync(
+                    output,
+                    outputGate,
+                    response,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            exitCancellation.Cancel();
+            throw;
         }
     }
 
@@ -459,6 +578,29 @@ internal sealed class LspServer : IDisposable
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return false;
+        }
+    }
+
+    private static JsonObject? CreateServerBusyResponse(string payload)
+    {
+        try
+        {
+            using var document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("method", out var method)
+                || method.ValueKind != JsonValueKind.String
+                || !root.TryGetProperty("id", out var requestId)
+                || !LspProtocol.TryParseRequestId(payload, requestId, out var id, out _))
+            {
+                return null;
+            }
+
+            return Error(id, JsonRpcServerBusyCode, JsonRpcServerBusyMessage);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return null;
         }
     }
 
@@ -749,10 +891,14 @@ internal sealed class LspServer : IDisposable
     }
 
     private JsonArray WorkspaceSymbol(JsonElement root) =>
-        CreateWorkspaceSymbolResponse(root, CancellationToken.None).FinalItems;
+        CreateWorkspaceSymbolResponse(
+            root,
+            createPartialItems: false,
+            CancellationToken.None).FinalItems;
 
     private SymbolResponse CreateWorkspaceSymbolResponse(
         JsonElement root,
+        bool createPartialItems,
         CancellationToken cancellationToken)
     {
         var query = GetString(root, "params", "query");
@@ -767,6 +913,15 @@ internal sealed class LspServer : IDisposable
             : _reader.SearchSymbols(query, checked(limit + 1));
         var truncated = candidates.Count > limit;
         var symbols = candidates.Take(limit).ToList();
+        if (createPartialItems)
+        {
+            return new SymbolResponse(
+                [],
+                EnumerateWorkspaceSymbolItems(symbols, cancellationToken),
+                symbols.Count,
+                truncated);
+        }
+
         var identifiers = new (int Line, int StartColumn, int EndColumn)[symbols.Count];
         var pathComparer = _pathStringComparison == StringComparison.OrdinalIgnoreCase
             ? StringComparer.OrdinalIgnoreCase
@@ -791,7 +946,36 @@ internal sealed class LspServer : IDisposable
             array.Add((JsonNode)ToWorkspaceSymbol(symbols[index], identifiers[index]));
         }
 
-        return new SymbolResponse(array, array, array.Count, truncated);
+        return new SymbolResponse(array, [], array.Count, truncated);
+    }
+
+    private IEnumerable<JsonNode> EnumerateWorkspaceSymbolItems(
+        IReadOnlyList<SymbolResult> symbols,
+        CancellationToken cancellationToken)
+    {
+        var pathComparer = _pathStringComparison == StringComparison.OrdinalIgnoreCase
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        var pathContexts = new Dictionary<
+            string,
+            (string? ResolvedPath, Dictionary<int, string?> LineCache)>(pathComparer);
+        foreach (var symbol in symbols)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!pathContexts.TryGetValue(symbol.Path, out var context))
+            {
+                context = (
+                    TryResolveIndexedFilePath(symbol.Path, out var path) ? path : null,
+                    new Dictionary<int, string?>());
+                pathContexts.Add(symbol.Path, context);
+            }
+
+            var identifier = GetSymbolIdentifierPosition(
+                symbol,
+                context.ResolvedPath,
+                context.LineCache);
+            yield return ToWorkspaceSymbol(symbol, identifier);
+        }
     }
 
     private JsonArray DocumentSymbol(JsonElement root) =>
@@ -824,17 +1008,13 @@ internal sealed class LspServer : IDisposable
 
         if (createPartialItems)
         {
-            var partialItems = new JsonArray();
-            var lineCache = new Dictionary<int, string?>();
-            foreach (var symbol in symbols)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                partialItems.Add((JsonNode)ToDocumentSymbolInformation(document, symbol, lineCache));
-            }
-
             Activity.Current?.SetTag("lsp.document_symbols.returned_root_count", 0);
-            Activity.Current?.SetTag("lsp.document_symbols.returned_partial_count", partialItems.Count);
-            return new SymbolResponse([], partialItems, partialItems.Count, materializationTruncated);
+            Activity.Current?.SetTag("lsp.document_symbols.returned_partial_count", symbols.Count);
+            return new SymbolResponse(
+                [],
+                EnumerateDocumentSymbolItems(document, symbols, cancellationToken),
+                symbols.Count,
+                materializationTruncated);
         }
 
         var tree = BuildDocumentSymbolTree(document, symbols, cancellationToken);
@@ -844,6 +1024,19 @@ internal sealed class LspServer : IDisposable
             [],
             Math.Max(0, symbols.Count - tree.RemovedCount),
             materializationTruncated || tree.RemovedCount > 0);
+    }
+
+    private IEnumerable<JsonNode> EnumerateDocumentSymbolItems(
+        IndexedDocumentContext document,
+        IReadOnlyList<SymbolResult> symbols,
+        CancellationToken cancellationToken)
+    {
+        var lineCache = new Dictionary<int, string?>();
+        foreach (var symbol in symbols)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return ToDocumentSymbolInformation(document, symbol, lineCache);
+        }
     }
 
     private DocumentSymbolTreeResult BuildDocumentSymbolTree(
@@ -890,12 +1083,16 @@ internal sealed class LspServer : IDisposable
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            BeforeSymbolRequestForTesting?.Invoke(cancellationToken);
             var response = documentSymbols
                 ? CreateDocumentSymbolResponse(
                     root,
                     createPartialItems: partialResultToken != null,
                     cancellationToken)
-                : CreateWorkspaceSymbolResponse(root, cancellationToken);
+                : CreateWorkspaceSymbolResponse(
+                    root,
+                    createPartialItems: partialResultToken != null,
+                    cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
             var truncated = response.Truncated;
@@ -907,6 +1104,7 @@ internal sealed class LspServer : IDisposable
                     partialResultToken,
                     workDoneToken,
                     response.PartialItems,
+                    response.ReturnedCount,
                     cancellationToken);
                 emittedCount = emission.EmittedCount;
                 truncated |= emission.Truncated;
@@ -966,18 +1164,18 @@ internal sealed class LspServer : IDisposable
         Action<JsonObject> outbound,
         JsonNode partialResultToken,
         JsonNode? workDoneToken,
-        JsonArray items,
+        IEnumerable<JsonNode> items,
+        int totalCount,
         CancellationToken cancellationToken)
     {
         var emittedCount = 0;
-        var itemIndex = 0;
         var chunk = new JsonArray();
-        while (itemIndex < items.Count)
+        foreach (var item in items)
         {
             if (cancellationToken.IsCancellationRequested)
                 return new PartialResultEmission(emittedCount, false, true);
 
-            chunk.Add(items[itemIndex]?.DeepClone());
+            chunk.Add(item);
             var measuredNotification = CreateProgressNotification(
                 partialResultToken,
                 chunk.DeepClone());
@@ -986,21 +1184,25 @@ internal sealed class LspServer : IDisposable
             if (exceedsChunkBudget)
             {
                 chunk.RemoveAt(chunk.Count - 1);
-                if (chunk.Count == 0)
-                    return new PartialResultEmission(emittedCount, true, false);
+                if (chunk.Count > 0)
+                {
+                    EmitPartialResultChunk(
+                        outbound,
+                        partialResultToken,
+                        workDoneToken,
+                        chunk,
+                        ref emittedCount,
+                        totalCount);
+                }
 
-                EmitPartialResultChunk(
-                    outbound,
-                    partialResultToken,
-                    workDoneToken,
-                    chunk,
-                    ref emittedCount,
-                    items.Count);
                 chunk = [];
-                continue;
+                chunk.Add(item);
+                measuredNotification = CreateProgressNotification(
+                    partialResultToken,
+                    chunk.DeepClone());
+                if (MeasureJsonUtf8Bytes(measuredNotification) > MaxSymbolProgressChunkBytes)
+                    return new PartialResultEmission(emittedCount, true, false);
             }
-
-            itemIndex++;
         }
 
         if (chunk.Count > 0)
@@ -1011,9 +1213,9 @@ internal sealed class LspServer : IDisposable
                 workDoneToken,
                 chunk,
                 ref emittedCount,
-                items.Count);
+                totalCount);
         }
-        else if (items.Count == 0 && workDoneToken != null)
+        else if (totalCount == 0 && workDoneToken != null)
         {
             outbound(CreateProgressNotification(
                 workDoneToken,
@@ -3086,26 +3288,47 @@ internal sealed class LspServer : IDisposable
     private static LspMessageReadDiagnostic ToServerDiagnostic(LspProtocol.ReadDiagnostic diagnostic)
         => new(diagnostic.Code, diagnostic.Message, diagnostic.ContentLength, diagnostic.MaxContentLength);
 
-    private async Task WriteResponseMessageAsync(Stream output, JsonObject response, CancellationToken cancellationToken)
+    private async Task WriteResponseMessageAsync(
+        Stream output,
+        SemaphoreSlim outputGate,
+        JsonObject response,
+        CancellationToken cancellationToken)
     {
-        var payload = response.ToJsonString(_jsonOptions);
-        if (await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
-            return;
+        await outputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var payload = response.ToJsonString(_jsonOptions);
+            if (await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
+                return;
 
-        var id = response["id"]?.DeepClone();
-        var errorPayload = Error(id, JsonRpcInternalErrorCode, "Response too large").ToJsonString(_jsonOptions);
-        if (!await LspProtocol.TryWriteMessageAsync(output, errorPayload, cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException("LSP response error exceeded the response frame byte limit.");
+            var id = response["id"]?.DeepClone();
+            var errorPayload = Error(id, JsonRpcInternalErrorCode, "Response too large").ToJsonString(_jsonOptions);
+            if (!await LspProtocol.TryWriteMessageAsync(output, errorPayload, cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("LSP response error exceeded the response frame byte limit.");
+        }
+        finally
+        {
+            outputGate.Release();
+        }
     }
 
     private async Task WriteServerNotificationAsync(
         Stream output,
+        SemaphoreSlim outputGate,
         JsonObject notification,
         CancellationToken cancellationToken)
     {
-        var payload = notification.ToJsonString(_jsonOptions);
-        if (!await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException("LSP server notification exceeded the response frame byte limit.");
+        await outputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var payload = notification.ToJsonString(_jsonOptions);
+            if (!await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("LSP server notification exceeded the response frame byte limit.");
+        }
+        finally
+        {
+            outputGate.Release();
+        }
     }
 
     internal static void WriteMessage(Stream output, string payload) =>
