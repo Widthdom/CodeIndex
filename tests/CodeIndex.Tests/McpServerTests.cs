@@ -1642,6 +1642,130 @@ public sealed class Caller
         Assert.Equal("text/x-csharp", resource["mimeType"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void ResourcesTemplatesList_ResolvesExactIndexedPathWithoutEnumeration_Issue4722()
+    {
+        InsertIndexedFile("src/direct template#?.cs", "csharp", "direct template content");
+
+        var templates = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"resources/templates/list","params":{}}""")!)!;
+        var template = Assert.Single(templates["result"]!["resourceTemplates"]!.AsArray())!;
+
+        Assert.Equal("indexed-file", template["name"]!.GetValue<string>());
+        Assert.Equal("cdidx://file-path/{path}", template["uriTemplate"]!.GetValue<string>());
+
+        var read = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file-path/src%2Fdirect%20template%23%3F.cs"}}""")!)!;
+        Assert.Equal(
+            "direct template content",
+            read["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            "cdidx://file/src/direct%20template%23%3F.cs",
+            read["result"]!["contents"]![0]!["uri"]!.GetValue<string>());
+
+        var missing = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"cdidx://file-path/src%2Fdirect-missing.cs"}}""")!)!;
+        Assert.Equal(-32602, missing["error"]!["code"]!.GetValue<int>());
+        Assert.Contains(
+            "Resource not found",
+            missing["error"]!["message"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
+        var traversal = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"cdidx://file-path/..%2Fsrc%2Fdirect%20template%23%3F.cs"}}""")!)!;
+        Assert.Equal(-32602, traversal["error"]!["code"]!.GetValue<int>());
+        Assert.Contains(
+            "Invalid resource uri",
+            traversal["error"]!["message"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
+        var canonicalEncodedSeparator = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":5,"method":"resources/read","params":{"uri":"cdidx://file/src%2Fdirect%20template%23%3F.cs"}}""")!)!;
+        Assert.Equal(-32602, canonicalEncodedSeparator["error"]!["code"]!.GetValue<int>());
+        Assert.Contains(
+            "Invalid resource uri",
+            canonicalEncodedSeparator["error"]!["message"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResourcesList_FiltersPathLanguageAndGeneratedFiles_Issue4722()
+    {
+        InsertIndexedFile("src/filtered/keep.cs", "csharp", "keep");
+        InsertIndexedFile("src/filtered/generated.g.cs", "csharp", "generated", generated: true);
+        InsertIndexedFile("src/filtered/skip.txt", "text", "skip");
+        InsertIndexedFile("other/filtered/skip.cs", "csharp", "skip");
+
+        JsonNode List(bool includeGenerated)
+            => _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = includeGenerated ? 2 : 1,
+                ["method"] = "resources/list",
+                ["params"] = new JsonObject
+                {
+                    ["path"] = new JsonArray("src/filtered"),
+                    ["lang"] = "cs",
+                    ["includeGenerated"] = includeGenerated,
+                },
+            })!;
+
+        var defaultNames = List(includeGenerated: false)["result"]!["resources"]!.AsArray()
+            .Select(resource => resource!["name"]!.GetValue<string>())
+            .ToArray();
+        var generatedNames = List(includeGenerated: true)["result"]!["resources"]!.AsArray()
+            .Select(resource => resource!["name"]!.GetValue<string>())
+            .ToArray();
+
+        Assert.Equal(["src/filtered/keep.cs"], defaultNames);
+        Assert.Equal(
+            ["src/filtered/generated.g.cs", "src/filtered/keep.cs"],
+            generatedNames.Order(StringComparer.Ordinal).ToArray());
+
+        var generatedRead = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"cdidx://file/src/filtered/generated.g.cs","includeGenerated":true}}""")!)!;
+        Assert.Equal(
+            "generated",
+            generatedRead["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ResourcesList_InvalidFiltersReturnBoundedInvalidParams_Issue4722()
+    {
+        var tooManyPaths = new JsonArray(
+            Enumerable.Range(0, McpServer.MaxResourceListPathFilterCount + 1)
+                .Select(index => (JsonNode?)$"src/{index}")
+                .ToArray());
+        (JsonObject Params, string Parameter)[] cases =
+        [
+            (new JsonObject { ["path"] = 42 }, "path"),
+            (new JsonObject { ["path"] = new string('x', McpServer.MaxResourceListPathFilterChars + 1) }, "path"),
+            (new JsonObject { ["path"] = new string('*', McpServer.MaxResourceListPathFilterWildcards + 1) }, "path"),
+            (new JsonObject { ["path"] = tooManyPaths }, "path"),
+            (new JsonObject { ["lang"] = true }, "lang"),
+            (new JsonObject { ["lang"] = "-" }, "lang"),
+            (new JsonObject { ["lang"] = "." }, "lang"),
+            (new JsonObject { ["includeGenerated"] = "true" }, "includeGenerated"),
+        ];
+
+        foreach (var (listParams, expectedParameter) in cases)
+        {
+            var response = _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "resources/list",
+                ["params"] = listParams,
+            })!;
+
+            Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+            var data = response["error"]!["data"]!;
+            Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+            Assert.Equal("resource_filter_invalid", data["reason"]!.GetValue<string>());
+            Assert.Equal(expectedParameter, data["parameter"]!.GetValue<string>());
+        }
+    }
+
     [Theory]
     [InlineData("-1")]
     [InlineData("not-a-cursor")]
@@ -1774,7 +1898,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void ResourcesList_CursorReturnsDeepPage_Issue3781()
+    public void ResourcesList_CursorReturnsDeepPageAndRejectsFilterChanges_Issue3781_Issue4722()
     {
         var writer = new DbWriter(_db.Connection);
         using var transaction = writer.BeginTransaction();
@@ -1796,7 +1920,10 @@ public sealed class Caller
             ["jsonrpc"] = "2.0",
             ["id"] = 1,
             ["method"] = "resources/list",
-            ["params"] = new JsonObject(),
+            ["params"] = new JsonObject
+            {
+                ["lang"] = "cs",
+            },
         };
 
         var firstResponse = _server.HandleMessage(firstRequest)!;
@@ -1810,11 +1937,24 @@ public sealed class Caller
             ["params"] = new JsonObject
             {
                 ["cursor"] = cursor,
+                ["lang"] = "csharp",
             },
         };
 
         var secondResponse = _server.HandleMessage(secondRequest)!;
         var secondResources = secondResponse["result"]!["resources"]!.AsArray();
+        var changedFilterResponse = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 3,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = cursor,
+                ["lang"] = "csharp",
+                ["path"] = "zz",
+            },
+        })!;
 
         Assert.Equal(200, firstResources.Count);
         Assert.Equal(McpServer.MaxResourceListCursorChars, cursor.Length);
@@ -1826,6 +1966,11 @@ public sealed class Caller
         Assert.Contains(secondResources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00199.cs");
         var firstNames = firstResources.Select(resource => resource!["name"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
         Assert.DoesNotContain(secondResources, resource => firstNames.Contains(resource!["name"]!.GetValue<string>()));
+        Assert.Equal(-32602, changedFilterResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(
+            "resources_list_filters_changed",
+            changedFilterResponse["error"]!["data"]!["reason"]!.GetValue<string>());
+        Assert.True(changedFilterResponse["error"]!["data"]!["restart_required"]!.GetValue<bool>());
     }
 
     [Fact]
