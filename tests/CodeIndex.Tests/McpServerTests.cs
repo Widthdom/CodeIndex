@@ -1645,27 +1645,46 @@ public sealed class Caller
     [Fact]
     public void ResourcesTemplatesList_ResolvesExactIndexedPathWithoutEnumeration_Issue4722()
     {
-        InsertIndexedFile("src/direct template.cs", "csharp", "direct template content");
+        InsertIndexedFile("src/direct template#?.cs", "csharp", "direct template content");
 
         var templates = _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":1,"method":"resources/templates/list","params":{}}""")!)!;
         var template = Assert.Single(templates["result"]!["resourceTemplates"]!.AsArray())!;
 
         Assert.Equal("indexed-file", template["name"]!.GetValue<string>());
-        Assert.Equal("cdidx://file/{+path}", template["uriTemplate"]!.GetValue<string>());
+        Assert.Equal("cdidx://file-path/{path}", template["uriTemplate"]!.GetValue<string>());
 
         var read = _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file/src/direct%20template.cs"}}""")!)!;
+            """{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file-path/src%2Fdirect%20template%23%3F.cs"}}""")!)!;
         Assert.Equal(
             "direct template content",
             read["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            "cdidx://file/src/direct%20template%23%3F.cs",
+            read["result"]!["contents"]![0]!["uri"]!.GetValue<string>());
 
         var missing = _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"cdidx://file/src/direct-missing.cs"}}""")!)!;
+            """{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"cdidx://file-path/src%2Fdirect-missing.cs"}}""")!)!;
         Assert.Equal(-32602, missing["error"]!["code"]!.GetValue<int>());
         Assert.Contains(
             "Resource not found",
             missing["error"]!["message"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
+        var traversal = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"cdidx://file-path/..%2Fsrc%2Fdirect%20template%23%3F.cs"}}""")!)!;
+        Assert.Equal(-32602, traversal["error"]!["code"]!.GetValue<int>());
+        Assert.Contains(
+            "Invalid resource uri",
+            traversal["error"]!["message"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
+        var canonicalEncodedSeparator = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":5,"method":"resources/read","params":{"uri":"cdidx://file/src%2Fdirect%20template%23%3F.cs"}}""")!)!;
+        Assert.Equal(-32602, canonicalEncodedSeparator["error"]!["code"]!.GetValue<int>());
+        Assert.Contains(
+            "Invalid resource uri",
+            canonicalEncodedSeparator["error"]!["message"]!.GetValue<string>(),
             StringComparison.Ordinal);
     }
 

@@ -4273,10 +4273,10 @@ public partial class McpServer : IDisposable
             {
                 new JsonObject
                 {
-                    ["uriTemplate"] = "cdidx://file/{+path}",
+                    ["uriTemplate"] = "cdidx://file-path/{path}",
                     ["name"] = "indexed-file",
                     ["title"] = "Indexed repository file",
-                    ["description"] = "Read one indexed, non-generated file by its exact repository-relative path. The reserved URI-template expansion preserves path separators; resources/read rejects absolute, traversal, backslash, and encoded-separator paths.",
+                    ["description"] = "Read one indexed, non-generated file by its exact repository-relative path. The template-only file-path resolver decodes the URI-template value, validates it as a relative path, and returns the canonical cdidx://file resource identity.",
                 },
             },
         });
@@ -5547,13 +5547,25 @@ public partial class McpServer : IDisposable
         path = string.Empty;
         if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed)
             || !string.Equals(parsed.Scheme, "cdidx", StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(parsed.Host, "file", StringComparison.OrdinalIgnoreCase)
             || !TryExtractRawResourcePath(uri, out var rawPath))
         {
             return false;
         }
 
-        if (!PathUriNormalizer.TryDecodeRelativeUriPath(rawPath, allowBackslash: false, out var decoded))
+        var isCanonicalFile = string.Equals(parsed.Host, "file", StringComparison.OrdinalIgnoreCase);
+        var isTemplateFilePath = string.Equals(parsed.Host, "file-path", StringComparison.OrdinalIgnoreCase);
+        if (!isCanonicalFile && !isTemplateFilePath)
+            return false;
+        if (isTemplateFilePath
+            && (!string.IsNullOrEmpty(parsed.Query) || !string.IsNullOrEmpty(parsed.Fragment)))
+        {
+            return false;
+        }
+
+        var decodedSuccessfully = isTemplateFilePath
+            ? PathUriNormalizer.TryDecodeTemplateRelativeUriPath(rawPath, out var decoded)
+            : PathUriNormalizer.TryDecodeRelativeUriPath(rawPath, allowBackslash: false, out decoded);
+        if (!decodedSuccessfully)
             return false;
 
         path = decoded;
