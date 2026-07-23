@@ -6,6 +6,7 @@ using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using ExtractorPluginRegistry = CodeIndex.Indexer.Extensibility.ExtractorPluginRegistry;
 
 namespace CodeIndex.Tests;
 
@@ -5622,6 +5623,45 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_MissingDefinitionPreservesWorkspacePluginLanguageKey_Issue4727()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                _writer.SetMeta(DbContext.IndexedProjectRootMetaKey, _dbDir);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    _dbDir,
+                    new HyphenatedWorkspaceReferenceExtractor());
+                InsertManualReference(
+                    "plugins/evidence.custom",
+                    HyphenatedWorkspaceReferenceExtractor.LanguageKey,
+                    "function",
+                    "PluginCaller",
+                    "MissingPluginDefinitionIssue4727",
+                    "call");
+
+                var analysis = _reader.AnalyzeSymbol("MissingPluginDefinitionIssue4727", limit: 5);
+
+                Assert.Empty(analysis.Definitions);
+                Assert.Equal(HyphenatedWorkspaceReferenceExtractor.LanguageKey, analysis.GraphLanguage);
+                Assert.Equal(
+                    [HyphenatedWorkspaceReferenceExtractor.LanguageKey],
+                    analysis.GraphLanguageCandidates);
+                Assert.Equal("graph_evidence", analysis.GraphLanguageSource);
+                Assert.Equal("inferred_consistent", analysis.GraphLanguageConfidence);
+                Assert.False(analysis.GraphLanguageConflict);
+                Assert.True(analysis.GraphSupported);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
     public void AnalyzeSymbol_PrefersExactDefinitionAsPrimaryAnchorWhenSubstringMatchesOverlap()
     {
         InsertIndexedFile("src/Services/ILoggerService.cs", "csharp",
@@ -8214,6 +8254,19 @@ public partial class DbReaderTests : IDisposable
 
     private void StampWorkspacePathCaseSensitive(bool pathCaseSensitive)
         => _writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, pathCaseSensitive.ToString());
+
+    private sealed class HyphenatedWorkspaceReferenceExtractor : CodeIndex.Indexer.Extensibility.IReferenceExtractor
+    {
+        internal const string LanguageKey = "my-lang";
+
+        public string Language => LanguageKey;
+
+        public IReadOnlyList<ReferenceRecord> Extract(
+            long fileId,
+            string source,
+            CodeIndex.Indexer.Extensibility.ExtractionContext context)
+            => [];
+    }
 
     private static SqliteConnection CreateLegacyReferenceConnection(string legacyPath)
     {

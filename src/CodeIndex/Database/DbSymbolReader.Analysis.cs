@@ -312,7 +312,7 @@ public partial class DbReader
                 .Concat(callers.Select(caller => caller.Lang))
                 .Concat(callees.Select(callee => callee.Lang))
                 .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
-                .Select(candidate => NormalizeQueryLanguage(candidate) ?? candidate!)
+                .Select(candidate => NormalizeGraphEvidenceLanguage(candidate!))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(candidate => candidate, StringComparer.Ordinal)
                 .ToList();
@@ -408,6 +408,14 @@ public partial class DbReader
         };
         txn.Commit();
         return result;
+    }
+
+    private string NormalizeGraphEvidenceLanguage(string language)
+    {
+        var storedLanguage = language.Trim().ToLowerInvariant();
+        return GetWorkspaceSupportedReferenceLanguages().Contains(storedLanguage, StringComparer.Ordinal)
+            ? storedLanguage
+            : NormalizeQueryLanguage(storedLanguage) ?? storedLanguage;
     }
 
     /// <summary>

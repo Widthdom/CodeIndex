@@ -876,6 +876,64 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_GraphFieldsRetainInferredLanguageProvenance_Issue4727()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_graph_fields_4727");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/EvidenceCaller.cs",
+                    Lang = "csharp",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "MissingDefinitionIssue4727",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 28,
+                        Context = "public void Run() => MissingDefinitionIssue4727();",
+                        ContainerKind = "function",
+                        ContainerName = "Run",
+                    },
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["MissingDefinitionIssue4727", "--db", dbPath, "--json", "--fields", "graph"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.Equal("graph_evidence", json.GetProperty("graph_language_source").GetString());
+            Assert.Equal("inferred_consistent", json.GetProperty("graph_language_confidence").GetString());
+            Assert.Equal(
+                ["csharp"],
+                json.GetProperty("graph_language_candidates").EnumerateArray().Select(item => item.GetString()));
+            Assert.False(json.GetProperty("graph_language_conflict").GetBoolean());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_JsonWithoutBody_OmitsDefinitionContent_Issue3913()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_json_omits_content");
