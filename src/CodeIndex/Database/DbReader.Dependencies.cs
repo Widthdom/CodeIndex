@@ -966,6 +966,7 @@ public partial class DbReader
             suppressDependencyNoise,
             "cycleDependency");
         sql += @"
+                ORDER BY source_path, target_path
                 LIMIT @limit
             ),
             candidate_symbols AS (

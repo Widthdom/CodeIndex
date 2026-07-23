@@ -3954,7 +3954,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_DepsCyclesUsesGraphBudgetBeyondDisplayLimit_Issue3185()
+    public void ToolsCall_DepsCyclesUsesStableCursorPagination_Issues3185And4731()
     {
         var writer = new DbWriter(_db.Connection);
         var highTargetId = InsertDependencyFile(writer, "src/HighTarget.cs");
@@ -3982,14 +3982,25 @@ public partial class McpServerTests
         var nextStepFlags = structured["next_step_flags"]!.AsArray()
             .Select(flag => flag!.GetValue<string>())
             .ToArray();
+        var cursor = structured["next_cursor"]!.GetValue<string>();
 
         Assert.Equal(1, structured["count"]!.GetValue<int>());
-        Assert.Equal(2, nodes.Length);
-        Assert.All(nodes, node => Assert.StartsWith("src/Cycle", node));
-        Assert.Equal("partial_display_limit", structured["cycle_result_scope"]!.GetValue<string>());
-        Assert.Contains("limit=2", nextStepFlags);
-        Assert.Contains("path=<narrower-glob>", nextStepFlags);
+        Assert.Equal(["src/CycleA.cs", "src/CycleB.cs"], nodes);
+        Assert.True(structured["analysis_complete"]!.GetValue<bool>());
+        Assert.Equal("complete_graph_page", structured["cycle_result_scope"]!.GetValue<string>());
+        Assert.Contains($"cursor={cursor}", nextStepFlags);
         Assert.DoesNotContain(nextStepFlags, flag => flag.StartsWith("--", StringComparison.Ordinal));
+
+        var nextRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"limit":1,"lang":"csharp"}}}""")!;
+        nextRequest["params"]!["arguments"]!["cursor"] = cursor;
+        var nextResponse = _server.HandleMessage(nextRequest)!;
+        var nextStructured = nextResponse["result"]!["structuredContent"]!;
+        var nextCycle = Assert.Single(nextStructured["cycles"]!.AsArray());
+        var nextNodes = nextCycle!["nodes"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+
+        Assert.Equal(["src/CycleC.cs", "src/CycleD.cs"], nextNodes);
+        Assert.Equal(2, nextCycle["rank"]!.GetValue<int>());
+        Assert.False(nextStructured["has_more"]!.GetValue<bool>());
     }
 
     [Fact]

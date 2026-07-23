@@ -245,7 +245,7 @@ public partial class McpServer
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
                 "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "maxReferencesPerFile" or "debounce" or
                 "staleAfterSeconds" or
-                "guardWindow" or "maxOutputBytes" or "maxResponseBytes" => "integer",
+                "guardWindow" or "maxOutputBytes" or "maxResponseBytes" or "graphBudget" => "integer",
             "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or "tokenBoundary" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
