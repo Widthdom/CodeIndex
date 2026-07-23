@@ -106,14 +106,13 @@ internal static partial class JsonEnvelopeWrapper
             ? Path.Combine(".cdidx", "codeindex.db")
             : explicitDbPath!;
 
-        var originalOut = Console.Out;
         using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
         var stopwatch = Stopwatch.StartNew();
         int exitCode;
         JsonEnvelopeCaptureLimitExceededException? captureLimitExceeded = null;
         try
         {
-            Console.SetOut(captured);
+            using var outputScope = ScopedConsoleOutput.Redirect(captured);
             exitCode = runInner(innerArgs);
         }
         catch (JsonEnvelopeCaptureLimitExceededException ex)
@@ -124,7 +123,6 @@ internal static partial class JsonEnvelopeWrapper
         finally
         {
             stopwatch.Stop();
-            Console.SetOut(originalOut);
         }
 
         if (captureLimitExceeded is not null)
