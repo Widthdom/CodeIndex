@@ -216,7 +216,11 @@ internal static class WorkspaceCommandRunner
         }
 
         var dbPath = member?.DbPath ?? DbPathResolver.ResolveForIndex(root, explicitDbPath: null);
-        var state = new ActiveWorkspaceState(selectedName, root, dbPath);
+        var state = new ActiveWorkspaceState(
+            selectedName,
+            root,
+            dbPath,
+            ManifestMember: member is not null);
         try
         {
             ActiveWorkspace.Save(state);

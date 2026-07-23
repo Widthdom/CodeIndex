@@ -1375,11 +1375,18 @@ public class WorkspaceCommandRunnerTests
         var root = project.Root;
         var configHome = config.Root;
         var selectedRoot = Path.Combine(root, "apps", "App");
+        var longMemberPath = string.Join(
+            "/",
+            Enumerable.Repeat("segment1234567890", 8).Append("App"));
+        var longMemberRoot = Path.Combine(
+            root,
+            longMemberPath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(selectedRoot);
         Directory.CreateDirectory(Path.Combine(root, "tests", "App"));
-        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
+        Directory.CreateDirectory(longMemberRoot);
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), $$"""
             {
-              "members": ["apps/App", "tests/App"]
+              "members": ["apps/App", "tests/App", {{JsonSerializer.Serialize(longMemberPath)}}]
             }
             """);
         using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
@@ -1391,6 +1398,9 @@ public class WorkspaceCommandRunnerTests
         {
             Environment.CurrentDirectory = root;
             var runtimeSelectedRoot = Path.Combine(Environment.CurrentDirectory, "apps", "App");
+            var runtimeLongMemberRoot = Path.Combine(
+                Environment.CurrentDirectory,
+                longMemberPath.Replace('/', Path.DirectorySeparatorChar));
             var (escapingExitCode, _, escapingStderr) = ConsoleCapture.Capture(
                 () => WorkspaceCommandRunner.Run(["use", "apps/../../App"], _jsonOptions));
             Assert.Equal(CommandExitCodes.UsageError, escapingExitCode);
@@ -1407,8 +1417,19 @@ public class WorkspaceCommandRunnerTests
                 var state = ActiveWorkspace.Load();
                 Assert.NotNull(state);
                 Assert.Equal("apps/App", state.Name);
+                Assert.True(state.ManifestMember);
                 Assert.True(PathCasing.PathsEqual(runtimeSelectedRoot, state.Root));
             }
+
+            var (longExitCode, _, longStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["use", longMemberPath], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, longExitCode);
+            Assert.Empty(longStderr);
+            var longState = ActiveWorkspace.Load();
+            Assert.NotNull(longState);
+            Assert.Equal(longMemberPath, longState.Name);
+            Assert.True(longState.ManifestMember);
+            Assert.True(PathCasing.PathsEqual(runtimeLongMemberRoot, longState.Root));
 
             File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
                 {
@@ -1424,6 +1445,7 @@ public class WorkspaceCommandRunnerTests
             var singleState = ActiveWorkspace.Load();
             Assert.NotNull(singleState);
             Assert.Equal("apps/App", singleState.Name);
+            Assert.True(singleState.ManifestMember);
             Assert.True(PathCasing.PathsEqual(Environment.CurrentDirectory, singleState.Root));
 
             var (statusExitCode, statusStdout, statusStderr) = ConsoleCapture.Capture(
@@ -1437,6 +1459,58 @@ public class WorkspaceCommandRunnerTests
                     .GetProperty("active_workspace_status")
                     .GetProperty("status")
                     .GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Theory]
+    [InlineData("default")]
+    [InlineData("env")]
+    public void WorkspaceUse_RelativeReservedMemberPreservesManifestProvenance_Issue4726(
+        string reservedName)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_reserved_relative");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_reserved_relative_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        Directory.CreateDirectory(Path.Combine(root, reservedName));
+        Directory.CreateDirectory(Path.Combine(root, "other"));
+        File.WriteAllText(
+            Path.Combine(root, "cdidx.workspace.json"),
+            $$"""{ "members": [{{JsonSerializer.Serialize(reservedName)}}] }""");
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var (useExitCode, _, useStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["use", $"./{reservedName}"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, useExitCode);
+            Assert.Empty(useStderr);
+            var state = ActiveWorkspace.Load();
+            Assert.NotNull(state);
+            Assert.Equal(reservedName, state.Name);
+            Assert.True(state.ManifestMember);
+
+            File.WriteAllText(
+                Path.Combine(root, "cdidx.workspace.json"),
+                """{ "members": ["other"] }""");
+            var (statusExitCode, statusStdout, statusStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Empty(statusStderr);
+            using var document = JsonDocument.Parse(statusStdout);
+            var activeStatus = document.RootElement.GetProperty("active_workspace_status");
+            Assert.Equal("stale", activeStatus.GetProperty("status").GetString());
+            Assert.Equal("manifest_member_not_found", activeStatus.GetProperty("reason").GetString());
         }
         finally
         {

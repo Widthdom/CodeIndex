@@ -107,8 +107,9 @@ internal sealed record ActiveWorkspaceJsonResult : IVersionedJsonResult
         var result = From(state, path);
         if (state is null
             || manifest is null
-            || string.Equals(state.Name, "default", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(state.Name, "env", StringComparison.OrdinalIgnoreCase))
+            || (!state.ManifestMember
+                && (string.Equals(state.Name, "default", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(state.Name, "env", StringComparison.OrdinalIgnoreCase))))
         {
             return result;
         }
