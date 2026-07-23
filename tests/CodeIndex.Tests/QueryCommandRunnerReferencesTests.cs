@@ -4757,14 +4757,14 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlSemicolonlessSetAndDeclareKeepTempReads()
+    public void RunReferences_ExactJson_SqlSemicolonlessTempReadsShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_semicolonless_set_declare_temp");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_semicolonless_temp_reads");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "set-declare.sql"),
                 """
                 SELECT * FROM #future_temp;
                 SELECT id INTO #set_temp FROM users
@@ -4772,48 +4772,8 @@ public partial class QueryCommandRunnerTests
                 SELECT id INTO #declare_temp FROM users
                 DECLARE @first_id INT = (SELECT TOP (1) id FROM #declare_temp);
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (futureExitCode, futureStdout, futureStderr) = RunReferencesInProcess("#future_temp", dbPath);
-            var (setExitCode, setStdout, setStderr) = RunReferencesInProcess("#set_temp", dbPath);
-            var (declareExitCode, declareStdout, declareStderr) = RunReferencesInProcess("#declare_temp", dbPath);
-
-            using var futureDocument = ParseJsonOutput(futureStdout);
-            var setRows = ParseJsonLines(setStdout);
-            var declareRows = ParseJsonLines(declareStdout);
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-
-            Assert.Equal(CommandExitCodes.Success, futureExitCode);
-            Assert.Equal(string.Empty, futureStderr);
-            Assert.Equal(0, futureDocument.RootElement.GetProperty("count").GetInt32());
-
-            Assert.Equal(CommandExitCodes.Success, setExitCode);
-            Assert.Equal(string.Empty, setStderr);
-            Assert.Equal(2, setRows.Count);
-            Assert.All(setRows, row => Assert.Equal("#set_temp", row.RootElement.GetProperty("symbol_name").GetString()));
-
-            Assert.Equal(CommandExitCodes.Success, declareExitCode);
-            Assert.Equal(string.Empty, declareStderr);
-            Assert.Equal(2, declareRows.Count);
-            Assert.All(declareRows, row => Assert.Equal("#declare_temp", row.RootElement.GetProperty("symbol_name").GetString()));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlSemicolonlessIfAndWhileKeepTempReads()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_semicolonless_if_while_temp");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "if-while.sql"),
                 """
                 SELECT id INTO #if_temp FROM users
                 IF EXISTS (SELECT 1) SELECT * FROM #if_temp;
@@ -4822,24 +4782,40 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (ifExitCode, ifStdout, ifStderr) = RunReferencesInProcess("#if_temp", dbPath);
-            var (whileExitCode, whileStdout, whileStderr) = RunReferencesInProcess("#while_temp", dbPath);
-
-            var ifRows = ParseJsonLines(ifStdout);
-            var whileRows = ParseJsonLines(whileStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
-            Assert.Equal(CommandExitCodes.Success, ifExitCode);
-            Assert.Equal(string.Empty, ifStderr);
-            Assert.Equal(2, ifRows.Count);
-            Assert.All(ifRows, row => Assert.Equal("#if_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+            AssertNoRows("sql/set-declare.sql", "#future_temp");
+            AssertRows("sql/set-declare.sql", "#set_temp", 2);
+            AssertRows("sql/set-declare.sql", "#declare_temp", 2);
+            AssertRows("sql/if-while.sql", "#if_temp", 2);
+            AssertRows("sql/if-while.sql", "#while_temp", 2);
 
-            Assert.Equal(CommandExitCodes.Success, whileExitCode);
-            Assert.Equal(string.Empty, whileStderr);
-            Assert.Equal(2, whileRows.Count);
-            Assert.All(whileRows, row => Assert.Equal("#while_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+            void AssertRows(string path, string query, int expectedCount)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    query, dbPath, "sql", true, "--path", path);
+                var rows = ParseJsonLines(stdout);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(expectedCount, rows.Count);
+                Assert.All(rows, row => Assert.Equal(
+                    query,
+                    row.RootElement.GetProperty("symbol_name").GetString()));
+            }
+
+            void AssertNoRows(string path, string query)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    query, dbPath, "sql", true, "--path", path);
+                using var document = ParseJsonOutput(stdout);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+            }
         }
         finally
         {
