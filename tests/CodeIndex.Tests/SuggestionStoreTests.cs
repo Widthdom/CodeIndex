@@ -916,6 +916,66 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryTransitionStatus_RedactsBeforeSurrogateSafeAuditBounds_Issue4719()
+    {
+        const string actorSecret = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";
+        var record = MakeRecord("security", "csharp", "Boundary audit metadata must be redacted");
+        Assert.True(_store.TryAdd(record));
+        var actor = new string('x', 240) + $" Bearer {actorSecret}";
+        var reason = new string('y', SuggestionStore.MaxStatusChangeReasonLength - 1) + "😀";
+
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryTransitionStatus(
+                record.Id,
+                record.RevisionHash,
+                SuggestionStatus.WontFix,
+                actor,
+                reason,
+                out var transitioned));
+
+        Assert.NotNull(transitioned);
+        Assert.DoesNotContain(actorSecret, transitioned.StatusChangedBy, StringComparison.Ordinal);
+        Assert.True(transitioned.StatusChangedBy!.Length <= SuggestionStore.MaxStatusChangedByLength);
+        Assert.True(transitioned.StatusChangeReason!.Length <= SuggestionStore.MaxStatusChangeReasonLength);
+        Assert.False(char.IsHighSurrogate(transitioned.StatusChangeReason[^1]));
+        var persistedJson = File.ReadAllText(Path.Combine(_tempDir, "suggestions-codeindex.json"));
+        Assert.DoesNotContain(actorSecret, persistedJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_LocalDispositionSuppressesWithoutClaimingUpstreamSubmission_Issue4719()
+    {
+        var record = MakeRecord("bug", "csharp", "Locally disposed duplicate");
+        Assert.True(_store.TryAdd(record));
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryTransitionStatus(
+                record.Id,
+                record.RevisionHash,
+                SuggestionStatus.WontFix,
+                "maintainer",
+                null,
+                out _));
+        var callbackCalled = false;
+
+        var result = _store.TryAddAndSubmit(
+            MakeRecord("bug", "csharp", "Locally disposed duplicate"),
+            _ =>
+            {
+                callbackCalled = true;
+                return SuggestionStore.SubmitAttemptResult.Success("https://github.com/example/repo/issues/1");
+            });
+
+        Assert.False(result.IsNew);
+        Assert.False(result.AlreadySubmitted);
+        Assert.True(result.SubmissionSuppressed);
+        Assert.False(callbackCalled);
+        Assert.Null(result.UpstreamUrl);
+        Assert.Equal(SuggestionStatus.WontFix, result.Status);
+    }
+
+    [Fact]
     public void TryAdd_EditThenReAddOriginalContentAllocatesDistinctStableId_Issue4588()
     {
         var first = MakeRecord("bug", "csharp", "Original reusable content");

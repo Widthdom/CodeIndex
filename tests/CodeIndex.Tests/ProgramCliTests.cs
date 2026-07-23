@@ -1732,6 +1732,43 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_ExportRejectsProtectedDatabaseThroughDirectoryAlias_Issue4719()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add("output_format", "csharp", "Protect export source aliases", submitted: false);
+        File.WriteAllText(fixture.DbPath, "database sentinel", Encoding.UTF8);
+        var databaseDirectory = Path.GetDirectoryName(fixture.DbPath)!;
+        var aliasDirectory = fixture.GetPath("database-alias");
+        try
+        {
+            Directory.CreateSymbolicLink(aliasDirectory, databaseDirectory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var originalBytes = File.ReadAllBytes(fixture.DbPath);
+        try
+        {
+            var aliasPath = Path.Combine(aliasDirectory, Path.GetFileName(fixture.DbPath));
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([
+                "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown",
+                "--output", aliasPath, "--overwrite"
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("must not replace", stderr);
+            Assert.Equal(originalBytes, File.ReadAllBytes(fixture.DbPath));
+        }
+        finally
+        {
+            Directory.Delete(aliasDirectory);
+        }
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftOutputWritesJsonAndRejectsStoreTargets_Issue4719()
     {
         using var fixture = SuggestionFixture.Create();

@@ -252,7 +252,7 @@ public class SuggestionStore
             var index = records.FindIndex(record => string.Equals(record.Id, id, StringComparison.Ordinal));
             if (index < 0)
                 return MutationResult.NotFound;
-            if (HasUpstreamSubmission(records[index]))
+            if (!IsEditableDraft(records[index]))
                 return MutationResult.NotDraft;
             if (IsSubmissionInFlight(records[index]))
                 return MutationResult.SubmissionInFlight;
@@ -323,8 +323,8 @@ public class SuggestionStore
             record.PreviousStatus = record.Status;
             record.Status = targetStatus;
             record.StatusChangedAt = changedAt;
-            record.StatusChangedBy = NormalizeAuditValue(changedBy, MaxStatusChangedByLength) ?? "cdidx-cli";
-            record.StatusChangeReason = NormalizeAuditValue(reason, MaxStatusChangeReasonLength);
+            record.StatusChangedBy = string.IsNullOrWhiteSpace(changedBy) ? "cdidx-cli" : changedBy;
+            record.StatusChangeReason = reason;
             record.ResolvedAt = targetStatus == SuggestionStatus.ResolvedInUpstream ? changedAt : null;
             record = RedactRecordForPersistence(record);
             records[index] = record;
@@ -352,7 +352,7 @@ public class SuggestionStore
             var index = records.FindIndex(record => string.Equals(record.Id, id, StringComparison.Ordinal));
             if (index < 0)
                 return MutationResult.NotFound;
-            if (HasUpstreamSubmission(records[index]))
+            if (!IsEditableDraft(records[index]))
                 return MutationResult.NotDraft;
             if (IsSubmissionInFlight(records[index]))
                 return MutationResult.SubmissionInFlight;
@@ -394,7 +394,8 @@ public class SuggestionStore
         string? DuplicateOfHash = null,
         double? DuplicateScore = null,
         string? StoredHash = null,
-        string? StoredRevisionHash = null);
+        string? StoredRevisionHash = null,
+        bool SubmissionSuppressed = false);
 
     /// <summary>
     /// Result of a GitHub submission attempt.
@@ -493,7 +494,11 @@ public class SuggestionStore
             }
 
             var current = found!;
-            if (!alreadySubmitted && submitToGitHub != null && ShouldAttemptSubmit(current))
+            var submissionSuppressed = IsLocalDisposition(current);
+            if (!alreadySubmitted
+                && !submissionSuppressed
+                && submitToGitHub != null
+                && ShouldAttemptSubmit(current))
             {
                 var attemptedAt = GetUtcNow();
                 StampSubmitAttempt(current, attemptedAt, null, attemptedAt.Add(s_inFlightSubmitRetryDelay));
@@ -501,6 +506,7 @@ public class SuggestionStore
                 return new SubmitReservation(
                     isNew,
                     alreadySubmitted,
+                    submissionSuppressed,
                     current.Id,
                     current.RevisionHash,
                     current.Status,
@@ -517,6 +523,7 @@ public class SuggestionStore
             return new SubmitReservation(
                 isNew,
                 alreadySubmitted,
+                submissionSuppressed,
                 current.Id,
                 current.RevisionHash,
                 current.Status,
@@ -538,7 +545,8 @@ public class SuggestionStore
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore,
                 reservation.Id,
-                reservation.RevisionHash);
+                reservation.RevisionHash,
+                reservation.SubmissionSuppressed);
         }
 
         SubmitAttemptResult submitResult;
@@ -570,7 +578,8 @@ public class SuggestionStore
                     reservation.DuplicateOfHash,
                     reservation.DuplicateScore,
                     reservation.Id,
-                    reservation.RevisionHash);
+                    reservation.RevisionHash,
+                    reservation.SubmissionSuppressed);
             }
 
             var issueUrl = submitResult.IssueUrl;
@@ -589,7 +598,8 @@ public class SuggestionStore
                     reservation.DuplicateOfHash,
                     reservation.DuplicateScore,
                     found.Id,
-                    found.RevisionHash);
+                    found.RevisionHash,
+                    reservation.SubmissionSuppressed);
             }
 
             var persistedSubmitError = StampSubmitResult(found, submitResult);
@@ -606,7 +616,8 @@ public class SuggestionStore
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore,
                 found.Id,
-                found.RevisionHash);
+                found.RevisionHash,
+                reservation.SubmissionSuppressed);
         });
     }
 
@@ -1045,11 +1056,22 @@ public class SuggestionStore
     }
 
     private static bool HasUpstreamSubmission(SuggestionRecord record) =>
-        record.Status != SuggestionStatus.Draft
+        record.Status is SuggestionStatus.SubmittedPendingTriage
+            or SuggestionStatus.OpenInUpstream
+            or SuggestionStatus.ResolvedInUpstream
         || record.SubmittedToGitHub == true
         || record.UpstreamIssueNumber != null
         || !string.IsNullOrWhiteSpace(record.UpstreamUrl)
         || !string.IsNullOrWhiteSpace(record.GitHubIssueUrl);
+
+    private static bool IsLocalDisposition(SuggestionRecord record) =>
+        record.Status is SuggestionStatus.WontFix
+            or SuggestionStatus.Duplicate
+            or SuggestionStatus.Superseded;
+
+    private static bool IsEditableDraft(SuggestionRecord record) =>
+        record.Status == SuggestionStatus.Draft
+        && !HasUpstreamSubmission(record);
 
     private static bool HasUpstreamReference(SuggestionRecord record) =>
         (record.Status is SuggestionStatus.SubmittedPendingTriage
@@ -1391,11 +1413,13 @@ public class SuggestionStore
         var redactedToolInvocationContext = RedactNullable(record.ToolInvocationContext, out var toolInvocationTypes);
         var redactedSampledTitle = RedactNullable(record.SampledTitle, out var sampledTitleTypes);
         var redactedSampledTags = RedactArray(record.SampledTags, out var sampledTagTypes);
-        var redactedStatusChangedBy = RedactNullable(
-            NormalizeAuditValue(record.StatusChangedBy, MaxStatusChangedByLength),
+        var redactedStatusChangedBy = RedactAndBoundAuditValue(
+            record.StatusChangedBy,
+            MaxStatusChangedByLength,
             out var statusChangedByTypes);
-        var redactedStatusChangeReason = RedactNullable(
-            NormalizeAuditValue(record.StatusChangeReason, MaxStatusChangeReasonLength),
+        var redactedStatusChangeReason = RedactAndBoundAuditValue(
+            record.StatusChangeReason,
+            MaxStatusChangeReasonLength,
             out var statusChangeReasonTypes);
         var allTypes = descriptionTypes
             .Concat(contextTypes)
@@ -1473,12 +1497,26 @@ public class SuggestionStore
         return redacted;
     }
 
-    private static string? NormalizeAuditValue(string? value, int maxLength)
+    private static string? RedactAndBoundAuditValue(
+        string? value,
+        int maxLength,
+        out IReadOnlyCollection<string> redactedTypes)
     {
         var normalized = value?.Trim();
         if (string.IsNullOrWhiteSpace(normalized))
+        {
+            redactedTypes = Array.Empty<string>();
             return null;
-        return normalized.Length <= maxLength ? normalized : normalized[..maxLength];
+        }
+
+        var redacted = RedactSensitiveText(normalized, out redactedTypes);
+        if (redacted.Length <= maxLength)
+            return redacted;
+
+        var boundedLength = maxLength;
+        if (boundedLength > 0 && char.IsHighSurrogate(redacted[boundedLength - 1]))
+            boundedLength--;
+        return redacted[..boundedLength];
     }
 
     private static void WriteRedactionWarning(IReadOnlyCollection<string> redactedTypes)
@@ -1495,6 +1533,7 @@ public class SuggestionStore
     private sealed record SubmitReservation(
         bool IsNew,
         bool AlreadySubmitted,
+        bool SubmissionSuppressed,
         string Id,
         string RevisionHash,
         SuggestionStatus Status,

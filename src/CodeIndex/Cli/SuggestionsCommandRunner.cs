@@ -619,8 +619,10 @@ internal static class SuggestionsCommandRunner
         try
         {
             fullOutputPath = Path.GetFullPath(options.OutputPath!);
-            if (PathCasing.PathsEqual(fullOutputPath, suggestionStorePath)
-                || PathCasing.PathsEqual(fullOutputPath, databasePath))
+            if (IsProtectedSuggestionExportTarget(
+                    fullOutputPath,
+                    suggestionStorePath,
+                    databasePath))
             {
                 return WriteUsageError(
                     "--output must not replace the selected database or its suggestion store.",
@@ -689,6 +691,38 @@ internal static class SuggestionsCommandRunner
                 $"Wrote {recordCount} suggestion{(recordCount == 1 ? string.Empty : "s")} to {ConsoleUi.FormatBoundedValue(fullOutputPath!)} ({byteCount} bytes).");
         }
         return CommandExitCodes.Success;
+    }
+
+    private static bool IsProtectedSuggestionExportTarget(
+        string outputPath,
+        string suggestionStorePath,
+        string databasePath)
+    {
+        if (PathCasing.PathsEqual(outputPath, suggestionStorePath)
+            || PathCasing.PathsEqual(outputPath, databasePath))
+        {
+            return true;
+        }
+
+        var outputIoPath = LongPath.EnsureWindowsPrefix(outputPath);
+        if (!File.Exists(outputIoPath)
+            || !FileIndexer.TryGetFileIdentity(outputIoPath, out var outputIdentity))
+        {
+            return false;
+        }
+
+        return ProtectedPathHasIdentity(suggestionStorePath, outputIdentity)
+            || ProtectedPathHasIdentity(databasePath, outputIdentity);
+    }
+
+    private static bool ProtectedPathHasIdentity(
+        string protectedPath,
+        FileIndexer.FileIdentity outputIdentity)
+    {
+        var protectedIoPath = LongPath.EnsureWindowsPrefix(protectedPath);
+        return File.Exists(protectedIoPath)
+            && FileIndexer.TryGetFileIdentity(protectedIoPath, out var protectedIdentity)
+            && protectedIdentity == outputIdentity;
     }
 
     private static SuggestionStoreContext CreateStore(string? dbPath)
