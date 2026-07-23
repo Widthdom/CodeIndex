@@ -410,21 +410,42 @@ job:
 
 ```bash
 cdidx export codeindex.cdidx.zip
+cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
+cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
 cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
+cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --dry-run --limit 100
 ```
+
+Archive export accepts `--lang`, repeatable `--path` and `--exclude-path`,
+repeatable `--project`, optional `--solution`, and `--exclude-tests`. Requested
+paths and resolved project directories form one inclusive scope; language,
+exclusion, and test filters then narrow that scope. The exported SQLite
+snapshot contains only the retained files and their dependent chunks, symbols,
+references, and diagnostics, and is vacuumed before packaging. JSON output and
+`manifest.json` include the requested scope, resolved project paths, and source
+and exported file counts. An export without scope flags remains a full archive.
 
 The archive path is intended for trusted CodeIndex databases. Import validates
 that the embedded SQLite file is a CodeIndex DB before replacing the destination
 database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
 to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
 use the sibling project directory; other database paths fall back to the process
-current directory.
+current directory. `--dry-run` and its `--check` alias also compare an existing
+destination DB with the validated archive without replacing it. JSON
+`destination_delta.comparison` reports schema and count deltas plus bounded
+file, symbol, reference-edge, chunk, and metadata samples. Use
+`--limit <n<=10000>` and `--offset <n>` to page those samples. If the destination
+does not exist or cannot be read, `destination_delta` reports that state instead
+of claiming a comparison.
 
 Use `cdidx diff <db1> <db2> --detailed --json` to verify the restored index.
 Database identity is based on semantic index content: reference-line links are
 compared by their indexed path, line, and context rather than SQLite surrogate
 row IDs, so equivalent databases remain identical after rows are rehydrated.
+Detailed JSON also includes `references_only_in_left/right` and
+`chunks_only_in_left/right`. `--limit` bounds each difference family and
+`--offset` selects the page; `has_more` and `next_offset` indicate continuation.
 
 ## Flag compatibility and migrations
 
@@ -3513,20 +3534,39 @@ summary を出力します。filter 付き export では
 
 ```bash
 cdidx export codeindex.cdidx.zip
+cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
+cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
 cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
+cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --dry-run --limit 100
 ```
+
+archive export では `--lang`、繰り返し指定できる `--path` / `--exclude-path` /
+`--project`、任意の `--solution`、`--exclude-tests` を使えます。指定した path と
+解決した project directory を包含 scope とし、language、除外 path、test filter で
+さらに絞り込みます。出力する SQLite snapshot には残した file と、それに従属する
+chunk、symbol、reference、diagnostic だけを保持し、packaging 前に vacuum します。
+JSON output と `manifest.json` には指定 scope、解決済み project path、元と出力後の
+file count が含まれます。scope flag を指定しなければ従来どおり full archive です。
 
 archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
 SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。
 `--prune-paths` は import した `indexed_project_root` metadata を import 先 project root に書き換えます。
 `.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
 それ以外の database path では process current directory に fallback します。
+`--dry-run` と alias の `--check` は置換せず、既存 destination DB と検証済み archive を
+比較します。JSON の `destination_delta.comparison` には schema / count delta と、
+file、symbol、reference edge、chunk、metadata の bounded sample が含まれます。
+sample の paging には `--limit <n<=10000>` と `--offset <n>` を使います。destination が
+存在しない、または読み取れない場合は、比較済みとせずその状態を `destination_delta` に返します。
 
 復元した index の確認には `cdidx diff <db1> <db2> --detailed --json` を使います。
 database の同一性は semantic index content に基づきます。reference-line link は SQLite の
 surrogate row ID ではなく indexed path、line、context で比較されるため、row が再構築されても
-意味的に同等な database は identical のままです。
+意味的に同等な database は identical のままです。詳細 JSON には
+`references_only_in_left/right` と `chunks_only_in_left/right` も含まれます。
+`--limit` は difference family ごとの件数を制限し、`--offset` は page を選択します。
+続きがある場合は `has_more` と `next_offset` を返します。
 
 ## フラグ互換性と移行
 
