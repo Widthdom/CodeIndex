@@ -3874,14 +3874,14 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpPostfixNullForgivingBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
+    public void RunReferences_ExactJson_CSharpPostfixQueryTerminalsShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select_after_null_forgiving");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_postfix_query_terminals");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
+                Path.Combine(projectRoot, "src", "null-forgiving.cs"),
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -3915,20 +3915,56 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "increment.cs"),
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Sink
+                {
+                    public static Status Pick(object left, Status right) => right;
+                }
+
+                public sealed class Uses
+                {
+                    public Status Read(IEnumerable<object> items, int counter)
+                    {
+                        return Sink.Pick(from Status in items
+                                         let n = counter++
+                                         select(Status.Ready),
+                                         Status.Ready);
+                    }
+                }
+                """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            var rows = ParseJsonLines(stdout);
-            var row = Assert.Single(rows).RootElement;
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
-            Assert.Equal("Read", row.GetProperty("container_name").GetString());
-            Assert.Contains("Status.Ready", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+
+            AssertSingleReference("src/null-forgiving.cs");
+            AssertSingleReference("src/increment.cs");
+
+            void AssertSingleReference(string path)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    "Ready", dbPath, "csharp", true, "--path", path);
+                var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
+                Assert.Equal("Read", row.GetProperty("container_name").GetString());
+                Assert.Contains("Status.Ready", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+            }
         }
         finally
         {
@@ -5172,63 +5208,6 @@ public partial class QueryCommandRunnerTests
             var json = accountsRow.RootElement;
             Assert.Equal("accounts", json.GetProperty("symbol_name").GetString());
             Assert.Equal(14, json.GetProperty("line").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpPostfixIncrementBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select_after_postfix_increment");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public static class Sink
-                {
-                    public static Status Pick(object left, Status right) => right;
-                }
-
-                public sealed class Uses
-                {
-                    public Status Read(IEnumerable<object> items, int counter)
-                    {
-                        return Sink.Pick(from Status in items
-                                         let n = counter++
-                                         select(Status.Ready),
-                                         Status.Ready);
-                    }
-                }
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            var rows = ParseJsonLines(stdout);
-            var row = Assert.Single(rows).RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
-            Assert.Equal("Read", row.GetProperty("container_name").GetString());
-            Assert.Contains("Status.Ready", row.GetProperty("context").GetString(), StringComparison.Ordinal);
         }
         finally
         {

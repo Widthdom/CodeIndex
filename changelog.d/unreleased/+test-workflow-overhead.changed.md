@@ -21,7 +21,7 @@ affected:
 - **SQLite fixture cleanup releases pools only after a failure** — Seeded-file writes and clean database deletion no longer trigger unconditional process-wide pool clearing; Windows retries still release pools when a file is actually locked.
 - **Hook scheduling coverage uses a compact assembly** — Full-scan scheduling tests now stage the dedicated hook-isolation fixture instead of copying the much larger test assembly into a worker directory.
 - **Unix shell tests skip before Windows fixture setup** — Installer and container-entrypoint cases now skip during discovery on Windows instead of constructing temporary directories and returning from the test body.
-- **Production query boundaries reuse indexed workspaces** — Related C# order-by comma, ternary-operator, throw-expression, and parenthesized query-terminal cases now share one production CLI indexing subprocess per syntax family while retaining distinct assertions.
+- **Production query boundaries reuse indexed workspaces** — Related C# order-by comma, ternary-operator, throw-expression, parenthesized query-terminal, and postfix-boundary cases now share one production CLI indexing subprocess per syntax family while retaining distinct assertions.
 
 ## 日本語
 
@@ -31,4 +31,4 @@ affected:
 - **SQLite fixture cleanupは失敗後だけpoolを解放します** — seed fileのwriteと正常なdatabase削除ではprocess-wide pool clearを行わず、実際にfileがlockされたWindows retryでは引き続きpoolを解放します。
 - **hook scheduling coverageで小型assemblyを使います** — full-scan scheduling testは巨大なtest assemblyをworker directoryへcopyせず、専用のhook-isolation fixtureをstageします。
 - **Unix shell testはWindowsのfixture setup前にskipします** — installerとcontainer entrypointのcaseはtemporary directoryを作ってtest bodyからreturnせず、Windowsではdiscovery時にskipします。
-- **production query boundaryでindexed workspaceを再利用します** — 関連するC# order-by comma、ternary operator、throw-expression、parenthesized query-terminal caseは個別の構文assertionを保ちながら、構文familyごとにproduction CLI indexing subprocessを1回だけ共有します。
+- **production query boundaryでindexed workspaceを再利用します** — 関連するC# order-by comma、ternary operator、throw-expression、parenthesized query-terminal、postfix boundary caseは個別の構文assertionを保ちながら、構文familyごとにproduction CLI indexing subprocessを1回だけ共有します。
