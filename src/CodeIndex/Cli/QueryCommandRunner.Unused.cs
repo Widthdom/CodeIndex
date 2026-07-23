@@ -693,7 +693,7 @@ public static partial class QueryCommandRunner
         "likely_unused_private" => "Private symbols with no indexed references; usually the highest-signal unused candidates.",
         "maybe_unused_nonpublic" => "Internal, protected, or otherwise non-public symbols with no indexed references; review call paths and framework entry points before removal.",
         "public_or_exported_no_refs" => "Public or exported symbols with no indexed references; may still be external API surface.",
-        "reflection_or_config_suspect" => "Symbols with no indexed references that look reachable through reflection, serialization, contracts, config, metadata, generated code, documentation headings, test hooks, or binding conventions.",
+        "reflection_or_config_suspect" => "Symbols with no indexed references that look reachable through reflection, serialization, contracts, config, metadata, generated code, documentation syntax, test hooks, or binding conventions.",
         _ => "Unknown unused-symbol bucket.",
     };
 
