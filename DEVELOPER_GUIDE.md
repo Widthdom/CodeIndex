@@ -374,6 +374,11 @@ single JSON summary or structured error, while the tag file itself remains the
 artifact. The summary includes resolved output/database paths, tag/emitted/
 skipped counts, filters, and advertised metadata field names so editor
 integrations can validate filtered exports without parsing human output.
+`skip_reason_counts` is a bounded object with stable reason keys; every skipped
+candidate contributes to exactly one reason, and its values sum to
+`skipped_count`. Generated files follow the query-command contract: exclude by
+default, opt in with `--include-generated`, and report `unavailable` without
+referencing `files.generated` when a legacy database lacks that column.
 
 Interactive terminal controls are allowed only when stdout is not redirected or captured, terminal capability hints are present, and the environment has not opted out. Treat `TERM=dumb`, truthy `CI`, missing Unix terminal hints, `NO_COLOR`, and `CLICOLOR=0` as reasons to suppress ANSI/progress controls unless an explicitly human-facing override is documented for that control.
 
@@ -3290,6 +3295,11 @@ process-internal protocol のいずれかなので、それぞれの bounded ser
 structured error だけを含み、tags file 自体は artifact として残します。summary には解決済みの
 output / database path、tag / emitted / skipped counts、filters、metadata field names を含め、
 editor integration が human output を parse せず filtered export を検証できるようにします。
+`skip_reason_counts` は安定した reason key だけを持つ上限付き object です。skip された各候補は
+必ず1つの理由にだけ計上され、値の合計は `skipped_count` と一致します。generated file は
+query command と同じ contract に従い、既定で除外し、`--include-generated` で opt in します。
+legacy database に `files.generated` column がない場合はその column を参照せず
+`unavailable` と報告します。
 
 interactive terminal control は stdout が redirected / captured されておらず、terminal
 capability hint があり、environment が opt out していない場合にだけ許可します。`TERM=dumb`、
