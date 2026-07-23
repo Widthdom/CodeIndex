@@ -7,6 +7,8 @@ affected:
   - tests/CodeIndex.Tests/TestProjectHelper.cs
   - tests/CodeIndex.Tests/TestProjectHelperTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerFullScanTests.cs
+  - tests/CodeIndex.Tests/InstallScriptTests.cs
+  - tests/CodeIndex.Tests/ReleaseWorkflowDockerContractTests.cs
   - TESTING_GUIDE.md
 ---
 
@@ -17,6 +19,7 @@ affected:
 - **Temporary-project cleanup avoids an eager filesystem walk** — Clean fixtures now attempt recursive deletion directly, while attribute normalization and bounded Windows recovery remain available after a real deletion failure.
 - **SQLite fixture cleanup releases pools only after a failure** — Seeded-file writes and clean database deletion no longer trigger unconditional process-wide pool clearing; Windows retries still release pools when a file is actually locked.
 - **Hook scheduling coverage uses a compact assembly** — Full-scan scheduling tests now stage the dedicated hook-isolation fixture instead of copying the much larger test assembly into a worker directory.
+- **Unix shell tests skip before Windows fixture setup** — Installer and container-entrypoint cases now skip during discovery on Windows instead of constructing temporary directories and returning from the test body.
 
 ## 日本語
 
@@ -25,3 +28,4 @@ affected:
 - **temporary project cleanupの先行filesystem走査を省きました** — 正常なfixtureは直接recursive deleteを試し、実際に削除が失敗した場合はattribute正規化とWindows向けbounded recoveryを引き続き利用します。
 - **SQLite fixture cleanupは失敗後だけpoolを解放します** — seed fileのwriteと正常なdatabase削除ではprocess-wide pool clearを行わず、実際にfileがlockされたWindows retryでは引き続きpoolを解放します。
 - **hook scheduling coverageで小型assemblyを使います** — full-scan scheduling testは巨大なtest assemblyをworker directoryへcopyせず、専用のhook-isolation fixtureをstageします。
+- **Unix shell testはWindowsのfixture setup前にskipします** — installerとcontainer entrypointのcaseはtemporary directoryを作ってtest bodyからreturnせず、Windowsではdiscovery時にskipします。
