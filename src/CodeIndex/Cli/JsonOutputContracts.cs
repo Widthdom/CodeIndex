@@ -109,6 +109,31 @@ internal sealed record DoctorJsonResult(
     [property: JsonPropertyName("environment_inventory")] IReadOnlyList<EnvironmentVariableInventoryItem>? EnvironmentInventory,
     [property: JsonPropertyName("redaction")] DoctorRedactionJsonResult Redaction) : IVersionedJsonResult;
 
+internal sealed record LicenseJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("license")] LicenseTermsJsonResult License,
+    [property: JsonPropertyName("copyright")] string Copyright,
+    [property: JsonPropertyName("commercial_use")] LicenseCommercialUseJsonResult CommercialUse,
+    [property: JsonPropertyName("trademark")] LicenseTrademarkJsonResult Trademark,
+    [property: JsonPropertyName("documents")] IReadOnlyList<string> Documents) : IVersionedJsonResult;
+
+internal sealed record LicenseTermsJsonResult(
+    [property: JsonPropertyName("identifier")] string Identifier,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("future_license")] string FutureLicense,
+    [property: JsonPropertyName("controlling_file")] string ControllingFile);
+
+internal sealed record LicenseCommercialUseJsonResult(
+    [property: JsonPropertyName("non_competing_use_allowed")] bool NonCompetingUseAllowed,
+    [property: JsonPropertyName("competing_products_or_services_require_separate_agreement")] bool CompetingProductsOrServicesRequireSeparateAgreement,
+    [property: JsonPropertyName("summary")] string Summary);
+
+internal sealed record LicenseTrademarkJsonResult(
+    [property: JsonPropertyName("names")] IReadOnlyList<string> Names,
+    [property: JsonPropertyName("derivative_branding_allowed")] bool DerivativeBrandingAllowed,
+    [property: JsonPropertyName("endorsement_branding_allowed")] bool EndorsementBrandingAllowed,
+    [property: JsonPropertyName("summary")] string Summary);
+
 internal sealed record DoctorTerminalJsonResult(
     [property: JsonPropertyName("stdout_tty")] bool StdoutTty,
     [property: JsonPropertyName("stderr_tty")] bool StderrTty,
@@ -1074,6 +1099,10 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(EnvironmentVariableInventoryLocation))]
 [JsonSerializable(typeof(EnvironmentVariableInventorySummaryJsonResult))]
 [JsonSerializable(typeof(EnvironmentVariableInventorySummaryBucketJsonResult))]
+[JsonSerializable(typeof(LicenseCommercialUseJsonResult))]
+[JsonSerializable(typeof(LicenseJsonResult))]
+[JsonSerializable(typeof(LicenseTermsJsonResult))]
+[JsonSerializable(typeof(LicenseTrademarkJsonResult))]
 [JsonSerializable(typeof(StatusResult))]
 [JsonSerializable(typeof(StatusLogPathJsonResult))]
 [JsonSerializable(typeof(StatusHeadFreshness))]

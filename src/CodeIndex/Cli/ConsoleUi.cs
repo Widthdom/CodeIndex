@@ -103,7 +103,7 @@ public static class ConsoleUi
         ("workspace", "cdidx workspace <list|status|use|current|clear|deactivate> [name] [--json]"),
         ("config", "cdidx config show [--json] [--show-paths]"),
         ("validate-config", "cdidx validate-config [--json]"),
-        ("doctor", "cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]]"),
+        ("doctor", "cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]] [--env-domain <domain>] [--env-category <category>] [--env-sensitivity <sensitivity>] [--max-json-bytes <n>]"),
         ("db", "cdidx db integrity|--integrity-check [--db <path>] [--json]"),
         ("db", $"cdidx db schema [--type <table|index|trigger|view>] [--name <object>] [--limit <n<={DbCommandRunner.SchemaEntryLimit}>] [--max-sql-chars <n<={DbCommandRunner.SchemaSqlTextLimit}>] [--summary-only] [--include-internal|--exclude-internal] [--db <path>] [--json]"),
         ("db", "cdidx db prune --dry-run|--apply [--db <path>] [--json]"),
@@ -139,7 +139,7 @@ public static class ConsoleUi
         ("completions", "cdidx completions <shell>"),
         ("--completions", "cdidx --completions <shell>"),
         ("upgrade", "cdidx upgrade [--check-only] [--json] [--channel <stable|latest|prerelease>] [--prerelease] [--version <tag>]"),
-        ("license", "cdidx license"),
+        ("license", "cdidx license [--json]"),
         ("help", "cdidx help <command> [subcommand]"),
     ];
 
@@ -1310,6 +1310,33 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("See LICENSE, LICENSES/FSL-1.1-ALv2.txt, LICENSES/Apache-2.0.txt, COMMERCIAL_LICENSE.md, INTEGRATION_POLICY.md, and TRADEMARKS.md for the controlling terms.");
     }
+
+    internal static LicenseJsonResult BuildLicenseJsonResult() =>
+        new(
+            JsonOutputContract.ApiVersion,
+            new LicenseTermsJsonResult(
+                "FSL-1.1-ALv2",
+                "Functional Source License, Version 1.1, ALv2 Future License",
+                "Apache-2.0",
+                "LICENSE"),
+            "Copyright 2026 Widthdom.",
+            new LicenseCommercialUseJsonResult(
+                NonCompetingUseAllowed: true,
+                CompetingProductsOrServicesRequireSeparateAgreement: true,
+                "Use, modification, and distribution are allowed for non-competing purposes, including internal, commercial, AI, IDE, MCP, CI, and scripting integrations."),
+            new LicenseTrademarkJsonResult(
+                ["CodeIndex", "cdidx"],
+                DerivativeBrandingAllowed: false,
+                EndorsementBrandingAllowed: false,
+                "CodeIndex and cdidx are not licensed for derivative product, package, service, or endorsement branding."),
+            [
+                "LICENSE",
+                "LICENSES/FSL-1.1-ALv2.txt",
+                "LICENSES/Apache-2.0.txt",
+                "COMMERCIAL_LICENSE.md",
+                "INTEGRATION_POLICY.md",
+                "TRADEMARKS.md",
+            ]);
 
     public static string? GetUsageLine(string command)
     {

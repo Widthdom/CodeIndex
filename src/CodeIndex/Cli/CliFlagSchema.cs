@@ -212,7 +212,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade",
+        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade", "doctor", "license",
     ];
 
     private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline", "symbols", "unused", "status", "hotspots", "impact"];
@@ -364,7 +364,11 @@ internal static class CliFlagSchema
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search/Audit grouped output: representative matches per file", Commands = Set("search", "audit") },
             new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search/Audit recipes: cap emitted rows across all child queries", Commands = Set("search", "audit") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded high-volume responses truncate projected rows with paging metadata", Commands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots") },
+            new() { Name = "--env-inventory", ValuePlaceholder = "<compact|full>", Description = "Doctor: include a compact environment-variable summary or the full inventory", Commands = Set("doctor") },
+            new() { Name = "--env-domain", ValuePlaceholder = "<domain>", Description = "Doctor full environment inventory: filter by exact domain", Commands = Set("doctor") },
+            new() { Name = "--env-category", ValuePlaceholder = "<category>", Description = "Doctor full environment inventory: filter by exact category", Commands = Set("doctor") },
+            new() { Name = "--env-sensitivity", ValuePlaceholder = "<sensitivity>", Description = "Doctor full environment inventory: filter by exact sensitivity", Commands = Set("doctor") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded high-volume responses truncate projected rows with paging metadata", Commands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "doctor") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", Commands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", Commands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", Commands = Set("search") },

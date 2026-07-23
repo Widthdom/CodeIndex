@@ -87,8 +87,17 @@ cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --
 cdidx suggestions add --category output_format --description "Record a local dogfood finding" --evidence-path src/CodeIndex/Cli/SuggestionsCommandRunner.cs --json
 cdidx suggestions update <id> --description "Corrected finding" --context "Corrected context" --json
 cdidx suggestions delete <id> --json
+cdidx doctor --json --env-inventory=full --env-domain indexing_query --max-json-bytes 16384
+cdidx license --json
 cdidx validate
 ```
+
+`doctor --env-inventory=full` accepts exact `--env-domain`,
+`--env-category`, and `--env-sensitivity` filters that compose with AND.
+Its JSON form accepts `--max-json-bytes` as a whole-document UTF-8 byte cap;
+use the filters to narrow an inventory that exceeds the requested budget.
+`license --json` returns stable versioned `license`, `commercial_use`,
+`trademark`, and `documents` fields for automation.
 
 The default NDJSON output of `search`, `symbols`, and `files` always ends with a bounded `terminal_record` unless `--results-only` explicitly suppresses it; recipe/audit search row streams use the same contract. The record reports returned and observed total counts, whether that total is authoritative or a lower bound, the truncation reason, applied limits, omitted rows, and recovery guidance. `--max-json-bytes` is a hard cap over all stdout bytes, including row newlines and the terminal record. If that record cannot fit by itself, the command fails with a usage error before writing stdout. Capped output rejects `--profile`, `--verbose`, and `--json-envelope`, whose additional serialization would otherwise escape the cap.
 
@@ -473,8 +482,17 @@ cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --
 cdidx suggestions add --category output_format --description "ローカル dogfood finding を記録する" --evidence-path src/CodeIndex/Cli/SuggestionsCommandRunner.cs --json
 cdidx suggestions update <id> --description "修正した finding" --context "修正した context" --json
 cdidx suggestions delete <id> --json
+cdidx doctor --json --env-inventory=full --env-domain indexing_query --max-json-bytes 16384
+cdidx license --json
 cdidx validate
 ```
+
+`doctor --env-inventory=full` は、AND で合成される完全一致の
+`--env-domain`、`--env-category`、`--env-sensitivity` filter を受け付けます。
+JSON 形式では `--max-json-bytes` を文書全体の UTF-8 byte cap として利用できるため、
+要求した budget を超える inventory は filter で絞り込んでください。
+`license --json` は automation 向けに、version 付きで安定した `license`、
+`commercial_use`、`trademark`、`documents` field を返します。
 
 `search`、`symbols`、`files` の既定 NDJSON 出力は、`--results-only` で明示的に抑止しない限り、常に上限付きの `terminal_record` で終了し、recipe / audit search の row stream も同じ契約を使います。このレコードは返却件数と観測済み総件数、その総件数が authoritative か lower bound か、切り詰め理由、適用上限、省略行数、復旧案内を返します。`--max-json-bytes` は各行の改行と終端レコードを含む stdout 全体の hard cap です。終端レコード自体が収まらない場合は、stdout を書く前に usage error で失敗します。追加 serialization が cap 外へ出ることを防ぐため、上限付き出力では `--profile`、`--verbose`、`--json-envelope` を拒否します。
 

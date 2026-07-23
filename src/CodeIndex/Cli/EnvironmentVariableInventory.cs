@@ -103,16 +103,22 @@ internal static class EnvironmentVariableInventory
     ];
 
     internal static EnvironmentVariableInventorySummaryJsonResult BuildSummary()
-        => new(
-            Items.Count,
-            CountBy(static item => item.Domain),
-            CountBy(static item => item.Sensitivity),
-            CountBy(static item => item.Category));
+        => BuildSummary(Items);
 
-    private static IReadOnlyList<EnvironmentVariableInventorySummaryBucketJsonResult> CountBy(Func<EnvironmentVariableInventoryItem, string> selector)
+    internal static EnvironmentVariableInventorySummaryJsonResult BuildSummary(
+        IReadOnlyList<EnvironmentVariableInventoryItem> items)
+        => new(
+            items.Count,
+            CountBy(items, static item => item.Domain),
+            CountBy(items, static item => item.Sensitivity),
+            CountBy(items, static item => item.Category));
+
+    private static IReadOnlyList<EnvironmentVariableInventorySummaryBucketJsonResult> CountBy(
+        IReadOnlyList<EnvironmentVariableInventoryItem> items,
+        Func<EnvironmentVariableInventoryItem, string> selector)
     {
         var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
-        foreach (var item in Items)
+        foreach (var item in items)
         {
             var key = selector(item);
             counts[key] = counts.TryGetValue(key, out var count) ? count + 1 : 1;

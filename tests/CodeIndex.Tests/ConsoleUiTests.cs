@@ -59,6 +59,33 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void DoctorAndLicense_HelpAndCompletionExposeStructuredOutputControls_Issue4713()
+    {
+        var doctorFlags = CliFlagSchema.GetCompletionFlagsForCommand("doctor")
+            .Select(static flag => flag.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("--json", doctorFlags);
+        Assert.Contains("--env-inventory", doctorFlags);
+        Assert.Contains("--env-domain", doctorFlags);
+        Assert.Contains("--env-category", doctorFlags);
+        Assert.Contains("--env-sensitivity", doctorFlags);
+        Assert.Contains("--max-json-bytes", doctorFlags);
+
+        var licenseFlags = CliFlagSchema.GetCompletionFlagsForCommand("license")
+            .Select(static flag => flag.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("--json", licenseFlags);
+
+        var (_, doctorHelp, _) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("doctor") ? 1 : 0);
+        var (_, licenseHelp, _) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("license") ? 1 : 0);
+        Assert.Contains("--env-domain <domain>", doctorHelp, StringComparison.Ordinal);
+        Assert.Contains("--max-json-bytes <n>", doctorHelp, StringComparison.Ordinal);
+        Assert.Contains("cdidx license [--json]", licenseHelp, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompletionRenderer_FormatValuesAreCommandScoped_Issue4426()
     {
         var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
