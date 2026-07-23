@@ -57,6 +57,8 @@ internal static class DiffResultWriter
         Console.WriteLine($"  files  : {result.Summary.LeftFileCount} -> {result.Summary.RightFileCount} ({FormatDelta(result.Summary.FileCountDelta)})");
         Console.WriteLine($"  symbols: {result.Summary.LeftSymbolCount} -> {result.Summary.RightSymbolCount} ({FormatDelta(result.Summary.SymbolCountDelta)})");
         Console.WriteLine($"  refs   : {result.Summary.LeftReferenceCount} -> {result.Summary.RightReferenceCount} ({FormatDelta(result.Summary.ReferenceCountDelta)})");
+        if (result.Offset > 0)
+            Console.WriteLine($"  page   : offset {result.Offset}, limit {result.Limit}");
 
         WriteList("files only in left", result.FilesOnlyInLeft);
         WriteList("files only in right", result.FilesOnlyInRight);
@@ -64,7 +66,13 @@ internal static class DiffResultWriter
         {
             WriteList("symbols only in left", result.SymbolsOnlyInLeft ?? []);
             WriteList("symbols only in right", result.SymbolsOnlyInRight ?? []);
+            WriteList("reference edges only in left", result.ReferencesOnlyInLeft ?? []);
+            WriteList("reference edges only in right", result.ReferencesOnlyInRight ?? []);
+            WriteList("chunks only in left", result.ChunksOnlyInLeft ?? []);
+            WriteList("chunks only in right", result.ChunksOnlyInRight ?? []);
         }
+        if (result.HasMore && result.NextOffset is int nextOffset)
+            Console.WriteLine($"  more   : rerun with --offset {nextOffset}");
     }
 
     private static void WriteList(string label, List<string> values)

@@ -741,6 +741,119 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportArchive_AppliesProjectPathLanguageAndTestScope_Issue4714()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_archive_scope");
+        try
+        {
+            TestProjectHelper.WriteTextFile(projectRoot, "src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App/App.cs", "csharp", "public class AppType { }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/shared/Shared.cs", "csharp", "public class SharedType { }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Other/Other.cs", "csharp", "public class OtherType { }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App/tool.py", "python", "def tool(): pass");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App/tests/AppTests.cs", "csharp", "public class AppTests { }");
+            var archivePath = Path.Combine(projectRoot, "scoped.cdidx.zip");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    [
+                        archivePath,
+                        "--db", dbPath,
+                        "--project", "App",
+                        "--path", "src/shared/*",
+                        "--lang", "csharp",
+                        "--exclude-tests",
+                        "--json",
+                    ],
+                    jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var result = JsonDocument.Parse(stdout);
+            var scope = result.RootElement.GetProperty("scope");
+            Assert.True(scope.GetProperty("scoped").GetBoolean());
+            Assert.Equal(5, scope.GetProperty("source_file_count").GetInt64());
+            Assert.Equal(2, scope.GetProperty("exported_file_count").GetInt64());
+            Assert.Equal("src/App/*", scope.GetProperty("resolved_project_path")[0].GetString());
+
+            var extractedDb = Path.Combine(projectRoot, "scoped.db");
+            using (var archive = ZipFile.OpenRead(archivePath))
+                archive.GetEntry("codeindex.db")!.ExtractToFile(extractedDb);
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = extractedDb }.ConnectionString);
+            connection.Open();
+            using (var filesCommand = connection.CreateCommand())
+            {
+                filesCommand.CommandText = "SELECT path FROM files ORDER BY path";
+                using var reader = filesCommand.ExecuteReader();
+                var paths = new List<string>();
+                while (reader.Read())
+                    paths.Add(reader.GetString(0));
+                Assert.Equal(["src/App/App.cs", "src/shared/Shared.cs"], paths);
+            }
+            using (var integrityCommand = connection.CreateCommand())
+            {
+                integrityCommand.CommandText = "PRAGMA foreign_key_check";
+                using var reader = integrityCommand.ExecuteReader();
+                Assert.False(reader.Read());
+            }
+
+            using var manifest = ZipFile.OpenRead(archivePath);
+            using var manifestStream = manifest.GetEntry("manifest.json")!.Open();
+            using var manifestDocument = JsonDocument.Parse(manifestStream);
+            Assert.Equal(2, manifestDocument.RootElement.GetProperty("file_count").GetInt64());
+            Assert.True(manifestDocument.RootElement.GetProperty("scope").GetProperty("scoped").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImport_DryRunReportsBoundedDestinationDeltaWithoutReplacingDb_Issue4714()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("import_destination_delta");
+        try
+        {
+            var sourceDb = TestProjectHelper.CreateProjectDb(Path.Combine(projectRoot, "source"));
+            var destinationDb = TestProjectHelper.CreateProjectDb(Path.Combine(projectRoot, "destination"));
+            TestProjectHelper.InsertIndexedFile(sourceDb, "src/Same.cs", "csharp", "public class Imported { void Run() { Run(); } }");
+            TestProjectHelper.InsertIndexedFile(destinationDb, "src/Same.cs", "csharp", "public class Existing { void Run() { Run(); } }");
+            var archivePath = ExportArchive(projectRoot, sourceDb);
+            var destinationBefore = File.ReadAllBytes(destinationDb);
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [archivePath, "--db", destinationDb, "--dry-run", "--limit", "1", "--offset", "0", "--json"],
+                    jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(destinationBefore, File.ReadAllBytes(destinationDb));
+            using var document = JsonDocument.Parse(stdout);
+            var delta = document.RootElement.GetProperty("destination_delta");
+            Assert.True(delta.GetProperty("destination_exists").GetBoolean());
+            Assert.True(delta.GetProperty("comparable").GetBoolean());
+            Assert.Equal("compared", delta.GetProperty("status").GetString());
+            var comparison = delta.GetProperty("comparison");
+            Assert.Equal(1, comparison.GetProperty("limit").GetInt32());
+            Assert.Equal(0, comparison.GetProperty("offset").GetInt32());
+            Assert.NotEmpty(comparison.GetProperty("symbols_only_in_left").EnumerateArray());
+            Assert.NotEmpty(comparison.GetProperty("symbols_only_in_right").EnumerateArray());
+            Assert.NotEmpty(comparison.GetProperty("chunks_only_in_left").EnumerateArray());
+            Assert.NotEmpty(comparison.GetProperty("chunks_only_in_right").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExportArchive_ManifestReportsEmptyUnknownExtensionSampleList_Issue3715()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("export_unknown_extensions_empty");

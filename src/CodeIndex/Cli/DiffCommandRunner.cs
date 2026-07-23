@@ -52,21 +52,12 @@ public static class DiffCommandRunner
 
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var leftHeader = ReadHeader(options.LeftDb!);
-            cancellationToken.ThrowIfCancellationRequested();
-            var rightHeader = ReadHeader(options.RightDb!);
-            if (leftHeader.SchemaVersion != rightHeader.SchemaVersion)
-            {
-                var schemaMismatch = BuildSchemaMismatchDiff(leftHeader, rightHeader, options);
-                DiffResultWriter.WriteResult(schemaMismatch, options, jsonOptions);
-                return SchemaMismatchExitCode;
-            }
-
-            var result = BuildDiff(leftHeader, rightHeader, options, cancellationToken);
+            var result = CompareDatabases(options, cancellationToken);
 
             DiffResultWriter.WriteResult(result, options, jsonOptions);
 
+            if (result.Status == "schema_mismatch")
+                return SchemaMismatchExitCode;
             return result.Identical ? CommandExitCodes.Success : DriftExitCode;
         }
         catch (OperationCanceledException)
@@ -107,6 +98,43 @@ public static class DiffCommandRunner
 
     internal static DiffCommandOptions ParseArgs(string[] args)
         => DiffCommandOptionsParser.Parse(args, MaxDiffLimit);
+
+    internal static DiffJsonResult CompareDatabases(
+        string leftDb,
+        string rightDb,
+        int limit,
+        int offset,
+        bool detailed,
+        CancellationToken cancellationToken,
+        string? leftDisplayPath = null,
+        string? rightDisplayPath = null)
+    {
+        var options = new DiffCommandOptions
+        {
+            LeftDb = leftDb,
+            RightDb = rightDb,
+            Limit = limit,
+            Offset = offset,
+            Detailed = detailed,
+        };
+        var result = CompareDatabases(options, cancellationToken);
+        return result with
+        {
+            LeftDb = leftDisplayPath ?? result.LeftDb,
+            RightDb = rightDisplayPath ?? result.RightDb,
+        };
+    }
+
+    private static DiffJsonResult CompareDatabases(DiffCommandOptions options, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var leftHeader = ReadHeader(options.LeftDb!);
+        cancellationToken.ThrowIfCancellationRequested();
+        var rightHeader = ReadHeader(options.RightDb!);
+        return leftHeader.SchemaVersion != rightHeader.SchemaVersion
+            ? BuildSchemaMismatchDiff(leftHeader, rightHeader, options)
+            : BuildDiff(leftHeader, rightHeader, options, cancellationToken);
+    }
 
     private const string FilePathRowsSql = "SELECT path FROM files ORDER BY path";
 
@@ -276,8 +304,13 @@ public static class DiffCommandRunner
         var filesOnlyInRight = new List<string>();
         var symbolsOnlyInLeft = new List<string>();
         var symbolsOnlyInRight = new List<string>();
+        var referencesOnlyInLeft = new List<string>();
+        var referencesOnlyInRight = new List<string>();
+        var chunksOnlyInLeft = new List<string>();
+        var chunksOnlyInRight = new List<string>();
         List<DiffMetadataDriftJsonResult>? metadataDrift = null;
         var diagnostics = new List<DiffDiagnosticJsonResult>();
+        var hasMore = false;
         var identical =
             summary.SchemaVersionsEqual &&
             summary.FileCountDelta == 0 &&
@@ -292,26 +325,45 @@ public static class DiffCommandRunner
         if (!options.SummaryOnly)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var fileDiff = DiffOrderedStrings(leftConnection, rightConnection, FilePathRowsSql, options.Limit, cancellationToken);
+            var fileDiff = DiffOrderedStrings(leftConnection, rightConnection, FilePathRowsSql, options.Limit, options.Offset, cancellationToken);
             filesOnlyInLeft = fileDiff.OnlyInLeft;
             filesOnlyInRight = fileDiff.OnlyInRight;
             identical = identical && fileDiff.Equal;
-            AddTruncationDiagnostic(diagnostics, fileDiff.Truncated, "file differences");
+            hasMore |= fileDiff.HasMore;
+            AddPagingDiagnostic(diagnostics, fileDiff.Omitted, fileDiff.HasMore, "file differences", options);
         }
 
         if (options.Detailed)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var symbolDiff = DiffOrderedRows(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, options.Limit, cancellationToken);
+            var symbolDiff = DiffOrderedRows(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, options.Limit, options.Offset, cancellationToken);
             symbolsOnlyInLeft = symbolDiff.OnlyInLeft;
             symbolsOnlyInRight = symbolDiff.OnlyInRight;
             identical = identical && symbolDiff.Equal;
-            AddTruncationDiagnostic(diagnostics, symbolDiff.Truncated, "symbol differences");
+            hasMore |= symbolDiff.HasMore;
+            AddPagingDiagnostic(diagnostics, symbolDiff.Omitted, symbolDiff.HasMore, "symbol differences", options);
 
             cancellationToken.ThrowIfCancellationRequested();
-            var metadataDiff = DiffMetadataRows(leftConnection, rightConnection, options.Limit, cancellationToken);
+            var referenceDiff = DiffOrderedRows(leftConnection, rightConnection, ReferenceRowsSql, ReferenceRowsSql, options.Limit, options.Offset, cancellationToken);
+            referencesOnlyInLeft = referenceDiff.OnlyInLeft;
+            referencesOnlyInRight = referenceDiff.OnlyInRight;
+            identical = identical && referenceDiff.Equal;
+            hasMore |= referenceDiff.HasMore;
+            AddPagingDiagnostic(diagnostics, referenceDiff.Omitted, referenceDiff.HasMore, "reference-edge differences", options);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var chunkDiff = DiffOrderedRows(leftConnection, rightConnection, ChunkRowsSql, ChunkRowsSql, options.Limit, options.Offset, cancellationToken);
+            chunksOnlyInLeft = chunkDiff.OnlyInLeft;
+            chunksOnlyInRight = chunkDiff.OnlyInRight;
+            identical = identical && chunkDiff.Equal;
+            hasMore |= chunkDiff.HasMore;
+            AddPagingDiagnostic(diagnostics, chunkDiff.Omitted, chunkDiff.HasMore, "chunk differences", options);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var metadataDiff = DiffMetadataRows(leftConnection, rightConnection, options.Limit, options.Offset, cancellationToken);
             metadataDrift = metadataDiff.Drift;
-            AddTruncationDiagnostic(diagnostics, metadataDiff.Truncated, "metadata differences");
+            hasMore |= metadataDiff.HasMore;
+            AddPagingDiagnostic(diagnostics, metadataDiff.Omitted, metadataDiff.HasMore, "metadata differences", options);
         }
 
         if (identical)
@@ -324,7 +376,8 @@ public static class DiffCommandRunner
                 RowsEqual(leftConnection, rightConnection, FileIssueRowsSql, cancellationToken) &&
                 RowsEqual(leftConnection, rightConnection, MetaRowsSql, cancellationToken) &&
                 (options.Detailed || RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, cancellationToken)) &&
-                RowsEqual(leftConnection, rightConnection, ReferenceRowsSql, cancellationToken);
+                (options.Detailed || RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken)) &&
+                (options.Detailed || RowsEqual(leftConnection, rightConnection, ReferenceRowsSql, cancellationToken));
         }
 
         var truncated = diagnostics.Count > 0;
@@ -338,20 +391,36 @@ public static class DiffCommandRunner
             filesOnlyInRight,
             options.Detailed ? symbolsOnlyInLeft : null,
             options.Detailed ? symbolsOnlyInRight : null,
+            options.Detailed ? referencesOnlyInLeft : null,
+            options.Detailed ? referencesOnlyInRight : null,
+            options.Detailed ? chunksOnlyInLeft : null,
+            options.Detailed ? chunksOnlyInRight : null,
             options.Detailed ? metadataDrift : null,
             options.Limit,
+            options.Offset,
             options.Detailed,
+            hasMore,
+            hasMore && options.Limit > 0 ? checked(options.Offset + options.Limit) : null,
             truncated,
             truncated ? diagnostics : null);
     }
 
-    private static void AddTruncationDiagnostic(List<DiffDiagnosticJsonResult> diagnostics, bool truncated, string area)
+    private static void AddPagingDiagnostic(
+        List<DiffDiagnosticJsonResult> diagnostics,
+        bool omitted,
+        bool hasMore,
+        string area,
+        DiffCommandOptions options)
     {
-        if (!truncated)
+        if (!omitted)
             return;
         diagnostics.Add(new DiffDiagnosticJsonResult(
             "diff_samples_truncated",
-            $"{area} exceeded the requested diff sample limit; rerun with a higher --limit for more rows."));
+            options.Limit == 0
+                ? $"{area} samples were omitted because --limit is 0; rerun with a positive --limit to inspect rows."
+                : hasMore
+                    ? $"{area} omitted rows outside this page; rerun with --offset {checked(options.Offset + options.Limit)} for the next page."
+                    : $"{area} omitted rows before offset {options.Offset}; rerun with a lower --offset to inspect earlier rows."));
     }
 
     private static DiffJsonResult BuildSchemaMismatchDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options)
@@ -381,7 +450,12 @@ public static class DiffCommandRunner
             options.Detailed ? [] : null,
             options.Detailed ? [] : null,
             options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
             options.Limit,
+            options.Offset,
             options.Detailed);
     }
 
@@ -389,14 +463,9 @@ public static class DiffCommandRunner
         SqliteConnection leftConnection,
         SqliteConnection rightConnection,
         int limit,
+        int offset,
         CancellationToken cancellationToken)
     {
-        if (limit == 0)
-        {
-            var rowsEqual = RowsEqual(leftConnection, rightConnection, OperationalMetaRowsSql, cancellationToken);
-            return new MetadataRowsDiff(rowsEqual, [], !rowsEqual);
-        }
-
         using var leftCommand = leftConnection.CreateCommand();
         leftCommand.CommandText = OperationalMetaRowsSql;
         using var rightCommand = rightConnection.CreateCommand();
@@ -410,7 +479,7 @@ public static class DiffCommandRunner
         var leftHasValue = TryReadMetadataRow(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
         var rightHasValue = TryReadMetadataRow(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         var equal = true;
-        var truncated = false;
+        var differenceCount = 0;
 
         while (leftHasValue || rightHasValue)
         {
@@ -424,10 +493,9 @@ public static class DiffCommandRunner
                 if (!string.Equals(leftValue.Value, rightValue.Value, StringComparison.Ordinal))
                 {
                     equal = false;
-                    if (drift.Count < limit)
+                    if (differenceCount >= offset && drift.Count < limit)
                         drift.Add(new DiffMetadataDriftJsonResult(leftValue.Key, leftValue.Value, rightValue.Value));
-                    else
-                        truncated = true;
+                    differenceCount++;
                 }
 
                 leftHasValue = TryReadMetadataRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
@@ -438,24 +506,23 @@ public static class DiffCommandRunner
             equal = false;
             if (comparison < 0)
             {
-                if (drift.Count < limit)
+                if (differenceCount >= offset && drift.Count < limit)
                     drift.Add(new DiffMetadataDriftJsonResult(leftValue.Key, leftValue.Value, null));
-                else
-                    truncated = true;
+                differenceCount++;
                 leftHasValue = TryReadMetadataRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
             }
             else
             {
-                if (drift.Count < limit)
+                if (differenceCount >= offset && drift.Count < limit)
                     drift.Add(new DiffMetadataDriftJsonResult(rightValue.Key, null, rightValue.Value));
-                else
-                    truncated = true;
+                differenceCount++;
                 rightHasValue = TryReadMetadataRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
             }
 
         }
 
-        return new MetadataRowsDiff(equal, drift, truncated);
+        var hasMore = differenceCount > (long)offset + drift.Count;
+        return new MetadataRowsDiff(equal, drift, hasMore, differenceCount != drift.Count);
     }
 
     private static OrderedRowsDiff DiffOrderedRows(
@@ -464,14 +531,9 @@ public static class DiffCommandRunner
         string leftSql,
         string rightSql,
         int limit,
+        int offset,
         CancellationToken cancellationToken)
     {
-        if (limit == 0)
-        {
-            var rowsEqual = RowsEqual(leftConnection, rightConnection, leftSql, rightSql, cancellationToken);
-            return new OrderedRowsDiff(rowsEqual, [], [], !rowsEqual);
-        }
-
         using var leftCommand = leftConnection.CreateCommand();
         leftCommand.CommandText = leftSql;
         using var rightCommand = rightConnection.CreateCommand();
@@ -486,7 +548,8 @@ public static class DiffCommandRunner
         var leftHasValue = TryReadRow(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
         var rightHasValue = TryReadRow(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         var equal = true;
-        var truncated = false;
+        var leftDifferenceCount = 0;
+        var rightDifferenceCount = 0;
 
         while (leftHasValue || rightHasValue)
         {
@@ -505,39 +568,37 @@ public static class DiffCommandRunner
             equal = false;
             if (comparison < 0)
             {
-                if (onlyInLeft.Count < limit)
+                if (leftDifferenceCount >= offset && onlyInLeft.Count < limit)
                     onlyInLeft.Add(EncodeRow(leftValue.SortValues));
-                else
-                    truncated = true;
+                leftDifferenceCount++;
                 leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
             }
             else
             {
-                if (onlyInRight.Count < limit)
+                if (rightDifferenceCount >= offset && onlyInRight.Count < limit)
                     onlyInRight.Add(EncodeRow(rightValue.SortValues));
-                else
-                    truncated = true;
+                rightDifferenceCount++;
                 rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
             }
-
-            if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
-            {
-                truncated = truncated || leftHasValue || rightHasValue;
-                break;
-            }
         }
 
-        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight, truncated);
+        var hasMore =
+            leftDifferenceCount > (long)offset + onlyInLeft.Count ||
+            rightDifferenceCount > (long)offset + onlyInRight.Count;
+        var omitted =
+            leftDifferenceCount != onlyInLeft.Count ||
+            rightDifferenceCount != onlyInRight.Count;
+        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight, hasMore, omitted);
     }
 
-    private static OrderedRowsDiff DiffOrderedStrings(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, int limit, CancellationToken cancellationToken)
+    private static OrderedRowsDiff DiffOrderedStrings(
+        SqliteConnection leftConnection,
+        SqliteConnection rightConnection,
+        string sql,
+        int limit,
+        int offset,
+        CancellationToken cancellationToken)
     {
-        if (limit == 0)
-        {
-            var rowsEqual = StringRowsEqual(leftConnection, rightConnection, sql, cancellationToken);
-            return new OrderedRowsDiff(rowsEqual, [], [], !rowsEqual);
-        }
-
         using var leftCommand = leftConnection.CreateCommand();
         leftCommand.CommandText = sql;
         using var rightCommand = rightConnection.CreateCommand();
@@ -552,7 +613,8 @@ public static class DiffCommandRunner
         var leftHasValue = TryReadString(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
         var rightHasValue = TryReadString(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         var equal = true;
-        var truncated = false;
+        var leftDifferenceCount = 0;
+        var rightDifferenceCount = 0;
 
         while (leftHasValue || rightHasValue)
         {
@@ -571,29 +633,27 @@ public static class DiffCommandRunner
             equal = false;
             if (comparison < 0)
             {
-                if (onlyInLeft.Count < limit)
+                if (leftDifferenceCount >= offset && onlyInLeft.Count < limit)
                     onlyInLeft.Add(leftValue);
-                else
-                    truncated = true;
+                leftDifferenceCount++;
                 leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
             }
             else
             {
-                if (onlyInRight.Count < limit)
+                if (rightDifferenceCount >= offset && onlyInRight.Count < limit)
                     onlyInRight.Add(rightValue);
-                else
-                    truncated = true;
+                rightDifferenceCount++;
                 rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
-            }
-
-            if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
-            {
-                truncated = truncated || leftHasValue || rightHasValue;
-                break;
             }
         }
 
-        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight, truncated);
+        var hasMore =
+            leftDifferenceCount > (long)offset + onlyInLeft.Count ||
+            rightDifferenceCount > (long)offset + onlyInRight.Count;
+        var omitted =
+            leftDifferenceCount != onlyInLeft.Count ||
+            rightDifferenceCount != onlyInRight.Count;
+        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight, hasMore, omitted);
     }
 
     private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, CancellationToken cancellationToken)
@@ -949,12 +1009,14 @@ public static class DiffCommandRunner
         bool Equal,
         List<string> OnlyInLeft,
         List<string> OnlyInRight,
-        bool Truncated);
+        bool HasMore,
+        bool Omitted);
 
     private sealed record MetadataRowsDiff(
         bool Equal,
         List<DiffMetadataDriftJsonResult> Drift,
-        bool Truncated);
+        bool HasMore,
+        bool Omitted);
 
     private sealed record DiffRow(
         object?[] SortValues)
@@ -986,5 +1048,6 @@ internal sealed class DiffCommandOptions
     public bool SummaryOnly { get; init; }
     public bool ShowHelp { get; init; }
     public int Limit { get; init; } = 20;
+    public int Offset { get; init; }
     public string? ParseError { get; init; }
 }
