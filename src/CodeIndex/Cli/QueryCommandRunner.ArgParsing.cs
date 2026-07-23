@@ -141,6 +141,7 @@ public static partial class QueryCommandRunner
         bool resultsOnly = false;
         bool nextSteps = false;
         int groupedPerFileLimit = DefaultSearchGroupedPerFileLimit;
+        bool groupedPerFileLimitExplicit = false;
         int? sampleSize = null;
         int? maxJsonBytes = null;
         bool rawBytes = false;
@@ -1137,6 +1138,7 @@ public static partial class QueryCommandRunner
                         AddParseError(sampleError!);
                     break;
                 case "--per-file-limit":
+                    groupedPerFileLimitExplicit = true;
                     if (!TryReadRawOptionValue(args, ref i, "--per-file-limit", inlineValue, out var perFileLimitValue, out var missingPerFileLimitError))
                         AddParseError(missingPerFileLimitError!);
                     else if (TryParsePositiveInt(perFileLimitValue!, "--per-file-limit", out var parsedPerFileLimit, out var perFileLimitError))
@@ -1708,6 +1710,7 @@ public static partial class QueryCommandRunner
             ResultsOnly = resultsOnly,
             NextSteps = nextSteps,
             GroupedPerFileLimit = groupedPerFileLimit,
+            GroupedPerFileLimitExplicit = groupedPerFileLimitExplicit,
             SampleSize = sampleSize,
             MaxJsonBytes = maxJsonBytes,
             RawBytes = rawBytes,

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -542,6 +543,12 @@ public static partial class QueryCommandRunner
 
             var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
 
+            if (options.OutputFormat == OutputFormatSarif)
+            {
+                WriteSearchRecipeSarif(recipe, scope, queryResults, total, options, jsonOptions);
+                return CommandExitCodes.Success;
+            }
+
             if (options.Json)
             {
                 var json = JsonSerializer.Serialize(
@@ -612,6 +619,160 @@ public static partial class QueryCommandRunner
             if (ndjsonTerminalLine != null && !options.ResultsOnly)
                 Console.WriteLine(ndjsonTerminalLine);
         });
+    }
+
+    private static void WriteSearchRecipeSarif(
+        SearchAuditRecipe recipe,
+        SearchRecipeScopeJsonResult scope,
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        int total,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
+    {
+        var summary = BuildSearchRecipeRunSummary(queryResults, options.Limit, options.TotalLimit, total);
+        var querySummaries = new JsonArray();
+        foreach (var queryResult in queryResults)
+        {
+            querySummaries.Add(new JsonObject
+            {
+                ["name"] = queryResult.Name,
+                ["result_count"] = queryResult.Count,
+                ["result_limit"] = queryResult.ResultLimit,
+                ["truncated"] = queryResult.Truncated,
+                ["minimum_omitted_result_count"] = queryResult.MinimumOmittedResultCount,
+                ["next_cursor"] = queryResult.NextCursor,
+            });
+        }
+        var runProperties = new JsonObject
+        {
+            ["format"] = "audit-recipe",
+            ["recipe"] = recipe.Name,
+            ["scope"] = JsonSerializer.SerializeToNode(
+                scope,
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeScopeJsonResult),
+            ["query_count"] = queryResults.Count,
+            ["result_count"] = total,
+            ["limit_per_query"] = options.Limit,
+            ["total_limit"] = JsonValue.Create(options.TotalLimit),
+            ["queries"] = querySummaries,
+            ["truncation"] = new JsonObject
+            {
+                ["truncated"] = summary.TruncatedQueryCount > 0,
+                ["truncated_query_count"] = summary.TruncatedQueryCount,
+                ["minimum_omitted_result_count"] = summary.MinimumOmittedResultCount,
+            },
+        };
+        var items = new List<SarifLocation>(total);
+        foreach (var queryResult in queryResults)
+        {
+            var ruleId = $"{recipe.Name}/{queryResult.Name}";
+            var level = GetSearchRecipeSarifLevel(queryResult.Severity);
+            var confidence = GetSearchRecipeConfidence(queryResult.Count);
+            var descriptor = new SarifRuleDescriptor(
+                queryResult.Name,
+                queryResult.Description,
+                $"Audit recipe {recipe.Name}: {queryResult.Description}",
+                $"{queryResult.FalsePositiveGuidance} Review the referenced location and surrounding code before filing or acting on this result.",
+                ["cdidx", "audit-recipe", recipe.Name, .. queryResult.RecommendedLabels]);
+            foreach (var result in queryResult.Results)
+            {
+                var (line, column, endColumn) = GetSearchRecipeSarifRegion(result);
+                var fingerprint = BuildSearchRecipeSarifFingerprint(recipe.Name, queryResult.Name, result.Path, line, column);
+                var properties = new JsonObject
+                {
+                    ["stable_result_id"] = fingerprint,
+                    ["recipe"] = recipe.Name,
+                    ["query_name"] = queryResult.Name,
+                    ["query"] = queryResult.Query,
+                    ["severity"] = queryResult.Severity,
+                    ["confidence"] = confidence,
+                    ["query_result_count"] = queryResult.Count,
+                    ["query_truncated"] = queryResult.Truncated,
+                    ["result_limit"] = queryResult.ResultLimit,
+                    ["minimum_omitted_result_count"] = queryResult.MinimumOmittedResultCount,
+                };
+                if (result.MatchOrigins.Count > 0)
+                    properties["match_origins"] = ToSarifJsonArray(result.MatchOrigins);
+                if (result.ResultKinds.Count > 0)
+                    properties["result_kinds"] = ToSarifJsonArray(result.ResultKinds);
+
+                items.Add(new SarifLocation(
+                    result.Path,
+                    line,
+                    column,
+                    endColumn,
+                    $"{ruleId}: {queryResult.Description}",
+                    ruleId,
+                    level,
+                    properties,
+                    fingerprint,
+                    descriptor));
+            }
+        }
+
+        WriteSarif(items, jsonOptions, runProperties: runProperties);
+    }
+
+    private static (int Line, int Column, int? EndColumn) GetSearchRecipeSarifRegion(CompactSearchResult result)
+    {
+        var facet = result.MatchFacets
+            .Where(candidate => candidate.Line > 0 && candidate.Column > 0)
+            .OrderBy(candidate => candidate.Line)
+            .ThenBy(candidate => candidate.Column)
+            .ThenBy(candidate => candidate.Length)
+            .FirstOrDefault();
+        var firstMatchLine = result.MatchLines
+            .Where(candidate => candidate > 0)
+            .DefaultIfEmpty()
+            .Min();
+        var line = Math.Max(
+            1,
+            facet?.Line
+                ?? (firstMatchLine > 0
+                    ? firstMatchLine
+                    : result.FocusLine
+                        ?? (result.SnippetStartLine > 0
+                            ? result.SnippetStartLine
+                            : result.ChunkStartLine)));
+        var column = Math.Max(1, facet?.Column ?? (result.FocusLine == line ? result.FocusColumn ?? 1 : 1));
+        var endColumn = facet is { Length: > 0 } && facet.Line == line && facet.Column == column
+            ? column + facet.Length
+            : (int?)null;
+        return (line, column, endColumn);
+    }
+
+    private static string BuildSearchRecipeSarifFingerprint(
+        string recipeName,
+        string queryName,
+        string path,
+        int line,
+        int column)
+    {
+        var identity = string.Join(
+            '\0',
+            "cdidx-sarif-v1",
+            recipeName,
+            queryName,
+            NormalizeSarifArtifactUri(path),
+            line.ToString(CultureInfo.InvariantCulture),
+            column.ToString(CultureInfo.InvariantCulture));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+    }
+
+    private static string GetSearchRecipeSarifLevel(string severity)
+        => severity switch
+        {
+            "critical" or "high" => "error",
+            "low" or "info" => "note",
+            _ => "warning",
+        };
+
+    private static JsonArray ToSarifJsonArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values.Distinct(StringComparer.Ordinal))
+            array.Add(value);
+        return array;
     }
 
     private static JsonObject BuildSearchRecipeCompactRunPayload(
@@ -2303,9 +2464,12 @@ public static partial class QueryCommandRunner
         int duplicateMatchCount)
         => new(
             queryResult.Severity,
-            queryResult.Count >= 3 ? "high" : queryResult.Count >= 2 ? "medium" : "low",
+            GetSearchRecipeConfidence(queryResult.Count),
             queryResult.Count,
             BuildSearchIssueDraftDuplicateGuidance(duplicatePreflightChecked, duplicateMatchCount));
+
+    private static string GetSearchRecipeConfidence(int resultCount)
+        => resultCount >= 3 ? "high" : resultCount >= 2 ? "medium" : "low";
 
     private static string BuildSearchIssueDraftDuplicateGuidance(bool duplicatePreflightChecked, int duplicateMatchCount)
     {
