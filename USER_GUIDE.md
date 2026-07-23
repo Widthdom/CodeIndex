@@ -2728,6 +2728,24 @@ hierarchical `DocumentSymbol` children when container metadata is available,
 returns at most 1000 indexed symbols, truncates each `detail` string to 512
 characters with `...`, and trims the tree before the result array exceeds
 524288 JSON bytes.
+Both symbol providers advertise work-done progress. Requests may pass bounded
+string or integer `partialResultToken` / `workDoneToken` values. With a partial
+result token, the server sends deterministic `$/progress` notifications capped
+at 100 symbols and 65536 JSON body bytes each, then returns `null` as the final
+result. Document-symbol partial
+results use flat LSP `SymbolInformation` items so a large hierarchy never has
+to fit in one progress value; requests without a partial token retain the
+hierarchical `DocumentSymbol` result. Work-done tokens receive
+`begin` / `report` / `end` values. Result-limit or progress-frame truncation is
+reported in the work-done `end` message, or through `window/logMessage` when no
+work-done token was supplied. `$/cancelRequest` matches the original string or
+integer request ID, ends any active work-done progress, and returns LSP
+`RequestCancelled` (`-32800`) for a cancelled symbol request.
+If the bounded pending-request queue is full, the server rejects additional
+requests with `-32000` (`Server busy`) while preserving document-sync and
+control notifications for ordered processing. The bounded rejection path keeps
+reading cancellations while it has capacity; if output is backpressured, it
+pauses input instead of dropping a required JSON-RPC response.
 `textDocument/hover` renders indexed paths relative to the project/workspace
 root when possible and uses `[outside workspace]` for absolute paths outside the
 known roots.
@@ -5810,6 +5828,22 @@ invalid request として拒否します。
 clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
 `DocumentSymbol` children を返し、最大 1000 件の indexed symbol を返し、各 `detail` string を
 `...` 付きの 512 文字に切り詰め、result tree が 524288 JSON bytes を超える前に trim します。
+両方の symbol provider は work-done progress を advertise します。request は上限付きの string
+または integer の `partialResultToken` / `workDoneToken` を渡せます。partial-result token が
+ある場合、server は決定的な順序の `$/progress` notification を1件あたり最大100 symbol・
+65536 JSON body bytesで送り、final result は `null` を返します。document-symbol の partial
+result は flat な LSP `SymbolInformation` item を使うため、大きな hierarchy 全体を1つの
+progress value に収める必要がありません。partial token がない request は従来どおり階層化された
+`DocumentSymbol` result を返します。work-done token には `begin` / `report` / `end` value を
+送ります。result limit または progress-frame limit による切り詰めは work-done の `end`
+message、work-done token がない場合は `window/logMessage` で通知します。`$/cancelRequest` は
+元の string / integer request ID と型を含めて一致させ、active な work-done progress を終了し、
+cancel された symbol request に LSP `RequestCancelled` (`-32800`) を返します。
+上限付き pending-request queue が満杯の場合、server は追加 request を `-32000`
+（`Server busy`）で拒否する一方、document-sync notification と control notification は
+順序どおり処理するため保持します。上限付き rejection 経路に空きがある間は cancellation
+の読み取りを継続し、output が backpressure された場合は必要な JSON-RPC response を
+破棄せず input を一時停止します。
 `textDocument/hover` は indexed path を可能な場合は project / workspace root からの相対 path として
 表示し、既知の root 外の absolute path は `[outside workspace]` に置き換えます。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
