@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using Microsoft.Data.Sqlite;
@@ -41,6 +42,281 @@ public class HookCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void Hooks_InstallJson_DistinguishesInstalledUpdatedAndAlreadyInstalled_Issue4716()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_install_statuses");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hookPath = Path.Combine(projectRoot, ".git", "hooks", "pre-commit");
+
+            var firstInstall = RunHooksAndCaptureStreams(["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, firstInstall.ExitCode);
+            Assert.Equal(string.Empty, firstInstall.StdErr);
+            using (var document = JsonDocument.Parse(firstInstall.StdOut))
+                Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+
+            File.SetLastWriteTimeUtc(hookPath, new DateTime(2020, 1, 2, 3, 4, 6, DateTimeKind.Utc));
+            var installedWriteTime = File.GetLastWriteTimeUtc(hookPath);
+
+            var repeatedInstall = RunHooksAndCaptureStreams(["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, repeatedInstall.ExitCode);
+            Assert.Equal(string.Empty, repeatedInstall.StdErr);
+            using (var document = JsonDocument.Parse(repeatedInstall.StdOut))
+                Assert.Equal("already_installed", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(installedWriteTime, File.GetLastWriteTimeUtc(hookPath));
+
+            File.WriteAllText(
+                hookPath,
+                "#!/bin/sh\n# BEGIN CDIDX MANAGED PRE-COMMIT\necho stale\n# END CDIDX MANAGED PRE-COMMIT\n");
+
+            var updatedInstall = RunHooksAndCaptureStreams(["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updatedInstall.ExitCode);
+            Assert.Equal(string.Empty, updatedInstall.StdErr);
+            using (var document = JsonDocument.Parse(updatedInstall.StdOut))
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains($"cdidx index {QuoteShellForTest(projectRoot)} --quiet", File.ReadAllText(hookPath));
+            Assert.DoesNotContain("echo stale", File.ReadAllText(hookPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_Install_RepairsUnusableManagedHook_Issue4716()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_install_mode");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hookPath = Path.Combine(projectRoot, ".git", "hooks", "pre-commit");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["install", "--project", projectRoot, "--json"]).ExitCode);
+
+            File.SetUnixFileMode(hookPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+            var preview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, preview.ExitCode);
+            using (var document = JsonDocument.Parse(preview.StdOut))
+            {
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal(
+                UnixFileMode.None,
+                File.GetUnixFileMode(hookPath)
+                    & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute));
+
+            var repair = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, repair.ExitCode);
+            using (var document = JsonDocument.Parse(repair.StdOut))
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+            Assert.NotEqual(
+                UnixFileMode.None,
+                File.GetUnixFileMode(hookPath) & UnixFileMode.UserExecute);
+
+            var managedHook = File.ReadAllText(hookPath);
+            File.WriteAllText(hookPath, managedHook, Encoding.Unicode);
+
+            var encodingPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, encodingPreview.ExitCode);
+            using (var document = JsonDocument.Parse(encodingPreview.StdOut))
+            {
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal([0xff, 0xfe], File.ReadAllBytes(hookPath)[..2]);
+
+            var encodingRepair = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, encodingRepair.ExitCode);
+            using (var document = JsonDocument.Parse(encodingRepair.StdOut))
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(Encoding.UTF8.GetBytes(managedHook), File.ReadAllBytes(hookPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_InstallDryRun_PreviewsCreateChainReplaceAndNoOpWithoutWriting_Issue4716()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_install_dry_run");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
+            var hookPath = Path.Combine(hooksDir, "pre-commit");
+            var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
+            TestProjectHelper.DeleteDirectory(hooksDir);
+
+            var humanPreview = RunHooksAndCaptureStreams(["install", "--project", projectRoot, "--dry-run"]);
+
+            Assert.Equal(CommandExitCodes.Success, humanPreview.ExitCode);
+            Assert.Equal(string.Empty, humanPreview.StdErr);
+            Assert.Contains("would be installed", humanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Planned action: create", humanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Managed hook preview:", humanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", humanPreview.StdOut, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(hooksDir));
+
+            var createPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, createPreview.ExitCode);
+            Assert.Equal(string.Empty, createPreview.StdErr);
+            string managedHookPreview;
+            using (var document = JsonDocument.Parse(createPreview.StdOut))
+            {
+                Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+                Assert.True(document.RootElement.GetProperty("dry_run").GetBoolean());
+                Assert.Equal("create", document.RootElement.GetProperty("planned_action").GetString());
+                managedHookPreview = document.RootElement.GetProperty("managed_hook_preview").GetString()!;
+                Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", managedHookPreview, StringComparison.Ordinal);
+            }
+            Assert.False(Directory.Exists(hooksDir));
+
+            Directory.CreateDirectory(hooksDir);
+            const string orphanChain = "#!/bin/sh\necho orphan chain\n";
+            File.WriteAllText(chainedHookPath, orphanChain);
+
+            var orphanChainPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, orphanChainPreview.ExitCode);
+            using (var document = JsonDocument.Parse(orphanChainPreview.StdOut))
+            {
+                Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("create", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Equal(chainedHookPath, document.RootElement.GetProperty("chained_hook_path").GetString());
+            }
+            Assert.False(File.Exists(hookPath));
+            Assert.Equal(orphanChain, File.ReadAllText(chainedHookPath));
+            TestProjectHelper.DeleteFile(chainedHookPath);
+
+            const string customHook = "#!/bin/sh\necho existing\n";
+            File.WriteAllText(hookPath, customHook);
+
+            var chainPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, chainPreview.ExitCode);
+            using (var document = JsonDocument.Parse(chainPreview.StdOut))
+            {
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("chain_existing", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Equal(chainedHookPath, document.RootElement.GetProperty("chained_hook_path").GetString());
+            }
+            Assert.Equal(customHook, File.ReadAllText(hookPath));
+            Assert.False(File.Exists(chainedHookPath));
+
+            const string existingChain = "#!/bin/sh\necho chained\n";
+            File.WriteAllText(chainedHookPath, existingChain);
+
+            var blockedPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, blockedPreview.ExitCode);
+            using (var document = JsonDocument.Parse(blockedPreview.StdOut))
+            {
+                Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+                Assert.True(document.RootElement.GetProperty("dry_run").GetBoolean());
+                Assert.Equal("blocked", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Contains(
+                    "BEGIN CDIDX MANAGED PRE-COMMIT",
+                    document.RootElement.GetProperty("managed_hook_preview").GetString(),
+                    StringComparison.Ordinal);
+            }
+            Assert.Equal(customHook, File.ReadAllText(hookPath));
+            Assert.Equal(existingChain, File.ReadAllText(chainedHookPath));
+
+            var blockedHumanPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, blockedHumanPreview.ExitCode);
+            Assert.Contains("chained hook already exists", blockedHumanPreview.StdErr, StringComparison.Ordinal);
+            Assert.Contains("Planned action: blocked", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Managed hook preview:", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Equal(customHook, File.ReadAllText(hookPath));
+            Assert.Equal(existingChain, File.ReadAllText(chainedHookPath));
+            TestProjectHelper.DeleteFile(chainedHookPath);
+
+            const string staleManagedHook = "#!/bin/sh\n# BEGIN CDIDX MANAGED PRE-COMMIT\necho stale\n# END CDIDX MANAGED PRE-COMMIT\n";
+            File.WriteAllText(hookPath, staleManagedHook);
+
+            var replacePreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, replacePreview.ExitCode);
+            using (var document = JsonDocument.Parse(replacePreview.StdOut))
+            {
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal(staleManagedHook, File.ReadAllText(hookPath));
+
+            File.WriteAllText(hookPath, managedHookPreview);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    hookPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            }
+
+            var noOpPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, noOpPreview.ExitCode);
+            using (var document = JsonDocument.Parse(noOpPreview.StdOut))
+            {
+                Assert.Equal("already_installed", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("none", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal(managedHookPreview, File.ReadAllText(hookPath));
+            Assert.False(File.Exists(chainedHookPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_DryRun_RejectsNonInstallSubcommand_Issue4716()
+    {
+        var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(["status", "--dry-run", "--json"]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(
+            "--dry-run is supported only for hooks install",
+            document.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -255,9 +531,13 @@ public class HookCommandRunnerTests
             var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
             File.WriteAllText(hookPath, "#!/bin/sh\necho existing\n");
 
-            var exitCode = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
+            var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using (var document = JsonDocument.Parse(stdout))
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
             Assert.True(File.Exists(hookPath));
             Assert.True(File.Exists(chainedHookPath));
             Assert.Contains("echo existing", File.ReadAllText(chainedHookPath));
