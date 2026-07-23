@@ -210,7 +210,7 @@ local index automatically:
 
 | Command | Use |
 |---|---|
-| `cdidx hooks install` | Install the optional git pre-commit hook. |
+| `cdidx hooks install [--dry-run]` | Install the optional git pre-commit hook, or preview it without writing. |
 | `cdidx hooks status` | Show whether the hook is installed. |
 | `cdidx hooks uninstall` | Remove the hook. |
 
@@ -218,6 +218,8 @@ local index automatically:
 |---|---|
 | Refresh command | The installed hook runs `cdidx index <selected-project-path> --quiet` before the commit completes. When `--project` is omitted, the selected path is the current directory at install time. |
 | Quiet mode | `--quiet` suppresses normal progress and success output for hook contexts while still printing indexing errors to stderr and returning a non-zero exit code. |
+| Install preview | `cdidx hooks install --dry-run` does not create or change hook files. Human output prints the planned managed hook, while JSON adds `dry_run: true`, `planned_action` (`create`, `replace_managed`, `chain_existing`, `none`, or `blocked`), and `managed_hook_preview`. |
+| Install result | A real install returns `status: installed` when it creates the hook, `status: updated` when it replaces managed content, repairs a non-executable or non-UTF-8/no-BOM managed hook, or chains an existing custom hook, and `status: already_installed` without rewriting when the exact executable UTF-8/no-BOM managed hook is already present. |
 | Status JSON diagnostics | `cdidx hooks status --json` keeps `project_path`, `hook_path`, and `chained_hook_path` for compatibility, and also emits `diagnostic_project_path`, `diagnostic_hook_path`, and `diagnostic_chained_hook_path` with path-sanitized values for logs and support bundles. |
 | Existing hooks | If `.git/hooks/pre-commit` already exists, `cdidx hooks install` moves it to `.git/hooks/pre-commit.cdidx-chain` and calls it after the cdidx refresh, preserving tools such as Husky, pre-commit, and lefthook. |
 | Intentional skip | Use `git commit --no-verify` when you intentionally need to skip all pre-commit hooks. |
@@ -1715,6 +1717,8 @@ cdidx report --output report.tgz --json
 | `--no-log` | | Skip the lifecycle log entirely. A valid saved `last-failure.json` event is still included because it is independent of lifecycle logging. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable stdout summary envelope (`output_path`, `version`, `artifact_format`, `artifact_media_type`, `recommended_extensions`, `json_metadata_stdout_only`, `warnings`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `last_failure_included`, `db_included`, `db_path`) instead of the human-friendly output. |
+
+In JSON mode, `output_path` is the generated artifact's basename so automation retains a safe handle even with `--redact-paths`; diagnostic paths such as `db_path` remain `[redacted]`.
 
 ## Search query syntax
 
@@ -3336,7 +3340,7 @@ pre-commit hook をインストールします:
 
 | コマンド | 用途 |
 |---|---|
-| `cdidx hooks install` | 任意の git pre-commit hook をインストール。 |
+| `cdidx hooks install [--dry-run]` | 任意の git pre-commit hook をインストール、または書き込まずにプレビュー。 |
 | `cdidx hooks status` | hook のインストール状態を表示。 |
 | `cdidx hooks uninstall` | hook を削除。 |
 
@@ -3344,6 +3348,8 @@ pre-commit hook をインストールします:
 |---|---|
 | 更新コマンド | インストールされた hook はコミット完了前に `cdidx index <selected-project-path> --quiet` を実行します。`--project` を省略した場合、選択パスはインストール時のカレントディレクトリです。 |
 | quiet mode | `--quiet` は hook 環境向けに通常の進捗・成功出力を抑制しつつ、indexing エラーは引き続き stderr に出力し、非ゼロの終了コードを返します。 |
+| インストールのプレビュー | `cdidx hooks install --dry-run` は hook ファイルを作成・変更しません。human 出力では予定される managed hook を表示し、JSON には `dry_run: true`、`planned_action`（`create`、`replace_managed`、`chain_existing`、`none`、`blocked` のいずれか）、`managed_hook_preview` を追加します。 |
+| インストール結果 | 実際のインストールでは、hook を新規作成した場合は `status: installed`、managed content の置換、実行不可または UTF-8/no-BOM 以外になった managed hook の修復、あるいは既存 custom hook の chain 化を行った場合は `status: updated`、同一かつ実行可能な UTF-8/no-BOM の managed hook がすでに存在して再書き込みを行わなかった場合は `status: already_installed` を返します。 |
 | status JSON 診断 | `cdidx hooks status --json` は互換性のため `project_path`、`hook_path`、`chained_hook_path` を維持しつつ、ログやサポートバンドル向けに path をサニタイズした `diagnostic_project_path`、`diagnostic_hook_path`、`diagnostic_chained_hook_path` も出力します。 |
 | 既存 hook の扱い | リポジトリに `.git/hooks/pre-commit` がある場合、`cdidx hooks install` はそれを `.git/hooks/pre-commit.cdidx-chain` に移動し、cdidx の更新後に呼び出すため、Husky、pre-commit、lefthook などのツールも維持されます。 |
 | 意図的な skip | すべての pre-commit hook を意図的にスキップする必要があるときは `git commit --no-verify` を使ってください。 |
@@ -4810,6 +4816,8 @@ cdidx report --output report.tgz --json
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定した stdout summary JSON（`output_path` / `version` / `artifact_format` / `artifact_media_type` / `recommended_extensions` / `json_metadata_stdout_only` / `warnings` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `last_failure_included` / `db_included` / `db_path`）を出力します。 |
 
+JSON mode の `output_path` は生成した artifact の basename を返すため、`--redact-paths` を指定しても automation は安全な handle を保持できます。`db_path` などの診断用 path は引き続き `[redacted]` です。
+
 ## 検索クエリ構文
 
 既定の `cdidx search` は、明示的に raw FTS5 を選ばない限り literal-safe です:
@@ -5612,11 +5620,17 @@ cdidx .                                    # フルインクリメンタル更�
 commit ごとに自動更新したい場合は、任意の git pre-commit hook を使えます:
 
 ```bash
+cdidx hooks install --dry-run
 cdidx hooks install
 cdidx hooks status
 cdidx hooks uninstall
 ```
 
+`cdidx hooks install --dry-run` は hook file を変更せず、予定する操作と managed
+hook をプレビューします。実際の install は新規作成時に `installed`、managed
+content の置換、実行不可または UTF-8/no-BOM 以外になった managed hook の修復、
+あるいは custom hook の chain 化時に `updated`、同一かつ実行可能な UTF-8/no-BOM
+の内容で変更不要の場合に `already_installed` を返します。
 インストールされた hook は commit 完了前に `cdidx index <selected-project-path> --quiet` を実行します。
 `--project` を省略した場合、選択パスはインストール時のカレントディレクトリです。
 `--quiet` は hook 向けに通常の進捗と成功出力を抑制しますが、indexing error は
