@@ -91,6 +91,15 @@ public class DbContext : IDisposable
         CreateFtsChunksTrigramInsertTriggerSql + ";\n"
         + CreateFtsChunksTrigramDeleteTriggerSql + ";\n"
         + CreateFtsChunksTrigramUpdateTriggerSql;
+    internal const string CountFtsChunksTrigramSyncTriggersSql = """
+        SELECT COUNT(*)
+        FROM sqlite_master
+        WHERE type = 'trigger'
+          AND name IN (
+              'fts_chunks_trigram_ai',
+              'fts_chunks_trigram_ad',
+              'fts_chunks_trigram_au')
+        """;
     internal const string CreateAllFtsChunksSyncTriggersSql =
         CreateFtsChunksSyncTriggersSql + ";\n"
         + CreateFtsChunksTrigramSyncTriggersSql;
@@ -2352,7 +2361,9 @@ public class DbContext : IDisposable
 
     public void InitializeSchema()
     {
-        _rebuildTrigramFtsAfterSchemaMigration = !TableExists(FtsChunksTrigramTableName);
+        _rebuildTrigramFtsAfterSchemaMigration =
+            !TableExists(FtsChunksTrigramTableName)
+            || CountFtsChunksTrigramSyncTriggers() != 3;
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
         try
         {
@@ -2364,6 +2375,15 @@ public class DbContext : IDisposable
         {
             _schemaCache?.Refresh();
         }
+    }
+
+    private int CountFtsChunksTrigramSyncTriggers()
+    {
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = CountFtsChunksTrigramSyncTriggersSql;
+        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "trigram FTS synchronization trigger count");
     }
 
     private void InitializeSchemaInOwnedTransaction(string legacyAlterTable)

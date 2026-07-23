@@ -406,9 +406,22 @@ public partial class DbReader
             return new FindSearchPlan("line_scan", "unsupported_query_characters", null);
         if (!HasTable(DbContext.FtsChunksTrigramTableName))
             return new FindSearchPlan("line_scan", "trigram_index_unavailable", null);
+        if (DbWriter.IsFtsBulkLoadMarkerSet(GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey)))
+            return new FindSearchPlan("line_scan", "trigram_index_rebuilding", null);
+        if (!HasAllTrigramFtsSyncTriggers())
+            return new FindSearchPlan("line_scan", "trigram_index_unsynchronized", null);
 
         var phrase = "\"" + query.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
         return new FindSearchPlan("indexed_trigram", null, phrase);
+    }
+
+    private bool HasAllTrigramFtsSyncTriggers()
+    {
+        using var command = _conn.CreateCommand();
+        command.CommandText = DbContext.CountFtsChunksTrigramSyncTriggersSql;
+        return SqliteCommandPolicy.ReadInt32Scalar(
+            command,
+            "find trigram FTS synchronization trigger count") == 3;
     }
 
     private SqliteCommand CreateFindFileCommand(

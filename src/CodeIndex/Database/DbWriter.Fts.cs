@@ -217,7 +217,7 @@ public partial class DbWriter
             : $"pid:{pid}:token:{CurrentProcessIncarnationToken:N}";
     }
 
-    private static bool IsFtsBulkLoadMarkerSet(string? marker)
+    internal static bool IsFtsBulkLoadMarkerSet(string? marker)
         => string.Equals(marker, "true", StringComparison.OrdinalIgnoreCase)
            || TryGetFtsBulkLoadOwnerPid(marker, out _);
 

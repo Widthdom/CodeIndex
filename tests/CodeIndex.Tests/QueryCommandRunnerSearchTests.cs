@@ -10791,6 +10791,61 @@ jobs:
         }
     }
 
+    [Fact]
+    public void RunFind_AllScopeBulkLoadMarkerFallsBackFromStaleTrigramIndex_Issue4725()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_bulk_trigram_fallback_4725");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/bulk.txt",
+                "text",
+                "content before bulk update\n");
+
+            using var writerDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(writerDb.Connection);
+            writer.SuspendFtsSyncTriggersForBulkLoad();
+            try
+            {
+                using (var update = writerDb.Connection.CreateCommand())
+                {
+                    update.CommandText = """
+                        UPDATE chunks
+                        SET content = 'bulk-indexed-needle'
+                        WHERE file_id = (SELECT id FROM files WHERE path = 'src/bulk.txt')
+                        """;
+                    Assert.Equal(1, update.ExecuteNonQuery());
+                }
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                    ["bulk-indexed-needle", "--db", dbPath, "--all", "--json", "--count"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal("line_scan", document.RootElement.GetProperty("search_strategy").GetString());
+                Assert.Equal(
+                    "trigram_index_rebuilding",
+                    document.RootElement.GetProperty("search_fallback_reason").GetString());
+                Assert.True(document.RootElement.GetProperty("authoritative_count").GetBoolean());
+            }
+            finally
+            {
+                writer.RestoreFtsSyncTriggers();
+                writer.RebuildFtsFromChunks();
+                writer.ClearFtsBulkLoadInProgress();
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("alpha", false, true, "regex")]
     [InlineData("alpha", true, false, "exact_source_normalization")]
@@ -10868,6 +10923,65 @@ jobs:
             var reader = new DbReader(migratedDb.Connection);
             var migrated = reader.CountFindInFiles(
                 "legacy-indexed-needle",
+                useIndexedLiteralCandidates: true);
+
+            Assert.Equal(1, migrated.Count);
+            Assert.Equal("indexed_trigram", migrated.Scan.SearchStrategy);
+            Assert.Null(migrated.Scan.SearchFallbackReason);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllScopeMigrationRepairsExistingTrigramTableWithoutSyncTriggers_Issue4725()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_stale_trigram_migration_4725");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/downgraded.txt",
+                "text",
+                "content before older writer rebuild\n");
+
+            using (var downgradedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var command = downgradedDb.Connection.CreateCommand())
+            {
+                command.CommandText = """
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_ai;
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_ad;
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_au;
+                    UPDATE chunks
+                    SET content = 'post-downgrade-needle'
+                    WHERE file_id = (SELECT id FROM files WHERE path = 'src/downgraded.txt');
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var (fallbackExitCode, fallbackStdout, fallbackStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["post-downgrade-needle", "--db", dbPath, "--all", "--json", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, fallbackExitCode);
+            Assert.Equal(string.Empty, fallbackStderr);
+            using (var fallbackDocument = ParseJsonOutput(fallbackStdout))
+            {
+                Assert.Equal(1, fallbackDocument.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal("line_scan", fallbackDocument.RootElement.GetProperty("search_strategy").GetString());
+                Assert.Equal(
+                    "trigram_index_unsynchronized",
+                    fallbackDocument.RootElement.GetProperty("search_fallback_reason").GetString());
+            }
+
+            using var migratedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            migratedDb.InitializeSchema();
+            var reader = new DbReader(migratedDb.Connection);
+            var migrated = reader.CountFindInFiles(
+                "post-downgrade-needle",
                 useIndexedLiteralCandidates: true);
 
             Assert.Equal(1, migrated.Count);
