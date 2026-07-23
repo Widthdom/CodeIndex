@@ -85,6 +85,22 @@ public class TestProjectHelperTests
     }
 
     [Fact]
+    public void InsertIndexedFile_ReleasePoolForFileAccess_AllowsExclusiveRawRead()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_fixture_database_raw_read");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/App.cs",
+            "csharp",
+            "public class App {}\n",
+            releasePoolForFileAccess: true);
+
+        using var stream = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.None);
+        Assert.True(stream.Length > 0);
+    }
+
+    [Fact]
     public void CreateExecutableExtensionTestProjectScope_UsesPlatformRootAndDeletesProject()
     {
         var configuredRoot = Environment.GetEnvironmentVariable(

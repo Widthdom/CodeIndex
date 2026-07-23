@@ -10,6 +10,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -253,7 +254,14 @@ internal static class TestProjectHelper
         return dbPath;
     }
 
-    internal static void InsertIndexedFile(string dbPath, string path, string lang, string content, DateTime? modified = null, bool isGenerated = false)
+    internal static void InsertIndexedFile(
+        string dbPath,
+        string path,
+        string lang,
+        string content,
+        DateTime? modified = null,
+        bool isGenerated = false,
+        bool releasePoolForFileAccess = false)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -289,8 +297,10 @@ internal static class TestProjectHelper
             var symbols = SymbolExtractor.Extract(fileId, lang, normalized, path);
             writer.InsertSymbols(symbols);
             writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols, path));
-        }
 
+            if (releasePoolForFileAccess)
+                SqliteConnection.ClearPool(db.Connection);
+        }
     }
 
     internal static void DeleteSqliteDatabaseFiles(string dbPath)
