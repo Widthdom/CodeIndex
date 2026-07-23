@@ -9,6 +9,7 @@ affected:
   - tests/CodeIndex.Tests/IndexCommandRunnerFullScanTests.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerReferencesTests.cs
   - tests/CodeIndex.Tests/InstallScriptTests.cs
+  - tests/CodeIndex.Tests/McpServerToolsCallTests.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowDockerContractTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorCSharpTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorTests.cs
@@ -28,6 +29,7 @@ affected:
 - **Production SQL boundaries reuse indexed workspaces** — Line-end comment, `USING` / `MERGE`, semicolonless temporary-table, non-code masking, and TRUNCATE variants now share one production CLI indexing subprocess per family while path filters preserve exact contracts.
 - **Non-coverage net8 lanes run complementary test shards** — Windows and macOS split `IndexCommandRunnerTests` from the remainder into separate processes; Ubuntu coverage remains full-suite, retries retain or intersect shard filters, and artifacts include shard identity.
 - **Dense extractor guards retain CI timing headroom** — C# and Java dense-constructor fixtures remain half-sized while restoring ten-second runaway ceilings, keeping the shorter workloads without false failures from coverage instrumentation.
+- **MCP C# stat-race coverage is enumeration-order independent** — Source drift is injected after final workspace validation and before the file loop, so the actual-skip revalidation contract no longer depends on native directory order.
 
 ## 日本語
 
@@ -42,3 +44,4 @@ affected:
 - **production SQL boundaryでindexed workspaceを再利用します** — line-end comment、`USING` / `MERGE`、semicolonless temporary-table、non-code masking、TRUNCATE variantはfamilyごとにproduction CLI indexing subprocessを1回だけ共有し、path filterでexact contractを維持します。
 - **coverageなしのnet8 laneを補完的なtest shardで実行します** — WindowsとmacOSでは`IndexCommandRunnerTests`と残りを別processに分けます。Ubuntuのcoverageはfull suiteを維持し、retryはshard filterを保持または交差させ、artifact名にはshard identityを含めます。
 - **dense extractor guardでCI計測の余裕を維持します** — C#とJavaのdense constructor fixtureは半減したまま10秒のrunaway上限を復元し、短いworkloadを保ちながらcoverage instrumentationによる誤失敗を防ぎます。
+- **MCP C# stat-race coverageを列挙順に依存させません** — source driftを最終workspace validation後かつfile loop前に注入し、actual-skip revalidation contractがnative directory順序に左右されないようにします。

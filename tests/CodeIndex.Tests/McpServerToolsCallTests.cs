@@ -9835,8 +9835,7 @@ public partial class McpServerTests
             $"mcp_index_csharp_actual_skip_race_{Guid.NewGuid():N}");
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_csharp_actual_skip_race");
         var previousRevalidationHook = McpServer.McpIndexCSharpFinalStatRevalidationForTesting;
-        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
-        var loadedPaths = new HashSet<string>(StringComparer.Ordinal);
+        var previousReferencePurgeHook = McpServer.McpIndexReferencePurgeForTesting;
         var finalRevalidationCompleted = false;
         var interfaceRewritten = false;
         try
@@ -9863,13 +9862,11 @@ public partial class McpServerTests
             File.SetLastWriteTimeUtc(earlierNonCSharpPath, DateTime.UtcNow.AddSeconds(2));
             McpServer.McpIndexCSharpFinalStatRevalidationForTesting = () =>
                 finalRevalidationCompleted = true;
-            McpServer.McpIndexFileContentLoadForTesting = path =>
+            McpServer.McpIndexReferencePurgeForTesting = () =>
             {
-                loadedPaths.Add(path);
-                if (path != "A.py" || interfaceRewritten)
-                    return;
-
+                previousReferencePurgeHook?.Invoke();
                 Assert.True(finalRevalidationCompleted);
+                Assert.False(interfaceRewritten);
                 WriteInterface(hasStaticContract: false);
                 File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
                 interfaceRewritten = true;
@@ -9879,7 +9876,6 @@ public partial class McpServerTests
 
             Assert.False(partialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, partialResponse.ToJsonString());
             Assert.True(interfaceRewritten);
-            Assert.Equal(["A.py"], loadedPaths.Order(StringComparer.Ordinal));
             var partialStructured = partialResponse["result"]!["structuredContent"]!;
             var partialSummary = partialStructured["summary"]!;
             Assert.Equal(1, partialSummary["errors"]!.GetValue<int>());
@@ -9898,7 +9894,7 @@ public partial class McpServerTests
             }
 
             McpServer.McpIndexCSharpFinalStatRevalidationForTesting = previousRevalidationHook;
-            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            McpServer.McpIndexReferencePurgeForTesting = previousReferencePurgeHook;
             var recoveryResponse = CallIndex(server, fixtureDir);
             Assert.False(recoveryResponse["result"]?["isError"]?.GetValue<bool>() ?? false, recoveryResponse.ToJsonString());
             Assert.Equal(0, recoveryResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
@@ -9942,7 +9938,7 @@ public partial class McpServerTests
         finally
         {
             McpServer.McpIndexCSharpFinalStatRevalidationForTesting = previousRevalidationHook;
-            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            McpServer.McpIndexReferencePurgeForTesting = previousReferencePurgeHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
