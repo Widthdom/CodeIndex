@@ -1449,13 +1449,16 @@ public partial class McpServer
         var format = ReadResponseFormat(args);
         if (format is not ("full" or "compact"))
             return CreateToolErrorResponse(id, "format must be one of full, compact");
+        if (!TryReadStatusProjectionFields(args, out var projectionFields, out var projectionError))
+            return CreateToolErrorResponse(id, projectionError!);
         if (!TryReadStatusScopes(args, out var statusScopes, out var scopeError))
             return CreateToolErrorResponse(id, scopeError!);
         var includeConfig = args?["config"]?.GetValue<bool>() ?? false;
         var includeLogPath = args?["logPath"]?.GetValue<bool>() ?? false;
         var runUpdateCheck = args?["updateCheck"]?.GetValue<bool>() ?? false;
 
-        return WithDbReader(id, args, reader =>
+        string? unavailableProjectionError = null;
+        var response = WithDbReader(id, args, reader =>
         {
             var requestToken = _currentRequestToken.Value;
             var status = reader.GetStatus();
@@ -1606,11 +1609,101 @@ public partial class McpServer
                 if (explainPayload is not null)
                     structured["explain"] = explainPayload;
             }
-            return CreateToolResult(id, "Database stats returned.", structured);
+            if (projectionFields is not null)
+            {
+                EnrichToolStructuredContent(structured);
+                var projected = new JsonObject();
+                foreach (var field in projectionFields)
+                {
+                    if (!structured.TryGetPropertyValue(field, out var value))
+                    {
+                        unavailableProjectionError =
+                            $"Status field '{field}' is not available in {format} format. Use an exact top-level field name returned by that format.";
+                        return new JsonObject();
+                    }
+                    projected[field] = value?.DeepClone();
+                }
+                if (!projected.ContainsKey("api_version"))
+                    projected["api_version"] = structured["api_version"]!.DeepClone();
+                structured = projected;
+            }
+            return CreateToolResult(
+                id,
+                "Database stats returned.",
+                structured,
+                enrichStructuredContent: projectionFields is null);
         });
+        return unavailableProjectionError is null
+            ? response
+            : CreateToolErrorResponse(id, unavailableProjectionError);
     }
 
     private sealed record McpStatusCheckFailure(string Name, bool IsStale, string Diagnostic);
+
+    private static bool TryReadStatusProjectionFields(
+        JsonNode? args,
+        out IReadOnlyList<string>? fields,
+        out string? error)
+    {
+        fields = null;
+        error = null;
+        if (args is not JsonObject argsObject || !argsObject.ContainsKey("fields"))
+            return true;
+
+        var node = argsObject["fields"];
+        if (node is null)
+        {
+            error = "fields must be a non-empty string or string array.";
+            return false;
+        }
+        IEnumerable<JsonNode?> values = node is JsonArray array ? array : new JsonNode?[] { node };
+        if (node is JsonArray fieldsArray
+            && (fieldsArray.Count == 0 || fieldsArray.Count > MaxStatusProjectionFields))
+        {
+            error = $"fields must contain between 1 and {MaxStatusProjectionFields} entries.";
+            return false;
+        }
+
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var totalCharacters = 0;
+        foreach (var value in values)
+        {
+            if (value is not JsonValue jsonValue
+                || !jsonValue.TryGetValue<string>(out var field)
+                || string.IsNullOrWhiteSpace(field))
+            {
+                error = "fields entries must be non-empty strings.";
+                return false;
+            }
+
+            field = field.Trim();
+            if (field.Length > MaxStatusProjectionFieldCharacters)
+            {
+                error = $"fields entries must be no longer than {MaxStatusProjectionFieldCharacters} characters.";
+                return false;
+            }
+            if (field.Contains('.', StringComparison.Ordinal)
+                || field.Contains('[', StringComparison.Ordinal)
+                || field.Contains(']', StringComparison.Ordinal))
+            {
+                error = "fields supports exact top-level field names only; nested field paths are not supported.";
+                return false;
+            }
+
+            totalCharacters += field.Length;
+            if (totalCharacters > MaxStatusProjectionCharacters)
+            {
+                error = $"fields must contain no more than {MaxStatusProjectionCharacters} characters in total.";
+                return false;
+            }
+            if (seen.Add(field))
+                result.Add(field);
+        }
+
+        fields = result;
+        return true;
+    }
 
     private static bool TryReadStatusScopes(JsonNode? args, out HashSet<string>? scopes, out string? error)
     {

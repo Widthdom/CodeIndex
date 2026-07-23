@@ -28,6 +28,9 @@ public partial class DbWriter
     {
         var stopwatch = Stopwatch.StartNew();
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')", cancellationToken);
+        Execute(
+            $"INSERT INTO {DbContext.FtsChunksTrigramTableName}({DbContext.FtsChunksTrigramTableName}) VALUES('optimize')",
+            cancellationToken);
         stopwatch.Stop();
         SetMetaValues(
             (FtsIncrementalWritesSinceOptimizeMetaKey, "0"),
@@ -58,6 +61,10 @@ public partial class DbWriter
             System.Globalization.CultureInfo.InvariantCulture,
             $"INSERT INTO fts_chunks(fts_chunks, rank) VALUES('merge', {-workTargetPages})");
         Execute(sql, cancellationToken);
+        var trigramSql = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"INSERT INTO {DbContext.FtsChunksTrigramTableName}({DbContext.FtsChunksTrigramTableName}, rank) VALUES('merge', {-workTargetPages})");
+        Execute(trigramSql, cancellationToken);
 
         SetMeta(FtsIncrementalWritesSinceMergeMetaKey, "0");
     }
@@ -75,7 +82,7 @@ public partial class DbWriter
         try
         {
             FtsMaintenanceBeforeExecuteForTesting?.Invoke(FtsDropTriggersMaintenancePhase);
-            Execute(DbContext.DropFtsChunksSyncTriggersSql);
+            Execute(DbContext.DropAllFtsChunksSyncTriggersSql);
             _markWriteWork?.Invoke();
         }
         catch
@@ -105,7 +112,7 @@ public partial class DbWriter
     public void RestoreFtsSyncTriggers(CancellationToken cancellationToken = default)
     {
         FtsMaintenanceBeforeExecuteForTesting?.Invoke(FtsRestoreTriggersMaintenancePhase);
-        Execute(DbContext.CreateFtsChunksSyncTriggersSql, cancellationToken);
+        Execute(DbContext.CreateAllFtsChunksSyncTriggersSql, cancellationToken);
         _markWriteWork?.Invoke();
     }
 
@@ -119,6 +126,9 @@ public partial class DbWriter
     {
         FtsMaintenanceBeforeExecuteForTesting?.Invoke(FtsRebuildMaintenancePhase);
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')", cancellationToken);
+        Execute(
+            $"INSERT INTO {DbContext.FtsChunksTrigramTableName}({DbContext.FtsChunksTrigramTableName}) VALUES('rebuild')",
+            cancellationToken);
         if (resetIncrementalWriteCounter)
         {
             SetMetaValues(
@@ -207,7 +217,7 @@ public partial class DbWriter
             : $"pid:{pid}:token:{CurrentProcessIncarnationToken:N}";
     }
 
-    private static bool IsFtsBulkLoadMarkerSet(string? marker)
+    internal static bool IsFtsBulkLoadMarkerSet(string? marker)
         => string.Equals(marker, "true", StringComparison.OrdinalIgnoreCase)
            || TryGetFtsBulkLoadOwnerPid(marker, out _);
 
