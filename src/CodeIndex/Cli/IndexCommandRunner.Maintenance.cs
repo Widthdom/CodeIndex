@@ -13,6 +13,32 @@ public static partial class IndexCommandRunner
         "--db", "--json", "--dry-run", "--help",
         "--no-checkpoint",
     ];
+    private static readonly (string Name, string[] Columns)[] OptimizeObjectDefinitions =
+    [
+        ("files", ["path", "lang", "checksum"]),
+        ("chunks", ["content"]),
+        ("symbols", ["kind", "sub_kind", "name", "signature", "container_kind", "container_name", "container_qualified_name", "family_key", "visibility", "return_type", "metadata_target_source", "name_folded"]),
+        ("reference_lines", ["context"]),
+        ("symbol_references", ["symbol_name", "reference_kind", "context", "container_kind", "container_name", "symbol_name_folded", "container_name_folded"]),
+        ("file_issues", ["kind", "message", "origin", "severity"]),
+        ("codeindex_meta", ["key", "value"]),
+        ("fts_chunks_data", ["block"]),
+        ("fts_chunks_idx", ["term"]),
+        ("fts_chunks_content", ["c0"]),
+        ("fts_chunks_docsize", ["sz"]),
+        ("fts_chunks_config", ["k", "v"]),
+        ("fts_chunks_trigram_data", ["block"]),
+        ("fts_chunks_trigram_idx", ["term"]),
+        ("fts_chunks_trigram_content", ["c0"]),
+        ("fts_chunks_trigram_docsize", ["sz"]),
+        ("fts_chunks_trigram_config", ["k", "v"]),
+    ];
+    private static readonly string[] OptimizeFtsObjectNames =
+    [
+        .. OptimizeObjectDefinitions
+            .Where(definition => definition.Name.StartsWith("fts_chunks_", StringComparison.Ordinal))
+            .Select(definition => definition.Name),
+    ];
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions) =>
         RunBackfillFold(cmdArgs, jsonOptions, cancellationForTesting: null);
@@ -205,11 +231,7 @@ public static partial class IndexCommandRunner
                 "codeindex_meta");
             var ftsSizeBytes = SumObjectSizes(
                 objectSizes,
-                "fts_chunks_data",
-                "fts_chunks_idx",
-                "fts_chunks_content",
-                "fts_chunks_docsize",
-                "fts_chunks_config");
+                OptimizeFtsObjectNames);
             var optimizationRecommended = writesSinceOptimize >= DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold;
             stopwatch.Stop();
 
@@ -329,16 +351,23 @@ public static partial class IndexCommandRunner
             try
             {
                 using var cmd = db.Connection.CreateCommand();
-                cmd.CommandText = """
+                var objectNameParameters = OptimizeObjectDefinitions
+                    .Select((_, index) => $"@objectName{index}")
+                    .ToArray();
+                cmd.CommandText = $"""
                     SELECT name, SUM(pgsize)
                     FROM dbstat
-                    WHERE name IN (
-                        'files', 'chunks', 'symbols', 'reference_lines', 'symbol_references',
-                        'file_issues', 'codeindex_meta', 'fts_chunks_data', 'fts_chunks_idx',
-                        'fts_chunks_content', 'fts_chunks_docsize', 'fts_chunks_config')
+                    WHERE name IN ({string.Join(", ", objectNameParameters)})
                     GROUP BY name
                     ORDER BY name
                     """;
+                for (var index = 0; index < OptimizeObjectDefinitions.Length; index++)
+                {
+                    SqliteCommandPolicy.AddText(
+                        cmd,
+                        objectNameParameters[index],
+                        OptimizeObjectDefinitions[index].Name);
+                }
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                     sizes[reader.GetString(0)] = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
@@ -363,23 +392,7 @@ public static partial class IndexCommandRunner
     private static Dictionary<string, long> ReadOptimizeLogicalPayloadSizes(DbContext db)
     {
         var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
-        (string Name, string[] Columns)[] objects =
-        [
-            ("files", ["path", "lang", "checksum"]),
-            ("chunks", ["content"]),
-            ("symbols", ["kind", "sub_kind", "name", "signature", "container_kind", "container_name", "container_qualified_name", "family_key", "visibility", "return_type", "metadata_target_source", "name_folded"]),
-            ("reference_lines", ["context"]),
-            ("symbol_references", ["symbol_name", "reference_kind", "context", "container_kind", "container_name", "symbol_name_folded", "container_name_folded"]),
-            ("file_issues", ["kind", "message", "origin", "severity"]),
-            ("codeindex_meta", ["key", "value"]),
-            ("fts_chunks_data", ["block"]),
-            ("fts_chunks_idx", ["term"]),
-            ("fts_chunks_content", ["c0"]),
-            ("fts_chunks_docsize", ["sz"]),
-            ("fts_chunks_config", ["k", "v"]),
-        ];
-
-        foreach (var (name, candidateColumns) in objects)
+        foreach (var (name, candidateColumns) in OptimizeObjectDefinitions)
         {
             try
             {
