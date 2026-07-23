@@ -898,23 +898,10 @@ internal static class ExportImportCommandRunner
                 WHERE reference_id NOT IN (SELECT id FROM symbol_references)
                    OR symbol_id NOT IN (SELECT id FROM symbols);
 
-                UPDATE symbol_references
-                SET resolution_candidate_count = (
-                    SELECT COUNT(*)
-                    FROM symbol_reference_candidates c
-                    WHERE c.reference_id = symbol_references.id
-                );
-
-                UPDATE symbol_references
-                SET resolution_state = CASE
-                    WHEN resolution_candidate_count = 0 THEN 'unresolved'
-                    ELSE 'ambiguous'
-                END
-                WHERE target_symbol_id IS NULL;
-
                 DROP TABLE archive_scope_files;
                 """;
             pruneCommand.ExecuteNonQuery();
+            DbWriter.RefreshRetainedReferenceResolution(connection, transaction, cancellationToken);
             transaction.Commit();
         }
 
@@ -1024,19 +1011,30 @@ internal static class ExportImportCommandRunner
                         Message: $"destination database exceeds the comparison limit of {ConsoleUi.FormatBytes(MaxImportDatabaseBytes)}");
                 }
 
-                using var target = new FileStream(
-                    destinationSnapshotPath,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    ImportCopyBufferSize,
-                    FileOptions.SequentialScan);
-                CopyToExactLength(
-                    source,
-                    target,
-                    source.Length,
-                    "destination database comparison snapshot",
-                    cancellationToken);
+                Span<byte> header = stackalloc byte[16];
+                if (source.Read(header) != header.Length || !header.SequenceEqual("SQLite format 3\0"u8))
+                {
+                    return new ImportDestinationDeltaResult(
+                        DestinationExists: true,
+                        Comparable: false,
+                        Status: "destination_unreadable",
+                        Comparison: null,
+                        Message: "destination database could not be compared from a non-mutating snapshot: file header is not SQLite format 3");
+                }
+            }
+
+            try
+            {
+                CreateDatabaseSnapshot(destinationDbPath, destinationSnapshotPath, cancellationToken);
+            }
+            catch (Exception ex) when (ex is SqliteException or CodeIndexException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return new ImportDestinationDeltaResult(
+                    DestinationExists: true,
+                    Comparable: false,
+                    Status: "destination_unreadable",
+                    Comparison: null,
+                    Message: $"destination database could not be compared from a non-mutating snapshot: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             }
 
             if (!DbContext.TryValidateExistingCodeIndexDb(

@@ -247,7 +247,7 @@ public static class DiffCommandRunner
             value
         """;
 
-    private const string ReferenceRowsSql = """
+    private const string LegacyReferenceRowsSql = """
         SELECT
             COALESCE(files.path, ''),
             symbol_references.symbol_name,
@@ -321,6 +321,8 @@ public static class DiffCommandRunner
         using var rightConnection = OpenReadOnlyConnection(options.RightDb!);
         var leftSymbolRowsSql = BuildSymbolRowsSql(leftConnection);
         var rightSymbolRowsSql = BuildSymbolRowsSql(rightConnection);
+        var leftReferenceRowsSql = BuildReferenceRowsSql(leftConnection);
+        var rightReferenceRowsSql = BuildReferenceRowsSql(rightConnection);
 
         if (!options.SummaryOnly)
         {
@@ -344,7 +346,7 @@ public static class DiffCommandRunner
             AddPagingDiagnostic(diagnostics, symbolDiff.Omitted, symbolDiff.HasMore, "symbol differences", options);
 
             cancellationToken.ThrowIfCancellationRequested();
-            var referenceDiff = DiffOrderedRows(leftConnection, rightConnection, ReferenceRowsSql, ReferenceRowsSql, options.Limit, options.Offset, cancellationToken);
+            var referenceDiff = DiffOrderedRows(leftConnection, rightConnection, leftReferenceRowsSql, rightReferenceRowsSql, options.Limit, options.Offset, cancellationToken);
             referencesOnlyInLeft = referenceDiff.OnlyInLeft;
             referencesOnlyInRight = referenceDiff.OnlyInRight;
             identical = identical && referenceDiff.Equal;
@@ -377,7 +379,7 @@ public static class DiffCommandRunner
                 RowsEqual(leftConnection, rightConnection, MetaRowsSql, cancellationToken) &&
                 (options.Detailed || RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, cancellationToken)) &&
                 (options.Detailed || RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken)) &&
-                (options.Detailed || RowsEqual(leftConnection, rightConnection, ReferenceRowsSql, cancellationToken));
+                (options.Detailed || RowsEqual(leftConnection, rightConnection, leftReferenceRowsSql, rightReferenceRowsSql, cancellationToken));
         }
 
         var truncated = diagnostics.Count > 0;
@@ -911,6 +913,89 @@ public static class DiffCommandRunner
                 return true;
         }
         return false;
+    }
+
+    private static bool TableExists(SqliteConnection connection, string table)
+    {
+        using var command = SqliteConnectionPolicy.CreateCommand(connection);
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $table";
+        SqliteCommandPolicy.AddText(command, "$table", table);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private static string BuildReferenceRowsSql(SqliteConnection connection)
+    {
+        if (!TableExists(connection, "symbol_reference_candidates")
+            || !ColumnExists(connection, "symbol_references", "source_symbol_id")
+            || !ColumnExists(connection, "symbol_references", "target_symbol_id")
+            || !ColumnExists(connection, "symbol_references", "target_symbol_key")
+            || !ColumnExists(connection, "symbol_references", "target_qualifier")
+            || !ColumnExists(connection, "symbol_references", "resolution_state")
+            || !ColumnExists(connection, "symbol_references", "resolution_candidate_count")
+            || !ColumnExists(connection, "symbols", "container_qualified_name"))
+        {
+            return LegacyReferenceRowsSql;
+        }
+
+        return """
+            SELECT
+                COALESCE(reference_files.path, ''),
+                r.symbol_name,
+                r.symbol_name_folded,
+                r.reference_kind,
+                r.line,
+                r.column_number,
+                r.context,
+                CASE WHEN r.reference_line_id IS NULL THEN 0 ELSE 1 END,
+                COALESCE(reference_line_files.path, ''),
+                reference_lines.line,
+                reference_lines.context,
+                r.container_kind,
+                r.container_name,
+                r.container_name_folded,
+                source_files.lang,
+                source_files.path,
+                source_symbols.kind,
+                COALESCE(source_symbols.container_qualified_name, source_symbols.container_name),
+                source_symbols.name,
+                source_symbols.line,
+                r.target_qualifier,
+                r.resolution_state,
+                r.resolution_candidate_count,
+                r.is_self_reference,
+                r.is_mutual_recursion,
+                r.target_symbol_key,
+                target_files.lang,
+                target_files.path,
+                target_symbols.kind,
+                COALESCE(target_symbols.container_qualified_name, target_symbols.container_name),
+                target_symbols.name,
+                target_symbols.line,
+                candidates.scope_rank,
+                candidate_files.lang,
+                candidate_files.path,
+                candidate_symbols.kind,
+                COALESCE(candidate_symbols.container_qualified_name, candidate_symbols.container_name),
+                candidate_symbols.name,
+                candidate_symbols.line,
+                candidate_symbols.signature
+            FROM symbol_references AS r
+            LEFT JOIN files AS reference_files ON reference_files.id = r.file_id
+            LEFT JOIN reference_lines ON reference_lines.id = r.reference_line_id
+            LEFT JOIN files AS reference_line_files ON reference_line_files.id = reference_lines.file_id
+            LEFT JOIN symbols AS source_symbols ON source_symbols.id = r.source_symbol_id
+            LEFT JOIN files AS source_files ON source_files.id = source_symbols.file_id
+            LEFT JOIN symbols AS target_symbols ON target_symbols.id = r.target_symbol_id
+            LEFT JOIN files AS target_files ON target_files.id = target_symbols.file_id
+            LEFT JOIN symbol_reference_candidates AS candidates ON candidates.reference_id = r.id
+            LEFT JOIN symbols AS candidate_symbols ON candidate_symbols.id = candidates.symbol_id
+            LEFT JOIN files AS candidate_files ON candidate_files.id = candidate_symbols.file_id
+            ORDER BY
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                31, 32, 33, 34, 35, 36, 37, 38, 39, 40
+            """;
     }
 
     private static string BuildSymbolRowsSql(SqliteConnection connection)

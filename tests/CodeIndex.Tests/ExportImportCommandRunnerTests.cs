@@ -813,6 +813,109 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportArchive_ReResolvesRetainedReferencesAfterScopePruning_Issue4714()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_archive_reference_resolution");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/keep/Source.cs", "csharp", "public class Source { }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/keep/Target.cs", "csharp", "public class Target { }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/drop/Target.cs", "csharp", "public class Target { }");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    INSERT INTO symbol_references(
+                        file_id,
+                        symbol_name,
+                        symbol_name_folded,
+                        reference_kind,
+                        line,
+                        column_number,
+                        context,
+                        container_kind,
+                        container_name,
+                        container_name_folded,
+                        source_symbol_id,
+                        resolution_candidate_count,
+                        resolution_state,
+                        is_self_reference,
+                        is_mutual_recursion)
+                    SELECT
+                        source_file.id,
+                        'Target',
+                        'target',
+                        'instantiate',
+                        1,
+                        1,
+                        'new Target()',
+                        'class',
+                        'Source',
+                        'source',
+                        source_symbol.id,
+                        2,
+                        'ambiguous',
+                        1,
+                        1
+                    FROM files source_file
+                    JOIN symbols source_symbol ON source_symbol.file_id = source_file.id
+                    WHERE source_file.path = 'src/keep/Source.cs'
+                      AND source_symbol.name = 'Source';
+
+                    INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+                    SELECT last_insert_rowid(), target_symbol.id, 2
+                    FROM symbols target_symbol
+                    WHERE target_symbol.name = 'Target';
+                    """;
+                command.ExecuteNonQuery();
+            }
+            var archivePath = Path.Combine(projectRoot, "resolved-scope.cdidx.zip");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    [archivePath, "--db", dbPath, "--path", "src/keep/*"],
+                    jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var extractedDb = Path.Combine(projectRoot, "resolved-scope.db");
+            using (var archive = ZipFile.OpenRead(archivePath))
+                archive.GetEntry("codeindex.db")!.ExtractToFile(extractedDb);
+            using var scopedConnection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = extractedDb }.ConnectionString);
+            scopedConnection.Open();
+            using var scopedCommand = scopedConnection.CreateCommand();
+            scopedCommand.CommandText = """
+                SELECT
+                    resolution_candidate_count,
+                    resolution_state,
+                    target_symbol_id,
+                    target_symbol_key,
+                    is_self_reference,
+                    is_mutual_recursion,
+                    (SELECT COUNT(*) FROM symbol_reference_candidates)
+                FROM symbol_references
+                """;
+            using var reader = scopedCommand.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(1, reader.GetInt32(0));
+            Assert.Equal("resolved", reader.GetString(1));
+            Assert.False(reader.IsDBNull(2));
+            Assert.False(reader.IsDBNull(3));
+            Assert.Equal(0, reader.GetInt32(4));
+            Assert.Equal(0, reader.GetInt32(5));
+            Assert.Equal(1, reader.GetInt32(6));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImport_DryRunReportsBoundedDestinationDeltaWithoutReplacingDb_Issue4714()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("import_destination_delta");
@@ -846,6 +949,77 @@ public class ExportImportCommandRunnerTests
             Assert.NotEmpty(comparison.GetProperty("symbols_only_in_right").EnumerateArray());
             Assert.NotEmpty(comparison.GetProperty("chunks_only_in_left").EnumerateArray());
             Assert.NotEmpty(comparison.GetProperty("chunks_only_in_right").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImport_DryRunIncludesCommittedWalRowsWithoutTouchingDestination_Issue4714()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("import_destination_wal_delta");
+        try
+        {
+            var sourceDb = TestProjectHelper.CreateProjectDb(Path.Combine(projectRoot, "source"));
+            TestProjectHelper.InsertIndexedFile(
+                sourceDb,
+                "src/Same.cs",
+                "csharp",
+                "public class Same { }",
+                releasePoolForFileAccess: true);
+            var archivePath = ExportArchive(projectRoot, sourceDb);
+            var destinationDb = Path.Combine(projectRoot, "destination", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationDb)!);
+            File.Copy(sourceDb, destinationDb);
+            using var destinationConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = destinationDb,
+                Pooling = false,
+            }.ConnectionString);
+            destinationConnection.Open();
+            using (var walMode = destinationConnection.CreateCommand())
+            {
+                walMode.CommandText = "PRAGMA journal_mode = WAL";
+                Assert.Equal("wal", walMode.ExecuteScalar() as string);
+            }
+            using (var disableCheckpoint = destinationConnection.CreateCommand())
+            {
+                disableCheckpoint.CommandText = "PRAGMA wal_autocheckpoint = 0";
+                disableCheckpoint.ExecuteNonQuery();
+            }
+            using (var insert = destinationConnection.CreateCommand())
+            {
+                insert.CommandText = """
+                    INSERT INTO files(path, lang, size, lines, checksum)
+                    VALUES ('src/WalOnly.cs', 'csharp', 1, 1, 'wal-only')
+                    """;
+                insert.ExecuteNonQuery();
+            }
+            var destinationBefore = File.ReadAllBytes(destinationDb);
+            var walBefore = File.ReadAllBytes(destinationDb + "-wal");
+            var shmBefore = File.ReadAllBytes(destinationDb + "-shm");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [archivePath, "--db", destinationDb, "--dry-run", "--json"],
+                    jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(destinationBefore, File.ReadAllBytes(destinationDb));
+            Assert.Equal(walBefore, File.ReadAllBytes(destinationDb + "-wal"));
+            Assert.Equal(shmBefore, File.ReadAllBytes(destinationDb + "-shm"));
+            using var document = JsonDocument.Parse(stdout);
+            var comparison = document.RootElement
+                .GetProperty("destination_delta")
+                .GetProperty("comparison");
+            Assert.False(comparison.GetProperty("identical").GetBoolean());
+            Assert.Contains(
+                comparison.GetProperty("files_only_in_left").EnumerateArray(),
+                item => item.GetString() == "src/WalOnly.cs");
         }
         finally
         {

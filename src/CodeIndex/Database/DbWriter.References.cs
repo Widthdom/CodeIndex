@@ -429,6 +429,20 @@ public partial class DbWriter
         WHERE r.is_mutual_recursion IS NOT ({MutualRecursionValueSql})
         """;
 
+    internal static void RefreshRetainedReferenceResolution(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = RefreshReferenceResolutionFullSql + "\n" + RefreshMutualRecursionFlagsSql;
+        using var cancellationRegistration = cancellationToken.Register(command.Cancel);
+        command.ExecuteNonQuery();
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
     /// <summary>
     /// Insert indexed references in batches.
     /// インデックス済み参照をバッチ挿入する。
