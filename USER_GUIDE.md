@@ -1386,7 +1386,9 @@ Use `--parallel <n>` with `--json-summary` to run up to 16 independent read-only
 items concurrently. Each worker uses an isolated query-only SQLite connection
 and isolated stdout/stderr capture; records are still emitted in input order,
 one command failure does not cancel sibling items, and caller cancellation stops
-new work. For clean automation, feed stdin from a pipe or file; an interactive
+new work. A bounded producer/consumer pipeline starts work as each line arrives
+and emits the earliest eligible ordered record without waiting for a full worker
+window or stdin EOF. For clean automation, feed stdin from a pipe or file; an interactive
 TTY may echo typed JSONL before `cdidx` reads it, but that echo is terminal
 behavior rather than process stdout/stderr.
 
@@ -4513,7 +4515,9 @@ stream 全体の既定 budget は 10,485,760 文字です。`--max-output-chars 
 `--json-summary` とともに `--parallel <n>` を使うと、最大 16 個の独立した read-only item を
 並列実行できます。各 worker は分離された query-only SQLite connection と stdout / stderr capture
 を使い、record は完了順にかかわらず入力順で出力されます。1 command の失敗は sibling item を
-cancel せず、caller cancellation は新しい work を停止します。automation で clean な入出力が
+cancel せず、caller cancellation は新しい work を停止します。bounded producer / consumer
+pipeline は各行の到着時に work を開始し、worker window が満杯になることや stdin EOF を待たずに、
+入力順を守って出力可能になった最初の record を出力します。automation で clean な入出力が
 必要な場合は stdin を pipe または file から渡してください。interactive TTY では入力した JSONL が
 `cdidx` の読み取り前に echo される場合がありますが、これは process の stdout / stderr ではなく
 terminal の挙動です。
