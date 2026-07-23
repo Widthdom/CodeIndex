@@ -337,11 +337,15 @@ public class ConsoleUiTests
         Assert.Contains("JSON Lines", referencesStdout);
         Assert.Contains("one JSON object per result", referencesStdout);
         Assert.Contains("stdin is JSON Lines", batchStdout);
-        Assert.Contains("--json-summary embeds typed child JSON plus a final summary", batchStdout);
+        Assert.Contains("--max-input-lines <n>", batchStdout);
+        Assert.Contains("--max-output-chars <n>", batchStdout);
+        Assert.Contains("--parallel <n>", batchStdout);
+        Assert.Contains("\"command\":\"search\"", batchStdout);
         Assert.Contains("batch_result or batch_error envelope", batchStdout);
         Assert.Contains("JSON is embedded as result, NDJSON as stable results", batchStdout);
-        Assert.Contains("full serialized stream is capped", batchStdout);
-        Assert.Contains("input lines", batchStdout);
+        Assert.Contains("configured serialized-output budgets", batchStdout);
+        Assert.Contains("safe maxima", batchStdout);
+        Assert.Contains("stable results in input order", batchStdout);
         Assert.Contains("batch_summary record", batchStdout);
     }
 

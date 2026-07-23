@@ -137,14 +137,13 @@ internal static partial class JsonEnvelopeWrapper
         }
 
         var innerArgs = PrepareBoundedInnerArgs(command, args, controls);
-        var originalOut = Console.Out;
         using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int exitCode;
         JsonEnvelopeCaptureLimitExceededException? captureLimitExceeded = null;
         try
         {
-            Console.SetOut(captured);
+            using var outputScope = ScopedConsoleOutput.Redirect(captured);
             using var executionScope = EnterBoundedExecution(command, controls.Offset, controls.PageLimit, controls.Fields, controls.Compact);
             exitCode = runInner(innerArgs);
         }
@@ -156,7 +155,6 @@ internal static partial class JsonEnvelopeWrapper
         finally
         {
             stopwatch.Stop();
-            Console.SetOut(originalOut);
         }
 
         if (captureLimitExceeded is not null)
@@ -616,23 +614,17 @@ internal static partial class JsonEnvelopeWrapper
             return new ResponseCount(offset + availableCount, false);
 
         var countArgs = PrepareCountArgs(command, args);
-        var originalOut = Console.Out;
         using var captured = new BoundedStringWriter(MaxRawJsonItemChars);
         int countExitCode;
         try
         {
-            Console.SetOut(captured);
+            using var outputScope = ScopedConsoleOutput.Redirect(captured);
             countExitCode = runInner(countArgs);
         }
         catch
         {
             return new ResponseCount(offset + availableCount, false);
         }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
-
         try
         {
             var countItems = ParseRawJsonItems(command, captured.ToString(), out _, out _);
