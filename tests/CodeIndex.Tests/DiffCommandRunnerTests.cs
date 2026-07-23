@@ -152,6 +152,16 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_OffsetAcceptsNonNegativePagingValue_Issue4714()
+    {
+        var options = DiffCommandRunner.ParseArgs(["left.db", "right.db", "--limit", "5", "--offset", "10"]);
+
+        Assert.Equal(5, options.Limit);
+        Assert.Equal(10, options.Offset);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void Run_DetailedJsonReportsLimitedSymbolRows_Issue2885()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_detailed_left");
@@ -174,6 +184,114 @@ public class DiffCommandRunnerTests
             Assert.Single(symbolsOnlyInRight);
             Assert.Contains("LeftOnly", symbolsOnlyInLeft[0].GetString(), StringComparison.Ordinal);
             Assert.Contains("RightOnly", symbolsOnlyInRight[0].GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonPagesReferenceAndChunkDrift_Issue4714()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_edge_chunk_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_edge_chunk_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            for (var i = 0; i < 3; i++)
+            {
+                var content = $"public class Same{i} {{ public void Run() {{ Run(); }} }}";
+                TestProjectHelper.InsertIndexedFile(leftDb, $"src/Same{i}.cs", "csharp", content);
+                TestProjectHelper.InsertIndexedFile(rightDb, $"src/Same{i}.cs", "csharp", content);
+            }
+            ExecuteNonQuery(rightDb, "UPDATE chunks SET content = content || ' // right'");
+            ExecuteNonQuery(rightDb, "UPDATE symbol_references SET context = COALESCE(context, '') || ' // right'");
+
+            var (firstExitCode, firstOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "1", "--offset", "0"]);
+            var (secondExitCode, secondOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "1", "--offset", "1"]);
+
+            Assert.Equal(1, firstExitCode);
+            Assert.Equal(1, secondExitCode);
+            using var firstDocument = JsonDocument.Parse(firstOutput);
+            using var secondDocument = JsonDocument.Parse(secondOutput);
+            var first = firstDocument.RootElement;
+            var second = secondDocument.RootElement;
+            Assert.Single(first.GetProperty("references_only_in_left").EnumerateArray());
+            Assert.Single(first.GetProperty("references_only_in_right").EnumerateArray());
+            Assert.Single(first.GetProperty("chunks_only_in_left").EnumerateArray());
+            Assert.Single(first.GetProperty("chunks_only_in_right").EnumerateArray());
+            Assert.True(first.GetProperty("has_more").GetBoolean());
+            Assert.Equal(1, first.GetProperty("next_offset").GetInt32());
+            Assert.Equal(1, second.GetProperty("offset").GetInt32());
+            Assert.NotEqual(
+                first.GetProperty("chunks_only_in_left")[0].GetString(),
+                second.GetProperty("chunks_only_in_left")[0].GetString());
+            Assert.NotEqual(
+                first.GetProperty("references_only_in_left")[0].GetString(),
+                second.GetProperty("references_only_in_left")[0].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonDetectsResolvedReferenceGraphDrift_Issue4714()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_graph_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_graph_right");
+        try
+        {
+            const string content = "public class Same { public void Run() { Run(); } }";
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", content);
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", content);
+            const string seedResolvedGraphSql = """
+                UPDATE symbol_references
+                SET source_symbol_id = (SELECT id FROM symbols WHERE name = 'Run' LIMIT 1),
+                    target_symbol_id = (SELECT id FROM symbols WHERE name = 'Run' LIMIT 1),
+                    target_symbol_key = 'csharp' || char(31) || 'src/Same.cs' || char(31) || 'Same' || char(31) || 'Run',
+                    resolution_candidate_count = 1,
+                    resolution_state = 'resolved',
+                    is_self_reference = 1;
+                INSERT OR REPLACE INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+                SELECT r.id, s.id, 0
+                FROM symbol_references r
+                CROSS JOIN symbols s
+                WHERE s.name = 'Run';
+                """;
+            ExecuteNonQuery(leftDb, seedResolvedGraphSql);
+            ExecuteNonQuery(rightDb, seedResolvedGraphSql);
+            ExecuteNonQuery(
+                rightDb,
+                """
+                DELETE FROM symbol_reference_candidates;
+                UPDATE symbol_references
+                SET target_symbol_id = NULL,
+                    target_symbol_key = NULL,
+                    resolution_candidate_count = 0,
+                    resolution_state = 'unresolved',
+                    is_self_reference = 0;
+                """);
+
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "5"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            Assert.Equal("different", root.GetProperty("status").GetString());
+            Assert.False(root.GetProperty("identical").GetBoolean());
+            Assert.NotEmpty(root.GetProperty("references_only_in_left").EnumerateArray());
+            Assert.NotEmpty(root.GetProperty("references_only_in_right").EnumerateArray());
         }
         finally
         {

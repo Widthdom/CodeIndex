@@ -1048,8 +1048,8 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeTheory]
-    [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json")]
-    [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json=array")]
+    [InlineData(CommandExitCodes.UsageError, "license supports --json only; --json=<format> is not supported.", "license", "--json=array")]
+    [InlineData(CommandExitCodes.InvalidArgument, "Unknown license argument: --bogus", "license", "--json", "--bogus")]
     [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "--json")]
     [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "zsh", "--json")]
     [InlineData(CommandExitCodes.InvalidArgument, "config show supports --json only; --json=<format> is not supported.", "config", "show", "--json=array")]
@@ -1062,6 +1062,30 @@ public class ProgramCliTests
         using var document = JsonDocument.Parse(stdout);
         Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
         Assert.Equal(expectedMessage, document.RootElement.GetProperty("message").GetString());
+    }
+
+    [ProductionRuntimeFact]
+    public void License_JsonPrintsStableLicenseTrademarkAndCommercialUseContract_Issue4713()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["license", "--json"]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("1", root.GetProperty("api_version").GetString());
+        Assert.Equal("FSL-1.1-ALv2", root.GetProperty("license").GetProperty("identifier").GetString());
+        Assert.Equal("Apache-2.0", root.GetProperty("license").GetProperty("future_license").GetString());
+        Assert.True(root.GetProperty("commercial_use").GetProperty("non_competing_use_allowed").GetBoolean());
+        Assert.True(root.GetProperty("commercial_use").GetProperty("competing_products_or_services_require_separate_agreement").GetBoolean());
+        Assert.False(root.GetProperty("trademark").GetProperty("derivative_branding_allowed").GetBoolean());
+        Assert.False(root.GetProperty("trademark").GetProperty("endorsement_branding_allowed").GetBoolean());
+        Assert.Contains(
+            root.GetProperty("trademark").GetProperty("names").EnumerateArray(),
+            element => element.GetString() == "cdidx");
+        Assert.Contains(
+            root.GetProperty("documents").EnumerateArray(),
+            element => element.GetString() == "TRADEMARKS.md");
     }
 
     [ProductionRuntimeFact]

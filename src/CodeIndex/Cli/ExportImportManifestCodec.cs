@@ -171,6 +171,67 @@ internal static class ExportImportManifestCodec
             }
         }
 
+        if (manifest.Scope != null && !TryValidateScope(manifest.Scope, out message))
+            return false;
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static bool TryValidateScope(
+        ExportImportCommandRunner.ArchiveExportScopeResult scope,
+        out string message)
+    {
+        if (scope.PathPatterns == null
+            || scope.ExcludePathPatterns == null
+            || scope.Projects == null
+            || scope.ResolvedProjectPathPatterns == null)
+        {
+            message = "scope arrays must not be null";
+            return false;
+        }
+        if (scope.SourceFileCount < 0
+            || scope.ExportedFileCount < 0
+            || scope.ExportedFileCount > scope.SourceFileCount)
+        {
+            message = "scope file counts are invalid";
+            return false;
+        }
+
+        var values = scope.PathPatterns
+            .Concat(scope.ExcludePathPatterns)
+            .Concat(scope.Projects)
+            .Concat(scope.ResolvedProjectPathPatterns)
+            .ToList();
+        if (scope.Solution != null)
+            values.Add(scope.Solution);
+        if (values.Count > ExportImportCommandRunner.MaxArchiveScopeValues * 2)
+        {
+            message = $"scope contains more than {ExportImportCommandRunner.MaxArchiveScopeValues * 2} values";
+            return false;
+        }
+
+        var totalChars = 0;
+        foreach (var value in values)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                message = "scope contains an empty value";
+                return false;
+            }
+            if (value.Length > ExportImportCommandRunner.MaxArchiveScopeValueChars)
+            {
+                message = $"scope contains a value longer than {ExportImportCommandRunner.MaxArchiveScopeValueChars} characters";
+                return false;
+            }
+            totalChars += value.Length;
+            if (totalChars > ExportImportCommandRunner.MaxArchiveScopeTotalChars * 2)
+            {
+                message = $"scope value text exceeds {ExportImportCommandRunner.MaxArchiveScopeTotalChars * 2} characters";
+                return false;
+            }
+        }
+
         message = string.Empty;
         return true;
     }

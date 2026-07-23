@@ -290,7 +290,7 @@ sections below show examples and option details for the most common workflows.
 | Portability | `export ctags` | Write a native `tags` file for Vim, Emacs, Sublime, and other ctags consumers | -- |
 | Portability | `export` / `import` | Share a built CodeIndex database as a portable archive | -- |
 | MCP | `mcp` | Start the MCP server for AI tools | server transport |
-| Legal | `license` | Show the license and commercial-use summary | -- |
+| Legal | `license` | Show the license and commercial-use summary; add `--json` for the stable `license`, `commercial_use`, `trademark`, and controlling `documents` fields | -- |
 
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
@@ -410,21 +410,42 @@ job:
 
 ```bash
 cdidx export codeindex.cdidx.zip
+cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
+cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
 cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
+cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --dry-run --limit 100
 ```
+
+Archive export accepts `--lang`, repeatable `--path` and `--exclude-path`,
+repeatable `--project`, optional `--solution`, and `--exclude-tests`. Requested
+paths and resolved project directories form one inclusive scope; language,
+exclusion, and test filters then narrow that scope. The exported SQLite
+snapshot contains only the retained files and their dependent chunks, symbols,
+references, and diagnostics, and is vacuumed before packaging. JSON output and
+`manifest.json` include the requested scope, resolved project paths, and source
+and exported file counts. An export without scope flags remains a full archive.
 
 The archive path is intended for trusted CodeIndex databases. Import validates
 that the embedded SQLite file is a CodeIndex DB before replacing the destination
 database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
 to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
 use the sibling project directory; other database paths fall back to the process
-current directory.
+current directory. `--dry-run` and its `--check` alias also compare an existing
+destination DB with the validated archive without replacing it. JSON
+`destination_delta.comparison` reports schema and count deltas plus bounded
+file, symbol, reference-edge, chunk, and metadata samples. Use
+`--limit <n<=10000>` and `--offset <n>` to page those samples. If the destination
+does not exist or cannot be read, `destination_delta` reports that state instead
+of claiming a comparison.
 
 Use `cdidx diff <db1> <db2> --detailed --json` to verify the restored index.
 Database identity is based on semantic index content: reference-line links are
 compared by their indexed path, line, and context rather than SQLite surrogate
 row IDs, so equivalent databases remain identical after rows are rehydrated.
+Detailed JSON also includes `references_only_in_left/right` and
+`chunks_only_in_left/right`. `--limit` bounds each difference family and
+`--offset` selects the page; `has_more` and `next_offset` indicate continuation.
 
 ## Flag compatibility and migrations
 
@@ -1695,6 +1716,8 @@ cdidx report --output report.tgz --json
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable stdout summary envelope (`output_path`, `version`, `artifact_format`, `artifact_media_type`, `recommended_extensions`, `json_metadata_stdout_only`, `warnings`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `last_failure_included`, `db_included`, `db_path`) instead of the human-friendly output. |
 
+In JSON mode, `output_path` is the generated artifact's basename so automation retains a safe handle even with `--redact-paths`; diagnostic paths such as `db_path` remain `[redacted]`.
+
 ## Search query syntax
 
 Default `cdidx search` is literal-safe unless you explicitly opt into raw FTS5:
@@ -2139,7 +2162,7 @@ Precedence is **CLI flag > environment variable > config file > built-in default
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
-Run `cdidx doctor --env-inventory` to audit a compact environment-variable summary grouped by `domain`, sensitivity, and category. Use `cdidx doctor --env-inventory=full` for the per-variable audit view with source locations and `invalid_value_behavior`, or `cdidx doctor --json --env-inventory=full` when a machine-readable full inventory is needed locally. `doctor --json` and `config show --json` redact local paths by default and expose the compact `environment_inventory_summary`; add `--show-paths` only for local debugging when raw path diagnostics are required. Secret-bearing variables such as `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are marked `auth_secret` and are redacted from doctor/config diagnostics; trust-boundary variables such as MCP tool filters, workspace plugin trust, hook directories, and GitHub proxy credential opt-ins document whether invalid values fail closed, warn, or leave the feature disabled.
+Run `cdidx doctor --env-inventory` to audit a compact environment-variable summary grouped by `domain`, sensitivity, and category. Use `cdidx doctor --env-inventory=full` for the per-variable audit view with source locations and `invalid_value_behavior`, or `cdidx doctor --json --env-inventory=full` when a machine-readable full inventory is needed locally. The full inventory accepts case-insensitive exact `--env-domain`, `--env-category`, and `--env-sensitivity` filters that compose with AND. Add `--max-json-bytes <n>` to the JSON full-inventory form to reject a successful document whose UTF-8 bytes, including its newline, exceed the requested budget; narrow the inventory with filters or increase the budget when that structured error is returned. `doctor --json` and `config show --json` redact local paths by default and expose the compact `environment_inventory_summary`; add `--show-paths` only for local debugging when raw path diagnostics are required. Secret-bearing variables such as `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are marked `auth_secret` and are redacted from doctor/config diagnostics; trust-boundary variables such as MCP tool filters, workspace plugin trust, hook directories, and GitHub proxy credential opt-ins document whether invalid values fail closed, warn, or leave the feature disabled.
 
 Supported schema (top-level keys are snake_case; nested indexing kind keys keep the CLI issue spelling; every key is optional):
 
@@ -3400,7 +3423,7 @@ cdidx index . --quiet
 | Portability | `export ctags` | Vim、Emacs、Sublime など ctags consumer 向けに `tags` file を出力 | -- |
 | Portability | `export` / `import` | build 済み CodeIndex database を portable archive として共有 | -- |
 | MCP | `mcp` | AI tools 向け MCP server を起動 | server transport |
-| Legal | `license` | license と commercial-use summary を表示 | -- |
+| Legal | `license` | license と commercial-use summary を表示。`--json` を付けると、安定した `license`、`commercial_use`、`trademark`、controlling `documents` field を出力 | -- |
 
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
@@ -3517,20 +3540,39 @@ summary を出力します。filter 付き export では
 
 ```bash
 cdidx export codeindex.cdidx.zip
+cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
+cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
 cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
+cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --dry-run --limit 100
 ```
+
+archive export では `--lang`、繰り返し指定できる `--path` / `--exclude-path` /
+`--project`、任意の `--solution`、`--exclude-tests` を使えます。指定した path と
+解決した project directory を包含 scope とし、language、除外 path、test filter で
+さらに絞り込みます。出力する SQLite snapshot には残した file と、それに従属する
+chunk、symbol、reference、diagnostic だけを保持し、packaging 前に vacuum します。
+JSON output と `manifest.json` には指定 scope、解決済み project path、元と出力後の
+file count が含まれます。scope flag を指定しなければ従来どおり full archive です。
 
 archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
 SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。
 `--prune-paths` は import した `indexed_project_root` metadata を import 先 project root に書き換えます。
 `.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
 それ以外の database path では process current directory に fallback します。
+`--dry-run` と alias の `--check` は置換せず、既存 destination DB と検証済み archive を
+比較します。JSON の `destination_delta.comparison` には schema / count delta と、
+file、symbol、reference edge、chunk、metadata の bounded sample が含まれます。
+sample の paging には `--limit <n<=10000>` と `--offset <n>` を使います。destination が
+存在しない、または読み取れない場合は、比較済みとせずその状態を `destination_delta` に返します。
 
 復元した index の確認には `cdidx diff <db1> <db2> --detailed --json` を使います。
 database の同一性は semantic index content に基づきます。reference-line link は SQLite の
 surrogate row ID ではなく indexed path、line、context で比較されるため、row が再構築されても
-意味的に同等な database は identical のままです。
+意味的に同等な database は identical のままです。詳細 JSON には
+`references_only_in_left/right` と `chunks_only_in_left/right` も含まれます。
+`--limit` は difference family ごとの件数を制限し、`--offset` は page を選択します。
+続きがある場合は `has_more` と `next_offset` を返します。
 
 ## フラグ互換性と移行
 
@@ -4772,6 +4814,8 @@ cdidx report --output report.tgz --json
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定した stdout summary JSON（`output_path` / `version` / `artifact_format` / `artifact_media_type` / `recommended_extensions` / `json_metadata_stdout_only` / `warnings` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `last_failure_included` / `db_included` / `db_path`）を出力します。 |
 
+JSON mode の `output_path` は生成した artifact の basename を返すため、`--redact-paths` を指定しても automation は安全な handle を保持できます。`db_path` などの診断用 path は引き続き `[redacted]` です。
+
 ## 検索クエリ構文
 
 既定の `cdidx search` は、明示的に raw FTS5 を選ばない限り literal-safe です:
@@ -5210,7 +5254,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
-`cdidx doctor --env-inventory` で、`domain`、sensitivity、category ごとに集約した compact な環境変数 summary を監査できます。変数ごとの source location や `invalid_value_behavior` まで確認する場合は `cdidx doctor --env-inventory=full` を使い、ローカルで machine-readable な full inventory が必要な場合は `cdidx doctor --json --env-inventory=full` を使います。`doctor --json` と `config show --json` は既定でローカルパスを redact し、compact な `environment_inventory_summary` を出力します。raw path の診断が必要なローカル debugging 時だけ `--show-paths` を追加してください。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` のような secret 変数は `auth_secret` として扱われ、doctor / config 診断では redact されます。MCP tool filter、workspace plugin trust、hook directory、GitHub proxy credential opt-in のような trust-boundary 変数は、不正値が fail closed になるのか、警告されるのか、機能を無効のままにするのかを inventory に明示します。
+`cdidx doctor --env-inventory` で、`domain`、sensitivity、category ごとに集約した compact な環境変数 summary を監査できます。変数ごとの source location や `invalid_value_behavior` まで確認する場合は `cdidx doctor --env-inventory=full` を使い、ローカルで machine-readable な full inventory が必要な場合は `cdidx doctor --json --env-inventory=full` を使います。full inventory では、大文字小文字を区別しない完全一致の `--env-domain`、`--env-category`、`--env-sensitivity` filter を AND で組み合わせられます。JSON の full-inventory 形式に `--max-json-bytes <n>` を追加すると、改行を含む UTF-8 byte 数が指定した budget を超える成功文書を拒否します。structured error が返った場合は filter で inventory を絞るか、budget を増やしてください。`doctor --json` と `config show --json` は既定でローカルパスを redact し、compact な `environment_inventory_summary` を出力します。raw path の診断が必要なローカル debugging 時だけ `--show-paths` を追加してください。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` のような secret 変数は `auth_secret` として扱われ、doctor / config 診断では redact されます。MCP tool filter、workspace plugin trust、hook directory、GitHub proxy credential opt-in のような trust-boundary 変数は、不正値が fail closed になるのか、警告されるのか、機能を無効のままにするのかを inventory に明示します。
 
 対応スキーマ（top-level key は snake_case、ネストした indexing の kind key は CLI issue の表記を維持、すべて任意）:
 

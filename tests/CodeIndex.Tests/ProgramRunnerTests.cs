@@ -1167,6 +1167,21 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunDoctor_BareEnvironmentInventoryPreservesFollowingGlobalJsonFlags_Issue4713()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--env-inventory", "--pretty", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains(Environment.NewLine + "  \"api_version\"", stdout, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.True(document.RootElement.TryGetProperty("environment_inventory_summary", out _));
+        Assert.False(document.RootElement.TryGetProperty("environment_inventory", out _));
+    }
+
+    [Fact]
     public void RunDoctor_EnvironmentInventoryFull_PrintsAuditView()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
@@ -1268,6 +1283,99 @@ public class ProgramRunnerTests
         Assert.Equal(
             EnvironmentVariableInventory.DomainDisplay,
             inventoryByName[QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable].GetProperty("domain").GetString());
+    }
+
+    [Fact]
+    public void RunDoctor_FullInventoryFiltersComposeAcrossDimensions_Issue4713()
+    {
+        var args = new[]
+        {
+            "doctor",
+            "--json",
+            "--env-inventory=full",
+            "--env-domain",
+            EnvironmentVariableInventory.DomainAuthSecret,
+            "--env-category=github",
+            "--env-sensitivity",
+            EnvironmentVariableInventory.SensitivitySecret,
+        };
+        var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => ProgramRunner.Run(
+            args,
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+        Assert.Empty(jsonStderr);
+        using var document = JsonDocument.Parse(jsonStdout);
+        var root = document.RootElement;
+        var item = Assert.Single(root.GetProperty("environment_inventory").EnumerateArray());
+        Assert.Equal("CDIDX_GITHUB_TOKEN", item.GetProperty("name").GetString());
+        Assert.Equal(EnvironmentVariableInventory.DomainAuthSecret, item.GetProperty("domain").GetString());
+        Assert.Equal("github", item.GetProperty("category").GetString());
+        Assert.Equal(EnvironmentVariableInventory.SensitivitySecret, item.GetProperty("sensitivity").GetString());
+        Assert.Equal(1, root.GetProperty("environment_inventory_summary").GetProperty("total").GetInt32());
+
+        var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => ProgramRunner.Run(
+            args.Where(static arg => arg != "--json").ToArray(),
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, humanExitCode);
+        Assert.Empty(humanStderr);
+        Assert.Contains("CDIDX_GITHUB_TOKEN", humanStdout, StringComparison.Ordinal);
+        Assert.DoesNotContain(McpAuthenticatorFactory.AuthTokenEnvVar, humanStdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunDoctor_JsonFullInventoryMaxBytesAcceptsExactBudgetAndRejectsOverflow_Issue4713()
+    {
+        var args = new[]
+        {
+            "doctor",
+            "--json",
+            "--env-inventory=full",
+            "--env-category",
+            "github",
+        };
+        var (uncappedExitCode, uncappedStdout, uncappedStderr) = CaptureConsole(() => ProgramRunner.Run(
+            args,
+            appVersion: "1.10.0"));
+        var exactByteCount = Encoding.UTF8.GetByteCount(uncappedStdout);
+
+        Assert.Equal(CommandExitCodes.Success, uncappedExitCode);
+        Assert.Empty(uncappedStderr);
+
+        var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(() => ProgramRunner.Run(
+            [.. args, $"--max-json-bytes={exactByteCount.ToString(CultureInfo.InvariantCulture)}"],
+            appVersion: "1.10.0"));
+        Assert.Equal(CommandExitCodes.Success, exactExitCode);
+        Assert.Empty(exactStderr);
+        Assert.Equal(uncappedStdout, exactStdout);
+
+        var (overflowExitCode, overflowStdout, overflowStderr) = CaptureConsole(() => ProgramRunner.Run(
+            [.. args, $"--max-json-bytes={exactByteCount - 1}"],
+            appVersion: "1.10.0"));
+        Assert.Equal(CommandExitCodes.UsageError, overflowExitCode);
+        Assert.Empty(overflowStderr);
+        using var errorDocument = JsonDocument.Parse(overflowStdout);
+        Assert.Equal("error", errorDocument.RootElement.GetProperty("status").GetString());
+        Assert.Contains("exceeds --max-json-bytes", errorDocument.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("--env-domain", "not-a-domain")]
+    [InlineData("--env-category", "not-a-category")]
+    [InlineData("--env-sensitivity", "not-a-sensitivity")]
+    public void RunDoctor_UnknownEnvironmentInventoryFilter_ReturnsStructuredError_Issue4713(string flag, string value)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json", "--env-inventory=full", flag, value],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains($"Unknown {flag} value", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Contains("choose one of:", document.RootElement.GetProperty("hint").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
