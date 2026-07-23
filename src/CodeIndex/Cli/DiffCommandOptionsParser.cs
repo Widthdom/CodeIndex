@@ -11,6 +11,7 @@ internal static class DiffCommandOptionsParser
         var detailed = false;
         var summaryOnly = false;
         var limit = DefaultLimit;
+        var offset = 0;
         string? parseError = null;
 
         for (var i = 0; i < args.Length; i++)
@@ -41,6 +42,13 @@ internal static class DiffCommandOptionsParser
                 case "--limit":
                     parseError = "--limit requires a value";
                     break;
+                case "--offset" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], out offset) || offset < 0)
+                        parseError = "--offset requires a non-negative integer";
+                    break;
+                case "--offset":
+                    parseError = "--offset requires a value";
+                    break;
                 default:
                     if (arg.StartsWith('-'))
                         parseError = $"diff does not support option: '{arg}'";
@@ -57,6 +65,8 @@ internal static class DiffCommandOptionsParser
 
         if (parseError is null && dbs.Count != 2)
             parseError = "diff requires exactly two database paths";
+        if (parseError is null && offset > int.MaxValue - limit)
+            parseError = "--offset is too large for the requested --limit";
 
         return new DiffCommandOptions
         {
@@ -66,6 +76,7 @@ internal static class DiffCommandOptionsParser
             Detailed = detailed,
             SummaryOnly = summaryOnly,
             Limit = limit,
+            Offset = offset,
             ParseError = parseError,
         };
     }

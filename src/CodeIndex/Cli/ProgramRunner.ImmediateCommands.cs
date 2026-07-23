@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace CodeIndex.Cli;
 
 internal static partial class ProgramRunner
@@ -169,17 +171,18 @@ internal static partial class ProgramRunner
     {
         if (args[0] is "--license" or "license")
         {
-            var wantsJson = ContainsJsonOutputFlag(args.Skip(1));
-            if (wantsJson)
+            var licenseArgs = args.Skip(1).ToArray();
+            var wantsJson = licenseArgs.Contains("--json", StringComparer.Ordinal);
+            if (licenseArgs.Any(static arg => arg.StartsWith("--json=", StringComparison.Ordinal)))
             {
                 exitCode = CommandErrorWriter.WriteJsonOrHuman(
                     true,
                     context.JsonOptions,
-                    "license does not support --json or --json=<format>.",
+                    "license supports --json only; --json=<format> is not supported.",
                     CommandExitCodes.UsageError,
-                    "rerun without --json; license output is human-readable text.",
-                    usage: "cdidx license");
-                GlobalToolLog.Info($"command_complete exit_code={exitCode} license_json_unsupported=true");
+                    "use `cdidx license --json` for the structured license summary.",
+                    usage: "cdidx license [--json]");
+                GlobalToolLog.Info($"command_complete exit_code={exitCode} license_json_format_unsupported=true");
                 EmitCommandMetric("license", args, context.StartTimestamp, context.Stopwatch, exitCode);
                 return true;
             }
@@ -193,9 +196,34 @@ internal static partial class ProgramRunner
                 return true;
             }
 
-            ConsoleUi.PrintLicenseSummary();
+            var unsupportedArg = licenseArgs.FirstOrDefault(static arg => arg != "--json");
+            if (unsupportedArg is not null)
+            {
+                exitCode = CommandErrorWriter.WriteJsonOrHuman(
+                    wantsJson,
+                    context.JsonOptions,
+                    $"Unknown license argument: {unsupportedArg}",
+                    CommandExitCodes.InvalidArgument,
+                    "use `cdidx license` for human-readable terms or `cdidx license --json` for structured output.",
+                    usage: "cdidx license [--json]");
+                GlobalToolLog.Info($"command_complete exit_code={exitCode} license_argument_unsupported=true");
+                EmitCommandMetric("license", args, context.StartTimestamp, context.Stopwatch, exitCode);
+                return true;
+            }
+
+            if (wantsJson)
+            {
+                var payload = ConsoleUi.BuildLicenseJsonResult();
+                Console.WriteLine(JsonSerializer.Serialize(
+                    payload,
+                    CliJsonSerializerContextFactory.Create(context.JsonOptions).LicenseJsonResult));
+            }
+            else
+            {
+                ConsoleUi.PrintLicenseSummary();
+            }
             exitCode = CommandExitCodes.Success;
-            GlobalToolLog.Info($"command_complete exit_code={exitCode} license_only=true");
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} license_only=true json={wantsJson.ToString().ToLowerInvariant()}");
             EmitCommandMetric("license", args, context.StartTimestamp, context.Stopwatch, exitCode);
             return true;
         }

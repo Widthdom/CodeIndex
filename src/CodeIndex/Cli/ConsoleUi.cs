@@ -103,7 +103,7 @@ public static class ConsoleUi
         ("workspace", "cdidx workspace <list|status|use|current|clear|deactivate> [name] [--json]"),
         ("config", "cdidx config show [--json] [--show-paths]"),
         ("validate-config", "cdidx validate-config [--json]"),
-        ("doctor", "cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]]"),
+        ("doctor", "cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]] [--env-domain <domain>] [--env-category <category>] [--env-sensitivity <sensitivity>] [--max-json-bytes <n>]"),
         ("db", "cdidx db integrity|--integrity-check [--db <path>] [--json]"),
         ("db", $"cdidx db schema [--type <table|index|trigger|view>] [--name <object>] [--limit <n<={DbCommandRunner.SchemaEntryLimit}>] [--max-sql-chars <n<={DbCommandRunner.SchemaSqlTextLimit}>] [--summary-only] [--include-internal|--exclude-internal] [--db <path>] [--json]"),
         ("db", "cdidx db prune --dry-run|--apply [--db <path>] [--json]"),
@@ -118,7 +118,7 @@ public static class ConsoleUi
         ("db-checkpoints", "cdidx db checkpoints --list|--delete <name<=128>|--prune [--keep <n>] [--dry-run] [--db <path>] [--json]"),
         ("db-restore", "cdidx db restore <name<=128> [--dry-run] [--db <path>] [--json]"),
         ("db-restore-backups", "cdidx db restore-backups --list|--prune [--keep <n>] [--dry-run] [--db <path>] [--json]"),
-        ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>]"),
+        ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>] [--offset <n>]"),
         ("report", "cdidx report --output <bundle.tgz> [--db <path>] [--json] [--redact-paths] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|compact>] [--compact] [--fields <csv>] [--cursor <response:v1:offset:fingerprint>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--exact-name] [--count] [--with-paths]"),
@@ -126,9 +126,9 @@ public static class ConsoleUi
         ("unused", "cdidx unused [--db <path>] [--json] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--cursor <unused:offset>] [--audit-scope <source|all>] [--kind <kind>] [--bucket <bucket>] [--min-confidence <medium|low>|--confidence <medium|low>] [--actionable] [--all] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--by-bucket]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--format <text|json|count|compact>] [--compact] [--fields <csv>] [--cursor <response:v1:offset:fingerprint>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions [list|show|export|add|update|delete] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]"),
-        ("export", "cdidx export <archive> [--db <path>] [--json]"),
+        ("export", "cdidx export <archive> [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
-        ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]"),
+        ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--limit <n<=10000>] [--offset <n>] [--json]"),
         ("languages", "cdidx languages [--db <path>] [--json] [--format <text|json|count>] [--summary-only] [--indexed-only] [--language <lang>|--extension <ext>|--alias <alias>] [--capability <all|none|graph|references|symbols|missing-any|missing-graph|missing-references|missing-symbols|search-only>]"),
         ("batch", "cdidx batch [--db <path>] [--json-summary]  # stdin is JSON Lines; --json-summary embeds typed child JSON plus a final summary"),
         ("hooks-install", "cdidx hooks install [--project <path>] [--force] [--json]"),
@@ -139,7 +139,7 @@ public static class ConsoleUi
         ("completions", "cdidx completions <shell>"),
         ("--completions", "cdidx --completions <shell>"),
         ("upgrade", "cdidx upgrade [--check-only] [--json] [--channel <stable|latest|prerelease>] [--prerelease] [--version <tag>]"),
-        ("license", "cdidx license"),
+        ("license", "cdidx license [--json]"),
         ("help", "cdidx help <command> [subcommand]"),
     ];
 
@@ -1313,6 +1313,33 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("See LICENSE, LICENSES/FSL-1.1-ALv2.txt, LICENSES/Apache-2.0.txt, COMMERCIAL_LICENSE.md, INTEGRATION_POLICY.md, and TRADEMARKS.md for the controlling terms.");
     }
+
+    internal static LicenseJsonResult BuildLicenseJsonResult() =>
+        new(
+            JsonOutputContract.ApiVersion,
+            new LicenseTermsJsonResult(
+                "FSL-1.1-ALv2",
+                "Functional Source License, Version 1.1, ALv2 Future License",
+                "Apache-2.0",
+                "LICENSE"),
+            "Copyright 2026 Widthdom.",
+            new LicenseCommercialUseJsonResult(
+                NonCompetingUseAllowed: true,
+                CompetingProductsOrServicesRequireSeparateAgreement: true,
+                "Use, modification, and distribution are allowed for non-competing purposes, including internal, commercial, AI, IDE, MCP, CI, and scripting integrations."),
+            new LicenseTrademarkJsonResult(
+                ["CodeIndex", "cdidx"],
+                DerivativeBrandingAllowed: false,
+                EndorsementBrandingAllowed: false,
+                "CodeIndex and cdidx are not licensed for derivative product, package, service, or endorsement branding."),
+            [
+                "LICENSE",
+                "LICENSES/FSL-1.1-ALv2.txt",
+                "LICENSES/Apache-2.0.txt",
+                "COMMERCIAL_LICENSE.md",
+                "INTEGRATION_POLICY.md",
+                "TRADEMARKS.md",
+            ]);
 
     public static string? GetUsageLine(string command)
     {
