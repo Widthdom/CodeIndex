@@ -1611,6 +1611,7 @@ public partial class McpServer
             }
             if (projectionFields is not null)
             {
+                EnrichToolStructuredContent(structured);
                 var projected = new JsonObject();
                 foreach (var field in projectionFields)
                 {
@@ -1622,9 +1623,15 @@ public partial class McpServer
                     }
                     projected[field] = value?.DeepClone();
                 }
+                if (!projected.ContainsKey("api_version"))
+                    projected["api_version"] = structured["api_version"]!.DeepClone();
                 structured = projected;
             }
-            return CreateToolResult(id, "Database stats returned.", structured);
+            return CreateToolResult(
+                id,
+                "Database stats returned.",
+                structured,
+                enrichStructuredContent: projectionFields is null);
         });
         return unavailableProjectionError is null
             ? response
