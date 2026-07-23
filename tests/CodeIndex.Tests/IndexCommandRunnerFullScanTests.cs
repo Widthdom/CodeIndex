@@ -1210,7 +1210,11 @@ public partial class IndexCommandRunnerTests
         {
             var hooksDir = Path.Combine(extensionProject.Root, "hooks");
             Directory.CreateDirectory(hooksDir);
-            File.Copy(typeof(SamplePostExtractionHook).Assembly.Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+            var hookAssemblyPath = typeof(
+                CodeIndex.HookIsolationFixture.PathSelectivePostExtractionHook).Assembly.Location;
+            File.Copy(
+                hookAssemblyPath,
+                Path.Combine(hooksDir, Path.GetFileName(hookAssemblyPath)));
             Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", hooksDir);
 
             RunGit(projectRoot, "init");

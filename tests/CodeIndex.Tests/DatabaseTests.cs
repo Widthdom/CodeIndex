@@ -2893,7 +2893,7 @@ public class DatabaseTests : IDisposable
 
             Assert.NotSame(
                 disposeTask,
-                await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromMilliseconds(200))));
+                await Task.WhenAny(disposeTask, Task.Delay(TestDeterminism.BlockedObservationWindow)));
 
             releaseCheckpoint.Set();
             Assert.Null(await commitTask.WaitAsync(TimeSpan.FromSeconds(2)));
@@ -2974,7 +2974,7 @@ public class DatabaseTests : IDisposable
             });
             await successorAttempting.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            await Task.Delay(TestDeterminism.BlockedObservationWindow);
             Assert.False(disposeTask.IsCompleted);
             Assert.False(successorEntered.Task.IsCompleted);
 

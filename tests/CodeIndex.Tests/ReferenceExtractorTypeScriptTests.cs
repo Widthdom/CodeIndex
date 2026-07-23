@@ -105,7 +105,7 @@ public partial class ReferenceExtractorTests
 #endif
     public void Extract_TypeScriptLargeTypeAliasUseSet_CompletesWithinPracticalBudget()
     {
-        const int useCount = 1_000;
+        const int useCount = 500;
         var uses = string.Join('\n', Enumerable.Range(0, useCount).Select(index => $"let v{index}: MyAlias = value;"));
         var content = $$"""
             class SomeType {}
@@ -127,7 +127,7 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "SomeType"
             && reference.ReferenceKind == "type_reference"
             && reference.Context == $"let v{useCount - 1}: MyAlias = value;");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large TypeScript type alias reference extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");

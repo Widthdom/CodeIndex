@@ -737,7 +737,7 @@ public class GitHelperTests : IDisposable
         var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
         var oldTimeout = GitHelper.GitCommandTimeout;
         GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
-        GitHelper.GitCommandTimeout = TimeSpan.FromSeconds(1);
+        GitHelper.GitCommandTimeout = TimeSpan.FromMilliseconds(500);
         try
         {
             var ex = Assert.Throws<InvalidOperationException>(

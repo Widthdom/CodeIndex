@@ -1,7 +1,12 @@
 namespace CodeIndex.Tests;
 
-[CollectionDefinition("Console sensitive", DisableParallelization = true)]
-public sealed class ConsoleSensitiveCollection : ICollectionFixture<TrustedPluginAssemblyFixture>
+[CollectionDefinition("Console sensitive")]
+public sealed class ConsoleSensitiveCollection
+{
+}
+
+[CollectionDefinition("Plugin registry sensitive", DisableParallelization = true)]
+public sealed class PluginRegistrySensitiveCollection : ICollectionFixture<TrustedPluginAssemblyFixture>
 {
 }
 

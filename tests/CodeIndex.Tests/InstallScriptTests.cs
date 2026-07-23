@@ -17,6 +17,7 @@ namespace CodeIndex.Tests;
 /// Regression tests for the published one-liner installer script.
 /// 公開ワンライナーインストーラーのリグレッションテスト。
 /// </summary>
+[UnsupportedOSPlatform("windows")]
 public sealed class InstallScriptTests : IDisposable
 {
     private static readonly TimeSpan InstallerSnippetTimeout = TimeSpan.FromMinutes(5);
@@ -32,9 +33,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Uninstall_RemovesInstalledPayloadAndLeavesProjectData()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "uninstall_bin");
         Directory.CreateDirectory(installDir);
         File.WriteAllText(Path.Combine(installDir, "cdidx"), "#!/usr/bin/env bash\n");
@@ -65,9 +63,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void UninstallPurgeCache_RemovesOnlyValidatedCacheDirectory_Issue3499()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "uninstall_purge_bin");
         var cacheRoot = Path.Combine(_tempRoot, "xdg_cache");
         var cdidxCache = Path.Combine(cacheRoot, "cdidx");
@@ -100,9 +95,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Uninstall_ReportsFileRemovalFailureWithoutSuccessMessage_Issue3500()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "uninstall_failure_bin");
         Directory.CreateDirectory(installDir);
         Directory.CreateDirectory(Path.Combine(installDir, "cdidx"));
@@ -132,9 +124,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Uninstall_ReportsDirectoryRemovalFailureWithoutSuccessMessage_Issue3500()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "uninstall_directory_failure_bin");
         var licensesDir = Path.Combine(installDir, "LICENSES");
         Directory.CreateDirectory(licensesDir);
@@ -171,9 +160,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void UninstallPurgeCache_RejectsUnsafeCacheRootBeforeRemovingInstall_Issue3499()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "uninstall_bad_cache_root_bin");
         Directory.CreateDirectory(installDir);
         var binaryPath = Path.Combine(installDir, "cdidx");
@@ -201,9 +187,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void PathProfileUpdate_BacksUpAndAtomicallyReplacesProfile_Issue3501()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var home = Path.Combine(_tempRoot, "path_profile_home");
         Directory.CreateDirectory(home);
         var profilePath = Path.Combine(home, ".zshrc");
@@ -236,9 +219,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void PathProfileUpdate_PreservesSymlinkedProfile_Issue3501()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var home = Path.Combine(_tempRoot, "path_profile_symlink_home");
         var dotfiles = Path.Combine(home, "dotfiles");
         Directory.CreateDirectory(dotfiles);
@@ -279,9 +259,6 @@ public sealed class InstallScriptTests : IDisposable
     [InlineData("/tmp")]
     public void Main_RiskyInstallDir_RejectsBeforeLockOrDownload_Issue3511(string installDir)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             detect_platform() { echo "PLATFORM_SHOULD_NOT_RUN"; }
@@ -312,9 +289,6 @@ public sealed class InstallScriptTests : IDisposable
     [InlineData("../bin")]
     public void Main_AmbiguousInstallDir_RejectsBeforeLock_Issue3511(string installDir)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             acquire_install_lock() { echo "LOCK_SHOULD_NOT_RUN"; }
@@ -337,9 +311,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Main_DefaultHomeLocalBin_RemainsAllowed_Issue3511()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "default_install_home");
         Directory.CreateDirectory(homeDir);
 
@@ -369,9 +340,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Main_RiskyInstallDir_ExplicitOverrideAllows_Issue3511()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
@@ -399,9 +367,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Uninstall_RiskyHomeInstallDir_RejectsBeforeRemoval_Issue3511()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "uninstall_home_target");
         Directory.CreateDirectory(homeDir);
         var binaryPath = Path.Combine(homeDir, "cdidx");
@@ -429,9 +394,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void RemovePromotedFiles_RemovesExpectedAssets_Issue3503()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "rollback_remove_expected");
         Directory.CreateDirectory(Path.Combine(installDir, "LICENSES"));
         File.WriteAllText(Path.Combine(installDir, "version.json"), "{}");
@@ -455,9 +417,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void RemovePromotedFiles_RejectsUnsafeAssetBeforeDeletingAny_Issue3503()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "rollback_reject_unsafe");
         Directory.CreateDirectory(installDir);
         var versionPath = Path.Combine(installDir, "version.json");
@@ -536,9 +495,6 @@ public sealed class InstallScriptTests : IDisposable
     [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]
     public void Main_WithoutExplicitVersion_SkipsDownloadWhenLatestAlreadyInstalled(string osName, string archName, string rid, string nativeAssetName)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, $"bin_{osName}");
         var executionMarker = Path.Combine(_tempRoot, $"executed_{osName}.marker");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -608,9 +564,6 @@ public sealed class InstallScriptTests : IDisposable
     [InlineData("libe_sqlite3.so")]
     public void Main_MatchingInstallWithModifiedCriticalArtifact_RedownloadsThroughStaging_Issue4607(string modifiedArtifact)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, $"modified_{modifiedArtifact.Replace('.', '_')}");
         var executionMarker = Path.Combine(_tempRoot, $"executed_{modifiedArtifact.Replace('.', '_')}.marker");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -668,9 +621,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Main_ReplacedPayloadAndManifestCannotBypassAuthenticatedReceipt_Issue4607()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "replaced_manifest_and_payload");
         var executionMarker = Path.Combine(_tempRoot, "replaced_manifest_payload.marker");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -736,9 +686,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_MissingDeclaredFindDependency_FailsPreflight_Issue4607()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             command() {
@@ -763,9 +710,6 @@ public sealed class InstallScriptTests : IDisposable
     [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]
     public void Main_WithoutExplicitVersion_UpgradesHealthyOlderInstallToLatest(string osName, string archName, string rid, string nativeAssetName)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, $"upgrade_{osName}");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -821,9 +765,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "broken_bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -878,9 +819,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Main_ExplicitSameVersionBrokenInstall_ReinstallsInsteadOfSkipping()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "explicit_broken_bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -917,9 +855,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Main_ExplicitSameVersionHealthyInstall_ReinstallsInsteadOfSkipping()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "explicit_healthy_bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -959,9 +894,6 @@ public sealed class InstallScriptTests : IDisposable
     [InlineData("osx", "arm64", "osx-arm64")]
     public void Main_WithoutExplicitVersion_LatestMatchingBrokenInstall_ReinstallsInsteadOfSkipping(string osName, string archName, string rid)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, $"latest_matching_broken_bin_{osName}");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -1017,9 +949,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ResolveVersion_RateLimitedLatestLookup_PrintsSpecificError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             curl() {
@@ -1057,9 +986,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ResolveVersion_LatestLookupResponseTooLarge_FailsBeforeShellParsing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             curl() {
@@ -1100,9 +1026,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ResolveVersion_ForbiddenLatestLookup_PrintsProxyAndVersionPinHints()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             curl() {
@@ -1144,9 +1067,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ResolveVersion_ForbiddenConfiguredLatestLookup_PrintsConfiguredApiHints()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             curl() {
@@ -1194,9 +1114,6 @@ public sealed class InstallScriptTests : IDisposable
     [InlineData("curl: (56) Received HTTP code 403 from proxy after CONNECT")]
     public void ResolveVersion_TunnelForbiddenLatestLookup_PrintsProxyDenyGuidance(string curlStderr)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
             curl() {
@@ -1221,9 +1138,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ResolveVersion_TunnelForbiddenLatestLookup_CapsCurlStderrBeforePrinting()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             curl() {
@@ -1246,9 +1160,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void InstallerNetworkPolicy_BoundsTransfersAndCategorizesProtocolAndTimeout_Issue4604()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var curlArgumentsPath = Path.Combine(_tempRoot, "network_policy_curl_args.txt");
         var outputPath = Path.Combine(_tempRoot, "network_policy_output.txt");
         var (successExitCode, successStdout, successStderr) = RunInstallerSnippet(
@@ -1391,9 +1302,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void InstallerNetworkPolicy_RealStallAndHttpsDowngradeAreBlocked_Issue4604()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         using (var stalledServer = new LoopbackTcpTestServer(async (client, cancellationToken) =>
         {
             await using var stream = client.GetStream();
@@ -1473,9 +1381,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void InstallerNetworkPolicy_RetryUsesFreshBoundedOutput_Issue4604()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         using var retryServer = new LoopbackTcpTestServer(2, async (client, attempt, cancellationToken) =>
         {
             await using var stream = client.GetStream();
@@ -1515,9 +1420,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_ForbiddenGitHubAssetDownload_PrintsGitHubAndAllowListHints()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "forbidden_asset_target");
 
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -1571,9 +1473,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerifyReleaseAttestation_GhAvailable_VerifiesArtifactWithRepository()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var logPath = Path.Combine(_tempRoot, "gh_attestation.log");
         var artifactPath = Path.Combine(_tempRoot, "CodeIndex-linux-x64.tar.gz");
         File.WriteAllText(artifactPath, "archive");
@@ -1604,9 +1503,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerifyReleaseAttestation_RequiredAndGhFails_Aborts()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var artifactPath = Path.Combine(_tempRoot, "sha256sums.txt");
         File.WriteAllText(artifactPath, "checksums");
 
@@ -1635,9 +1531,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerificationPolicy_DefaultStrictWithoutGhOrPinnedSigner_FailsClosed_Issue4603()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var artifactPath = Path.Combine(_tempRoot, "sha256sums.txt");
         File.WriteAllText(artifactPath, "checksums");
 
@@ -1672,9 +1565,6 @@ public sealed class InstallScriptTests : IDisposable
     [InlineData("curl: (56) Received HTTP code 403 from proxy after CONNECT")]
     public void DownloadAndInstall_TunnelForbiddenAssetDownload_PrintsProxyDenyGuidance(string curlStderr)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "tunnel_forbidden_asset_target");
 
         var (exitCode, _, stderr) = RunInstallerSnippet(
@@ -1709,9 +1599,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_ForbiddenConfiguredAssetDownload_PrintsConfiguredMirrorHints()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "forbidden_configured_asset_target");
 
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -1766,9 +1653,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Main_RateLimitedLatestLookup_StopsBeforeSuccessPath()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "rate_limited_lookup_bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -1815,9 +1699,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Main_NetworkFailureDuringLatestLookup_StopsBeforeSuccessPath()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "network_failure_lookup_bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -1849,9 +1730,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_MissingAsset_DoesNotCreateFilesInEmptyInstallDir()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "missing_asset_empty_target");
         var payloadDir = Path.Combine(_tempRoot, "missing_asset_empty_payload");
         var archivePath = Path.Combine(_tempRoot, "missing_asset_empty.tar.gz");
@@ -1940,9 +1818,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_OptionalLicenseAssetsAreInstalledWhenPresent()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "license_assets_target");
         var payloadDir = Path.Combine(_tempRoot, "license_assets_payload");
         var archivePath = Path.Combine(_tempRoot, "license_assets.tar.gz");
@@ -2053,9 +1928,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_ReinstallReplacesExistingOptionalDirectories()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "replace_optional_target");
         var payloadDir = Path.Combine(_tempRoot, "replace_optional_payload");
         var archivePath = Path.Combine(_tempRoot, "replace_optional.tar.gz");
@@ -2130,9 +2002,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_LegacyArchiveWithoutManifestStillInstalls()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "legacy_manifest_target");
         var payloadDir = Path.Combine(_tempRoot, "legacy_manifest_payload");
         var archivePath = Path.Combine(_tempRoot, "legacy_manifest.tar.gz");
@@ -2194,9 +2063,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_NewArchiveWithoutManifestFails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "new_manifest_required_target");
         var payloadDir = Path.Combine(_tempRoot, "new_manifest_required_payload");
         var archivePath = Path.Combine(_tempRoot, "new_manifest_required.tar.gz");
@@ -2256,9 +2122,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ValidateArchiveMembers_RejectsTraversalBeforeExtraction()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var workDir = Path.Combine(_tempRoot, "unsafe_archive");
         var baseDir = Path.Combine(workDir, "base");
         var extractDir = Path.Combine(workDir, "extract");
@@ -2304,9 +2167,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ValidateArchiveMembers_RejectsLinksAndUnsupportedTypes_Issue4605()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var entryTypes = new[]
         {
             TarEntryType.SymbolicLink,
@@ -2347,9 +2207,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ArchiveBudgets_RejectManyMembersDeclaredBytesGzipBombAndActualBytes_Issue4605()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var manyMembersArchive = Path.Combine(_tempRoot, "many_members.tar.gz");
         using (var archive = File.Create(manyMembersArchive))
         using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
@@ -2451,9 +2308,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void CurlHttpGet_RejectsOversizedDownloadedResponse_Issue4605()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var outputPath = Path.Combine(_tempRoot, "oversized_download.txt");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -2489,9 +2343,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_ArchiveWithUnmanifestedFileFails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "unmanifested_file_target");
         var payloadDir = Path.Combine(_tempRoot, "unmanifested_file_payload");
         var archivePath = Path.Combine(_tempRoot, "unmanifested_file.tar.gz");
@@ -2560,9 +2411,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_StageDirMktempFailure_AbortsBeforeInstallWritesUnderStrictMode()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "stage_mktemp_failure_target");
         var payloadDir = Path.Combine(_tempRoot, "stage_mktemp_failure_payload");
         var archivePath = Path.Combine(_tempRoot, "stage_mktemp_failure.tar.gz");
@@ -2659,9 +2507,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_BackupDirMktempFailure_PreservesExistingHealthyInstallUnderStrictMode()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "backup_mktemp_failure_target");
         var payloadDir = Path.Combine(_tempRoot, "backup_mktemp_failure_payload");
         var archivePath = Path.Combine(_tempRoot, "backup_mktemp_failure.tar.gz");
@@ -2758,9 +2603,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_MissingAsset_DoesNotOverwriteExistingHealthyInstall()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "missing_asset_existing_target");
         var payloadDir = Path.Combine(_tempRoot, "missing_asset_existing_payload");
         var archivePath = Path.Combine(_tempRoot, "missing_asset_existing.tar.gz");
@@ -2862,9 +2704,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_MoveFailure_RollsBackExistingHealthyInstall()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "move_failure_existing_target");
         var payloadDir = Path.Combine(_tempRoot, "move_failure_existing_payload");
         var archivePath = Path.Combine(_tempRoot, "move_failure_existing.tar.gz");
@@ -2994,9 +2833,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_BackupMoveFailure_PreservesExistingHealthyInstall()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "backup_failure_existing_target");
         var payloadDir = Path.Combine(_tempRoot, "backup_failure_existing_payload");
         var archivePath = Path.Combine(_tempRoot, "backup_failure_existing.tar.gz");
@@ -3130,9 +2966,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_RollbackFailure_PreservesRecoveryArtifacts()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "rollback_failure_existing_target");
         var payloadDir = Path.Combine(_tempRoot, "rollback_failure_existing_payload");
         var archivePath = Path.Combine(_tempRoot, "rollback_failure_existing.tar.gz");
@@ -3273,9 +3106,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_RestrictsStageAndBackupDirectories()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "strict_install_dirs_target");
         var payloadDir = Path.Combine(_tempRoot, "strict_install_dirs_payload");
         var archivePath = Path.Combine(_tempRoot, "strict_install_dirs.tar.gz");
@@ -3371,9 +3201,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadReleaseFile_Http404_PrintsHttpSpecificError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             $$"""
             VERSION="v0.99.0"
@@ -3413,9 +3240,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_MissingChecksumEntry_PrintsActionableError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "missing_checksum_target");
         var payloadDir = Path.Combine(_tempRoot, "missing_checksum_payload");
         var archivePath = Path.Combine(_tempRoot, "missing_checksum.tar.gz");
@@ -3484,9 +3308,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void CheckExisting_DifferentVersion_UsesNeutralSwitchingWording()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "bin_switch");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -3516,9 +3337,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerifyChecksumSignature_StrictVerifyWithoutGpg_FailsClosed()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var checksumsPath = Path.Combine(_tempRoot, "strict.sha256sums.txt");
         var signaturePath = checksumsPath + ".asc";
         File.WriteAllText(checksumsPath, "checksum");
@@ -3550,9 +3368,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerificationPolicy_StrictRequiresIndependentManifestProvenance_Issue4603()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             printf 'policy=%s provenance=%s attestation=%s strict=%s\n' "$VERIFY_POLICY" "$REQUIRE_RELEASE_PROVENANCE" "$REQUIRE_ATTESTATION" "$STRICT_VERIFY"
@@ -3570,9 +3385,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void InstalledReceipt_AttestationOnlyPolicyRejectsGpgOnlyProof_Issue4607()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var checksumsPath = Path.Combine(_tempRoot, "installed-attestation-only.sha256sums.txt");
         var signaturePath = checksumsPath + ".asc";
         File.WriteAllText(checksumsPath, "checksum");
@@ -3604,9 +3416,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void InstalledReceipt_GpgOnlyPolicyRejectsAttestationOnlyProof_Issue4607()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var checksumsPath = Path.Combine(_tempRoot, "installed-gpg-only.sha256sums.txt");
         File.WriteAllText(checksumsPath, "checksum");
 
@@ -3635,9 +3444,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerificationPolicy_CompatIsExplicitAuditedOptIn_Issue4603()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             MANIFEST_PROVENANCE_VERIFIED=0
@@ -3653,9 +3459,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerificationPolicy_InvalidValue_FailsDuringSource()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             echo "UNREACHABLE"
@@ -3674,9 +3477,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerificationPolicy_StrictWithoutAttestationOrPinnedSigner_FailsClosed_Issue4603()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var checksumsPath = Path.Combine(_tempRoot, "strict-policy.sha256sums.txt");
         var signaturePath = checksumsPath + ".asc";
         File.WriteAllText(checksumsPath, "checksum");
@@ -3709,9 +3509,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerifyChecksumSignature_FingerprintMismatch_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var checksumsPath = Path.Combine(_tempRoot, "mismatch.sha256sums.txt");
         var signaturePath = checksumsPath + ".asc";
         File.WriteAllText(checksumsPath, "checksum");
@@ -3741,9 +3538,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerifyChecksumSignature_MatchingFingerprint_Succeeds()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var checksumsPath = Path.Combine(_tempRoot, "match.sha256sums.txt");
         var signaturePath = checksumsPath + ".asc";
         File.WriteAllText(checksumsPath, "checksum");
@@ -3774,9 +3568,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void AcquireInstallLock_WhenFlockIsAvailable_TakesNonBlockingFileLock()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "flock_lock_target");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -3802,9 +3593,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void AcquireInstallLock_WhenFlockIsUnavailable_RefusesExistingLockDirectory()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "mkdir_lock_target");
         Directory.CreateDirectory(Path.Combine(installDir, ".cdidx-install.lockdir"));
 
@@ -3835,9 +3623,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DetectPlatform_MacosX64_PrintsActionableUnsupportedRidGuidance()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             uname() {
@@ -3863,9 +3648,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DetectPlatform_UnsupportedArchitecture_PrintsPublishedRidPolicyAndSourceBuildGuidance()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             uname() {
@@ -3893,9 +3675,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ValidatePublishedReleaseRid_UnsupportedResolvedRid_FailsBeforeDownloadWithActionableGuidance()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             RID="linux-arm"
@@ -3915,9 +3694,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ResolveVersion_UsesJqWhenAvailable()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var toolDir = Path.Combine(_tempRoot, "jq_stub_bin");
         Directory.CreateDirectory(toolDir);
         var jqPath = Path.Combine(toolDir, "jq");
@@ -3963,9 +3739,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ResolveVersion_UsesConfiguredApiBaseUrl()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var urlLogPath = Path.Combine(_tempRoot, "configured_api_base_url.log");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -4011,9 +3784,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ResolveVersion_ConfiguredApiBase403_PrintsConfiguredEndpointGuidance()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             curl() {
@@ -4055,9 +3825,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_ConfiguredReleaseBaseNetworkFailure_PrintsConfiguredHostGuidance()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "configured_release_base_network_failure");
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
@@ -4089,9 +3856,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_WithoutExplicitInstallDir_UsesIsolatedTempInstallDir()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "self_test_home");
         var realInstallDir = Path.Combine(homeDir, ".local", "bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -4135,9 +3899,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_WithExplicitInstallDir_UsesRequestedInstallDir()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "self_test_explicit_install");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -4173,9 +3934,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_EmptyInstallDirEnv_StillUsesIsolatedTempInstallDir()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "self_test_empty_env_home");
         var realInstallDir = Path.Combine(homeDir, ".local", "bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -4222,9 +3980,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_AddsLoopbackNoProxyAndUsesCurlNoProxy()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "self_test_no_proxy_install");
         var curlLogPath = Path.Combine(_tempRoot, "self_test_no_proxy.log");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -4275,9 +4030,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_CustomPort_UsesConfiguredPort()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "self_test_custom_port_install");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -4313,9 +4065,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_LocalMirrorStartFailure_PrintsSelfTestSpecificError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "self_test_start_failure");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -4347,9 +4096,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_AddressAlreadyInUse_PrintsPortSpecificGuidance()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "self_test_port_in_use");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -4379,9 +4125,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_BindPermissionFailure_PrintsPermissionSpecificGuidance()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "self_test_permission_failure");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -4413,9 +4156,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_CdidxInstallDirPointsAtHomeLocalBin_AbortsToProtectRealInstall()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "self_test_guard_home");
         var realInstallDir = Path.Combine(homeDir, ".local", "bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -4454,9 +4194,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_CdidxInstallDirContainingExistingCdidx_AbortsToProtectRealInstall()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var customInstallDir = Path.Combine(_tempRoot, "self_test_guard_custom");
         Directory.CreateDirectory(customInstallDir);
         var preExistingBinary = Path.Combine(customInstallDir, "cdidx");
@@ -4497,9 +4234,6 @@ public sealed class InstallScriptTests : IDisposable
         // 呼び出し側シェルや CI に残った SELF_TEST_ALLOW_OVERWRITE=1 は
         // install-dir ガードを黙って無効化してはならない。唯一の解除手段は
         // --self-test-allow-overwrite CLI フラグ。
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "self_test_env_bypass_home");
         var realInstallDir = Path.Combine(homeDir, ".local", "bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -4550,9 +4284,6 @@ public sealed class InstallScriptTests : IDisposable
         // The risky-path detector must normalize trailing slashes so
         // CDIDX_INSTALL_DIR="/usr/local/bin/" is caught just like "/usr/local/bin".
         // 末尾スラッシュがあっても既知のシステム install 先として検出されること。
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
             export BINARY_NAME="cdidx_does_not_exist_here"
@@ -4575,9 +4306,6 @@ public sealed class InstallScriptTests : IDisposable
         // exact-string comparison and only got caught after a real binary existed.
         // 末尾スラッシュ付きの "$HOME/.local/bin/" も、実バイナリがまだ無い段階で
         // ガードに引っかかること。
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "self_test_trailing_slash_home");
         var realInstallDir = Path.Combine(homeDir, ".local", "bin");
         Directory.CreateDirectory(realInstallDir);
@@ -4609,9 +4337,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_AllowOverwriteCliFlag_ProceedsDespiteRiskyInstallDir()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "self_test_allow_cli_home");
         var realInstallDir = Path.Combine(homeDir, ".local", "bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
@@ -4670,9 +4395,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void SelfTestLocalMirror_CdidxInstallDirPointsAtFreshCustomDir_ProceedsWithoutGuard()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var safeInstallDir = Path.Combine(_tempRoot, "self_test_safe_custom_install");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
@@ -4707,9 +4429,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void DownloadAndInstall_UsesConfiguredReleaseBaseUrl()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var installDir = Path.Combine(_tempRoot, "configured_release_base_install");
         var payloadDir = Path.Combine(_tempRoot, "configured_release_base_payload");
         var archivePath = Path.Combine(_tempRoot, "configured_release_base.tar.gz");
@@ -4786,9 +4505,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ProbeTempRoot_UnwritableTmpdir_PrintsSpecificError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var tmpdir = Path.Combine(_tempRoot, "not_a_dir");
         File.WriteAllText(tmpdir, "not a directory");
 
@@ -4809,9 +4525,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerifyCdidxBinary_VersionMismatch_FailsBeforeSuccess()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var binDir = Path.Combine(_tempRoot, "verify_mismatch");
         Directory.CreateDirectory(binDir);
         var binaryPath = Path.Combine(binDir, "cdidx");
@@ -4835,9 +4548,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void CheckPath_WhenOlderCdidxPrecedesInstallDir_WarnsAboutShadowing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var oldDir = Path.Combine(_tempRoot, "old_path_bin");
         var installDir = Path.Combine(_tempRoot, "new_path_bin");
         Directory.CreateDirectory(oldDir);
@@ -4869,9 +4579,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void CheckPath_UpdatePathOptIn_AppendsProfileExportAndUpdatesCurrentPath()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "path_profile_home");
         var installDir = Path.Combine(_tempRoot, "profile_install_bin");
         Directory.CreateDirectory(homeDir);
@@ -4905,9 +4612,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_WithoutVersionArgument_FailsWithUsageError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             run_reinstall_real
@@ -4921,9 +4625,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_PrefixesBareVersionWithV()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, _) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -4964,9 +4665,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_IgnoresCdidxInstallDirAndUsesIsolatedTempDir()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var homeDir = Path.Combine(_tempRoot, "reinstall_real_home");
         var realInstallDir = Path.Combine(homeDir, ".local", "bin");
         Directory.CreateDirectory(realInstallDir);
@@ -5028,9 +4726,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_ExercisesVersionIndexAndSearch()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var versionSentinel = Path.Combine(_tempRoot, "reinstall_real_version_invoked");
         var searchSentinel = Path.Combine(_tempRoot, "reinstall_real_search_invoked");
 
@@ -5098,9 +4793,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_BinaryMissingAfterInstall_FailsLoudly()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5122,9 +4814,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchFails_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5158,9 +4847,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionMismatch_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5189,9 +4875,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionWithoutLeftBoundary_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5219,9 +4902,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionWithTrailingDigit_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5249,9 +4929,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchOutputWithoutStructuredMatch_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5290,9 +4967,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionMixedOutput_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5331,9 +5005,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchPathPrefix_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5378,9 +5049,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionDiagnosticOnlyRequestedToken_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5422,9 +5090,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchHeaderPlusDiagnosticGreet_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5471,9 +5136,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionFirstLineTrailingDiagnostic_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5519,9 +5181,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionFirstLineWithBuildMetadata_AcceptsAndContinues()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // Real cdidx --version output may include the build-metadata suffix
         // since #1550 (e.g. `cdidx v1.2.3 (commit abc1234, built 2026-05-12,
         // clean)`). The reinstall validator must accept that shape so dev
@@ -5567,9 +5226,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionFirstLineWithUpdateHint_AcceptsAndContinues()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // #1626: older validated releases can legitimately append the standard
         // update-check hint to the single-line --version output. The validator
         // must accept only that exact suffix shape, not arbitrary trailing text.
@@ -5612,9 +5268,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchHeaderInlineDiagnostic_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5662,9 +5315,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchIndentedDiagnosticWithoutDef_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5710,9 +5360,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_VersionMultiLineExactFirstLinePlusDiagnostic_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5758,9 +5405,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchHeaderLineContainsDefGreetDiagnostic_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5806,9 +5450,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchIndentedLineContainsDefGreetDiagnostic_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5854,9 +5495,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchHeaderLineContainsVerbatimSignatureDiagnostic_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5904,9 +5542,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchIndentedLineContainsVerbatimSignatureDiagnostic_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -5953,9 +5588,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchRangeBlockNonFirstIndentMatchesSignature_AbortsWithError()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6004,9 +5636,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchGrepFormExactFullLine_Succeeds()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, _) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6052,9 +5681,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_SearchLaterRangeHeaderRearmsFirstIndent_Succeeds()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, _) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6106,9 +5732,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void ReinstallReal_DoesNotRequestJsonFromSearch()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, _, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6159,9 +5782,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_AllProbesReturn200_ExitsZeroAndReportsReachable()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6208,9 +5828,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_ConnectTunnel403_PrintsUpstreamProxyGuidanceAndExitsOne()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6244,9 +5861,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_ConnectTunnel403_CapsCurlStderrBeforePrinting()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6272,9 +5886,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_PrintsConfiguredProxyEnvVars()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, _) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6300,9 +5911,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_RedactsProxyUrlCredentialsBeforePrinting()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // `--doctor` is the command users paste into logs, issues, and support
         // transcripts when they're trying to diagnose a proxy-blocked install.
         // If the proxy URL contains credentials (a common pattern on corporate
@@ -6348,9 +5956,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_CredentialLessProxyUrlsAreNotRewritten()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // The redactor must only touch values that actually carry a
         // `scheme://userinfo@host` shape. Plain `scheme://host:port` or
         // bare-host NO_PROXY values would otherwise be rewritten into a form
@@ -6382,9 +5987,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_ExplicitVersionArgument_ProbesReleaseAssetForThatVersion()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, _) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6403,9 +6005,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_BareVersionArgument_GetsVPrefixBeforeProbing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, _) = RunInstallerSnippet(
             """
             need_cmd() { :; }
@@ -6423,9 +6022,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_NoExplicitVersion_ReadsVersionJson()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // `default_self_test_version` reads the version.json sitting next to
         // this script, so when no explicit version is passed the doctor should
         // use that as the probe target.
@@ -6448,9 +6044,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_NoExplicitVersionAndNoVersionJson_SkipsReleaseProbes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // When neither an explicit argument nor a version.json is available,
         // `default_self_test_version` returns v0.0.0. The doctor must still run
         // the API probe and clearly mark the release probes as skipped instead
@@ -6478,9 +6071,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_ApiReturnsHttp404_ExitsOneAndFlagsApiProbe()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // Simulate an API endpoint that answers (curl exit 0) but the response
         // itself is 404. Reachability is not confirmed — the probe must fail
         // and the summary must show the API probe as FAILED, while the
@@ -6522,9 +6112,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_UnknownFlagAfterDoctor_IsTreatedAsVersion()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // The dispatcher forwards the first positional token after --doctor
         // verbatim as the version argument. Passing a bare string such as
         // `notaversion` is normalized by `v` prefixing to `vnotaversion` and
@@ -6551,9 +6138,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void Doctor_DispatcherWiresDoctorCliFlag()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         // The CLI dispatcher at the bottom of install.sh must route
         // --doctor [<version>] to run_doctor, not into main(). Build an
         // isolated PATH shim that replaces curl + uname with stubs, so the
@@ -6608,9 +6192,6 @@ public sealed class InstallScriptTests : IDisposable
     [ProductionCliFact]
     public void VerificationPolicy_DispatcherRejectsInvalidCliValue()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var psi = new ProcessStartInfo
         {
             FileName = "bash",

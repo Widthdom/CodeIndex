@@ -26,6 +26,7 @@ permissions:
 
 jobs:
   build:
+    name: build (${{ matrix.os }}, ${{ matrix.test-framework }}, ${{ matrix.sdk-label }}, ${{ matrix.primary_lane }}, ${{ matrix.test-shard }})
     strategy:
       matrix:
         include:
@@ -34,23 +35,53 @@ jobs:
             sdk-versions: |
               8.0.413
               9.0.301
+            sdk-label: 8.0.413 9.0.301
             primary_lane: true
+            test-shard: full
+            test-filter: ''
           - os: ubuntu-24.04
             test-framework: net9.0
             sdk-versions: 9.0.301
+            sdk-label: 9.0.301
             primary_lane: false
+            test-shard: full
+            test-filter: ''
           - os: windows-2022
             test-framework: net8.0
             sdk-versions: |
               8.0.413
               9.0.301
+            sdk-label: 8.0.413 9.0.301
             primary_lane: false
+            test-shard: index-command
+            test-filter: FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests
+          - os: windows-2022
+            test-framework: net8.0
+            sdk-versions: |
+              8.0.413
+              9.0.301
+            sdk-label: 8.0.413 9.0.301
+            primary_lane: false
+            test-shard: remaining
+            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests
           - os: macos-14
             test-framework: net8.0
             sdk-versions: |
               8.0.413
               9.0.301
+            sdk-label: 8.0.413 9.0.301
             primary_lane: false
+            test-shard: index-command
+            test-filter: FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests
+          - os: macos-14
+            test-framework: net8.0
+            sdk-versions: |
+              8.0.413
+              9.0.301
+            sdk-label: 8.0.413 9.0.301
+            primary_lane: false
+            test-shard: remaining
+            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -136,17 +167,18 @@ jobs:
         run: |
           ./.github/scripts/run-dotnet-tests.ps1 `
             -Framework "${{ matrix.test-framework }}" `
-            -CollectCoverage "${{ matrix.primary_lane }}"
+            -CollectCoverage "${{ matrix.primary_lane }}" `
+            -BaseFilter "${{ matrix.test-filter }}"
 
       - name: Summarize TRX telemetry
         if: always() && steps.test.outputs.summarize == 'true'
-        run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize --results-directory ./TestResults --top 10
+        run: dotnet tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll summarize --results-directory ./TestResults --top 10
 
       - name: Upload test results
-        if: always() && (steps.test.outputs.summarize == 'true' || failure())
+        if: always() && steps.test.outcome != 'skipped' && (steps.test.outputs.summarize == 'true' || failure())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}
+          name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}
           if-no-files-found: warn
           overwrite: true
           retention-days: 14
@@ -156,11 +188,11 @@ jobs:
             TestResults/**/*.xml
 
       - name: Upload diagnostic dumps
-        if: failure()
+        if: failure() && steps.test.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         continue-on-error: true
         with:
-          name: DiagnosticDumps-${{ matrix.os }}-${{ matrix.test-framework }}
+          name: DiagnosticDumps-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}
           if-no-files-found: ignore
           overwrite: true
           retention-days: 7
@@ -170,10 +202,10 @@ jobs:
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports
-        if: always() && matrix.primary_lane
+        if: always() && matrix.primary_lane && steps.test.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}
+          name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}
           if-no-files-found: warn
           overwrite: true
           retention-days: 14

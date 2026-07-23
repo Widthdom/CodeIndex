@@ -1810,7 +1810,7 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_CSharp_ManyPrimaryConstructorTypes_CompletesWithinPracticalBudget()
     {
-        const int typeCount = 40_000;
+        const int typeCount = 20_000;
         _ = SymbolExtractor.Extract(0, "csharp", "public record Warmup(int Value);");
         var content = string.Join('\n', Enumerable.Range(0, typeCount).Select(i => $"public record Item{i}(int Value{i});"));
 

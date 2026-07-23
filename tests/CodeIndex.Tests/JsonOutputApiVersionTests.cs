@@ -12,7 +12,7 @@ namespace CodeIndex.Tests;
 /// `--json-envelope` metadata block must carry it. Bumping the constant should be a deliberate
 /// breaking-change signal for downstream consumers.
 /// </summary>
-[Collection("Console sensitive")]
+[Collection("SQLite pool sensitive")]
 public class JsonOutputApiVersionTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text;
 
 namespace CodeIndex.Tests;
@@ -41,11 +42,9 @@ public partial class ReleaseWorkflowTests
     }
 
     [ProductionCliFact]
+    [UnsupportedOSPlatform("windows")]
     public void ReleaseWorkflow_DockerEntrypointDropsRootToRequestedUidGid()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_entrypoint_drop_root");
         try
         {
@@ -91,11 +90,9 @@ public partial class ReleaseWorkflowTests
     }
 
     [ProductionCliFact]
+    [UnsupportedOSPlatform("windows")]
     public void ReleaseWorkflow_DockerEntrypointCanKeepRootWhenExplicitlyRequested()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_entrypoint_keep_root");
         try
         {

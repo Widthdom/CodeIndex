@@ -859,7 +859,12 @@ public class ProgramCliTests
             var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
             var replacementDbPath = TestProjectHelper.CreateProjectDb(replacementRoot);
-            TestProjectHelper.InsertIndexedFile(replacementDbPath, "src/other.cs", "csharp", "class Other { void Run() {} }\n");
+            TestProjectHelper.InsertIndexedFile(
+                replacementDbPath,
+                "src/other.cs",
+                "csharp",
+                "class Other { void Run() {} }\n",
+                releasePoolForFileAccess: true);
             var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
             var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
 

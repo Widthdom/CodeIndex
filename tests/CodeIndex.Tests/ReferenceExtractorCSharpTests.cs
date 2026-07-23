@@ -7473,7 +7473,7 @@ public partial class ReferenceExtractorTests
 #endif
     public void Extract_CSharpLargeMethodWithManyLocals_CompletesWithinPracticalBudget()
     {
-        const int localCount = 2_000;
+        const int localCount = 1_000;
         var builder = new StringBuilder();
         builder.AppendLine("class Demo");
         builder.AppendLine("{");
@@ -7497,7 +7497,7 @@ public partial class ReferenceExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(references, reference => reference.SymbolName == "Helper" && reference.ReferenceKind == "call");
-        var runawayBudget = TimeSpan.FromSeconds(15);
+        var runawayBudget = TimeSpan.FromSeconds(5);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large C# method reference extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");

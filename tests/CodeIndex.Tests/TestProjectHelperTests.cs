@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -54,6 +56,69 @@ public class TestProjectHelperTests
         }
 
         Assert.False(Directory.Exists(projectRoot));
+    }
+
+    [Fact]
+    public void DeleteDirectory_RemovesNestedReadOnlyFixturesAfterFailureDrivenNormalization()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fixture_readonly_cleanup");
+        var nestedDirectory = TestProjectHelper.CreateDirectory(projectRoot, "nested");
+        var nestedFile = TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("nested", "readonly.txt"), "fixture\n");
+        File.SetAttributes(nestedFile, FileAttributes.ReadOnly);
+        File.SetAttributes(nestedDirectory, File.GetAttributes(nestedDirectory) | FileAttributes.ReadOnly);
+
+        TestProjectHelper.DeleteDirectory(projectRoot);
+
+        Assert.False(Directory.Exists(projectRoot));
+    }
+
+    [Fact]
+    public void InsertIndexedFileAndDeleteDatabaseFiles_UseFailureDrivenPoolRelease()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_fixture_database_cleanup");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App {}\n");
+
+        TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+
+        Assert.False(File.Exists(dbPath));
+        Assert.False(File.Exists(dbPath + "-wal"));
+        Assert.False(File.Exists(dbPath + "-shm"));
+    }
+
+    [Fact]
+    public void InsertIndexedFile_ReleasePoolForFileAccess_AllowsStandaloneRawRead()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_fixture_database_raw_read");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        const string content = "public class App {}\n";
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/App.cs",
+            "csharp",
+            content,
+            releasePoolForFileAccess: true);
+
+        using (var stream = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.True(stream.Length > 0);
+        }
+
+        var standaloneDbPath = Path.Combine(project.Root, "standalone.db");
+        File.Copy(dbPath, standaloneDbPath);
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = standaloneDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString();
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT checksum FROM files WHERE path = 'src/App.cs'";
+        var expectedChecksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)))
+            .ToLowerInvariant();
+        Assert.Equal(expectedChecksum, Assert.IsType<string>(command.ExecuteScalar()));
     }
 
     [Fact]

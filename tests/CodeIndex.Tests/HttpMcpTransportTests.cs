@@ -533,7 +533,7 @@ public class HttpMcpTransportTests : IDisposable
                 cancellationToken: CancellationToken.None);
             var earlySecondWrite = await Task.WhenAny(
                 stream.SecondWriteEntered,
-                Task.Delay(TimeSpan.FromMilliseconds(100)));
+                Task.Delay(TestDeterminism.BlockedObservationWindow));
             Assert.NotSame(stream.SecondWriteEntered, earlySecondWrite);
             Assert.False(firstWrite.IsCompleted);
 
@@ -3095,7 +3095,7 @@ public class HttpMcpTransportTests : IDisposable
         var write = transport.WriteFrameAsync(responseBody, CancellationToken.None);
         var earlyResponseWrite = await Task.WhenAny(
             responseWriteEntered.Task,
-            Task.Delay(TimeSpan.FromMilliseconds(100)));
+            Task.Delay(TestDeterminism.BlockedObservationWindow));
         Assert.NotSame(responseWriteEntered.Task, earlyResponseWrite);
         Assert.False(write.IsCompleted);
 
@@ -3347,7 +3347,7 @@ public class HttpMcpTransportTests : IDisposable
         var post = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
         await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the initial initialize request to enter the queue");
 
-        await Task.Delay(100);
+        await Task.Delay(TestDeterminism.BlockedObservationWindow);
         Assert.False(post.IsCompleted, "initial initialize headers must wait for the session identifier");
         Assert.False(probeAttempted.Task.IsCompleted, "initial initialize must not start the disconnect probe");
 
@@ -3987,7 +3987,7 @@ public class HttpMcpTransportTests : IDisposable
     public async Task HttpTransport_EventsStream_AllowsPostsAndRemovesDisconnectedStreams_Issue3815()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-        harness.SetKeepAlive(TimeSpan.FromSeconds(1), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
+        harness.SetKeepAlive(TimeSpan.FromMilliseconds(10), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
         using (var initialize = await harness.InitializeAsync())
             Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
         using var client = CreateHttpClient();

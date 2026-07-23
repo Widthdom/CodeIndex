@@ -5,7 +5,9 @@ param(
 
   [Parameter(Mandatory = $true)]
   [ValidateSet("true", "false")]
-  [string]$CollectCoverage
+  [string]$CollectCoverage,
+
+  [string]$BaseFilter = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,6 +93,22 @@ function Invoke-TestRun {
   return [int]$exitCode
 }
 
+function Merge-TestFilters {
+  param(
+    [string]$BaseFilter,
+    [string]$FocusedFilter
+  )
+
+  if ([string]::IsNullOrWhiteSpace($BaseFilter)) {
+    return $FocusedFilter
+  }
+  if ([string]::IsNullOrWhiteSpace($FocusedFilter)) {
+    return $BaseFilter
+  }
+
+  return "($BaseFilter)&($FocusedFilter)"
+}
+
 function Get-RetryFilterDecision {
   param(
     [Parameter(Mandatory = $true)]
@@ -98,12 +116,7 @@ function Get-RetryFilterDecision {
   )
 
   $telemetryArgs = @(
-    "run",
-    "--project", "tools/CodeIndex.TestTelemetry",
-    "--configuration", "Release",
-    "--no-build",
-    "--no-restore",
-    "--",
+    "tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll",
     "retry-filter",
     "--trx-file", $TrxPath
   )
@@ -155,7 +168,7 @@ function Get-RetryFilterDecision {
 }
 
 $firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
-$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true
+$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true -TestFilter $BaseFilter
 if ($firstExitCode -eq 0) {
   exit 0
 }
@@ -171,19 +184,20 @@ Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning 
 if ($includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage on the flaky-classification retry."
 }
-Write-Host "Reusing initial crash diagnostics; the retry keeps hang collection but skips the crash collector."
+Write-Host "Reusing crash evidence from the initial attempt; the flaky-classification retry skips duplicate crash collection."
 $firstTrxPath = Join-Path $resultsDirectory "test_results_first.trx"
 $retryFilterDecision = Get-RetryFilterDecision -TrxPath $firstTrxPath
-$retryFilter = ""
-$retryScope = "full suite"
+$retryFilter = $BaseFilter
+$retryScope = if ([string]::IsNullOrWhiteSpace($BaseFilter)) { "full suite" } else { "full shard: $BaseFilter" }
 if ($retryFilterDecision.useFocusedRetry -eq $true -and
     -not [string]::IsNullOrWhiteSpace([string]$retryFilterDecision.filter)) {
-  $retryFilter = [string]$retryFilterDecision.filter
-  $retryScope = "focused: $($retryFilterDecision.failedResultCount) failed result(s) across $($retryFilterDecision.testMethodCount) test method(s)"
+  $retryFilter = Merge-TestFilters -BaseFilter $BaseFilter -FocusedFilter ([string]$retryFilterDecision.filter)
+  $retryScope = "focused within lane: $($retryFilterDecision.failedResultCount) failed result(s) across $($retryFilterDecision.testMethodCount) test method(s)"
   Write-Host "Using a bounded focused retry for $($retryFilterDecision.testMethodCount) failed test method(s)."
 }
 else {
-  Write-Host "Focused retry is unavailable ($($retryFilterDecision.reason)); using the full-suite retry fallback."
+  $fallbackScope = if ([string]::IsNullOrWhiteSpace($BaseFilter)) { "full-suite" } else { "full-shard" }
+  Write-Host "Focused retry is unavailable ($($retryFilterDecision.reason)); using the $fallbackScope retry fallback."
 }
 $retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
 $retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false -IncludeCrashDiagnostics $false -TestFilter $retryFilter
