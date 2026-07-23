@@ -3597,14 +3597,14 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpParenthesizedTerminalSelectInArgumentPreservesLaterEnumReferenceContext()
+    public void RunReferences_ExactJson_CSharpParenthesizedQueryTerminalsShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_parenthesized_query_terminals");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
+                Path.Combine(projectRoot, "src", "terminal-select.cs"),
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -3634,36 +3634,8 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            var rows = ParseJsonLines(stdout);
-            var row = Assert.Single(rows).RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
-            Assert.Equal("Read", row.GetProperty("container_name").GetString());
-            Assert.Contains("Status.Ready", row.GetProperty("context").GetString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpGroupByQueryInArgumentPreservesLaterEnumReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_group_by_argument");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
+                Path.Combine(projectRoot, "src", "group-by.cs"),
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -3695,18 +3667,27 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            var rows = ParseJsonLines(stdout);
-            var row = Assert.Single(rows).RootElement;
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
-            Assert.Equal(25, row.GetProperty("line").GetInt32());
-            Assert.Contains("Status.Ready", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+
+            AssertSingleReference("src/terminal-select.cs", expectedLine: null);
+            AssertSingleReference("src/group-by.cs", expectedLine: 25);
+
+            void AssertSingleReference(string path, int? expectedLine)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    "Ready", dbPath, "csharp", true, "--path", path);
+                var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
+                Assert.Equal("Read", row.GetProperty("container_name").GetString());
+                Assert.Contains("Status.Ready", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+                if (expectedLine.HasValue)
+                    Assert.Equal(expectedLine.Value, row.GetProperty("line").GetInt32());
+            }
         }
         finally
         {
