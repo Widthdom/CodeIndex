@@ -152,7 +152,8 @@ public static class HookCommandRunner
             var existingHook = ReadHookFileWithinLimit(ioHookPath);
             if (existingHook is not null && IsManagedHook(existingHook))
             {
-                if (string.Equals(existingHook, hookScript, StringComparison.Ordinal))
+                if (string.Equals(existingHook, hookScript, StringComparison.Ordinal)
+                    && IsExecutableHook(ioHookPath))
                 {
                     return WriteResult(
                         options.Json,
@@ -216,14 +217,15 @@ public static class HookCommandRunner
         var status = "installed";
         var message = "cdidx pre-commit hook would be installed";
         var plannedAction = "create";
-        string? reportedChainedHookPath = null;
+        string? reportedChainedHookPath = chainedHookExists ? chainedHookPath : null;
 
         if (File.Exists(ioHookPath))
         {
             var existingHook = ReadHookFileWithinLimit(ioHookPath);
             if (existingHook is not null && IsManagedHook(existingHook))
             {
-                if (string.Equals(existingHook, hookScript, StringComparison.Ordinal))
+                if (string.Equals(existingHook, hookScript, StringComparison.Ordinal)
+                    && IsExecutableHook(ioHookPath))
                 {
                     status = "already_installed";
                     message = "cdidx pre-commit hook is already installed";
@@ -526,6 +528,10 @@ fi
             UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
 
+    private static bool IsExecutableHook(string path)
+        => OperatingSystem.IsWindows()
+            || (File.GetUnixFileMode(path) & UnixFileMode.UserExecute) != 0;
+
     private static int WriteResult(
         bool json,
         JsonSerializerOptions jsonOptions,
@@ -574,16 +580,17 @@ fi
                     CommandErrorWriter.WriteStdout($"Hook: {hookPath}");
                 if (chainedHookPath != null)
                     CommandErrorWriter.WriteStdout($"Chained hook: {chainedHookPath}");
-                if (dryRun == true)
-                {
-                    CommandErrorWriter.WriteStdout($"Planned action: {plannedAction}");
-                    CommandErrorWriter.WriteStdout("Managed hook preview:");
-                    CommandErrorWriter.WriteStdout(managedHookPreview ?? string.Empty);
-                }
             }
             else
             {
                 CommandErrorWriter.WriteStderr($"Error: {message}");
+            }
+
+            if (dryRun == true)
+            {
+                CommandErrorWriter.WriteStdout($"Planned action: {plannedAction}");
+                CommandErrorWriter.WriteStdout("Managed hook preview:");
+                CommandErrorWriter.WriteStdout(managedHookPreview ?? string.Empty);
             }
         }
 
