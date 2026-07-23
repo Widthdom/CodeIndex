@@ -24,6 +24,7 @@ affected:
 - **Production query boundaries reuse indexed workspaces** — Related C# order-by comma and range-scope, ternary-operator, throw-expression, query-terminal, postfix, casted local-select, and nullable-suffix cases now share one production CLI indexing subprocess per syntax family while retaining distinct assertions.
 - **Seeded query boundaries reuse databases** — C# generic type-pattern, query range-scope, foreach-shadowing, lambda-parameter, and declaration-pattern variants now share graph-ready databases by family while path filters preserve their exact result contracts.
 - **Production SQL boundaries reuse indexed workspaces** — Line-end comment, `USING` / `MERGE`, semicolonless temporary-table, non-code masking, and TRUNCATE variants now share one production CLI indexing subprocess per family while path filters preserve exact contracts.
+- **Non-coverage net8 lanes run complementary test shards** — Windows and macOS split `IndexCommandRunnerTests` from the remainder into separate processes; Ubuntu coverage remains full-suite, retries retain or intersect shard filters, and artifacts include shard identity.
 
 ## 日本語
 
@@ -36,3 +37,4 @@ affected:
 - **production query boundaryでindexed workspaceを再利用します** — 関連するC# order-by comma / range scope、ternary operator、throw-expression、query-terminal、postfix、casted local-select、nullable-suffix caseは個別の構文assertionを保ちながら、構文familyごとにproduction CLI indexing subprocessを1回だけ共有します。
 - **seed済みquery boundaryでdatabaseを再利用します** — C# generic type-pattern、query range-scope、foreach-shadowing、lambda-parameter、declaration-pattern variantはfamilyごとにgraph-ready databaseを共有し、path filterでexact result contractを維持します。
 - **production SQL boundaryでindexed workspaceを再利用します** — line-end comment、`USING` / `MERGE`、semicolonless temporary-table、non-code masking、TRUNCATE variantはfamilyごとにproduction CLI indexing subprocessを1回だけ共有し、path filterでexact contractを維持します。
+- **coverageなしのnet8 laneを補完的なtest shardで実行します** — WindowsとmacOSでは`IndexCommandRunnerTests`と残りを別processに分けます。Ubuntuのcoverageはfull suiteを維持し、retryはshard filterを保持または交差させ、artifact名にはshard identityを含めます。

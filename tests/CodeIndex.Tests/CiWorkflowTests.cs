@@ -28,23 +28,53 @@ public class CiWorkflowTests
             "            sdk-versions: |\n" +
             "              8.0.413\n" +
             "              9.0.301\n" +
+            "            sdk-label: 8.0.413 9.0.301\n" +
             "            primary_lane: true\n" +
+            "            test-shard: full\n" +
+            "            test-filter: ''\n" +
             "          - os: ubuntu-24.04\n" +
             "            test-framework: net9.0\n" +
             "            sdk-versions: 9.0.301\n" +
+            "            sdk-label: 9.0.301\n" +
             "            primary_lane: false\n" +
+            "            test-shard: full\n" +
+            "            test-filter: ''\n" +
             "          - os: windows-2022\n" +
             "            test-framework: net8.0\n" +
             "            sdk-versions: |\n" +
             "              8.0.413\n" +
             "              9.0.301\n" +
+            "            sdk-label: 8.0.413 9.0.301\n" +
             "            primary_lane: false\n" +
+            "            test-shard: index-command\n" +
+            "            test-filter: FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests\n" +
+            "          - os: windows-2022\n" +
+            "            test-framework: net8.0\n" +
+            "            sdk-versions: |\n" +
+            "              8.0.413\n" +
+            "              9.0.301\n" +
+            "            sdk-label: 8.0.413 9.0.301\n" +
+            "            primary_lane: false\n" +
+            "            test-shard: remaining\n" +
+            "            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests\n" +
             "          - os: macos-14\n" +
             "            test-framework: net8.0\n" +
             "            sdk-versions: |\n" +
             "              8.0.413\n" +
             "              9.0.301\n" +
-            "            primary_lane: false",
+            "            sdk-label: 8.0.413 9.0.301\n" +
+            "            primary_lane: false\n" +
+            "            test-shard: index-command\n" +
+            "            test-filter: FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests\n" +
+            "          - os: macos-14\n" +
+            "            test-framework: net8.0\n" +
+            "            sdk-versions: |\n" +
+            "              8.0.413\n" +
+            "              9.0.301\n" +
+            "            sdk-label: 8.0.413 9.0.301\n" +
+            "            primary_lane: false\n" +
+            "            test-shard: remaining\n" +
+            "            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests",
             "- name: Set up .NET SDK\n        id: setup-dotnet\n        continue-on-error: true\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
             "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
             "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
@@ -65,7 +95,7 @@ public class CiWorkflowTests
             "- name: Verify Release test build\n        if: matrix.primary_lane\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false",
             "- name: Verify developer task wrapper\n        if: matrix.primary_lane\n        run: make lint",
             "- name: Build\n        if: ${{ !matrix.primary_lane }}",
-            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ matrix.primary_lane }}\"");
+            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ matrix.primary_lane }}\" `\n            -BaseFilter \"${{ matrix.test-filter }}\"");
         AssertDoesNotContainAny(
             workflow,
             "- name: Verify Release solution build",
@@ -77,7 +107,7 @@ public class CiWorkflowTests
             "if ($includeCoverage)",
             "[ValidateSet(\"true\", \"false\")]",
             "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0",
-            "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName \"test_results_first.trx\" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true",
+            "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName \"test_results_first.trx\" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true -TestFilter $BaseFilter",
             "Skipping XPlat Code Coverage on the flaky-classification retry.",
             "Reusing crash evidence from the initial attempt; the flaky-classification retry skips duplicate crash collection.",
             "$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName \"test_results_retry.trx\" -IncludeCoverage $false -IncludeCrashDiagnostics $false",
@@ -112,6 +142,8 @@ public class CiWorkflowTests
         AssertContainsAll(
             workflow,
             "-Framework \"${{ matrix.test-framework }}\"",
+            "-BaseFilter \"${{ matrix.test-filter }}\"",
+            "name: build (${{ matrix.os }}, ${{ matrix.test-framework }}, ${{ matrix.sdk-label }}, ${{ matrix.primary_lane }}, ${{ matrix.test-shard }})",
             "id: test",
             "- name: Summarize TRX telemetry\n        if: always() && steps.test.outputs.summarize == 'true'",
             "run: dotnet tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll summarize",
@@ -120,6 +152,9 @@ public class CiWorkflowTests
             "TestResults/**/*.xml",
             "TestResults/**/*.dmp",
             "TestResults/**/*.dump",
+            "TestResults-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}",
+            "DiagnosticDumps-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}",
+            "Coverage-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}",
             "if: always() && matrix.primary_lane");
         AssertContainsAll(
             workflow,
@@ -147,15 +182,18 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void DotnetWorkflow_UsesBoundedFocusedRetryWithSafeFullSuiteFallback()
+    public void DotnetWorkflow_UsesBoundedFocusedRetryWithinLaneFilter()
     {
         var workflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
 
         AssertContainsAll(
             testScript,
+            "[string]$BaseFilter = \"\"",
             "[string]$TestFilter = \"\"",
             "$runArgs += @(\"--filter\", $TestFilter)",
+            "function Merge-TestFilters",
+            "return \"($BaseFilter)&($FocusedFilter)\"",
             "function Get-RetryFilterDecision",
             "\"tools/CodeIndex.TestTelemetry/bin/Release/net8.0/CodeIndex.TestTelemetry.dll\"",
             "\"retry-filter\"",
@@ -164,9 +202,13 @@ public class CiWorkflowTests
             "reason = \"telemetry_tool_failed\"",
             "reason = \"telemetry_output_invalid\"",
             "$firstTrxPath = Join-Path $resultsDirectory \"test_results_first.trx\"",
+            "-TestFilter $BaseFilter",
+            "$retryFilter = $BaseFilter",
             "$retryFilterDecision.useFocusedRetry -eq $true",
+            "Merge-TestFilters -BaseFilter $BaseFilter -FocusedFilter",
             "Using a bounded focused retry",
-            "using the full-suite retry fallback",
+            "full shard: $BaseFilter",
+            "using the $fallbackScope retry fallback",
             "-TestFilter $retryFilter",
             "Retry scope: $retryScope");
         AssertContainsAll(
