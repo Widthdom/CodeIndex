@@ -64,6 +64,136 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsList_CompactCatalogIsLightweightAndPointsToFullDefinitions_Issue4724()
+    {
+        var fullRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var compactRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"format":"compact"}}""")!;
+
+        var fullResponse = _server.HandleMessage(fullRequest)!;
+        var compactResponse = _server.HandleMessage(compactRequest)!;
+        var compactResult = compactResponse["result"]!;
+        var compactTools = compactResult["tools"]!.AsArray();
+
+        Assert.Equal(24, compactTools.Count);
+        Assert.True(
+            Encoding.UTF8.GetByteCount(compactResponse.ToJsonString())
+            < Encoding.UTF8.GetByteCount(fullResponse.ToJsonString()) / 3);
+        foreach (var tool in compactTools)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(tool!["name"]!.GetValue<string>()));
+            Assert.False(string.IsNullOrWhiteSpace(tool["description"]!.GetValue<string>()));
+            Assert.Equal("object", tool["inputSchema"]!["type"]!.GetValue<string>());
+            Assert.Single(tool["inputSchema"]!.AsObject());
+            Assert.Null(tool["examples"]);
+            Assert.NotNull(tool["annotations"]);
+            Assert.NotNull(tool["x-stability"]);
+        }
+
+        var meta = compactResult["_meta"]!;
+        Assert.Equal("compact", meta["format"]!.GetValue<string>());
+        Assert.False(meta["definitions_complete"]!.GetValue<bool>());
+        Assert.False(meta["discovery_contract"]!["input_schemas_are_authoritative"]!.GetValue<bool>());
+        Assert.True(meta["discovery_contract"]!["full_definitions_available_on_demand"]!.GetValue<bool>());
+        Assert.Equal("tools/list", meta["full_definition_request"]!["method"]!.GetValue<string>());
+        Assert.Equal("full", meta["full_definition_request"]!["params"]!["format"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsList_NamesRetrievesSelectedFullDefinitions_Issue4724()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full","names":"status"}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tool = Assert.Single(response["result"]!["tools"]!.AsArray())!;
+        Assert.Equal("status", tool["name"]!.GetValue<string>());
+        Assert.NotEmpty(tool["examples"]!.AsArray());
+        Assert.NotNull(tool["inputSchema"]!["properties"]!["fields"]);
+        Assert.True(tool["inputSchema"]!["additionalProperties"] is not null);
+        var meta = response["result"]!["_meta"]!;
+        Assert.Equal(1, meta["response_controls"]!["tools_total"]!.GetValue<int>());
+        Assert.Equal(24, meta["response_controls"]!["enabled_tools_total"]!.GetValue<int>());
+        Assert.True(meta["response_controls"]!["names_filtered"]!.GetValue<bool>());
+        Assert.Equal("name_filtered", meta["catalog_scope"]!.GetValue<string>());
+        Assert.False(meta["discovery_contract"]!["tools_list_is_authoritative"]!.GetValue<bool>());
+        Assert.Equal("enabled_tools", meta["discovery_contract"]!["catalog_metadata_scope"]!.GetValue<string>());
+        Assert.Contains("search", meta["capability_groups"]!["discovery"]!.AsArray().Select(item => item!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsList_ContinuationCursorPreservesCompactNameFilter_Issue4724()
+    {
+        var firstRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"compact","names":["search","status"],"limit":1}}""")!;
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        var secondRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject { ["cursor"] = cursor },
+        };
+
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var tool = Assert.Single(secondResponse["result"]!["tools"]!.AsArray())!;
+        Assert.Equal("status", tool["name"]!.GetValue<string>());
+        Assert.Null(tool["examples"]);
+        Assert.Single(tool["inputSchema"]!.AsObject());
+        Assert.Equal("compact", secondResponse["result"]!["_meta"]!["format"]!.GetValue<string>());
+        Assert.True(secondResponse["result"]!["_meta"]!["response_controls"]!["names_filtered"]!.GetValue<bool>());
+
+        var conflictingRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 3,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = cursor,
+                ["format"] = "full",
+            },
+        };
+        var conflictingResponse = _server.HandleMessage(conflictingRequest)!;
+        Assert.Equal(-32602, conflictingResponse["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsList_ExplicitFullMatchesDefaultResponse_Issue4724()
+    {
+        var defaultRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var explicitRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"format":"full"}}""")!;
+
+        var defaultResponse = _server.HandleMessage(defaultRequest)!;
+        var explicitResponse = _server.HandleMessage(explicitRequest)!;
+
+        Assert.Equal(
+            defaultResponse["result"]!["tools"]!.ToJsonString(),
+            explicitResponse["result"]!["tools"]!.ToJsonString());
+        var defaultMeta = defaultResponse["result"]!["_meta"]!.DeepClone().AsObject();
+        var explicitMeta = explicitResponse["result"]!["_meta"]!.DeepClone().AsObject();
+        defaultMeta.Remove("correlation_id");
+        defaultMeta.Remove("request_id");
+        explicitMeta.Remove("correlation_id");
+        explicitMeta.Remove("request_id");
+        Assert.Equal(defaultMeta.ToJsonString(), explicitMeta.ToJsonString());
+    }
+
+    [Fact]
+    public void ToolsList_InvalidCatalogControlsReturnInvalidParams_Issue4724()
+    {
+        var formatRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"summary"}}""")!;
+        var namesRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"names":[]}}""")!;
+
+        var formatResponse = _server.HandleMessage(formatRequest)!;
+        var namesResponse = _server.HandleMessage(namesRequest)!;
+
+        Assert.Equal(-32602, formatResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", formatResponse["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(-32602, namesResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxToolsListNameFilters, namesResponse["error"]!["data"]!["max_tool_name_filters"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsList_Returns23Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

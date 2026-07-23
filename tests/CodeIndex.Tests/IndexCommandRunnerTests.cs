@@ -5672,6 +5672,83 @@ public sealed class Caller
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunOptimizeFts_DryRunCountsTrigramFtsSizes_Issue4725(
+        bool forceLogicalObjectSizeFallbackForTesting)
+    {
+        var dbPath = CreateTempDbPath("cdidx_optimize_trigram_preview");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/TrigramPreview.cs",
+                    Lang = "csharp",
+                    Size = 31,
+                    Lines = 1,
+                    Checksum = "trigram-preview-checksum",
+                    Modified = DateTime.UtcNow,
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = "public sealed class TrigramPreview;",
+                    },
+                ]);
+            }
+
+            SqliteConnection.ClearAllPools();
+            int exitCode;
+            JsonElement json;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    exitCode = IndexCommandRunner.RunOptimizeFts(
+                        ["--db", dbPath, "--dry-run", "--json"],
+                        _jsonOptions,
+                        forceLogicalObjectSizeFallbackForTesting);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var measurement = json.GetProperty("object_sizes_measurement").GetString();
+            Assert.Contains(measurement, new[] { "dbstat_page_bytes", "logical_payload_bytes" });
+            if (forceLogicalObjectSizeFallbackForTesting)
+                Assert.Equal("logical_payload_bytes", measurement);
+            var objectSizes = json.GetProperty("object_size_bytes");
+            Assert.True(objectSizes.GetProperty("fts_chunks_trigram_data").GetInt64() > 0);
+            var measuredFtsSize = objectSizes
+                .EnumerateObject()
+                .Where(property => property.Name.StartsWith("fts_chunks_", StringComparison.Ordinal))
+                .Sum(property => property.Value.GetInt64());
+            Assert.Equal(measuredFtsSize, json.GetProperty("fts_size_bytes").GetInt64());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
     [Fact]
     public void RunOptimizeFts_DryRunLogicalFallbackMeasuresLegacySchema_Issue4577()
     {
