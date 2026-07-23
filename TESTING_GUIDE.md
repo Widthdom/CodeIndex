@@ -261,6 +261,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Production-runtime SQL `USING` / `MERGE` coverage keeps DELETE sources, DDL matcher controls, target hints, and temporary targets in one indexed workspace, with path filters preserving qualified-name and negative contracts.
   Production-runtime SQL semicolonless temporary-table coverage keeps SET / DECLARE and IF / WHILE sources in one indexed workspace, with path filters preserving established and future-read contracts.
   Production-runtime SQL non-code masking keeps double-quoted dynamic SQL, same-line dollar bodies, multiline single quotes, and comment / dollar-body mixtures in one indexed workspace, with path filters preserving visible and phantom-reference contracts.
+  Production-runtime SQL TRUNCATE coverage keeps qualified / multiple targets and temporary-target establishment in one indexed workspace, with path filters preserving normalization and later-read contracts.
   C# postfix-expression coverage before parenthesized terminal select shares null-forgiving and increment forms in one extraction pass.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
@@ -1076,6 +1077,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   production-runtime SQL `USING` / `MERGE` coverageはDELETE source、DDL matcher control、target hint、temporary targetを1つのindexed workspaceで共有し、path filterでqualified-name / negative contractを維持してください。
   production-runtime SQL semicolonless temporary-table coverageはSET / DECLAREとIF / WHILE sourceを1つのindexed workspaceで共有し、path filterでestablished / future-read contractを維持してください。
   production-runtime SQL non-code maskingはdouble-quoted dynamic SQL、same-line dollar body、multiline single quote、comment / dollar-body mixtureを1つのindexed workspaceで共有し、path filterでvisible / phantom-reference contractを維持してください。
+  production-runtime SQL TRUNCATE coverageはqualified / multiple targetとtemporary-target establishmentを1つのindexed workspaceで共有し、path filterでnormalization / later-read contractを維持してください。
   C# parenthesized terminal select 前のpostfix-expression coverage は null-forgiving / increment 形式を1回の extraction pass で共有してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。

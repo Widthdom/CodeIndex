@@ -4321,30 +4321,39 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlTruncateTargetsHandleOnlyAndMultipleTargets()
+    public void RunReferences_ExactJson_SqlTruncateTargetsShareIndexedWorkspace()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_truncate_targets");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "targets.sql"),
                 """
                 TRUNCATE TABLE ONLY public.users;
                 TRUNCATE TABLE audit_log, archived_log;
                 TRUNCATE TABLE [dbo].[users], `analytics`.`logs`, "public"."accounts";
                 """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "temp-targets.sql"),
+                """
+                TRUNCATE TABLE #truncate_temp;
+                SELECT * FROM #truncate_temp;
+                SELECT * FROM #future_temp;
+                TRUNCATE TABLE #future_temp;
+                """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
-            var (archivedExitCode, archivedStdout, archivedStderr) = RunReferencesInProcess("archived_log", dbPath);
-            var (logsExitCode, logsStdout, logsStderr) = RunReferencesInProcess("logs", dbPath);
-            var (accountsExitCode, accountsStdout, accountsStderr) = RunReferencesInProcess("accounts", dbPath);
-            var (onlyExitCode, onlyStdout, onlyStderr) = RunReferencesInProcess("ONLY", dbPath);
-            var (qualifiedExitCode, qualifiedStdout, qualifiedStderr) = RunReferencesInProcess("public.users", dbPath);
-            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunReferencesInProcess("dbo].[users", dbPath);
-            var (mangledBacktickExitCode, mangledBacktickStdout, mangledBacktickStderr) = RunReferencesInProcess("analytics`.`logs", dbPath);
-            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunReferencesInProcess("public\".\"accounts", dbPath);
+            var targetPathArgs = new[] { "--path", "sql/targets.sql" };
+            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath, "sql", true, targetPathArgs);
+            var (archivedExitCode, archivedStdout, archivedStderr) = RunReferencesInProcess("archived_log", dbPath, "sql", true, targetPathArgs);
+            var (logsExitCode, logsStdout, logsStderr) = RunReferencesInProcess("logs", dbPath, "sql", true, targetPathArgs);
+            var (accountsExitCode, accountsStdout, accountsStderr) = RunReferencesInProcess("accounts", dbPath, "sql", true, targetPathArgs);
+            var (onlyExitCode, onlyStdout, onlyStderr) = RunReferencesInProcess("ONLY", dbPath, "sql", true, targetPathArgs);
+            var (qualifiedExitCode, qualifiedStdout, qualifiedStderr) = RunReferencesInProcess("public.users", dbPath, "sql", true, targetPathArgs);
+            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunReferencesInProcess("dbo].[users", dbPath, "sql", true, targetPathArgs);
+            var (mangledBacktickExitCode, mangledBacktickStdout, mangledBacktickStderr) = RunReferencesInProcess("analytics`.`logs", dbPath, "sql", true, targetPathArgs);
+            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunReferencesInProcess("public\".\"accounts", dbPath, "sql", true, targetPathArgs);
 
             var usersRows = ParseJsonLines(usersStdout);
             var archivedRows = ParseJsonLines(archivedStdout);
@@ -4395,6 +4404,26 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, mangledDoubleQuoteExitCode);
             Assert.Equal(string.Empty, mangledDoubleQuoteStderr);
             Assert.Equal(0, mangledDoubleQuoteDocument.RootElement.GetProperty("count").GetInt32());
+
+            var (truncateExitCode, truncateStdout, truncateStderr) = RunReferencesInProcess(
+                "#truncate_temp", dbPath, "sql", true, "--path", "sql/temp-targets.sql");
+            var (futureExitCode, futureStdout, futureStderr) = RunReferencesInProcess(
+                "#future_temp", dbPath, "sql", true, "--path", "sql/temp-targets.sql");
+            var truncateRows = ParseJsonLines(truncateStdout);
+            var futureRows = ParseJsonLines(futureStdout);
+
+            Assert.Equal(CommandExitCodes.Success, truncateExitCode);
+            Assert.Equal(string.Empty, truncateStderr);
+            Assert.Equal(2, truncateRows.Count);
+            Assert.All(truncateRows, row => Assert.Equal(
+                "#truncate_temp",
+                row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, futureExitCode);
+            Assert.Equal(string.Empty, futureStderr);
+            var futureRow = Assert.Single(futureRows);
+            Assert.Equal("#future_temp", futureRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal(4, futureRow.RootElement.GetProperty("line").GetInt32());
         }
         finally
         {
@@ -4664,49 +4693,6 @@ public partial class QueryCommandRunnerTests
                         expectedKind,
                         row.RootElement.GetProperty("reference_kind").GetString()));
             }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlTruncateTempTargetsEstablishLaterReads()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_truncate_temp_target");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
-                """
-                TRUNCATE TABLE #truncate_temp;
-                SELECT * FROM #truncate_temp;
-                SELECT * FROM #future_temp;
-                TRUNCATE TABLE #future_temp;
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (truncateExitCode, truncateStdout, truncateStderr) = RunReferencesInProcess("#truncate_temp", dbPath);
-            var (futureExitCode, futureStdout, futureStderr) = RunReferencesInProcess("#future_temp", dbPath);
-
-            var truncateRows = ParseJsonLines(truncateStdout);
-            var futureRows = ParseJsonLines(futureStdout);
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-
-            Assert.Equal(CommandExitCodes.Success, truncateExitCode);
-            Assert.Equal(string.Empty, truncateStderr);
-            Assert.Equal(2, truncateRows.Count);
-            Assert.All(truncateRows, row => Assert.Equal("#truncate_temp", row.RootElement.GetProperty("symbol_name").GetString()));
-
-            Assert.Equal(CommandExitCodes.Success, futureExitCode);
-            Assert.Equal(string.Empty, futureStderr);
-            var futureRow = Assert.Single(futureRows);
-            Assert.Equal("#future_temp", futureRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal(4, futureRow.RootElement.GetProperty("line").GetInt32());
         }
         finally
         {

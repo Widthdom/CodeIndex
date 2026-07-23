@@ -23,7 +23,7 @@ affected:
 - **Unix shell tests skip before Windows fixture setup** — Installer and container-entrypoint cases now skip during discovery on Windows instead of constructing temporary directories and returning from the test body.
 - **Production query boundaries reuse indexed workspaces** — Related C# order-by comma and range-scope, ternary-operator, throw-expression, query-terminal, postfix, casted local-select, and nullable-suffix cases now share one production CLI indexing subprocess per syntax family while retaining distinct assertions.
 - **Seeded query boundaries reuse databases** — C# generic type-pattern, query range-scope, foreach-shadowing, lambda-parameter, and declaration-pattern variants now share graph-ready databases by family while path filters preserve their exact result contracts.
-- **Production SQL boundaries reuse indexed workspaces** — Line-end comment, `USING` / `MERGE`, semicolonless temporary-table, and non-code masking variants now share one production CLI indexing subprocess per family while path filters preserve exact contracts.
+- **Production SQL boundaries reuse indexed workspaces** — Line-end comment, `USING` / `MERGE`, semicolonless temporary-table, non-code masking, and TRUNCATE variants now share one production CLI indexing subprocess per family while path filters preserve exact contracts.
 
 ## 日本語
 
@@ -35,4 +35,4 @@ affected:
 - **Unix shell testはWindowsのfixture setup前にskipします** — installerとcontainer entrypointのcaseはtemporary directoryを作ってtest bodyからreturnせず、Windowsではdiscovery時にskipします。
 - **production query boundaryでindexed workspaceを再利用します** — 関連するC# order-by comma / range scope、ternary operator、throw-expression、query-terminal、postfix、casted local-select、nullable-suffix caseは個別の構文assertionを保ちながら、構文familyごとにproduction CLI indexing subprocessを1回だけ共有します。
 - **seed済みquery boundaryでdatabaseを再利用します** — C# generic type-pattern、query range-scope、foreach-shadowing、lambda-parameter、declaration-pattern variantはfamilyごとにgraph-ready databaseを共有し、path filterでexact result contractを維持します。
-- **production SQL boundaryでindexed workspaceを再利用します** — line-end comment、`USING` / `MERGE`、semicolonless temporary-table、non-code masking variantはfamilyごとにproduction CLI indexing subprocessを1回だけ共有し、path filterでexact contractを維持します。
+- **production SQL boundaryでindexed workspaceを再利用します** — line-end comment、`USING` / `MERGE`、semicolonless temporary-table、non-code masking、TRUNCATE variantはfamilyごとにproduction CLI indexing subprocessを1回だけ共有し、path filterでexact contractを維持します。
