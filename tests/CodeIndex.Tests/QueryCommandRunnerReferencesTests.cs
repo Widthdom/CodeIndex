@@ -7006,13 +7006,13 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpQueryRangeVariableGenericTypePatternDesignationDoesNotLeakEnumReference()
+    public void RunReferences_ExactJson_CSharpGenericTypePatternsShareDatabaseFixture()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_generic_type_pattern_designation");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_generic_type_patterns");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/designation.cs", "csharp",
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -7038,36 +7038,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
-            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
-            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpQueryRangeVariableGenericTypePatternWithoutDesignationDoesNotLeakEnumReference()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_generic_type_pattern_without_designation");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/without-designation.cs", "csharp",
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -7095,19 +7066,23 @@ public partial class QueryCommandRunnerTests
                 """);
             MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
+            AssertNoReferences("src/designation.cs");
+            AssertNoReferences("src/without-designation.cs");
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            void AssertNoReferences(string path)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    "Ready", dbPath, "csharp", true, "--path", path);
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
-            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
-            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, json.GetProperty("count").GetInt32());
+                Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+                Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+                Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+            }
         }
         finally
         {

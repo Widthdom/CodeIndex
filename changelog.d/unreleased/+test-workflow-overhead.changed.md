@@ -22,6 +22,7 @@ affected:
 - **Hook scheduling coverage uses a compact assembly** — Full-scan scheduling tests now stage the dedicated hook-isolation fixture instead of copying the much larger test assembly into a worker directory.
 - **Unix shell tests skip before Windows fixture setup** — Installer and container-entrypoint cases now skip during discovery on Windows instead of constructing temporary directories and returning from the test body.
 - **Production query boundaries reuse indexed workspaces** — Related C# order-by comma, ternary-operator, throw-expression, query-terminal, postfix, casted local-select, and nullable-suffix cases now share one production CLI indexing subprocess per syntax family while retaining distinct assertions.
+- **Seeded query boundaries reuse databases** — C# generic type-pattern designation variants now share one graph-ready database while path filters preserve their exact empty-result contracts.
 
 ## 日本語
 
@@ -32,3 +33,4 @@ affected:
 - **hook scheduling coverageで小型assemblyを使います** — full-scan scheduling testは巨大なtest assemblyをworker directoryへcopyせず、専用のhook-isolation fixtureをstageします。
 - **Unix shell testはWindowsのfixture setup前にskipします** — installerとcontainer entrypointのcaseはtemporary directoryを作ってtest bodyからreturnせず、Windowsではdiscovery時にskipします。
 - **production query boundaryでindexed workspaceを再利用します** — 関連するC# order-by comma、ternary operator、throw-expression、query-terminal、postfix、casted local-select、nullable-suffix caseは個別の構文assertionを保ちながら、構文familyごとにproduction CLI indexing subprocessを1回だけ共有します。
+- **seed済みquery boundaryでdatabaseを再利用します** — C# generic type-patternのdesignation variantは1つのgraph-ready databaseを共有し、path filterでexact empty-result contractを維持します。
