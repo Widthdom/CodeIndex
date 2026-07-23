@@ -21,7 +21,7 @@ public class CdidxConfigFileTests
 
             Assert.False(result.Loaded);
             Assert.False(result.Failed);
-            Assert.Null(result.Path);
+            Assert.Null(result.ConfigPath);
             Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
@@ -57,7 +57,7 @@ public class CdidxConfigFileTests
 
             Assert.False(result.Loaded);
             Assert.False(result.Failed);
-            Assert.Null(result.Path);
+            Assert.Null(result.ConfigPath);
             Assert.Empty(result.Settings);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
@@ -166,7 +166,7 @@ public class CdidxConfigFileTests
             var result = CdidxConfigFile.Load(Path.Combine(dir, "src"), env.Read);
 
             Assert.True(result.Loaded);
-            Assert.EndsWith(Path.Combine(".cdidx", "config.json"), result.Path);
+            Assert.EndsWith(Path.Combine(".cdidx", "config.json"), result.ConfigPath);
             Assert.Equal("41", result.Settings[QueryCommandRunner.DefaultLimitEnvironmentVariable]);
             Assert.Equal("5", result.Settings[QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable]);
             Assert.Equal("120", result.Settings[QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable]);
@@ -406,7 +406,7 @@ public class CdidxConfigFileTests
             var result = CdidxConfigFile.Load(nested, env.Read);
 
             Assert.True(result.Loaded);
-            Assert.Equal(Path.Combine(root, ".cdidxrc.json"), result.Path);
+            Assert.Equal(Path.Combine(root, ".cdidxrc.json"), result.ConfigPath);
             Assert.Equal("config-value", result.Settings["CDIDX_DEBUG"]);
         }
         finally { TestProjectHelper.DeleteDirectory(root); }

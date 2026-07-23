@@ -174,7 +174,7 @@ internal static partial class ProgramRunner
         using var globalLogFlagEnvironment = CdidxEnvironment.Push(globalLogEnvironment);
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
         if (configResult.Loaded)
-            GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
+            GlobalToolLog.Info($"config_file_loaded path={configResult.ConfigPath}");
         jsonOptions ??= CreateDefaultJsonOptions();
         EnsureRedirectedStdoutUsesUtf8();
 

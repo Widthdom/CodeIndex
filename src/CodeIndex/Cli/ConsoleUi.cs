@@ -1412,7 +1412,7 @@ public static class ConsoleUi
     /// Damerau-Levenshtein距離で最も近いコマンド名を返す。短いコマンドは無関係な推薦を避けるため閾値を厳しくする。
     /// </summary>
     public static string? FindClosestCommand(string input) =>
-        FindClosestMatch(input, CliCommandCatalog.Commands);
+        FindClosestMatch(input, CliCommandCatalog.PublicCommandNames);
 
     /// <summary>
     /// Find the closest match for <paramref name="input"/> from <paramref name="candidates"/>
