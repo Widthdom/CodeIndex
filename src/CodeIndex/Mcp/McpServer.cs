@@ -239,6 +239,7 @@ public partial class McpServer : IDisposable
     internal const int MaxToolsListPageSize = 24;
     internal const int MaxToolsListNameFilters = 24;
     internal const int MaxToolsListNameCharacters = 128;
+    internal const int MaxToolsListCursorCharacters = 8_192;
     internal const int MaxStatusProjectionFields = 32;
     internal const int MaxStatusProjectionFieldCharacters = 128;
     internal const int MaxStatusProjectionCharacters = 2_048;

@@ -109,7 +109,52 @@ public partial class McpServerTests
         Assert.NotEmpty(tool["examples"]!.AsArray());
         Assert.NotNull(tool["inputSchema"]!["properties"]!["fields"]);
         Assert.True(tool["inputSchema"]!["additionalProperties"] is not null);
-        Assert.Equal(1, response["result"]!["_meta"]!["response_controls"]!["tools_total"]!.GetValue<int>());
+        var meta = response["result"]!["_meta"]!;
+        Assert.Equal(1, meta["response_controls"]!["tools_total"]!.GetValue<int>());
+        Assert.Equal(24, meta["response_controls"]!["enabled_tools_total"]!.GetValue<int>());
+        Assert.True(meta["response_controls"]!["names_filtered"]!.GetValue<bool>());
+        Assert.Equal("name_filtered", meta["catalog_scope"]!.GetValue<string>());
+        Assert.False(meta["discovery_contract"]!["tools_list_is_authoritative"]!.GetValue<bool>());
+        Assert.Equal("enabled_tools", meta["discovery_contract"]!["catalog_metadata_scope"]!.GetValue<string>());
+        Assert.Contains("search", meta["capability_groups"]!["discovery"]!.AsArray().Select(item => item!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsList_ContinuationCursorPreservesCompactNameFilter_Issue4724()
+    {
+        var firstRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"compact","names":["search","status"],"limit":1}}""")!;
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        var secondRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject { ["cursor"] = cursor },
+        };
+
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var tool = Assert.Single(secondResponse["result"]!["tools"]!.AsArray())!;
+        Assert.Equal("status", tool["name"]!.GetValue<string>());
+        Assert.Null(tool["examples"]);
+        Assert.Single(tool["inputSchema"]!.AsObject());
+        Assert.Equal("compact", secondResponse["result"]!["_meta"]!["format"]!.GetValue<string>());
+        Assert.True(secondResponse["result"]!["_meta"]!["response_controls"]!["names_filtered"]!.GetValue<bool>());
+
+        var conflictingRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 3,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = cursor,
+                ["format"] = "full",
+            },
+        };
+        var conflictingResponse = _server.HandleMessage(conflictingRequest)!;
+        Assert.Equal(-32602, conflictingResponse["error"]!["code"]!.GetValue<int>());
     }
 
     [Fact]
