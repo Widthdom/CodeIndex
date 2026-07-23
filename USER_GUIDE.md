@@ -396,13 +396,24 @@ cdidx export ctags --lang csharp --path src/ --exclude-tests --json
 
 `cdidx export ctags` accepts the same language and path filtering style used by
 query commands: `--lang <lang>`, repeatable `--path <glob>`, repeatable
-`--exclude-path <glob>`, and `--exclude-tests`. The default human mode keeps
-writing the tags file and prints the output path. `--json` prints a machine
-summary with `output_path`, `db_path`, total candidate `tag_count`,
-`emitted_count`, `skipped_count`, `filters`, and `metadata_fields`; filtered
-exports satisfy `tag_count == emitted_count + skipped_count`. Tag lines keep
-the standard `kind` and `line` fields and may also include indexed metadata such as
-`language`, `container_kind`, `container`, and `visibility`.
+`--exclude-path <glob>`, and `--exclude-tests`. Generated files are excluded by
+default when the database exposes generated-file metadata; pass
+`--include-generated` to include them. Legacy databases without that metadata
+remain queryable and report the generated-code policy as `unavailable`.
+
+The default human mode keeps writing the tags file and prints the output path.
+`--json` prints a machine summary with `output_path`, `db_path`, total candidate
+`tag_count`, `emitted_count`, `skipped_count`, `skip_reason_counts`, `filters`,
+and `metadata_fields`. The fixed `skip_reason_counts` object always contains
+`invalid_name`, `unsupported_kind`, `generated_code`, `language_filter`,
+`test_filter`, `path_filter`, `exclude_path_filter`, and `other`. Each skipped
+candidate is assigned to its first matching reason in that order, so exports
+satisfy both `tag_count == emitted_count + skipped_count` and
+`skipped_count == sum(skip_reason_counts)`. The `filters` object advertises
+`include_generated`, `generated_code_policy`, and
+`generated_file_filter_available`. Tag lines keep the standard `kind` and
+`line` fields and may also include indexed metadata such as `language`,
+`container_kind`, `container`, and `visibility`.
 
 Use `cdidx export <archive>` to package the current `codeindex.db` with a
 manifest, and `cdidx import <archive>` to restore it on another checkout or CI
@@ -3500,12 +3511,20 @@ cdidx export ctags --lang csharp --path src/ --exclude-tests --json
 
 `cdidx export ctags` は query command と同じ language / path filter の形を受け付けます。
 `--lang <lang>`、繰り返し指定できる `--path <glob>` / `--exclude-path <glob>`、
-`--exclude-tests` を使えます。既定の human mode は tags file を書き出し、output path を
-表示します。`--json` は `output_path`、`db_path`、総候補数の `tag_count`、
-`emitted_count`、`skipped_count`、`filters`、`metadata_fields` を含む機械処理向け
-summary を出力します。filter 付き export では
-`tag_count == emitted_count + skipped_count` になります。tag line は標準の
-`kind` / `line` fields を維持し、indexed metadata として
+`--exclude-tests` を使えます。database に generated-file metadata がある場合、既定では
+generated file を除外し、`--include-generated` を指定すると含めます。この metadata がない
+legacy database も query でき、generated-code policy は `unavailable` と報告されます。
+
+既定の human mode は tags file を書き出し、output path を表示します。`--json` は
+`output_path`、`db_path`、総候補数の `tag_count`、`emitted_count`、`skipped_count`、
+`skip_reason_counts`、`filters`、`metadata_fields` を含む機械処理向け summary を出力します。
+固定 schema の `skip_reason_counts` は常に `invalid_name`、`unsupported_kind`、
+`generated_code`、`language_filter`、`test_filter`、`path_filter`、
+`exclude_path_filter`、`other` を含みます。各 skip 候補はこの順で最初に一致した理由へ
+1 回だけ計上されるため、`tag_count == emitted_count + skipped_count` と
+`skipped_count == sum(skip_reason_counts)` の両方が成立します。`filters` object は
+`include_generated`、`generated_code_policy`、`generated_file_filter_available` を
+報告します。tag line は標準の `kind` / `line` fields を維持し、indexed metadata として
 `language`、`container_kind`、`container`、`visibility` も含めることがあります。
 
 `cdidx export <archive>` は現在の `codeindex.db` と manifest を archive 化します。

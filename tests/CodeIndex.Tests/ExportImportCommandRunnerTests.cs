@@ -264,7 +264,7 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
-    public void RunExportCtags_JsonReportsFiltersAndMetadata_Issue3551()
+    public void RunExportCtags_JsonReportsSkipReasonsAndGeneratedPolicy_Issue4720()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("ctags_json_filters");
         try
@@ -272,8 +272,21 @@ public class ExportImportCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { public void Run() {} }\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "tests/AppTests.cs", "csharp", "public class AppTests { public void Run() {} }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Generated.cs", "csharp", "public class Generated { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Generated.cs", "csharp", "public class Generated { }\n", isGenerated: true);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Excluded.cs", "csharp", "public class Excluded { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/Guide.cs", "csharp", "public class Guide { }\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/tool.py", "python", "def run():\n    pass\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    INSERT INTO symbols(file_id, kind, name, line)
+                    SELECT id, 'class', '', 1 FROM files WHERE path = 'src/App.cs';
+                    INSERT INTO symbols(file_id, kind, name, line)
+                    SELECT id, NULL, 'UnsupportedKind', 1 FROM files WHERE path = 'src/App.cs';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
             var outputPath = Path.Combine(projectRoot, "tags");
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
@@ -291,7 +304,7 @@ public class ExportImportCommandRunnerTests
                         "--path",
                         "src/",
                         "--exclude-path",
-                        "src/Generated*",
+                        "src/Excluded*",
                         "--exclude-tests"
                     ],
                     jsonOptions,
@@ -316,16 +329,109 @@ public class ExportImportCommandRunnerTests
             var filters = root.GetProperty("filters");
             Assert.Equal("csharp", filters.GetProperty("lang").GetString());
             Assert.Equal("src/", filters.GetProperty("path")[0].GetString());
-            Assert.Equal("src/Generated*", filters.GetProperty("exclude_path")[0].GetString());
+            Assert.Equal("src/Excluded*", filters.GetProperty("exclude_path")[0].GetString());
             Assert.True(filters.GetProperty("exclude_tests").GetBoolean());
+            Assert.False(filters.GetProperty("include_generated").GetBoolean());
+            Assert.Equal("exclude", filters.GetProperty("generated_code_policy").GetString());
+            Assert.True(filters.GetProperty("generated_file_filter_available").GetBoolean());
             Assert.Contains(root.GetProperty("metadata_fields").EnumerateArray(), field => field.GetString() == "language");
+
+            var skipReasonCounts = root.GetProperty("skip_reason_counts");
+            Assert.True(skipReasonCounts.GetProperty("invalid_name").GetInt64() > 0);
+            Assert.True(skipReasonCounts.GetProperty("unsupported_kind").GetInt64() > 0);
+            Assert.True(skipReasonCounts.GetProperty("generated_code").GetInt64() > 0);
+            Assert.True(skipReasonCounts.GetProperty("language_filter").GetInt64() > 0);
+            Assert.True(skipReasonCounts.GetProperty("test_filter").GetInt64() > 0);
+            Assert.True(skipReasonCounts.GetProperty("path_filter").GetInt64() > 0);
+            Assert.True(skipReasonCounts.GetProperty("exclude_path_filter").GetInt64() > 0);
+            Assert.Equal(0, skipReasonCounts.GetProperty("other").GetInt64());
+            Assert.Equal(
+                root.GetProperty("skipped_count").GetInt64(),
+                skipReasonCounts.EnumerateObject().Sum(reason => reason.Value.GetInt64()));
 
             var tags = File.ReadAllText(outputPath);
             Assert.Contains("App\tsrc/App.cs", tags);
             Assert.Contains("language:csharp", tags);
             Assert.DoesNotContain("AppTests", tags);
             Assert.DoesNotContain("Generated", tags);
+            Assert.DoesNotContain("Excluded", tags);
+            Assert.DoesNotContain("Guide", tags);
             Assert.DoesNotContain("tool.py", tags);
+
+            var (includeExitCode, includeStdout, includeStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    [
+                        "ctags",
+                        "--db",
+                        dbPath,
+                        "--output",
+                        outputPath,
+                        "--json",
+                        "--lang",
+                        "csharp",
+                        "--path",
+                        "src/",
+                        "--exclude-path",
+                        "src/Excluded*",
+                        "--exclude-tests",
+                        "--include-generated"
+                    ],
+                    jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, includeExitCode);
+            Assert.Equal(string.Empty, includeStderr);
+            using var includeDocument = JsonDocument.Parse(includeStdout);
+            var includeRoot = includeDocument.RootElement;
+            var includeFilters = includeRoot.GetProperty("filters");
+            Assert.True(includeFilters.GetProperty("include_generated").GetBoolean());
+            Assert.Equal("include", includeFilters.GetProperty("generated_code_policy").GetString());
+            Assert.True(includeFilters.GetProperty("generated_file_filter_available").GetBoolean());
+            Assert.Equal(0, includeRoot.GetProperty("skip_reason_counts").GetProperty("generated_code").GetInt64());
+            Assert.Contains("Generated\tsrc/Generated.cs", File.ReadAllText(outputPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportCtags_LegacyDatabaseReportsGeneratedFilterUnavailable_Issue4720()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("ctags_legacy_generated_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Generated.cs", "csharp", "public class Generated { }\n", isGenerated: true);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    DROP INDEX idx_files_generated;
+                    ALTER TABLE files DROP COLUMN generated;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var outputPath = Path.Combine(projectRoot, "tags");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    ["ctags", "--db", dbPath, "--output", outputPath, "--json"],
+                    jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            var filters = root.GetProperty("filters");
+            Assert.False(filters.GetProperty("include_generated").GetBoolean());
+            Assert.Equal("unavailable", filters.GetProperty("generated_code_policy").GetString());
+            Assert.False(filters.GetProperty("generated_file_filter_available").GetBoolean());
+            Assert.Equal(0, root.GetProperty("skip_reason_counts").GetProperty("generated_code").GetInt64());
+            Assert.Contains("Generated\tsrc/Generated.cs", File.ReadAllText(outputPath));
         }
         finally
         {
