@@ -4824,80 +4824,25 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlDoubleQuotedDynamicSqlDoesNotEstablishTempTable()
+    public void RunReferences_ExactJson_SqlNonCodeRegionsShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_dynamic_temp_establishment");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_non_code_regions");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "double-quoted.sql"),
                 """
                 SET @sql = "SELECT id INTO #temp_users FROM users";
                 SELECT * FROM #temp_users;
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("#temp_users", dbPath);
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlSameLineDollarQuotedBodiesDoNotHideLaterReference()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_same_line_dollar_quoted_bodies");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "dollar-body.sql"),
                 """
                 DO $$BEGIN END$$; SELECT * FROM users; DO $$BEGIN END$$;
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
-
-            var usersRows = ParseJsonLines(usersStdout);
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, usersExitCode);
-            Assert.Equal(string.Empty, usersStderr);
-
-            var usersRow = Assert.Single(usersRows);
-            Assert.Equal("users", usersRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal(1, usersRow.RootElement.GetProperty("line").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlMultilineSingleQuotedStringsStayOpaque()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_multiline_single_quoted_strings");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "multiline-single-quoted.sql"),
                 """
                 SELECT 'abc''
                 still escaped \'
@@ -4907,42 +4852,8 @@ public partial class QueryCommandRunnerTests
                 SELECT * FROM users;
                 SELECT * FROM #temp_users;
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
-            var (tempExitCode, tempStdout, tempStderr) = RunReferencesInProcess("#temp_users", dbPath);
-
-            var usersRows = ParseJsonLines(usersStdout);
-            using var tempDocument = ParseJsonOutput(tempStdout);
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-
-            Assert.Equal(CommandExitCodes.Success, usersExitCode);
-            Assert.Equal(string.Empty, usersStderr);
-            var usersRow = Assert.Single(usersRows);
-            Assert.Equal("users", usersRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal(6, usersRow.RootElement.GetProperty("line").GetInt32());
-
-            Assert.Equal(CommandExitCodes.Success, tempExitCode);
-            Assert.Equal(string.Empty, tempStderr);
-            Assert.Equal(0, tempDocument.RootElement.GetProperty("count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlNonCodeRegionsDoNotLeakPhantomReference()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_non_code_regions");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "comments-and-dollar-bodies.sql"),
                 """
                 SELECT * FROM users /* comment
                 FROM phantom */;
@@ -4962,25 +4873,45 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (phantomExitCode, phantomStdout, phantomStderr) = RunReferencesInProcess("phantom", dbPath);
-            var (accountsExitCode, accountsStdout, accountsStderr) = RunReferencesInProcess("accounts", dbPath);
-
-            using var phantomDocument = ParseJsonOutput(phantomStdout);
-            var accountsRows = ParseJsonLines(accountsStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
-            Assert.Equal(CommandExitCodes.Success, phantomExitCode);
-            Assert.Equal(string.Empty, phantomStderr);
-            Assert.Equal(0, phantomDocument.RootElement.GetProperty("count").GetInt32());
+            AssertNoRows("sql/double-quoted.sql", "#temp_users");
+            AssertRows("sql/dollar-body.sql", "users", 1, expectedLine: 1);
+            AssertRows("sql/multiline-single-quoted.sql", "users", 1, expectedLine: 6);
+            AssertNoRows("sql/multiline-single-quoted.sql", "#temp_users");
+            AssertNoRows("sql/comments-and-dollar-bodies.sql", "phantom");
+            AssertRows("sql/comments-and-dollar-bodies.sql", "accounts", 1, expectedLine: 14);
 
-            Assert.Equal(CommandExitCodes.Success, accountsExitCode);
-            Assert.Equal(string.Empty, accountsStderr);
-            var accountsRow = Assert.Single(accountsRows);
-            var json = accountsRow.RootElement;
-            Assert.Equal("accounts", json.GetProperty("symbol_name").GetString());
-            Assert.Equal(14, json.GetProperty("line").GetInt32());
+            void AssertRows(string path, string query, int expectedCount, int expectedLine)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    query, dbPath, "sql", true, "--path", path);
+                var rows = ParseJsonLines(stdout);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(expectedCount, rows.Count);
+                Assert.All(rows, row => Assert.Equal(
+                    query,
+                    row.RootElement.GetProperty("symbol_name").GetString()));
+                Assert.All(rows, row => Assert.Equal(
+                    expectedLine,
+                    row.RootElement.GetProperty("line").GetInt32()));
+            }
+
+            void AssertNoRows(string path, string query)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    query, dbPath, "sql", true, "--path", path);
+                using var document = ParseJsonOutput(stdout);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+                Assert.Empty(document.RootElement.GetProperty("references").EnumerateArray());
+            }
         }
         finally
         {
