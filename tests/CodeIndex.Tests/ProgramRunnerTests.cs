@@ -381,6 +381,7 @@ public class ProgramRunnerTests
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Contains(expectedUsage, stdout);
         Assert.Contains(expectedNote, stdout);
+        Assert.Contains("--dry-run", stdout);
         Assert.Empty(stderr);
     }
 
