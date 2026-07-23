@@ -23,7 +23,7 @@ internal static class EnvironmentOptionParser
             throw new ArgumentOutOfRangeException(nameof(minimum), minimum, "Minimum must not exceed maximum.");
 
         var rawValue = CdidxEnvironment.GetEnvironmentVariable(name);
-        var sourceDetail = CdidxEnvironment.GetConfigSource(name);
+        var sourceDetail = CdidxConfigSourceResolver.GetSource(name);
         var source = ResolveSource(name, rawValue, sourceDetail);
 
         if (rawValue is null)
@@ -96,7 +96,7 @@ internal static class EnvironmentOptionParser
             throw new ArgumentOutOfRangeException(nameof(minimum), minimum, "Minimum must not exceed maximum.");
 
         var rawValue = CdidxEnvironment.GetEnvironmentVariable(name);
-        var sourceDetail = CdidxEnvironment.GetConfigSource(name);
+        var sourceDetail = CdidxConfigSourceResolver.GetSource(name);
         var source = ResolveSource(name, rawValue, sourceDetail);
 
         if (rawValue is null)

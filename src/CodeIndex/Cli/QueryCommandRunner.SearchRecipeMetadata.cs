@@ -4,7 +4,7 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
-    private static readonly List<string> SearchRecipeSupportedFormats = ["text", "json", "count", "compact", OutputFormatIssueDrafts];
+    private static readonly List<string> SearchRecipeSupportedFormats = ["text", "json", "count", "compact", OutputFormatSarif, OutputFormatIssueDrafts];
     private static readonly SearchRecipeFilterSupportJsonResult SearchRecipeFilterSupport = new(
         Lang: true,
         Path: true,

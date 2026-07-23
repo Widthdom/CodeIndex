@@ -19,7 +19,7 @@ public class CliFlagSchemaTests
     [Fact]
     public void AllCommands_MatchesCliCommandCatalog()
     {
-        Assert.Equal(CliCommandCatalog.Commands, CliFlagSchema.AllCommands);
+        Assert.Equal(CliCommandCatalog.PublicCommandNames, CliFlagSchema.AllCommands);
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public class CliFlagSchemaTests
         var known = CliFlagSchema.AllCommands.ToHashSet(StringComparer.Ordinal);
         foreach (var flag in CliFlagSchema.All)
         {
-            foreach (var command in flag.Commands)
+            foreach (var command in flag.PrimaryCommands)
                 Assert.True(known.Contains(command), $"{flag.Name} Commands references unknown subcommand '{command}'");
             foreach (var command in flag.AlsoAcceptedBy)
                 Assert.True(known.Contains(command), $"{flag.Name} AlsoAcceptedBy references unknown subcommand '{command}'");
@@ -53,8 +53,8 @@ public class CliFlagSchemaTests
         foreach (var flag in CliFlagSchema.All)
         {
             foreach (var command in flag.AlsoAcceptedBy)
-                Assert.False(flag.Commands.Contains(command),
-                    $"{flag.Name}: '{command}' appears in both Commands and AlsoAcceptedBy");
+                Assert.False(flag.PrimaryCommands.Contains(command),
+                    $"{flag.Name}: '{command}' appears in both PrimaryCommands and AlsoAcceptedBy");
         }
     }
 
@@ -62,7 +62,7 @@ public class CliFlagSchemaTests
     public void EveryFlag_HasCommandOrTopLevelScope()
     {
         foreach (var flag in CliFlagSchema.All)
-            Assert.True(flag.Commands.Count > 0 || flag.TopLevel, $"{flag.Name} must apply to a command or top-level scope.");
+            Assert.True(flag.PrimaryCommands.Count > 0 || flag.TopLevel, $"{flag.Name} must apply to a command or top-level scope.");
     }
 
     [Fact]
@@ -337,7 +337,7 @@ public class CliFlagSchemaTests
         foreach (var flag in CliFlagSchema.All)
         {
             var name = flag.Name.TrimStart('-');
-            foreach (var command in flag.Commands)
+            foreach (var command in flag.PrimaryCommands)
                 expected.Add((name, command));
         }
 

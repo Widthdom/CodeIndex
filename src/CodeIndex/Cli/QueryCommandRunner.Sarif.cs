@@ -54,9 +54,12 @@ public static partial class QueryCommandRunner
             itemList
                 .Where(item => !string.IsNullOrWhiteSpace(item.RuleId))
                 .GroupBy(item => item.RuleId, StringComparer.Ordinal)
-                .Select(group => (RuleId: group.Key, Level: GetHighestSarifLevel(group.Select(item => item.Level ?? level))))
+                .Select(group => (
+                    RuleId: group.Key,
+                    Level: GetHighestSarifLevel(group.Select(item => item.Level ?? level)),
+                    Descriptor: group.Select(item => item.RuleDescriptor).FirstOrDefault(descriptor => descriptor != null)))
                 .OrderBy(rule => rule.RuleId, StringComparer.Ordinal),
-            (ruleWriter, rule) => WriteSarifRule(ruleWriter, rule.RuleId, rule.Level, itemOptions),
+            (ruleWriter, rule) => WriteSarifRule(ruleWriter, rule.RuleId, rule.Level, rule.Descriptor, itemOptions),
             separator: ",");
         writer.Write("}},\"results\":");
         WriteJsonArrayInline(
@@ -109,21 +112,34 @@ public static partial class QueryCommandRunner
         writer.Write(']');
     }
 
-    private static void WriteSarifRule(TextWriter writer, string ruleId, string level, JsonSerializerOptions jsonOptions)
+    private static void WriteSarifRule(
+        TextWriter writer,
+        string ruleId,
+        string level,
+        SarifRuleDescriptor? descriptor,
+        JsonSerializerOptions jsonOptions)
     {
+        var name = descriptor?.Name ?? $"cdidx {ruleId}";
+        var shortDescription = descriptor?.ShortDescription ?? $"cdidx {ruleId} result";
+        var fullDescription = descriptor?.FullDescription ?? "A machine-readable cdidx finding emitted from an indexed code query.";
+        var help = descriptor?.Help ?? "Review the referenced location and surrounding code before filing or acting on this result.";
+        IReadOnlyList<string> tags = descriptor?.Tags ?? ["cdidx", "code-search"];
+
         writer.Write("{\"id\":");
         writer.Write(JsonSerializer.Serialize(ruleId, jsonOptions));
         writer.Write(",\"name\":");
-        writer.Write(JsonSerializer.Serialize($"cdidx {ruleId}", jsonOptions));
+        writer.Write(JsonSerializer.Serialize(name, jsonOptions));
         writer.Write(",\"shortDescription\":{\"text\":");
-        writer.Write(JsonSerializer.Serialize($"cdidx {ruleId} result", jsonOptions));
+        writer.Write(JsonSerializer.Serialize(shortDescription, jsonOptions));
         writer.Write("},\"fullDescription\":{\"text\":");
-        writer.Write(JsonSerializer.Serialize("A machine-readable cdidx finding emitted from an indexed code query.", jsonOptions));
+        writer.Write(JsonSerializer.Serialize(fullDescription, jsonOptions));
         writer.Write("},\"helpUri\":\"https://github.com/Widthdom/CodeIndex\",\"help\":{\"text\":");
-        writer.Write(JsonSerializer.Serialize("Review the referenced location and surrounding code before filing or acting on this result.", jsonOptions));
+        writer.Write(JsonSerializer.Serialize(help, jsonOptions));
         writer.Write("},\"defaultConfiguration\":{\"level\":");
         writer.Write(JsonSerializer.Serialize(level, jsonOptions));
-        writer.Write("},\"properties\":{\"tags\":[\"cdidx\",\"code-search\"]}}");
+        writer.Write("},\"properties\":{\"tags\":");
+        writer.Write(JsonSerializer.Serialize(tags, jsonOptions));
+        writer.Write("}}");
     }
 
     private static void WriteSarifResult(TextWriter writer, SarifLocation item, string level, JsonSerializerOptions jsonOptions)
@@ -146,6 +162,12 @@ public static partial class QueryCommandRunner
             writer.Write(Math.Max(Math.Max(1, item.Column) + 1, item.EndColumn.Value).ToString(CultureInfo.InvariantCulture));
         }
         writer.Write("}}}]");
+        if (!string.IsNullOrWhiteSpace(item.Fingerprint))
+        {
+            writer.Write(",\"fingerprints\":{\"cdidx/v1\":");
+            writer.Write(JsonSerializer.Serialize(item.Fingerprint, jsonOptions));
+            writer.Write('}');
+        }
         if (item.Properties is { Count: > 0 })
         {
             writer.Write(",\"properties\":");
@@ -170,5 +192,14 @@ public static partial class QueryCommandRunner
         string Message,
         string RuleId,
         string? Level = null,
-        JsonObject? Properties = null);
+        JsonObject? Properties = null,
+        string? Fingerprint = null,
+        SarifRuleDescriptor? RuleDescriptor = null);
+
+    private sealed record SarifRuleDescriptor(
+        string Name,
+        string ShortDescription,
+        string FullDescription,
+        string Help,
+        IReadOnlyList<string> Tags);
 }
