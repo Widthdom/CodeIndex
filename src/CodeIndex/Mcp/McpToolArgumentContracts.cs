@@ -24,7 +24,7 @@ public partial class McpServer
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "minEntrypointConfidence", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "countOnly", "format", "project", "solution" },
-        "status" => new HashSet<string>(StringComparer.Ordinal) { "check", "scopes", "staleAfterSeconds", "explain", "config", "logPath", "updateCheck", "format" },
+        "status" => new HashSet<string>(StringComparer.Ordinal) { "check", "scopes", "staleAfterSeconds", "explain", "config", "logPath", "updateCheck", "format", "fields" },
         "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries", "maxResponseBytes", "estimateOnly" },
         "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "includeGenerated", "project", "solution" },

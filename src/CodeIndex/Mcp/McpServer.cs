@@ -237,6 +237,12 @@ public partial class McpServer : IDisposable
     internal const int MaxResourceReadCursorCharacters = 128;
     internal const int DefaultToolsListPageSize = 24;
     internal const int MaxToolsListPageSize = 24;
+    internal const int MaxToolsListNameFilters = 24;
+    internal const int MaxToolsListNameCharacters = 128;
+    internal const int MaxToolsListCursorCharacters = 8_192;
+    internal const int MaxStatusProjectionFields = 32;
+    internal const int MaxStatusProjectionFieldCharacters = 128;
+    internal const int MaxStatusProjectionCharacters = 2_048;
     internal const int MaxMcpMapDepth = 32;
     internal const double MinKeepAliveIntervalSeconds = 1.0;
     internal const double MaxKeepAliveIntervalSeconds = 300.0;
@@ -7110,7 +7116,12 @@ public partial class McpServer : IDisposable
     /// Create a tool result response (MCP format).
     /// ツール結果レスポンスを作成（MCP形式）。
     /// </summary>
-    private JsonObject CreateToolResult(JsonNode? id, string text, JsonNode? structuredContent = null, string? mimeType = null)
+    private JsonObject CreateToolResult(
+        JsonNode? id,
+        string text,
+        JsonNode? structuredContent = null,
+        string? mimeType = null,
+        bool enrichStructuredContent = true)
     {
         mimeType ??= structuredContent is null ? "text/plain" : "application/json";
         var result = new JsonObject
@@ -7127,9 +7138,8 @@ public partial class McpServer : IDisposable
         };
         if (structuredContent is JsonObject structuredObject)
         {
-            structuredObject.TryAdd("api_version", JsonOutputContract.ApiVersion);
-            AddProjectFilterRootDiagnostics(structuredObject);
-            AddConfiguredSqliteDiagnostics(structuredObject);
+            if (enrichStructuredContent)
+                EnrichToolStructuredContent(structuredObject);
             result["structuredContent"] = structuredContent;
         }
         else if (structuredContent != null)
@@ -7147,6 +7157,13 @@ public partial class McpServer : IDisposable
             return response;
 
         return CreateResponseTooLargeError(true, id, responseBytes, responseLimit, actualBytesExact: false);
+    }
+
+    private void EnrichToolStructuredContent(JsonObject structuredContent)
+    {
+        structuredContent.TryAdd("api_version", JsonOutputContract.ApiVersion);
+        AddProjectFilterRootDiagnostics(structuredContent);
+        AddConfiguredSqliteDiagnostics(structuredContent);
     }
 
     internal bool TrySerializeJsonNodeWithinByteLimitForTests(JsonNode node, int maxBytes, out string? serialized, out int bytesWritten)
