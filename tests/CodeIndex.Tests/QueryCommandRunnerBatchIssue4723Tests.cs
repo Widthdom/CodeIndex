@@ -101,10 +101,25 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, parallelWithoutSummaryExitCode);
         Assert.Contains("--parallel requires --json-summary", parallelWithoutSummaryStderr);
 
+        var (defaultParallelWithoutSummaryExitCode, _, defaultParallelWithoutSummaryStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--parallel", "1"], _jsonOptions));
+        Assert.Equal(CommandExitCodes.UsageError, defaultParallelWithoutSummaryExitCode);
+        Assert.Contains("--parallel requires --json-summary", defaultParallelWithoutSummaryStderr);
+
         var (outputWithoutSummaryExitCode, _, outputWithoutSummaryStderr) = CaptureConsole(
             () => QueryCommandRunner.RunBatch(["--db", dbPath, "--max-output-chars", "8192"], _jsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, outputWithoutSummaryExitCode);
         Assert.Contains("--max-output-chars requires --json-summary", outputWithoutSummaryStderr);
+
+        var (defaultOutputWithoutSummaryExitCode, _, defaultOutputWithoutSummaryStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunBatch(
+                [
+                    "--db", dbPath,
+                    "--max-output-chars", QueryCommandRunner.BatchDefaultTotalOutputChars.ToString(),
+                ],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.UsageError, defaultOutputWithoutSummaryExitCode);
+        Assert.Contains("--max-output-chars requires --json-summary", defaultOutputWithoutSummaryStderr);
 
         var (inputAboveMaximumExitCode, _, inputAboveMaximumStderr) = CaptureConsole(
             () => QueryCommandRunner.RunBatch(
@@ -196,6 +211,38 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_ParallelFailureExitCodeFollowsInputOrder_Issue4723()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_parallel_exit_order_4723");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var input = """
+        {"command":"search","args":["missing-symbol-4723","--json","--strict-not-found"]}
+        []
+
+        """;
+
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(
+                ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                _jsonOptions));
+        var lines = ParseJsonLines(stdout);
+        try
+        {
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(CommandExitCodes.NotFound, lines[0].RootElement.GetProperty("exit_code").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, lines[1].RootElement.GetProperty("exit_code").GetInt32());
+            Assert.Equal(CommandExitCodes.NotFound, lines[^1].RootElement.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            foreach (var document in lines)
+                document.Dispose();
+        }
+    }
+
+    [Fact]
     public void RunBatch_ParallelReadsPropagateCancellationAndRestoreConsole_Issue4723()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_cancel_4723");
@@ -211,7 +258,7 @@ public partial class QueryCommandRunnerTests
         {
             Assert.Throws<OperationCanceledException>(() => CaptureConsoleWithInput(
                 """
-                {"command":"status","args":["--json"]}
+                {"command":"recipes","args":["--json"]}
                 {"command":"languages","args":["--format","count"]}
 
                 """,

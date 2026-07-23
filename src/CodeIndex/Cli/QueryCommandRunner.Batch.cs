@@ -24,7 +24,9 @@ public static partial class QueryCommandRunner
         var jsonSummary = false;
         var maxInputLines = BatchDefaultInputLines;
         var maxOutputChars = BatchDefaultTotalOutputChars;
+        var maxOutputCharsSpecified = false;
         var parallelism = 1;
+        var parallelismSpecified = false;
         for (var i = 0; i < cmdArgs.Length; i++)
         {
             var arg = cmdArgs[i];
@@ -87,6 +89,7 @@ public static partial class QueryCommandRunner
                 {
                     return CommandExitCodes.UsageError;
                 }
+                maxOutputCharsSpecified = true;
                 continue;
             }
 
@@ -103,6 +106,7 @@ public static partial class QueryCommandRunner
                 {
                     return CommandExitCodes.UsageError;
                 }
+                parallelismSpecified = true;
                 continue;
             }
 
@@ -111,13 +115,13 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        if (parallelism > 1 && !jsonSummary)
+        if (parallelismSpecified && !jsonSummary)
         {
             CommandErrorWriter.WriteStderr("Error: --parallel requires --json-summary so concurrent child output can be isolated and emitted in input order.");
             CommandErrorWriter.WriteStderr($"Usage: {ConsoleUi.GetUsageLine("batch")}");
             return CommandExitCodes.UsageError;
         }
-        if (maxOutputChars != BatchDefaultTotalOutputChars && !jsonSummary)
+        if (maxOutputCharsSpecified && !jsonSummary)
         {
             CommandErrorWriter.WriteStderr("Error: --max-output-chars requires --json-summary because ordinary batch output streams directly.");
             CommandErrorWriter.WriteStderr($"Usage: {ConsoleUi.GetUsageLine("batch")}");
@@ -407,8 +411,6 @@ public static partial class QueryCommandRunner
                         lineErrors++;
                         inputLimitReached = true;
                         inputComplete = true;
-                        if (firstFailure == CommandExitCodes.Success)
-                            firstFailure = CommandExitCodes.UsageError;
                         break;
                     }
 
@@ -420,8 +422,6 @@ public static partial class QueryCommandRunner
                             ErrorCode: CommandErrorCodes.UsageError);
                         pending.Add(new BatchPendingItem(lineNumber, null, [], lineError, Terminal: false));
                         lineErrors++;
-                        if (firstFailure == CommandExitCodes.Success)
-                            firstFailure = CommandExitCodes.UsageError;
                         continue;
                     }
 
@@ -435,7 +435,7 @@ public static partial class QueryCommandRunner
                             writeDiagnostics: false,
                             out var commandName,
                             out var subArgs,
-                            out var parseExitCode,
+                            out _,
                             out var parseError))
                     {
                         pending.Add(new BatchPendingItem(
@@ -445,8 +445,6 @@ public static partial class QueryCommandRunner
                             parseError ?? BuildGenericBatchLineError(lineNumber),
                             Terminal: false));
                         lineErrors++;
-                        if (firstFailure == CommandExitCodes.Success)
-                            firstFailure = parseExitCode;
                         continue;
                     }
 
@@ -484,6 +482,9 @@ public static partial class QueryCommandRunner
                     var item = pending[i];
                     if (item.Error is not null)
                     {
+                        if (firstFailure == CommandExitCodes.Success)
+                            firstFailure = item.Error.ExitCode;
+
                         if (item.Terminal)
                         {
                             jsonOutput.WriteTerminal(BuildBatchLineErrorJson(item.LineNumber, item.Error));
@@ -1282,8 +1283,8 @@ public static partial class QueryCommandRunner
         Func<string[], int> runner = commandName switch
         {
             "search" => args => RunSearch(args, jsonOptions, cancellationToken),
-            "recipes" => args => RunRecipes(args, jsonOptions),
-            "audit" => args => RunAudit(args, jsonOptions),
+            "recipes" => args => RunRecipes(args, jsonOptions, cancellationToken),
+            "audit" => args => RunAudit(args, jsonOptions, cancellationToken),
             "definition" => args => RunDefinition(args, jsonOptions),
             "goto" => args => RunGoto(args, jsonOptions),
             "references" => args => RunReferences(args, jsonOptions),
