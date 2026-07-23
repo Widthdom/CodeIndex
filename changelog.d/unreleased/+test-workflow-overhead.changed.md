@@ -10,6 +10,8 @@ affected:
   - tests/CodeIndex.Tests/QueryCommandRunnerReferencesTests.cs
   - tests/CodeIndex.Tests/InstallScriptTests.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowDockerContractTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractorCSharpTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractorTests.cs
   - TESTING_GUIDE.md
 ---
 
@@ -25,6 +27,7 @@ affected:
 - **Seeded query boundaries reuse databases** — C# generic type-pattern, query range-scope, foreach-shadowing, lambda-parameter, and declaration-pattern variants now share graph-ready databases by family while path filters preserve their exact result contracts.
 - **Production SQL boundaries reuse indexed workspaces** — Line-end comment, `USING` / `MERGE`, semicolonless temporary-table, non-code masking, and TRUNCATE variants now share one production CLI indexing subprocess per family while path filters preserve exact contracts.
 - **Non-coverage net8 lanes run complementary test shards** — Windows and macOS split `IndexCommandRunnerTests` from the remainder into separate processes; Ubuntu coverage remains full-suite, retries retain or intersect shard filters, and artifacts include shard identity.
+- **Dense extractor guards retain CI timing headroom** — C# and Java dense-constructor fixtures remain half-sized while restoring ten-second runaway ceilings, keeping the shorter workloads without false failures from coverage instrumentation.
 
 ## 日本語
 
@@ -38,3 +41,4 @@ affected:
 - **seed済みquery boundaryでdatabaseを再利用します** — C# generic type-pattern、query range-scope、foreach-shadowing、lambda-parameter、declaration-pattern variantはfamilyごとにgraph-ready databaseを共有し、path filterでexact result contractを維持します。
 - **production SQL boundaryでindexed workspaceを再利用します** — line-end comment、`USING` / `MERGE`、semicolonless temporary-table、non-code masking、TRUNCATE variantはfamilyごとにproduction CLI indexing subprocessを1回だけ共有し、path filterでexact contractを維持します。
 - **coverageなしのnet8 laneを補完的なtest shardで実行します** — WindowsとmacOSでは`IndexCommandRunnerTests`と残りを別processに分けます。Ubuntuのcoverageはfull suiteを維持し、retryはshard filterを保持または交差させ、artifact名にはshard identityを含めます。
+- **dense extractor guardでCI計測の余裕を維持します** — C#とJavaのdense constructor fixtureは半減したまま10秒のrunaway上限を復元し、短いworkloadを保ちながらcoverage instrumentationによる誤失敗を防ぎます。

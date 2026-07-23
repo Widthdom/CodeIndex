@@ -1821,7 +1821,7 @@ public partial class SymbolExtractorTests
         Assert.Equal(typeCount, symbols.Count(s => s.Kind == "property" && s.ContainerName?.StartsWith("Item", StringComparison.Ordinal) == true));
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Value0" && s.ContainerName == "Item0");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"Value{typeCount - 1}" && s.ContainerName == $"Item{typeCount - 1}");
-        var runawayBudget = TimeSpan.FromSeconds(5);
+        var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Dense C# primary-constructor extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
