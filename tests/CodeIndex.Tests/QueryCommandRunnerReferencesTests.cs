@@ -4403,30 +4403,65 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlDeleteUsingCapturesSourceReferences()
+    public void RunReferences_ExactJson_SqlUsingAndMergeSourcesShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_delete_using");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_using_merge_sources");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "delete-using.sql"),
                 """
                 DELETE FROM audit_log USING staging_log, archived_log
                 WHERE audit_log.id = staging_log.id;
                 DELETE FROM public.audit_log USING staging.stage_log, [archive].[archived_log], "public"."source"
                 WHERE audit_log.id = stage_log.id;
                 """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "using-matcher.sql"),
+                """
+                CREATE INDEX idx_users_name ON users USING btree (name);
+                ALTER TABLE users ALTER COLUMN name TYPE text USING lower(name);
+                MERGE INTO audit_log AS t
+                USING staging_log AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                    UPDATE SET action = s.action;
+                MERGE audit_log_archive AS t
+                USING staging_archive AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                    UPDATE SET action = s.action;
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "target-hint.sql"),
+                """
+                MERGE INTO audit_log WITH (INDEX(ix_audit_log), HOLDLOCK) AS t
+                USING staging_log AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                    UPDATE SET action = s.action;
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "temp-target.sql"),
+                """
+                MERGE #audit_log AS t
+                USING staging_log AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                    UPDATE SET action = s.action;
+                """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (stagingExitCode, stagingStdout, stagingStderr) = RunReferencesInProcess("staging_log", dbPath);
-            var (archivedExitCode, archivedStdout, archivedStderr) = RunReferencesInProcess("archived_log", dbPath);
-            var (stageExitCode, stageStdout, stageStderr) = RunReferencesInProcess("stage_log", dbPath);
-            var (sourceExitCode, sourceStdout, sourceStderr) = RunReferencesInProcess("source", dbPath);
-            var (qualifiedTargetExitCode, qualifiedTargetStdout, qualifiedTargetStderr) = RunReferencesInProcess("public.audit_log", dbPath);
-            var (qualifiedSourceExitCode, qualifiedSourceStdout, qualifiedSourceStderr) = RunReferencesInProcess("staging.stage_log", dbPath);
-            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunReferencesInProcess("archive].[archived_log", dbPath);
-            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunReferencesInProcess("public\".\"source", dbPath);
+            var deletePathArgs = new[] { "--path", "sql/delete-using.sql" };
+            var (stagingExitCode, stagingStdout, stagingStderr) = RunReferencesInProcess("staging_log", dbPath, "sql", true, deletePathArgs);
+            var (archivedExitCode, archivedStdout, archivedStderr) = RunReferencesInProcess("archived_log", dbPath, "sql", true, deletePathArgs);
+            var (stageExitCode, stageStdout, stageStderr) = RunReferencesInProcess("stage_log", dbPath, "sql", true, deletePathArgs);
+            var (sourceExitCode, sourceStdout, sourceStderr) = RunReferencesInProcess("source", dbPath, "sql", true, deletePathArgs);
+            var (qualifiedTargetExitCode, qualifiedTargetStdout, qualifiedTargetStderr) = RunReferencesInProcess("public.audit_log", dbPath, "sql", true, deletePathArgs);
+            var (qualifiedSourceExitCode, qualifiedSourceStdout, qualifiedSourceStderr) = RunReferencesInProcess("staging.stage_log", dbPath, "sql", true, deletePathArgs);
+            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunReferencesInProcess("archive].[archived_log", dbPath, "sql", true, deletePathArgs);
+            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunReferencesInProcess("public\".\"source", dbPath, "sql", true, deletePathArgs);
 
             var stagingRows = ParseJsonLines(stagingStdout);
             var archivedRows = ParseJsonLines(archivedStdout);
@@ -4473,163 +4508,53 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, mangledDoubleQuoteExitCode);
             Assert.Equal(string.Empty, mangledDoubleQuoteStderr);
             Assert.Equal(0, mangledDoubleQuoteDocument.RootElement.GetProperty("count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlUsingSourceMatcherSkipsDdlUsingClauses()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_using_source_matcher");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
-                """
-                CREATE INDEX idx_users_name ON users USING btree (name);
-                ALTER TABLE users ALTER COLUMN name TYPE text USING lower(name);
-                MERGE INTO audit_log AS t
-                USING staging_log AS s
-                ON t.id = s.id
-                WHEN MATCHED THEN
-                    UPDATE SET action = s.action;
-                MERGE audit_log_archive AS t
-                USING staging_archive AS s
-                ON t.id = s.id
-                WHEN MATCHED THEN
-                    UPDATE SET action = s.action;
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (stagingExitCode, stagingStdout, stagingStderr) = RunReferencesInProcess("staging_log", dbPath);
-            var (archiveTargetExitCode, archiveTargetStdout, archiveTargetStderr) = RunReferencesInProcess("audit_log_archive", dbPath);
-            var (archiveSourceExitCode, archiveSourceStdout, archiveSourceStderr) = RunReferencesInProcess("staging_archive", dbPath);
-            var (btreeExitCode, btreeStdout, btreeStderr) = RunReferencesInProcess("btree", dbPath);
-            var (lowerExitCode, lowerStdout, lowerStderr) = RunReferencesInProcess("lower", dbPath);
+            AssertRows("sql/using-matcher.sql", "staging_log", 1, "reference");
+            AssertRows("sql/using-matcher.sql", "audit_log_archive", 1, "reference");
+            AssertRows("sql/using-matcher.sql", "staging_archive", 1, "reference");
+            AssertNoRows("sql/using-matcher.sql", "btree");
+            AssertRows("sql/using-matcher.sql", "lower", 1, "call");
 
-            var stagingRows = ParseJsonLines(stagingStdout);
-            var archiveTargetRows = ParseJsonLines(archiveTargetStdout);
-            var archiveSourceRows = ParseJsonLines(archiveSourceStdout);
-            var lowerRows = ParseJsonLines(lowerStdout);
-            using var btreeDocument = ParseJsonOutput(btreeStdout);
+            AssertRows("sql/target-hint.sql", "staging_log", 1, "reference", expectedLine: 2);
+            AssertRows("sql/temp-target.sql", "#audit_log", 1, "reference");
+            AssertRows("sql/temp-target.sql", "staging_log", 1, "reference");
 
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
+            void AssertRows(
+                string path,
+                string query,
+                int expectedCount,
+                string expectedKind,
+                int? expectedLine = null)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    query, dbPath, "sql", true, "--path", path);
+                var rows = ParseJsonLines(stdout);
 
-            Assert.Equal(CommandExitCodes.Success, stagingExitCode);
-            Assert.Equal(string.Empty, stagingStderr);
-            var stagingRow = Assert.Single(stagingRows);
-            Assert.Equal("staging_log", stagingRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", stagingRow.RootElement.GetProperty("reference_kind").GetString());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(expectedCount, rows.Count);
+                Assert.All(rows, row => Assert.Equal(
+                    query,
+                    row.RootElement.GetProperty("symbol_name").GetString()));
+                Assert.All(rows, row => Assert.Equal(
+                    expectedKind,
+                    row.RootElement.GetProperty("reference_kind").GetString()));
+                if (expectedLine.HasValue)
+                    Assert.All(rows, row => Assert.Equal(
+                        expectedLine.Value,
+                        row.RootElement.GetProperty("line").GetInt32()));
+            }
 
-            Assert.Equal(CommandExitCodes.Success, archiveTargetExitCode);
-            Assert.Equal(string.Empty, archiveTargetStderr);
-            var archiveTargetRow = Assert.Single(archiveTargetRows);
-            Assert.Equal("audit_log_archive", archiveTargetRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", archiveTargetRow.RootElement.GetProperty("reference_kind").GetString());
+            void AssertNoRows(string path, string query)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    query, dbPath, "sql", true, "--path", path);
+                using var document = ParseJsonOutput(stdout);
 
-            Assert.Equal(CommandExitCodes.Success, archiveSourceExitCode);
-            Assert.Equal(string.Empty, archiveSourceStderr);
-            var archiveSourceRow = Assert.Single(archiveSourceRows);
-            Assert.Equal("staging_archive", archiveSourceRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", archiveSourceRow.RootElement.GetProperty("reference_kind").GetString());
-
-            Assert.Equal(CommandExitCodes.Success, btreeExitCode);
-            Assert.Equal(string.Empty, btreeStderr);
-            Assert.Equal(0, btreeDocument.RootElement.GetProperty("count").GetInt32());
-
-            Assert.Equal(CommandExitCodes.Success, lowerExitCode);
-            Assert.Equal(string.Empty, lowerStderr);
-            var lowerRow = Assert.Single(lowerRows);
-            Assert.Equal("lower", lowerRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("call", lowerRow.RootElement.GetProperty("reference_kind").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlMergeUsingWithTargetHintStillResolvesSource()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_merge_using_target_hint");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
-                """
-                MERGE INTO audit_log WITH (INDEX(ix_audit_log), HOLDLOCK) AS t
-                USING staging_log AS s
-                ON t.id = s.id
-                WHEN MATCHED THEN
-                    UPDATE SET action = s.action;
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (stagingExitCode, stagingStdout, stagingStderr) = RunReferencesInProcess("staging_log", dbPath);
-
-            var stagingRows = ParseJsonLines(stagingStdout);
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, stagingExitCode);
-            Assert.Equal(string.Empty, stagingStderr);
-
-            var stagingRow = Assert.Single(stagingRows);
-            Assert.Equal("staging_log", stagingRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", stagingRow.RootElement.GetProperty("reference_kind").GetString());
-            Assert.Equal(2, stagingRow.RootElement.GetProperty("line").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlMergeTempTargetWithoutIntoResolvesTargetAndSource()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_merge_temp_without_into");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
-                """
-                MERGE #audit_log AS t
-                USING staging_log AS s
-                ON t.id = s.id
-                WHEN MATCHED THEN
-                    UPDATE SET action = s.action;
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (targetExitCode, targetStdout, targetStderr) = RunReferencesInProcess("#audit_log", dbPath);
-            var (sourceExitCode, sourceStdout, sourceStderr) = RunReferencesInProcess("staging_log", dbPath);
-
-            var targetRows = ParseJsonLines(targetStdout);
-            var sourceRows = ParseJsonLines(sourceStdout);
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-
-            Assert.Equal(CommandExitCodes.Success, targetExitCode);
-            Assert.Equal(string.Empty, targetStderr);
-            var targetRow = Assert.Single(targetRows);
-            Assert.Equal("#audit_log", targetRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", targetRow.RootElement.GetProperty("reference_kind").GetString());
-
-            Assert.Equal(CommandExitCodes.Success, sourceExitCode);
-            Assert.Equal(string.Empty, sourceStderr);
-            var sourceRow = Assert.Single(sourceRows);
-            Assert.Equal("staging_log", sourceRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", sourceRow.RootElement.GetProperty("reference_kind").GetString());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+            }
         }
         finally
         {
