@@ -1374,7 +1374,56 @@ public partial class McpServerTests
         Assert.NotNull(response["result"]!["structuredContent"]!["workspace_indexed_at"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["workspace_latest_modified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["project_root"]);
+        Assert.Equal("definition", response["result"]!["structuredContent"]!["graph_language_source"]!.GetValue<string>());
+        Assert.Equal("authoritative", response["result"]!["structuredContent"]!["graph_language_confidence"]!.GetValue<string>());
+        Assert.Empty(response["result"]!["structuredContent"]!["graph_language_candidates"]!.AsArray());
+        Assert.False(response["result"]!["structuredContent"]!["graph_language_conflict"]!.GetValue<bool>());
         Assert.True(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_MissingDefinitionPublishesInferredGraphLanguageInEveryFormat_Issue4727()
+    {
+        InsertIndexedFile(
+            "src/EvidenceCaller.cs",
+            "csharp",
+            """
+            public class EvidenceCaller
+            {
+                public void Run() => MissingDefinitionIssue4727();
+            }
+            """);
+
+        foreach (var format in new[] { null, "compact", "count" })
+        {
+            var arguments = new JsonObject
+            {
+                ["query"] = "MissingDefinitionIssue4727",
+            };
+            if (format != null)
+                arguments["format"] = format;
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 4727,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "analyze_symbol",
+                    ["arguments"] = arguments,
+                },
+            };
+
+            var response = _server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal("csharp", structured["graph_language"]!.GetValue<string>());
+            Assert.Equal("graph_evidence", structured["graph_language_source"]!.GetValue<string>());
+            Assert.Equal("inferred_consistent", structured["graph_language_confidence"]!.GetValue<string>());
+            Assert.Equal(["csharp"], structured["graph_language_candidates"]!.AsArray().Select(node => node!.GetValue<string>()));
+            Assert.False(structured["graph_language_conflict"]!.GetValue<bool>());
+            Assert.True(structured["graph_supported"]!.GetValue<bool>());
+        }
     }
 
     [Fact]

@@ -940,7 +940,12 @@ bundle. Candidate selectors expose the persisted symbol ID plus qualified/contai
 signature, language, kind, path, and line. Identity-scoped reference/caller/callee queries
 join `symbol_reference_candidates` or `source_symbol_id`; with multiple candidates,
 top-level graph arrays are labeled `primary_candidate` and mirror only the first prioritized
-bundle, never an unlabeled aggregate across definitions.
+bundle, never an unlabeled aggregate across definitions. When neither a language filter nor
+a definition supplies the graph language, `analyze_symbol` infers it only from one consistent
+language across reference/caller/callee evidence. `graph_language_source`,
+`graph_language_confidence`, `graph_language_candidates`, and `graph_language_conflict`
+distinguish authoritative filter/definition decisions from consistent inference and keep
+mixed-language evidence unresolved.
 
 ### Reference taxonomy
 
@@ -3893,7 +3898,11 @@ signature、language、kind、path、line を公開します。identity-scoped �
 reference/caller/callee query は `symbol_reference_candidates` または
 `source_symbol_id` を join します。複数 candidate の top-level graph 配列は
 `primary_candidate` と明示して優先順位1位の bundle だけを反映し、複数定義を
-未ラベルで集約しません。
+未ラベルで集約しません。言語フィルタと定義のどちらからも graph language が得られない場合、
+`analyze_symbol` は reference/caller/callee evidence が一貫して1言語だけを示すときに限って
+言語を推論します。`graph_language_source`、`graph_language_confidence`、
+`graph_language_candidates`、`graph_language_conflict` により、filter/definition による
+authoritative な判定と一貫した推論を区別し、複数言語の evidence は未確定のままにします。
 
 ### 参照 taxonomy
 

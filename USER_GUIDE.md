@@ -2918,7 +2918,7 @@ cdidx backfill-fold
 
 This recomputes persisted `name_folded` / `*_folded` columns from existing DB rows and stamps `fold_ready` when verification succeeds. The target must already be an existing CodeIndex DB; blank or missing paths are rejected instead of creating a new database.
 
-Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
+Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries. When `analyze_symbol` has no language filter or definition, it infers `graph_language` only when all returned reference/caller/callee evidence has one language. `graph_language_source`, `graph_language_confidence`, `graph_language_candidates`, and `graph_language_conflict` distinguish authoritative filter/definition support from consistent inference and leave mixed-language evidence unresolved.
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
 
@@ -6017,7 +6017,7 @@ cdidx backfill-fold
 
 これは既存 DB 行から `name_folded` / `*_folded` 列を再計算し、`fold_ready` を stamp する。対象は既存の CodeIndex DB に限られ、空のDBや存在しないパスを指定しても新規作成せず拒否する。
 
-`references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
+`references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。`analyze_symbol` に言語フィルタも定義もない場合は、返された reference/caller/callee evidence がすべて1言語で一貫するときに限って `graph_language` を推論します。`graph_language_source`、`graph_language_confidence`、`graph_language_candidates`、`graph_language_conflict` により、filter/definition による authoritative な support と一貫した推論を区別し、複数言語の evidence は未確定のままにします。
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
 

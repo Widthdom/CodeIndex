@@ -269,19 +269,18 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var graphLanguage = lang ?? primaryDefinition?.Lang;
+        var graphLanguageSource = lang != null
+            ? "language_filter"
+            : primaryDefinition?.Lang != null
+                ? "definition"
+                : null;
+        var graphLanguageConfidence = graphLanguageSource != null ? "authoritative" : null;
+        var graphLanguageCandidates = new List<string>();
+        var graphLanguageConflict = false;
         const bool hasUnsupportedEnumMember = false;
         var hasSupportedGraphDefinition = exact
             ? HasExactGraphSupportedDefinition(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests)
             : definitions.Any(definition => SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true);
-        var baseGraphSupported = graphLanguage == null
-            ? (bool?)null
-            : SupportsReferenceLanguage(graphLanguage);
-        bool? graphSupported = baseGraphSupported;
-        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
-            graphLanguage,
-            graphSupported,
-            hasUnsupportedEnumMember,
-            hasSupportedGraphDefinition);
         var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
         var candidateBundles = definitions
             .Select((definition, index) => BuildSymbolCandidateBundle(
@@ -307,6 +306,37 @@ public partial class DbReader
             ?? (definitions.Count == 0
                 ? GetCallees(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact)
                 : []);
+        if (graphLanguage == null)
+        {
+            graphLanguageCandidates = references.Select(reference => reference.Lang)
+                .Concat(callers.Select(caller => caller.Lang))
+                .Concat(callees.Select(callee => callee.Lang))
+                .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
+                .Select(candidate => NormalizeQueryLanguage(candidate) ?? candidate!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(candidate => candidate, StringComparer.Ordinal)
+                .ToList();
+            if (graphLanguageCandidates.Count == 1)
+            {
+                graphLanguage = graphLanguageCandidates[0];
+                graphLanguageSource = "graph_evidence";
+                graphLanguageConfidence = "inferred_consistent";
+            }
+            else if (graphLanguageCandidates.Count > 1)
+            {
+                graphLanguageSource = "graph_evidence";
+                graphLanguageConfidence = "conflicted";
+                graphLanguageConflict = true;
+            }
+        }
+        var graphSupported = graphLanguage == null
+            ? (bool?)null
+            : SupportsReferenceLanguage(graphLanguage);
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
+            graphLanguage,
+            graphSupported,
+            hasUnsupportedEnumMember,
+            hasSupportedGraphDefinition);
         var sqlGraphRelevant = IsSqlLanguage(lang)
             || IsSqlLanguage(graphLanguage)
             || ContainsSqlLanguage(definitions.Select(definition => definition.Lang))
@@ -347,6 +377,10 @@ public partial class DbReader
             WorkspaceIndexedAt = freshness.IndexedAt,
             WorkspaceLatestModified = freshness.LatestModified,
             GraphLanguage = graphLanguage,
+            GraphLanguageSource = graphLanguageSource,
+            GraphLanguageConfidence = graphLanguageConfidence,
+            GraphLanguageCandidates = graphLanguageCandidates,
+            GraphLanguageConflict = graphLanguageConflict,
             GraphSupported = graphSupported,
             GraphSupportReason = graphSupportReason,
             GraphDegraded = hasUnsupportedEnumMember ? true : null,

@@ -5565,10 +5565,60 @@ public partial class DbReaderTests : IDisposable
         Assert.NotNull(analysis.WorkspaceIndexedAt);
         Assert.Equal(new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc), analysis.WorkspaceLatestModified);
         Assert.Equal("javascript", analysis.GraphLanguage);
+        Assert.Equal("language_filter", analysis.GraphLanguageSource);
+        Assert.Equal("authoritative", analysis.GraphLanguageConfidence);
+        Assert.Empty(analysis.GraphLanguageCandidates);
+        Assert.False(analysis.GraphLanguageConflict);
         Assert.True(analysis.GraphSupported);
         Assert.Contains("indexed", analysis.GraphSupportReason);
         Assert.Contains(analysis.NearbySymbols, item => item.Name == "ApiClient");
         Assert.Contains(analysis.Callees, item => item.CalleeName == "fetch");
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_MissingDefinitionInfersGraphLanguageFromConsistentEvidence_Issue4727()
+    {
+        InsertManualReference(
+            "src/evidence.cs",
+            "csharp",
+            "function",
+            "EvidenceCaller",
+            "MissingDefinitionIssue4727",
+            "call");
+
+        var analysis = _reader.AnalyzeSymbol("MissingDefinitionIssue4727", limit: 5);
+
+        Assert.Empty(analysis.Definitions);
+        Assert.NotEmpty(analysis.References);
+        Assert.NotEmpty(analysis.Callers);
+        Assert.Equal("csharp", analysis.GraphLanguage);
+        Assert.Equal("graph_evidence", analysis.GraphLanguageSource);
+        Assert.Equal("inferred_consistent", analysis.GraphLanguageConfidence);
+        Assert.Equal(["csharp"], analysis.GraphLanguageCandidates);
+        Assert.False(analysis.GraphLanguageConflict);
+        Assert.True(analysis.GraphSupported);
+        Assert.Contains("indexed", analysis.GraphSupportReason);
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_MissingDefinitionKeepsGraphLanguageUnknownForConflictingEvidence_Issue4727()
+    {
+        const string query = "ConflictingDefinitionIssue4727";
+        InsertManualReference("src/evidence.cs", "csharp", "function", "CSharpCaller", query, "call");
+        InsertManualReference("web/evidence.js", "javascript", "function", "JavaScriptCaller", query, "call");
+
+        var analysis = _reader.AnalyzeSymbol(query, limit: 5);
+
+        Assert.Empty(analysis.Definitions);
+        Assert.NotEmpty(analysis.References);
+        Assert.NotEmpty(analysis.Callers);
+        Assert.Null(analysis.GraphLanguage);
+        Assert.Equal("graph_evidence", analysis.GraphLanguageSource);
+        Assert.Equal("conflicted", analysis.GraphLanguageConfidence);
+        Assert.Equal(["csharp", "javascript"], analysis.GraphLanguageCandidates);
+        Assert.True(analysis.GraphLanguageConflict);
+        Assert.Null(analysis.GraphSupported);
+        Assert.Null(analysis.GraphSupportReason);
     }
 
     [Fact]
