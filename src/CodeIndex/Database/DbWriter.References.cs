@@ -429,7 +429,7 @@ public partial class DbWriter
         WHERE r.is_mutual_recursion IS NOT ({MutualRecursionValueSql})
         """;
 
-    internal static void RefreshRetainedReferenceResolution(
+    internal static void RebuildRetainedReferenceGraph(
         SqliteConnection connection,
         SqliteTransaction transaction,
         CancellationToken cancellationToken)
@@ -437,7 +437,13 @@ public partial class DbWriter
         cancellationToken.ThrowIfCancellationRequested();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = RefreshReferenceResolutionFullSql + "\n" + RefreshMutualRecursionFlagsSql;
+        command.CommandText =
+            CreateReferenceUniqueFamiliesSql + ";\n" +
+            RefreshReferenceSourceSymbolsFullSql + ";\n" +
+            RefreshReferenceUniqueFamiliesSql + "\n" +
+            RefreshReferenceCandidatesSql + "\n" +
+            RefreshReferenceResolutionFullSql + "\n" +
+            RefreshMutualRecursionFlagsSql;
         using var cancellationRegistration = cancellationToken.Register(command.Cancel);
         command.ExecuteNonQuery();
         cancellationToken.ThrowIfCancellationRequested();

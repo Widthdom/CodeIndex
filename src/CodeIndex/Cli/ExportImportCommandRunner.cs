@@ -498,8 +498,24 @@ internal static class ExportImportCommandRunner
             phase = PhaseSqliteValidate;
             CreateDatabaseSnapshot(normalizedDbPath, snapshotPath, cancellationToken);
             ExportManifest manifest;
-            using (var snapshotConnection = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath)))
+            if (scopeOptions.IsScoped)
             {
+                using var snapshotContext = new DbContext(DbOpenIntent.Migration, snapshotPath, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                snapshotContext.TryMigrateForRead();
+                if (snapshotContext.LastMigrationFailure is { } migrationFailure)
+                {
+                    throw new InvalidDataException(
+                        $"export snapshot schema migration failed at {migrationFailure.Step}: {migrationFailure.SqliteMessage}");
+                }
+                phase = PhaseScopeArchive;
+                var snapshotConnection = snapshotContext.Connection;
+                var scope = ApplyArchiveScope(snapshotConnection, scopeOptions, cancellationToken);
+                manifest = BuildManifest(snapshotConnection, appVersion, scope, cancellationToken);
+            }
+            else
+            {
+                using var snapshotConnection = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
                 cancellationToken.ThrowIfCancellationRequested();
                 snapshotConnection.Open();
                 phase = PhaseScopeArchive;
@@ -901,7 +917,7 @@ internal static class ExportImportCommandRunner
                 DROP TABLE archive_scope_files;
                 """;
             pruneCommand.ExecuteNonQuery();
-            DbWriter.RefreshRetainedReferenceResolution(connection, transaction, cancellationToken);
+            DbWriter.RebuildRetainedReferenceGraph(connection, transaction, cancellationToken);
             transaction.Commit();
         }
 
@@ -999,32 +1015,32 @@ internal static class ExportImportCommandRunner
         var destinationSnapshotPath = Path.Combine(snapshotDirectory, "destination-codeindex.db");
         try
         {
-            using (var source = BoundedFile.OpenReadForIndexContent(destinationDbPath))
-            {
-                if (source.Length > MaxImportDatabaseBytes)
-                {
-                    return new ImportDestinationDeltaResult(
-                        DestinationExists: true,
-                        Comparable: false,
-                        Status: "destination_too_large",
-                        Comparison: null,
-                        Message: $"destination database exceeds the comparison limit of {ConsoleUi.FormatBytes(MaxImportDatabaseBytes)}");
-                }
-
-                Span<byte> header = stackalloc byte[16];
-                if (source.Read(header) != header.Length || !header.SequenceEqual("SQLite format 3\0"u8))
-                {
-                    return new ImportDestinationDeltaResult(
-                        DestinationExists: true,
-                        Comparable: false,
-                        Status: "destination_unreadable",
-                        Comparison: null,
-                        Message: "destination database could not be compared from a non-mutating snapshot: file header is not SQLite format 3");
-                }
-            }
-
             try
             {
+                using (var source = BoundedFile.OpenReadForIndexContent(destinationDbPath))
+                {
+                    if (source.Length > MaxImportDatabaseBytes)
+                    {
+                        return new ImportDestinationDeltaResult(
+                            DestinationExists: true,
+                            Comparable: false,
+                            Status: "destination_too_large",
+                            Comparison: null,
+                            Message: $"destination database exceeds the comparison limit of {ConsoleUi.FormatBytes(MaxImportDatabaseBytes)}");
+                    }
+
+                    Span<byte> header = stackalloc byte[16];
+                    if (source.Read(header) != header.Length || !header.SequenceEqual("SQLite format 3\0"u8))
+                    {
+                        return new ImportDestinationDeltaResult(
+                            DestinationExists: true,
+                            Comparable: false,
+                            Status: "destination_unreadable",
+                            Comparison: null,
+                            Message: "destination database could not be compared from a non-mutating snapshot: file header is not SQLite format 3");
+                    }
+                }
+
                 CreateDatabaseSnapshot(destinationDbPath, destinationSnapshotPath, cancellationToken);
             }
             catch (Exception ex) when (ex is SqliteException or CodeIndexException or IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -1083,7 +1099,7 @@ internal static class ExportImportCommandRunner
 
     private static string FormatDestinationDeltaSummary(ImportDestinationDeltaResult destinationDelta)
     {
-        if (destinationDelta.Comparison is not { } comparison)
+        if (!destinationDelta.Comparable || destinationDelta.Comparison is not { } comparison)
             return $"; {destinationDelta.Message}";
         return string.Create(
             CultureInfo.InvariantCulture,
@@ -2155,7 +2171,16 @@ internal static class ExportImportCommandRunner
         IReadOnlyList<string> ExcludePathPatterns,
         IReadOnlyList<string> Projects,
         string? Solution,
-        bool ExcludeTests);
+        bool ExcludeTests)
+    {
+        internal bool IsScoped =>
+            !string.IsNullOrWhiteSpace(Lang) ||
+            PathPatterns.Count > 0 ||
+            ExcludePathPatterns.Count > 0 ||
+            Projects.Count > 0 ||
+            !string.IsNullOrWhiteSpace(Solution) ||
+            ExcludeTests;
+    }
     internal sealed record ArchiveExportScopeResult(
         [property: JsonPropertyName("scoped")] bool Scoped,
         [property: JsonPropertyName("lang")] string? Lang,

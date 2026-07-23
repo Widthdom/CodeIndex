@@ -373,12 +373,11 @@ public static class DiffCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             identical =
                 RowsEqual(leftConnection, rightConnection, FileRowsSql, cancellationToken) &&
-                RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken) &&
+                (options.Detailed || RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken)) &&
                 RowsEqual(leftConnection, rightConnection, ReferenceLineRowsSql, cancellationToken) &&
                 RowsEqual(leftConnection, rightConnection, FileIssueRowsSql, cancellationToken) &&
                 RowsEqual(leftConnection, rightConnection, MetaRowsSql, cancellationToken) &&
                 (options.Detailed || RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, cancellationToken)) &&
-                (options.Detailed || RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken)) &&
                 (options.Detailed || RowsEqual(leftConnection, rightConnection, leftReferenceRowsSql, rightReferenceRowsSql, cancellationToken));
         }
 
