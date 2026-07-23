@@ -383,7 +383,9 @@ Interactive terminal controls are allowed only when stdout is not redirected or 
 
 Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. When the indexed project root cannot be resolved and project expansion falls back to the process current directory, CLI query context and MCP structured payloads include `project_filter_root` and `project_filter_root_fallback_reason`. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path, but rejects expansions above 65,536 files for one project or 131,072 unique files across all requested projects with an explicit-files recovery hint.
 
-`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads at most 1,024 newline-delimited JSON string arrays from stdin, caps each decoded string argument at 8,192 characters, and dispatches only commands in the side-effect-free allowlist owned by `CliCommandCatalog`. That schema includes the query and read-only discovery surfaces such as `goto` and `audit`; adding a top-level command or a dispatcher arm alone cannot cross the batch safety boundary. Immediate EOF with no commands remains exit 0 with no output by default; `--json-summary` appends a final JSON object with `commands_processed`, `line_errors`, `command_failures`, and `exit_code` for non-interactive callers that need an explicit empty-input signal.
+`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. Each newline-delimited stdin record may use the established JSON string-array form or the validated `{"command": "...", "args": [...]}` object form. Object input rejects duplicate/unknown properties, missing or blank commands, non-array `args`, non-string values, and the same argument count/length violations as array input. Serial mode opens one `DbContext` / `DbReader`; `--parallel <n>` requires `--json-summary`, is capped at 16 workers, and opens one isolated query-only context per active worker. Every form dispatches only commands in the side-effect-free allowlist owned by `CliCommandCatalog`. That schema includes query and read-only discovery surfaces such as `goto` and `audit`; adding a top-level command or a dispatcher arm alone cannot cross the batch safety boundary.
+
+The default input budget remains 1,024 lines and is configurable through `--max-input-lines <n>` up to 65,536. Each decoded string argument remains capped at 8,192 characters. The JSON-summary output budget defaults to 10,485,760 characters and `--max-output-chars <n>` accepts 4,096 through 67,108,864. Immediate EOF with no commands remains exit 0 with no output by default; `--json-summary` appends a final JSON object with `commands_processed`, `line_errors`, `command_failures`, and `exit_code` for non-interactive callers that need an explicit empty-input signal.
 By default, child query commands stream their normal stdout/stderr directly. In
 `--json-summary` mode, every non-blank stdin line must instead emit one
 machine-readable batch envelope before the final summary: parsed commands use
@@ -396,12 +398,20 @@ commands remain raw `stdout` text so diagnostics are not lost. Malformed or
 over-limit input lines use `record: "batch_error"` and an `error` object. Child
 output must not be written directly beside batch metadata in this mode. The entire
 serialized stream—including envelopes, arguments, escaping expansion, terminal
-errors, and the final summary—is capped at 10,485,760 characters. An item that
-exhausts it retains its exit/error metadata with `error.scope: "batch"`. The
+errors, and the final summary—uses the configured `--max-output-chars` budget
+(default 10,485,760; maximum 67,108,864). An item that exhausts it retains its
+exit/error metadata with `error.scope: "batch"`. The
 final `record: "batch_summary"` retains `commands_processed`, `line_errors`,
 `command_failures`, and `exit_code`, and publishes `output_chars`,
-`output_char_limit`, `input_line_limit`, and input/output limit state for
-empty-input, failure, and budget accounting.
+`output_char_limit`, `input_line_limit`, `parallelism`, and input/output limit
+state for empty-input, failure, and budget accounting. Parallel workers route
+stdout/stderr through per-command bounded writers, keep a separate read-only
+SQLite connection and thread-local batch reader, and buffer only the active
+worker window. `ScopedConsoleOutput` keeps nested JSON-envelope capture on the
+current worker's routed stdout instead of replacing another worker's process-wide
+writer. Completed records are committed to the shared output writer in input
+order; an ordinary item failure remains isolated, while caller cancellation
+stops scheduling and propagates.
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations.
 
@@ -3277,7 +3287,9 @@ override が文書化されていない限り ANSI/progress control を抑止す
 
 path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。indexed project root を解決できず process current directory に fallback して project expansion する場合、CLI query context と MCP structured payload は `project_filter_root` と `project_filter_root_fallback_reason` を含める。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。ただし 1 project で 65,536 files、requested projects 全体で 131,072 unique files を超える展開は拒否し、明示的な `--files` を使う recovery hint を返す。
 
-`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から最大 1,024 行の newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、`CliCommandCatalog` が正本となる副作用なし allowlist の command だけを dispatch する。この schema には `goto` や `audit` などの query / read-only discovery surface が含まれ、top-level command や dispatcher arm を追加しただけでは batch の安全境界を越えられない。command がない即時 EOF は既定で exit 0 かつ無出力のまま維持される。非対話の呼び出し元が空入力を明示的に判定したい場合は、`--json-summary` が `commands_processed`、`line_errors`、`command_failures`、`exit_code` を含む最終 JSON オブジェクトを追加する。
+`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。newline-delimited な stdin record は従来の JSON 文字列配列 form、または検証済みの `{"command": "...", "args": [...]}` object form を使用できる。object input は重複/未知 property、欠落または空白 command、array でない `args`、文字列でない値、array input と同じ引数数/長さ違反を拒否する。serial mode は 1 つの `DbContext` / `DbReader` を開く。`--parallel <n>` は `--json-summary` を必須とし、最大 16 workers に制限し、active worker ごとに分離した query-only context を開く。すべての form は `CliCommandCatalog` が正本となる副作用なし allowlist の command だけを dispatch する。この schema には `goto` や `audit` などの query / read-only discovery surface が含まれ、top-level command や dispatcher arm を追加しただけでは batch の安全境界を越えられない。
+
+既定の入力 budget は 1,024 行のままで、`--max-input-lines <n>` により最大 65,536 まで設定できる。デコード後の各文字列引数は引き続き 8,192 文字に制限する。JSON-summary 出力 budget は既定で 10,485,760 文字であり、`--max-output-chars <n>` は 4,096 から 67,108,864 までを受け付ける。command がない即時 EOF は既定で exit 0 かつ無出力のまま維持される。非対話の呼び出し元が空入力を明示的に判定したい場合は、`--json-summary` が `commands_processed`、`line_errors`、`command_failures`、`exit_code` を含む最終 JSON オブジェクトを追加する。
 既定では child query command の通常の stdout / stderr を直接 stream する。`--json-summary`
 mode では、空白でない stdin 行ごとに final summary より前へ 1 つの machine-readable batch
 envelope を出力しなければならない。parse 済み command は `record: "batch_result"` として
@@ -3287,12 +3299,18 @@ envelope を出力しなければならない。parse 済み command は `record
 text と失敗 command の出力は診断を失わないよう raw `stdout` text のまま
 保持する。malformed line や入力上限超過 line は `record: "batch_error"` と `error` object を使う。
 この mode では child output を batch metadata と並べて直接出力してはならない。envelope、
-arguments、escape 展開、terminal error、final summary を含む serialized stream 全体を
-10,485,760 文字に制限し、使い切った item も
+arguments、escape 展開、terminal error、final summary を含む serialized stream 全体には
+設定された `--max-output-chars` budget（既定 10,485,760、最大 67,108,864）を適用し、
+使い切った item も
 `error.scope: "batch"` と exit / error metadata を保持する。final `record: "batch_summary"` は
 empty input、failure、budget accounting のために `commands_processed`、`line_errors`、
-`command_failures`、`exit_code`、`output_chars`、`output_char_limit`、`input_line_limit` と
-input / output limit state を保持する。
+`command_failures`、`exit_code`、`output_chars`、`output_char_limit`、`input_line_limit`、
+`parallelism` と input / output limit state を保持する。parallel worker は stdout / stderr を
+command ごとの bounded writer へ route し、分離した read-only SQLite connection と thread-local
+batch reader を使い、active worker window だけを buffer する。`ScopedConsoleOutput` は nested
+JSON-envelope capture を現在の worker の routed stdout に保ち、他 worker の process-wide writer を
+置き換えない。完了 record は入力順で共有 output writer へ commit する。通常の item failure は
+他 item から隔離し、caller cancellation は scheduling を停止して伝播する。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は一致する全 location を返す。
 
