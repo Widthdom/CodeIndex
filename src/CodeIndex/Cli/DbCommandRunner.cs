@@ -694,12 +694,20 @@ public static class DbCommandRunner
             return CommandExitCodes.Success;
         }
 
-        var retainedPaths = listed.Entries
+        var retainableEntries = listed.Entries
+            .Where(entry => IsCheckpointRetainable(
+                fullDbPath,
+                entry.Name,
+                entry.CheckpointPath,
+                diagnostics))
+            .ToList();
+        var retainedPaths = retainableEntries
             .Take(options.CheckpointsKeep)
             .Select(entry => entry.CheckpointPath)
             .ToList();
+        var retainedPathSet = retainedPaths.ToHashSet(StringComparer.Ordinal);
         var candidatePaths = listed.Entries
-            .Skip(options.CheckpointsKeep)
+            .Where(entry => !retainedPathSet.Contains(entry.CheckpointPath))
             .Select(entry => entry.CheckpointPath)
             .ToList();
         var deletedPaths = new List<string>();
@@ -1818,6 +1826,18 @@ public static class DbCommandRunner
         {
             if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
                 return false;
+            if (!TryValidateCheckpointDirectoryTarget(
+                    fullDbPath,
+                    fullPath,
+                    out fullPath,
+                    out validationFailure))
+            {
+                diagnostics.Add(new DbDiagnosticJsonResult(
+                    "checkpoint_delete_skipped",
+                    $"Skipped deleting checkpoint directory after revalidation: {validationFailure}.",
+                    ConsoleUi.FormatBoundedValue(checkpointPath)));
+                return false;
+            }
 
             Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath), recursive: true);
             return true;
@@ -1838,6 +1858,23 @@ public static class DbCommandRunner
         out string fullPath,
         out string failureReason)
     {
+        var checkpointRoot = GetCheckpointRoot(fullDbPath);
+        var rootStatus = FileSystemBoundary.TryGetAttributes(checkpointRoot, out var rootAttributes);
+        if (rootStatus != FileSystemBoundaryProbeStatus.Found)
+        {
+            fullPath = string.Empty;
+            failureReason = "checkpoint root is unavailable";
+            return false;
+        }
+        if ((rootAttributes & FileAttributes.Directory) == 0
+            || FileSystemBoundary.IsSymlinkOrReparsePoint(rootAttributes)
+            || FileSystemBoundary.IsDevice(rootAttributes))
+        {
+            fullPath = string.Empty;
+            failureReason = "checkpoint root is not a regular directory";
+            return false;
+        }
+
         var options = new DirectoryCleanupBoundaryOptions(
             ExpectedNamePrefix: string.Empty,
             OutsideRootReason: "target is outside the checkpoint root",
@@ -1845,7 +1882,7 @@ public static class DbCommandRunner
             UnsafeDirectoryReason: "target is not a regular checkpoint directory");
         return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
             checkpointPath,
-            GetCheckpointRoot(fullDbPath),
+            checkpointRoot,
             options,
             out fullPath,
             out failureReason);
@@ -1997,8 +2034,10 @@ public static class DbCommandRunner
         }
 
         var manifestValid = false;
-        var files = new List<string>();
-        long bytes = 0;
+        var payload = new DbCheckpointPayloadValidationResult(
+            PathsValid: false,
+            Files: [],
+            Bytes: 0);
         if (pathsValid)
         {
             manifestValid = TryValidateCheckpointManifest(
@@ -2006,43 +2045,15 @@ public static class DbCommandRunner
                 name,
                 validatedCheckpointPath,
                 diagnostics);
-            var dbFileName = Path.GetFileName(fullDbPath);
-            foreach (var fileName in new[] { dbFileName, dbFileName + "-wal", dbFileName + "-shm" })
-            {
-                var path = Path.Combine(validatedCheckpointPath, fileName);
-                try
-                {
-                    if (!TryGetRegularExistingFile(path, out var normalizedPath))
-                    {
-                        if (string.Equals(fileName, dbFileName, StringComparison.Ordinal))
-                        {
-                            pathsValid = false;
-                            diagnostics.Add(new DbDiagnosticJsonResult(
-                                "checkpoint_payload_missing",
-                                "Checkpoint database payload is missing.",
-                                ConsoleUi.FormatBoundedValue(path)));
-                        }
-
-                        continue;
-                    }
-
-                    files.Add(fileName);
-                    bytes = checked(bytes + new FileInfo(normalizedPath).Length);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or NotSupportedException or PathTooLongException or OverflowException)
-                {
-                    pathsValid = false;
-                    diagnostics.Add(new DbDiagnosticJsonResult(
-                        "checkpoint_payload_invalid",
-                        $"Checkpoint payload failed regular-file validation ({CommandErrorWriter.FormatSanitizedException(ex)}).",
-                        ConsoleUi.FormatBoundedValue(path)));
-                }
-            }
+            payload = ValidateCheckpointPayload(
+                fullDbPath,
+                validatedCheckpointPath,
+                diagnostics);
+            pathsValid = payload.PathsValid;
         }
 
-        files.Sort(StringComparer.Ordinal);
         var availableSpace = TryGetAvailableFreeSpace(fullDbPath, diagnostics);
-        bool? spaceSufficient = availableSpace is long available ? available >= bytes : null;
+        bool? spaceSufficient = availableSpace is long available ? available >= payload.Bytes : null;
         if (spaceSufficient == false)
         {
             diagnostics.Add(new DbDiagnosticJsonResult(
@@ -2058,11 +2069,94 @@ public static class DbCommandRunner
             pathsValid,
             availableSpace.HasValue,
             spaceSufficient,
-            bytes,
+            payload.Bytes,
             availableSpace,
-            files,
-            bytes,
+            payload.Files,
+            payload.Bytes,
             diagnostics);
+    }
+
+    private static bool IsCheckpointRetainable(
+        string fullDbPath,
+        string name,
+        string checkpointPath,
+        List<DbDiagnosticJsonResult> diagnostics)
+    {
+        if (!TryValidateCheckpointDirectoryTarget(
+                fullDbPath,
+                checkpointPath,
+                out var validatedCheckpointPath,
+                out var checkpointPathFailure))
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "checkpoint_retention_invalid",
+                $"Checkpoint cannot occupy a retention slot because its directory is unsafe: {checkpointPathFailure}.",
+                ConsoleUi.FormatBoundedValue(checkpointPath)));
+            return false;
+        }
+
+        var manifestValid = TryValidateCheckpointManifest(
+            fullDbPath,
+            name,
+            validatedCheckpointPath,
+            diagnostics);
+        var payload = ValidateCheckpointPayload(
+            fullDbPath,
+            validatedCheckpointPath,
+            diagnostics);
+        if (manifestValid && payload.PathsValid)
+            return true;
+
+        diagnostics.Add(new DbDiagnosticJsonResult(
+            "checkpoint_retention_invalid",
+            "Checkpoint cannot occupy a retention slot because restore validation failed.",
+            ConsoleUi.FormatBoundedValue(checkpointPath)));
+        return false;
+    }
+
+    private static DbCheckpointPayloadValidationResult ValidateCheckpointPayload(
+        string fullDbPath,
+        string checkpointPath,
+        List<DbDiagnosticJsonResult> diagnostics)
+    {
+        var pathsValid = true;
+        var files = new List<string>();
+        long bytes = 0;
+        var dbFileName = Path.GetFileName(fullDbPath);
+        foreach (var fileName in new[] { dbFileName, dbFileName + "-wal", dbFileName + "-shm" })
+        {
+            var path = Path.Combine(checkpointPath, fileName);
+            try
+            {
+                if (!TryGetRegularExistingFile(path, out var normalizedPath))
+                {
+                    if (string.Equals(fileName, dbFileName, StringComparison.Ordinal))
+                    {
+                        pathsValid = false;
+                        diagnostics.Add(new DbDiagnosticJsonResult(
+                            "checkpoint_payload_missing",
+                            "Checkpoint database payload is missing.",
+                            ConsoleUi.FormatBoundedValue(path)));
+                    }
+
+                    continue;
+                }
+
+                files.Add(fileName);
+                bytes = checked(bytes + new FileInfo(normalizedPath).Length);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or NotSupportedException or PathTooLongException or OverflowException)
+            {
+                pathsValid = false;
+                diagnostics.Add(new DbDiagnosticJsonResult(
+                    "checkpoint_payload_invalid",
+                    $"Checkpoint payload failed regular-file validation ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+                    ConsoleUi.FormatBoundedValue(path)));
+            }
+        }
+
+        files.Sort(StringComparer.Ordinal);
+        return new DbCheckpointPayloadValidationResult(pathsValid, files, bytes);
     }
 
     private static bool TryValidateCheckpointManifest(
@@ -2150,10 +2244,38 @@ public static class DbCommandRunner
             if (AvailableFreeSpaceForTesting is not null)
                 return AvailableFreeSpaceForTesting(fullDbPath);
 
-            var root = Path.GetPathRoot(fullDbPath);
-            if (string.IsNullOrWhiteSpace(root))
-                throw new IOException("destination filesystem root is unavailable");
-            return new DriveInfo(root).AvailableFreeSpace;
+            var destinationDirectory = Path.GetDirectoryName(fullDbPath);
+            if (string.IsNullOrWhiteSpace(destinationDirectory))
+                throw new IOException("destination filesystem directory is unavailable");
+
+            DriveInfo? destinationDrive = null;
+            var destinationRootLength = -1;
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                try
+                {
+                    if (!drive.IsReady)
+                        continue;
+                    var driveRoot = drive.RootDirectory.FullName;
+                    if (driveRoot.Length <= destinationRootLength
+                        || !IsPathWithinDriveRoot(driveRoot, destinationDirectory))
+                    {
+                        continue;
+                    }
+
+                    destinationDrive = drive;
+                    destinationRootLength = driveRoot.Length;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    // Ignore an unreadable unrelated mount and keep looking for the
+                    // longest ready mount that contains the destination directory.
+                }
+            }
+
+            if (destinationDrive is null)
+                throw new IOException("destination filesystem volume is unavailable");
+            return destinationDrive.AvailableFreeSpace;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
@@ -2165,9 +2287,36 @@ public static class DbCommandRunner
         }
     }
 
+    private static bool IsPathWithinDriveRoot(string driveRoot, string path)
+    {
+        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(driveRoot));
+        var normalizedPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(normalizedRoot, normalizedPath, comparison))
+            return true;
+
+        var rootWithSeparator = normalizedRoot.EndsWith(Path.DirectorySeparatorChar)
+            || normalizedRoot.EndsWith(Path.AltDirectorySeparatorChar)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
+        return normalizedPath.StartsWith(rootWithSeparator, comparison);
+    }
+
     private static string RestoreCheckpoint(string fullDbPath, string name, string checkpointPath)
     {
         ValidateCheckpointName(name);
+        if (!TryValidateCheckpointDirectoryTarget(
+                fullDbPath,
+                checkpointPath,
+                out checkpointPath,
+                out var checkpointPathFailure))
+        {
+            throw new InvalidOperationException(
+                $"checkpoint path validation failed: {checkpointPathFailure}");
+        }
+
         SqliteConnection.ClearAllPools();
         var checkpointDbPath = Path.Combine(checkpointPath, Path.GetFileName(fullDbPath));
         if (!File.Exists(LongPath.EnsureWindowsPrefix(checkpointDbPath)))
@@ -2313,10 +2462,20 @@ public static class DbCommandRunner
     private static bool TryGetRegularExistingFile(string path, out string normalizedPath)
     {
         normalizedPath = LongPath.EnsureWindowsPrefix(path);
-        if (!File.Exists(normalizedPath))
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(normalizedPath);
+        }
+        catch (FileNotFoundException)
+        {
             return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
 
-        var attributes = File.GetAttributes(normalizedPath);
         if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
             throw new InvalidOperationException($"checkpoint file is not a regular file: {ConsoleUi.FormatBoundedValue(path)}");
 
@@ -2530,7 +2689,8 @@ public static class DbCommandRunner
                     else
                         parseError = "--prune is only valid with `cdidx db checkpoints --prune` or `cdidx db restore-backups --prune`";
                     break;
-                case "--delete" when i + 1 < args.Length:
+                case "--delete" when i + 1 < args.Length
+                    && !args[i + 1].StartsWith("-", StringComparison.Ordinal):
                     if (!listCheckpoints)
                     {
                         parseError = "--delete is only valid with `cdidx db checkpoints --delete <name>`";
@@ -2739,6 +2899,11 @@ internal sealed record DbRestorePreviewResult(
     List<string> Files,
     long Bytes,
     List<DbDiagnosticJsonResult> Diagnostics);
+
+internal sealed record DbCheckpointPayloadValidationResult(
+    bool PathsValid,
+    List<string> Files,
+    long Bytes);
 
 internal sealed record DbRestoreBackupPruneResult(
     int Deleted,
