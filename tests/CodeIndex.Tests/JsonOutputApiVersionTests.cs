@@ -56,6 +56,8 @@ public class JsonOutputApiVersionTests
     [InlineData(typeof(CommandErrorJsonResult))]
     [InlineData(typeof(UpgradeJsonResult))]
     [InlineData(typeof(DbRestoreJsonResult))]
+    [InlineData(typeof(DbRestoreDryRunJsonResult))]
+    [InlineData(typeof(DbCheckpointCleanupJsonResult))]
     [InlineData(typeof(DbRestoreBackupListJsonResult))]
     [InlineData(typeof(DbRestoreBackupPruneJsonResult))]
     [InlineData(typeof(DiffJsonResult))]
