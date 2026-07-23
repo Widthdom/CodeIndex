@@ -210,13 +210,20 @@ public partial class McpServer : IDisposable
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
     internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
-    internal const int MaxResourceListCursorChars = 23;
+    internal const int LegacyResourceListCursorChars = 23;
+    internal const int MaxResourceListCursorChars = 34;
+    internal const int MaxResourceListPathFilterCount = 100;
+    internal const int MaxResourceListPathFilterChars = DbReader.MaxPathLikePatternLength;
+    internal const int MaxResourceListPathFilterWildcards = DbReader.MaxPathLikePatternWildcards;
+    internal const int MaxResourceListLanguageFilterChars = McpBoundedText.MaxScalarArgumentChars;
     internal const int MinResourceListMaxBytes = 4 * 1024;
     internal const int DefaultResourceListMaxBytes = HttpMcpTransport.DefaultMaxResponseBodyBytes;
     internal const int MaxResourceListMaxBytes = HttpMcpTransport.DefaultMaxResponseBodyBytes;
     internal const int ResourceListPageSize = 200;
-    private const int ResourceListCursorPayloadBytes = 17;
-    private const byte ResourceListCursorVersion = 1;
+    private const int LegacyResourceListCursorPayloadBytes = 17;
+    private const int ResourceListCursorPayloadBytes = 25;
+    private const byte LegacyResourceListCursorVersion = 1;
+    private const byte ResourceListCursorVersion = 2;
     // `resources/read` keeps its text budget below the default HTTP response ceiling even
     // when JSON escaping expands every source byte. Cursor pages also cap logical lines so
     // files containing many empty lines cannot turn a small byte budget into unbounded DB work.
@@ -2369,6 +2376,7 @@ public partial class McpServer : IDisposable
                 "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id, request["params"])),
                 "tools/call" => HandleToolsCallAsync(hasId, id, request["params"]),
                 "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
+                "resources/templates/list" => Task.FromResult<JsonNode>(HandleResourceTemplatesList(id, request["params"])),
                 "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
                 "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
                 "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
@@ -2376,7 +2384,7 @@ public partial class McpServer : IDisposable
                 "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, BuildHealthResult())),
                 _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                     category: McpErrorEnvelope.CategoryMethodNotFound,
-                    suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
+                    suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/templates/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                     retrySafe: false)),
             };
         }).ConfigureAwait(false);
@@ -4239,8 +4247,48 @@ public partial class McpServer : IDisposable
         return value is null ? null : BoundClientInfoForDisplay(value);
     }
 
+    private static JsonNode HandleResourceTemplatesList(JsonNode? id, JsonNode? templateParams)
+    {
+        if (templateParams is not null && templateParams is not JsonObject)
+        {
+            return CreateErrorResponse(hasId: true, id: id, code: -32602,
+                message: "resources/templates/list params must be an object.",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Pass an empty params object or omit params.",
+                retrySafe: false);
+        }
+
+        if (templateParams?["cursor"] is not null)
+        {
+            return CreateErrorResponse(hasId: true, id: id, code: -32602,
+                message: "resources/templates/list does not have another page.",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Omit params.cursor; the complete resource template catalog fits in one response.",
+                retrySafe: false);
+        }
+
+        return CreateSuccessResponse(true, id, new JsonObject
+        {
+            ["resourceTemplates"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["uriTemplate"] = "cdidx://file-path/{path}",
+                    ["name"] = "indexed-file",
+                    ["title"] = "Indexed repository file",
+                    ["description"] = "Read one indexed, non-generated file by its exact repository-relative path. The template-only file-path resolver decodes the URI-template value, validates it as a relative path, and returns the canonical cdidx://file resource identity.",
+                },
+            },
+        });
+    }
+
     private JsonNode HandleResourcesList(JsonNode? id, JsonNode? listParams)
     {
+        var filterError = ValidateResourceListFilters(id, listParams, out var filters);
+        if (filterError is not null)
+            return filterError;
+        var filterFingerprint = ComputeResourceListFilterFingerprint(filters);
+
         var requestedMaxBytes = DefaultResourceListMaxBytes;
         if (listParams?["maxBytes"] is JsonNode maxBytesNode)
         {
@@ -4282,6 +4330,12 @@ public partial class McpServer : IDisposable
             }
             else if (TryDecodeResourceListCursor(cursor, out var decodedCursor))
             {
+                if ((decodedCursor.HasFilterFingerprint
+                        && decodedCursor.FilterFingerprint != filterFingerprint)
+                    || (!decodedCursor.HasFilterFingerprint && !filters.IsDefault))
+                {
+                    return CreateResourcesListFilterMismatchError(id);
+                }
                 afterFileId = decodedCursor.AfterFileId;
                 expectedGeneration = decodedCursor.Generation;
             }
@@ -4291,13 +4345,16 @@ public partial class McpServer : IDisposable
             }
         }
 
-        return WithDbReader(id, args: null, reader =>
+        return WithDbReader(id, args: listParams, reader =>
         {
             var resourcePage = reader.ListResourceFiles(
                 limit: ResourceListPageSize + 1,
                 afterFileId: afterFileId,
                 expectedGeneration: expectedGeneration,
-                legacyOffset: legacyOffset);
+                legacyOffset: legacyOffset,
+                pathPatterns: filters.PathPatterns,
+                lang: filters.Language,
+                includeGenerated: filters.IncludeGenerated);
             if (resourcePage.GenerationTrackingUnavailable)
                 return CreateResourcesListGenerationUnavailableError(id);
             if (resourcePage.CursorRestartRequired)
@@ -4310,6 +4367,7 @@ public partial class McpServer : IDisposable
                 resources: [],
                 generation: long.MaxValue,
                 lastConsumedFileId: long.MaxValue,
+                filterFingerprint: ulong.MaxValue,
                 hasContinuation: true,
                 requestedMaxBytes: MaxResourceListMaxBytes,
                 effectiveMaxBytes: MaxResourceListMaxBytes,
@@ -4389,6 +4447,7 @@ public partial class McpServer : IDisposable
                 resources,
                 resourcePage.Generation,
                 lastConsumedFileId,
+                filterFingerprint,
                 hasContinuation,
                 requestedMaxBytes,
                 effectiveMaxBytes,
@@ -4436,6 +4495,7 @@ public partial class McpServer : IDisposable
         JsonArray resources,
         long generation,
         long? lastConsumedFileId,
+        ulong filterFingerprint,
         bool hasContinuation,
         int requestedMaxBytes,
         int effectiveMaxBytes,
@@ -4461,7 +4521,7 @@ public partial class McpServer : IDisposable
             },
         };
         if (hasContinuation && lastConsumedFileId is not null)
-            result["nextCursor"] = EncodeResourceListCursor(generation, lastConsumedFileId.Value);
+            result["nextCursor"] = EncodeResourceListCursor(generation, lastConsumedFileId.Value, filterFingerprint);
         return CreateSuccessResponse(true, id, result);
     }
 
@@ -4505,6 +4565,18 @@ public partial class McpServer : IDisposable
                 ["max_legacy_pagination_offset"] = MaxMcpPaginationOffset,
             });
 
+    private static JsonObject CreateResourcesListFilterMismatchError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: "The resources/list filters do not match the supplied cursor.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Continue with the same path, lang, and includeGenerated filters used to create the cursor, or omit params.cursor to start a new filtered listing.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "resources_list_filters_changed",
+                ["restart_required"] = true,
+            });
+
     private static JsonObject CreateResourcesListRestartError(JsonNode? id)
         => CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeIndexStale,
             message: "The indexed file set changed after this resources/list cursor was issued.",
@@ -4530,25 +4602,261 @@ public partial class McpServer : IDisposable
                 ["restart_required"] = false,
             });
 
-    private static string EncodeResourceListCursor(long generation, long afterFileId)
+    private static JsonObject? ValidateResourceListFilters(
+        JsonNode? id,
+        JsonNode? listParams,
+        out ResourceListFilters filters)
+    {
+        filters = ResourceListFilters.Default;
+        if (listParams is null)
+            return null;
+        if (listParams is not JsonObject obj)
+        {
+            return CreateResourcesListFilterError(
+                id,
+                parameter: "params",
+                message: "resources/list params must be an object.",
+                suggestion: "Pass an object containing optional cursor, maxBytes, path, lang, and includeGenerated members.");
+        }
+
+        var pathPatterns = new List<string>();
+        if (obj.TryGetPropertyValue("path", out var pathNode) && pathNode is not null)
+        {
+            if (pathNode is JsonValue pathValue
+                && pathValue.TryGetValue<string>(out var scalarPath))
+            {
+                pathPatterns.Add(scalarPath);
+            }
+            else if (pathNode is JsonArray pathArray)
+            {
+                if (pathArray.Count > MaxResourceListPathFilterCount)
+                {
+                    return CreateResourcesListFilterError(
+                        id,
+                        parameter: "path",
+                        message: $"resources/list params.path accepts at most {MaxResourceListPathFilterCount} values.",
+                        suggestion: "Reduce the path filter array and retry.",
+                        extraData: new JsonObject
+                        {
+                            ["max_item_count"] = MaxResourceListPathFilterCount,
+                            ["actual_item_count"] = pathArray.Count,
+                        });
+                }
+
+                foreach (var item in pathArray)
+                {
+                    if (item is not JsonValue itemValue
+                        || !itemValue.TryGetValue<string>(out var pathText))
+                    {
+                        return CreateResourcesListFilterError(
+                            id,
+                            parameter: "path",
+                            message: "resources/list params.path array items must be strings.",
+                            suggestion: "Use a single path string or an array containing only non-empty path strings.");
+                    }
+                    pathPatterns.Add(pathText);
+                }
+            }
+            else
+            {
+                return CreateResourcesListFilterError(
+                    id,
+                    parameter: "path",
+                    message: "resources/list params.path must be a string or an array of strings.",
+                    suggestion: "Use repository-relative path text or bounded glob-style path patterns.");
+            }
+        }
+
+        for (var i = 0; i < pathPatterns.Count; i++)
+        {
+            var pathPattern = pathPatterns[i];
+            if (string.IsNullOrWhiteSpace(pathPattern)
+                || pathPattern.Length > MaxResourceListPathFilterChars)
+            {
+                return CreateResourcesListFilterError(
+                    id,
+                    parameter: "path",
+                    message: $"resources/list params.path values must contain text and be at most {MaxResourceListPathFilterChars} characters.",
+                    suggestion: "Use a shorter non-empty repository-relative path filter.",
+                    extraData: new JsonObject
+                    {
+                        ["max_value_length"] = MaxResourceListPathFilterChars,
+                        ["item_index"] = i,
+                        ["actual_value_length"] = pathPattern?.Length ?? 0,
+                    });
+            }
+
+            if (CountUnescapedResourcePathWildcards(pathPattern) > MaxResourceListPathFilterWildcards)
+            {
+                return CreateResourcesListFilterError(
+                    id,
+                    parameter: "path",
+                    message: $"resources/list params.path values may contain at most {MaxResourceListPathFilterWildcards} wildcard operators.",
+                    suggestion: "Split the path filters or use a narrower directory prefix.",
+                    extraData: new JsonObject
+                    {
+                        ["max_wildcard_count"] = MaxResourceListPathFilterWildcards,
+                        ["item_index"] = i,
+                    });
+            }
+        }
+
+        string? language = null;
+        if (obj.TryGetPropertyValue("lang", out var languageNode) && languageNode is not null)
+        {
+            if (languageNode is not JsonValue languageValue
+                || !languageValue.TryGetValue<string>(out var parsedLanguage)
+                || string.IsNullOrWhiteSpace(parsedLanguage)
+                || parsedLanguage.Length > MaxResourceListLanguageFilterChars)
+            {
+                return CreateResourcesListFilterError(
+                    id,
+                    parameter: "lang",
+                    message: $"resources/list params.lang must be a non-empty string of at most {MaxResourceListLanguageFilterChars} characters.",
+                    suggestion: "Use an indexed language name or alias such as `csharp`, `cs`, `typescript`, or `python`.",
+                    extraData: new JsonObject
+                    {
+                        ["max_value_length"] = MaxResourceListLanguageFilterChars,
+                    });
+            }
+            language = DbReader.NormalizeQueryLanguage(parsedLanguage);
+            if (string.IsNullOrEmpty(language))
+            {
+                return CreateResourcesListFilterError(
+                    id,
+                    parameter: "lang",
+                    message: "resources/list params.lang must contain at least one letter or digit after normalization.",
+                    suggestion: "Use an indexed language name or alias such as `csharp`, `cs`, `typescript`, or `python`.");
+            }
+        }
+
+        var includeGenerated = false;
+        if (obj.TryGetPropertyValue("includeGenerated", out var generatedNode) && generatedNode is not null)
+        {
+            if (generatedNode is not JsonValue generatedValue
+                || !generatedValue.TryGetValue<bool>(out includeGenerated))
+            {
+                return CreateResourcesListFilterError(
+                    id,
+                    parameter: "includeGenerated",
+                    message: "resources/list params.includeGenerated must be a boolean.",
+                    suggestion: "Use true to include generated files or false to preserve the default exclusion.");
+            }
+        }
+
+        filters = new ResourceListFilters(
+            pathPatterns
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray(),
+            language,
+            includeGenerated);
+        return null;
+    }
+
+    private static JsonObject CreateResourcesListFilterError(
+        JsonNode? id,
+        string parameter,
+        string message,
+        string suggestion,
+        JsonObject? extraData = null)
+    {
+        extraData ??= new JsonObject();
+        extraData["reason"] = "resource_filter_invalid";
+        extraData["parameter"] = parameter;
+        return CreateErrorResponse(
+            hasId: true,
+            id: id,
+            code: -32602,
+            message: message,
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: suggestion,
+            retrySafe: false,
+            extraData: extraData);
+    }
+
+    private static ulong ComputeResourceListFilterFingerprint(ResourceListFilters filters)
+    {
+        var canonical = new StringBuilder("resources-list-filters-v1\n");
+        canonical.Append(filters.IncludeGenerated ? "1\n" : "0\n");
+        AppendFingerprintValue(canonical, filters.Language ?? string.Empty);
+        var canonicalPathPatterns = filters.PathPatterns
+            .Select(static pathPattern =>
+                (DbReader.PathLikePatternHasWildcard(pathPattern) ? "W:" : "P:")
+                + DbReader.BuildPathLikePattern(pathPattern))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        canonical.Append(canonicalPathPatterns.Length).Append('\n');
+        foreach (var pathPattern in canonicalPathPatterns)
+            AppendFingerprintValue(canonical, pathPattern);
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
+        return BinaryPrimitives.ReadUInt64BigEndian(hash);
+    }
+
+    private static void AppendFingerprintValue(StringBuilder builder, string value)
+        => builder.Append(value.Length).Append(':').Append(value).Append('\n');
+
+    private static int CountUnescapedResourcePathWildcards(string pathPattern)
+    {
+        var count = 0;
+        var escaped = false;
+        foreach (var ch in pathPattern)
+        {
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+            if (ch is '*' or '?')
+                count++;
+        }
+        return count;
+    }
+
+    private readonly record struct ResourceListFilters(
+        string[] PathPatterns,
+        string? Language,
+        bool IncludeGenerated)
+    {
+        internal static ResourceListFilters Default { get; } = new([], null, false);
+
+        internal bool IsDefault
+            => PathPatterns.Length == 0
+               && Language is null
+               && !IncludeGenerated;
+    }
+
+    private static string EncodeResourceListCursor(
+        long generation,
+        long afterFileId,
+        ulong filterFingerprint)
     {
         Span<byte> payload = stackalloc byte[ResourceListCursorPayloadBytes];
         payload[0] = ResourceListCursorVersion;
         BinaryPrimitives.WriteInt64BigEndian(payload[1..9], generation);
         BinaryPrimitives.WriteInt64BigEndian(payload[9..17], afterFileId);
+        BinaryPrimitives.WriteUInt64BigEndian(payload[17..25], filterFingerprint);
         return Convert.ToBase64String(payload).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
     private static bool TryDecodeResourceListCursor(string cursor, out ResourceListCursor decoded)
     {
         decoded = default;
-        if (cursor.Length != MaxResourceListCursorChars
+        if (cursor.Length is not LegacyResourceListCursorChars and not MaxResourceListCursorChars
             || cursor.Any(static ch => !char.IsAsciiLetterOrDigit(ch) && ch is not '-' and not '_'))
         {
             return false;
         }
 
-        Span<char> base64 = stackalloc char[MaxResourceListCursorChars + 1];
+        var paddedLength = ((cursor.Length + 3) / 4) * 4;
+        Span<char> base64 = stackalloc char[paddedLength];
         for (var i = 0; i < cursor.Length; i++)
         {
             base64[i] = cursor[i] switch
@@ -4558,12 +4866,20 @@ public partial class McpServer : IDisposable
                 _ => cursor[i],
             };
         }
-        base64[^1] = '=';
+        base64[cursor.Length..].Fill('=');
 
         Span<byte> payload = stackalloc byte[ResourceListCursorPayloadBytes];
         if (!Convert.TryFromBase64Chars(base64, payload, out var bytesWritten)
-            || bytesWritten != ResourceListCursorPayloadBytes
-            || payload[0] != ResourceListCursorVersion)
+            || (bytesWritten != LegacyResourceListCursorPayloadBytes
+                && bytesWritten != ResourceListCursorPayloadBytes))
+        {
+            return false;
+        }
+
+        var version = payload[0];
+        if ((version == LegacyResourceListCursorVersion && bytesWritten != LegacyResourceListCursorPayloadBytes)
+            || (version == ResourceListCursorVersion && bytesWritten != ResourceListCursorPayloadBytes)
+            || version is not LegacyResourceListCursorVersion and not ResourceListCursorVersion)
         {
             return false;
         }
@@ -4573,30 +4889,64 @@ public partial class McpServer : IDisposable
         if (generation < 0 || afterFileId <= 0)
             return false;
 
-        decoded = new ResourceListCursor(generation, afterFileId);
+        decoded = version == ResourceListCursorVersion
+            ? new ResourceListCursor(
+                generation,
+                afterFileId,
+                BinaryPrimitives.ReadUInt64BigEndian(payload[17..25]),
+                HasFilterFingerprint: true)
+            : new ResourceListCursor(
+                generation,
+                afterFileId,
+                FilterFingerprint: 0,
+                HasFilterFingerprint: false);
         return true;
     }
 
-    private readonly record struct ResourceListCursor(long Generation, long AfterFileId);
+    private readonly record struct ResourceListCursor(
+        long Generation,
+        long AfterFileId,
+        ulong FilterFingerprint,
+        bool HasFilterFingerprint);
 
     private JsonNode HandleResourcesRead(JsonNode? id, JsonNode? readParams)
     {
+        if (readParams is not null && readParams is not JsonObject)
+        {
+            return CreateResourceReadArgumentError(
+                id,
+                "params",
+                "resources/read params must be an object.",
+                "Pass an object containing uri and optional startLine, endLine, maxBytes, cursor, and includeGenerated members.");
+        }
+
         var uri = TryReadStringValue(readParams?["uri"]);
         if (string.IsNullOrWhiteSpace(uri))
             return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing resource uri",
                 category: McpErrorEnvelope.CategoryMissingParameter,
-                suggestion: "resources/read requires `params.uri` from resources/list, such as `cdidx://file/src/app.cs`.",
+                suggestion: "resources/read requires `params.uri` from resources/list or resources/templates/list, such as `cdidx://file/src/app.cs`.",
                 retrySafe: false);
         if (uri.Length > McpBoundedText.MaxResourceUriChars)
             return CreateResourceUriError(id, uri, messagePrefix: "Resource uri is too long",
-                suggestion: "Use a resource URI returned by resources/list and keep it within the documented MCP resource URI length limit.",
+                suggestion: "Use a resource URI returned by resources/list or expanded from resources/templates/list, and keep it within the documented MCP resource URI length limit.",
                 retrySafe: false,
                 includeLengthLimit: true);
 
         if (!TryParseResourceUri(uri, out var path))
             return CreateResourceUriError(id, uri, messagePrefix: "Invalid resource uri",
-                suggestion: "Use a cdidx file resource URI returned by resources/list (`cdidx://file/<indexed-path>`).",
+                suggestion: "Use a cdidx file resource URI returned by resources/list or expanded from resources/templates/list (`cdidx://file/<indexed-path>`).",
                 retrySafe: false);
+
+        if (readParams?["includeGenerated"] is JsonNode includeGeneratedNode
+            && (includeGeneratedNode is not JsonValue includeGeneratedValue
+                || !includeGeneratedValue.TryGetValue<bool>(out _)))
+        {
+            return CreateResourceReadArgumentError(
+                id,
+                "includeGenerated",
+                "resources/read params.includeGenerated must be a boolean.",
+                "Use true only when reading a generated URI returned by resources/list with includeGenerated enabled.");
+        }
 
         if (!TryReadOptionalResourceReadInteger(readParams, "startLine", out var requestedStartLine))
             return CreateResourceReadArgumentError(id, "startLine",
@@ -4646,12 +4996,12 @@ public partial class McpServer : IDisposable
             cursor = parsedCursor;
         }
 
-        return WithDbReader(id, args: null, reader => reader.RunInReadSnapshot(() =>
+        return WithDbReader(id, args: readParams, reader => reader.RunInReadSnapshot(() =>
         {
             var file = reader.GetResourceFileMetadata(path);
             if (file == null)
                 return CreateResourceUriError(id, uri, messagePrefix: "Resource not found",
-                    suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
+                    suggestion: "Verify the exact indexed path through resources/templates/list or call resources/list again, then retry with a matching resource URI.",
                     retrySafe: true);
 
             var fingerprint = BuildResourceReadFingerprint(file.Path, file.Checksum, file.Size, file.Lines, file.Modified);
@@ -4724,7 +5074,7 @@ public partial class McpServer : IDisposable
             {
                 case BoundedFileReadStatus.FileNotFound:
                     return CreateResourceUriError(id, uri, messagePrefix: "Resource not found",
-                        suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
+                        suggestion: "Verify the exact indexed path through resources/templates/list or call resources/list again, then retry with a matching resource URI.",
                         retrySafe: true);
                 case BoundedFileReadStatus.InvalidContinuation:
                     return CreateResourceReadArgumentError(id, "cursor",
@@ -5205,13 +5555,25 @@ public partial class McpServer : IDisposable
         path = string.Empty;
         if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed)
             || !string.Equals(parsed.Scheme, "cdidx", StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(parsed.Host, "file", StringComparison.OrdinalIgnoreCase)
             || !TryExtractRawResourcePath(uri, out var rawPath))
         {
             return false;
         }
 
-        if (!PathUriNormalizer.TryDecodeRelativeUriPath(rawPath, allowBackslash: false, out var decoded))
+        var isCanonicalFile = string.Equals(parsed.Host, "file", StringComparison.OrdinalIgnoreCase);
+        var isTemplateFilePath = string.Equals(parsed.Host, "file-path", StringComparison.OrdinalIgnoreCase);
+        if (!isCanonicalFile && !isTemplateFilePath)
+            return false;
+        if (isTemplateFilePath
+            && (!string.IsNullOrEmpty(parsed.Query) || !string.IsNullOrEmpty(parsed.Fragment)))
+        {
+            return false;
+        }
+
+        var decodedSuccessfully = isTemplateFilePath
+            ? PathUriNormalizer.TryDecodeTemplateRelativeUriPath(rawPath, out var decoded)
+            : PathUriNormalizer.TryDecodeRelativeUriPath(rawPath, allowBackslash: false, out decoded);
+        if (!decodedSuccessfully)
             return false;
 
         path = decoded;
