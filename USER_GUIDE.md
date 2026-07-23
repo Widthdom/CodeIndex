@@ -290,7 +290,7 @@ sections below show examples and option details for the most common workflows.
 | Portability | `export ctags` | Write a native `tags` file for Vim, Emacs, Sublime, and other ctags consumers | -- |
 | Portability | `export` / `import` | Share a built CodeIndex database as a portable archive | -- |
 | MCP | `mcp` | Start the MCP server for AI tools | server transport |
-| Legal | `license` | Show the license and commercial-use summary | -- |
+| Legal | `license` | Show the license and commercial-use summary; add `--json` for the stable `license`, `commercial_use`, `trademark`, and controlling `documents` fields | -- |
 
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
@@ -2139,7 +2139,7 @@ Precedence is **CLI flag > environment variable > config file > built-in default
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
-Run `cdidx doctor --env-inventory` to audit a compact environment-variable summary grouped by `domain`, sensitivity, and category. Use `cdidx doctor --env-inventory=full` for the per-variable audit view with source locations and `invalid_value_behavior`, or `cdidx doctor --json --env-inventory=full` when a machine-readable full inventory is needed locally. `doctor --json` and `config show --json` redact local paths by default and expose the compact `environment_inventory_summary`; add `--show-paths` only for local debugging when raw path diagnostics are required. Secret-bearing variables such as `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are marked `auth_secret` and are redacted from doctor/config diagnostics; trust-boundary variables such as MCP tool filters, workspace plugin trust, hook directories, and GitHub proxy credential opt-ins document whether invalid values fail closed, warn, or leave the feature disabled.
+Run `cdidx doctor --env-inventory` to audit a compact environment-variable summary grouped by `domain`, sensitivity, and category. Use `cdidx doctor --env-inventory=full` for the per-variable audit view with source locations and `invalid_value_behavior`, or `cdidx doctor --json --env-inventory=full` when a machine-readable full inventory is needed locally. The full inventory accepts case-insensitive exact `--env-domain`, `--env-category`, and `--env-sensitivity` filters that compose with AND. Add `--max-json-bytes <n>` to the JSON full-inventory form to reject a successful document whose UTF-8 bytes, including its newline, exceed the requested budget; narrow the inventory with filters or increase the budget when that structured error is returned. `doctor --json` and `config show --json` redact local paths by default and expose the compact `environment_inventory_summary`; add `--show-paths` only for local debugging when raw path diagnostics are required. Secret-bearing variables such as `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are marked `auth_secret` and are redacted from doctor/config diagnostics; trust-boundary variables such as MCP tool filters, workspace plugin trust, hook directories, and GitHub proxy credential opt-ins document whether invalid values fail closed, warn, or leave the feature disabled.
 
 Supported schema (top-level keys are snake_case; nested indexing kind keys keep the CLI issue spelling; every key is optional):
 
@@ -3396,7 +3396,7 @@ cdidx index . --quiet
 | Portability | `export ctags` | Vim、Emacs、Sublime など ctags consumer 向けに `tags` file を出力 | -- |
 | Portability | `export` / `import` | build 済み CodeIndex database を portable archive として共有 | -- |
 | MCP | `mcp` | AI tools 向け MCP server を起動 | server transport |
-| Legal | `license` | license と commercial-use summary を表示 | -- |
+| Legal | `license` | license と commercial-use summary を表示。`--json` を付けると、安定した `license`、`commercial_use`、`trademark`、controlling `documents` field を出力 | -- |
 
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
@@ -5206,7 +5206,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
-`cdidx doctor --env-inventory` で、`domain`、sensitivity、category ごとに集約した compact な環境変数 summary を監査できます。変数ごとの source location や `invalid_value_behavior` まで確認する場合は `cdidx doctor --env-inventory=full` を使い、ローカルで machine-readable な full inventory が必要な場合は `cdidx doctor --json --env-inventory=full` を使います。`doctor --json` と `config show --json` は既定でローカルパスを redact し、compact な `environment_inventory_summary` を出力します。raw path の診断が必要なローカル debugging 時だけ `--show-paths` を追加してください。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` のような secret 変数は `auth_secret` として扱われ、doctor / config 診断では redact されます。MCP tool filter、workspace plugin trust、hook directory、GitHub proxy credential opt-in のような trust-boundary 変数は、不正値が fail closed になるのか、警告されるのか、機能を無効のままにするのかを inventory に明示します。
+`cdidx doctor --env-inventory` で、`domain`、sensitivity、category ごとに集約した compact な環境変数 summary を監査できます。変数ごとの source location や `invalid_value_behavior` まで確認する場合は `cdidx doctor --env-inventory=full` を使い、ローカルで machine-readable な full inventory が必要な場合は `cdidx doctor --json --env-inventory=full` を使います。full inventory では、大文字小文字を区別しない完全一致の `--env-domain`、`--env-category`、`--env-sensitivity` filter を AND で組み合わせられます。JSON の full-inventory 形式に `--max-json-bytes <n>` を追加すると、改行を含む UTF-8 byte 数が指定した budget を超える成功文書を拒否します。structured error が返った場合は filter で inventory を絞るか、budget を増やしてください。`doctor --json` と `config show --json` は既定でローカルパスを redact し、compact な `environment_inventory_summary` を出力します。raw path の診断が必要なローカル debugging 時だけ `--show-paths` を追加してください。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` のような secret 変数は `auth_secret` として扱われ、doctor / config 診断では redact されます。MCP tool filter、workspace plugin trust、hook directory、GitHub proxy credential opt-in のような trust-boundary 変数は、不正値が fail closed になるのか、警告されるのか、機能を無効のままにするのかを inventory に明示します。
 
 対応スキーマ（top-level key は snake_case、ネストした indexing の kind key は CLI issue の表記を維持、すべて任意）:
 
