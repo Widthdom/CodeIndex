@@ -4638,14 +4638,14 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlLineEndCommentsKeepMultilineUsingSources()
+    public void RunReferences_ExactJson_SqlLineEndCommentBoundariesShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comment_using");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comments");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "multiline.sql"),
                 """
                 DELETE FROM audit_log -- trailing comment
                 USING staging_log
@@ -4661,51 +4661,8 @@ public partial class QueryCommandRunnerTests
                 FROM users;
                 SELECT * FROM #comment_temp;
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (deleteExitCode, deleteStdout, deleteStderr) = RunReferencesInProcess("staging_log", dbPath);
-            var (mergeExitCode, mergeStdout, mergeStderr) = RunReferencesInProcess("staging_merge", dbPath);
-            var (tempExitCode, tempStdout, tempStderr) = RunReferencesInProcess("#comment_temp", dbPath);
-
-            var deleteRows = ParseJsonLines(deleteStdout);
-            var mergeRows = ParseJsonLines(mergeStdout);
-            var tempRows = ParseJsonLines(tempStdout);
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-
-            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
-            Assert.Equal(string.Empty, deleteStderr);
-            var deleteRow = Assert.Single(deleteRows);
-            Assert.Equal("staging_log", deleteRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", deleteRow.RootElement.GetProperty("reference_kind").GetString());
-
-            Assert.Equal(CommandExitCodes.Success, mergeExitCode);
-            Assert.Equal(string.Empty, mergeStderr);
-            var mergeRow = Assert.Single(mergeRows);
-            Assert.Equal("staging_merge", mergeRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", mergeRow.RootElement.GetProperty("reference_kind").GetString());
-
-            Assert.Equal(CommandExitCodes.Success, tempExitCode);
-            Assert.Equal(string.Empty, tempStderr);
-            Assert.Equal(2, tempRows.Count);
-            Assert.All(tempRows, row => Assert.Equal("#comment_temp", row.RootElement.GetProperty("symbol_name").GetString()));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlLineEndCommentsKeepUnfinishedPrefixes()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comment_unfinished_prefixes");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "unfinished-prefixes.sql"),
                 """
                 SELECT id INTO -- trailing comment
                     #comment_temp
@@ -4723,51 +4680,8 @@ public partial class QueryCommandRunnerTests
                 WHEN MATCHED THEN
                     UPDATE SET action = s.action;
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (tempExitCode, tempStdout, tempStderr) = RunReferencesInProcess("#comment_temp", dbPath);
-            var (deleteExitCode, deleteStdout, deleteStderr) = RunReferencesInProcess("archived_log", dbPath);
-            var (mergeExitCode, mergeStdout, mergeStderr) = RunReferencesInProcess("staging_merge", dbPath);
-
-            var tempRows = ParseJsonLines(tempStdout);
-            var deleteRows = ParseJsonLines(deleteStdout);
-            var mergeRows = ParseJsonLines(mergeStdout);
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-
-            Assert.Equal(CommandExitCodes.Success, tempExitCode);
-            Assert.Equal(string.Empty, tempStderr);
-            Assert.Equal(2, tempRows.Count);
-            Assert.All(tempRows, row => Assert.Equal("#comment_temp", row.RootElement.GetProperty("symbol_name").GetString()));
-
-            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
-            Assert.Equal(string.Empty, deleteStderr);
-            var deleteRow = Assert.Single(deleteRows);
-            Assert.Equal("archived_log", deleteRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", deleteRow.RootElement.GetProperty("reference_kind").GetString());
-
-            Assert.Equal(CommandExitCodes.Success, mergeExitCode);
-            Assert.Equal(string.Empty, mergeStderr);
-            var mergeRow = Assert.Single(mergeRows);
-            Assert.Equal("staging_merge", mergeRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", mergeRow.RootElement.GetProperty("reference_kind").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_SqlLineEndCommentsKeepUnfinishedTargetPrefixes()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comment_target_prefixes");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
             File.WriteAllText(
-                Path.Combine(projectRoot, "sql", "repro.sql"),
+                Path.Combine(projectRoot, "sql", "target-prefixes.sql"),
                 """
                 INSERT INTO -- trailing comment
                     audit_log (action) VALUES ('x');
@@ -4790,46 +4704,41 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (auditExitCode, auditStdout, auditStderr) = RunReferencesInProcess("audit_log", dbPath);
-            var (updateExitCode, updateStdout, updateStderr) = RunReferencesInProcess("#update_temp", dbPath);
-            var (deleteExitCode, deleteStdout, deleteStderr) = RunReferencesInProcess("#delete_temp", dbPath);
-            var (truncateExitCode, truncateStdout, truncateStderr) = RunReferencesInProcess("#truncate_temp", dbPath);
-            var (createExitCode, createStdout, createStderr) = RunReferencesInProcess("#create_temp", dbPath);
-
-            var auditRows = ParseJsonLines(auditStdout);
-            var updateRows = ParseJsonLines(updateStdout);
-            var deleteRows = ParseJsonLines(deleteStdout);
-            var truncateRows = ParseJsonLines(truncateStdout);
-            var createRows = ParseJsonLines(createStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
-            Assert.Equal(CommandExitCodes.Success, auditExitCode);
-            Assert.Equal(string.Empty, auditStderr);
-            var auditRow = Assert.Single(auditRows);
-            Assert.Equal("audit_log", auditRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", auditRow.RootElement.GetProperty("reference_kind").GetString());
+            AssertRows("sql/multiline.sql", "staging_log", 1, "reference");
+            AssertRows("sql/multiline.sql", "staging_merge", 1, "reference");
+            AssertRows("sql/multiline.sql", "#comment_temp", 2);
 
-            Assert.Equal(CommandExitCodes.Success, updateExitCode);
-            Assert.Equal(string.Empty, updateStderr);
-            Assert.Equal(2, updateRows.Count);
-            Assert.All(updateRows, row => Assert.Equal("#update_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+            AssertRows("sql/unfinished-prefixes.sql", "#comment_temp", 2);
+            AssertRows("sql/unfinished-prefixes.sql", "archived_log", 1, "reference");
+            AssertRows("sql/unfinished-prefixes.sql", "staging_merge", 1, "reference");
 
-            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
-            Assert.Equal(string.Empty, deleteStderr);
-            Assert.Equal(2, deleteRows.Count);
-            Assert.All(deleteRows, row => Assert.Equal("#delete_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+            AssertRows("sql/target-prefixes.sql", "audit_log", 1, "reference");
+            AssertRows("sql/target-prefixes.sql", "#update_temp", 2);
+            AssertRows("sql/target-prefixes.sql", "#delete_temp", 2);
+            AssertRows("sql/target-prefixes.sql", "#truncate_temp", 2);
+            AssertRows("sql/target-prefixes.sql", "#create_temp", 1);
 
-            Assert.Equal(CommandExitCodes.Success, truncateExitCode);
-            Assert.Equal(string.Empty, truncateStderr);
-            Assert.Equal(2, truncateRows.Count);
-            Assert.All(truncateRows, row => Assert.Equal("#truncate_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+            void AssertRows(string path, string query, int expectedCount, string? expectedKind = null)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    query, dbPath, "sql", true, "--path", path);
+                var rows = ParseJsonLines(stdout);
 
-            Assert.Equal(CommandExitCodes.Success, createExitCode);
-            Assert.Equal(string.Empty, createStderr);
-            Assert.Single(createRows);
-            Assert.All(createRows, row => Assert.Equal("#create_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(expectedCount, rows.Count);
+                Assert.All(rows, row => Assert.Equal(
+                    query,
+                    row.RootElement.GetProperty("symbol_name").GetString()));
+                if (expectedKind is not null)
+                    Assert.All(rows, row => Assert.Equal(
+                        expectedKind,
+                        row.RootElement.GetProperty("reference_kind").GetString()));
+            }
         }
         finally
         {
