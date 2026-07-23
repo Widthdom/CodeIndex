@@ -1415,12 +1415,13 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void RebuildFtsFromChunks_AfterBulkLoadSuspension_PopulatesFtsAndRestoresTriggers()
+    public void RebuildFtsFromChunks_AfterBulkLoadSuspension_PopulatesBothIndexesAndRestoresTriggers_Issue4725()
     {
         var bulkFileId = UpsertTestFile("src/bulk-fts.cs", checksum: "bulk-fts");
 
         _writer.SuspendFtsSyncTriggersForBulkLoad();
         Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(0L, CountTrigramFtsSyncTriggers());
 
         _writer.InsertChunks(
         [
@@ -1435,12 +1436,15 @@ public class DatabaseTests : IDisposable
         ]);
 
         Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'bulkuniquetoken'"));
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks_trigram WHERE fts_chunks_trigram MATCH 'bulkuniquetoken'"));
 
         _writer.RestoreFtsSyncTriggers();
         _writer.RebuildFtsFromChunks();
 
         Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal(3L, CountTrigramFtsSyncTriggers());
         Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'bulkuniquetoken'"));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks_trigram WHERE fts_chunks_trigram MATCH 'bulkuniquetoken'"));
 
         var incrementalFileId = UpsertTestFile("src/incremental-fts.cs", checksum: "incremental-fts");
         _writer.InsertChunks(
@@ -1456,6 +1460,16 @@ public class DatabaseTests : IDisposable
         ]);
 
         Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'incrementaluniquetoken'"));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks_trigram WHERE fts_chunks_trigram MATCH 'incrementaluniquetoken'"));
+
+        ExecuteNonQuery(
+            _db.Connection,
+            $"UPDATE chunks SET content = 'updateduniquetoken' WHERE file_id = {incrementalFileId}");
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks_trigram WHERE fts_chunks_trigram MATCH 'incrementaluniquetoken'"));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks_trigram WHERE fts_chunks_trigram MATCH 'updateduniquetoken'"));
+
+        ExecuteNonQuery(_db.Connection, $"DELETE FROM chunks WHERE file_id = {incrementalFileId}");
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks_trigram WHERE fts_chunks_trigram MATCH 'updateduniquetoken'"));
     }
 
     [Fact]
@@ -8264,6 +8278,9 @@ public class DatabaseTests : IDisposable
 
     private long CountFtsSyncTriggers()
         => ExecuteScalarLong("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_ai', 'fts_chunks_ad', 'fts_chunks_au')");
+
+    private long CountTrigramFtsSyncTriggers()
+        => ExecuteScalarLong("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_trigram_ai', 'fts_chunks_trigram_ad', 'fts_chunks_trigram_au')");
 
     private long CountFtsBulkLoadGenerationCleanupTriggers()
         => ExecuteScalarLong($"""

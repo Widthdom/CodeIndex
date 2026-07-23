@@ -10727,8 +10727,266 @@ jobs:
             Assert.False(json.GetProperty("scan_truncated").GetBoolean());
             Assert.False(json.GetProperty("scan_cap_reached").GetBoolean());
             Assert.False(json.GetProperty("scan_timed_out").GetBoolean());
+            Assert.Equal("indexed_trigram", json.GetProperty("search_strategy").GetString());
             Assert.Equal(QueryCommandRunner.FindAllCandidateFileLimit, json.GetProperty("candidate_file_limit").GetInt32());
             Assert.Equal(QueryCommandRunner.FindAllLineScanLimit, json.GetProperty("line_scan_limit").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllScopeIndexedLiteralFindsLateFileBeforeLineCap_Issue4725()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_indexed_literal_4725");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-early.txt",
+                "text",
+                "first unrelated line\nsecond unrelated line\nthird unrelated line\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/z-late.txt",
+                "text",
+                "prefix indexed-late-needle suffix\n");
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["INDEXED-LATE-NEEDLE", "--db", dbPath, "--all", "--line-scan-limit", "2", "--json", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            using var countDocument = ParseJsonOutput(countStdout);
+            var count = countDocument.RootElement;
+            Assert.Equal(1, count.GetProperty("count").GetInt32());
+            Assert.Equal(2, count.GetProperty("candidate_files").GetInt32());
+            Assert.Equal(1, count.GetProperty("files_scanned").GetInt32());
+            Assert.Equal(1, count.GetProperty("lines_scanned").GetInt32());
+            Assert.Equal("indexed_trigram", count.GetProperty("search_strategy").GetString());
+            Assert.True(count.GetProperty("scan_complete").GetBoolean());
+            Assert.True(count.GetProperty("authoritative_count").GetBoolean());
+
+            var (rowExitCode, rowStdout, rowStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["INDEXED-LATE-NEEDLE", "--db", dbPath, "--all", "--line-scan-limit", "2", "--json=ndjson"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, rowExitCode);
+            Assert.Equal(string.Empty, rowStderr);
+            var rows = ParseJsonLines(rowStdout).Select(document => document.RootElement).ToList();
+            Assert.Equal(2, rows.Count);
+            Assert.Equal("src/z-late.txt", rows[0].GetProperty("path").GetString());
+            Assert.True(rows[1].GetProperty("terminal_record").GetBoolean());
+            Assert.Equal("indexed_trigram", rows[1].GetProperty("search_strategy").GetString());
+            Assert.True(rows[1].GetProperty("scan_complete").GetBoolean());
+            Assert.True(rows[1].GetProperty("authoritative_rows").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllScopeBulkLoadMarkerFallsBackFromStaleTrigramIndex_Issue4725()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_bulk_trigram_fallback_4725");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/bulk.txt",
+                "text",
+                "content before bulk update\n");
+
+            using var writerDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(writerDb.Connection);
+            writer.SuspendFtsSyncTriggersForBulkLoad();
+            try
+            {
+                using (var update = writerDb.Connection.CreateCommand())
+                {
+                    update.CommandText = """
+                        UPDATE chunks
+                        SET content = 'bulk-indexed-needle'
+                        WHERE file_id = (SELECT id FROM files WHERE path = 'src/bulk.txt')
+                        """;
+                    Assert.Equal(1, update.ExecuteNonQuery());
+                }
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                    ["bulk-indexed-needle", "--db", dbPath, "--all", "--json", "--count"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal("line_scan", document.RootElement.GetProperty("search_strategy").GetString());
+                Assert.Equal(
+                    "trigram_index_rebuilding",
+                    document.RootElement.GetProperty("search_fallback_reason").GetString());
+                Assert.True(document.RootElement.GetProperty("authoritative_count").GetBoolean());
+            }
+            finally
+            {
+                writer.RestoreFtsSyncTriggers();
+                writer.RebuildFtsFromChunks();
+                writer.ClearFtsBulkLoadInProgress();
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("alpha", false, true, "regex")]
+    [InlineData("alpha", true, false, "exact_source_normalization")]
+    [InlineData("al", false, false, "query_too_short")]
+    [InlineData("日本語", false, false, "unsupported_query_characters")]
+    public void CountFindInFiles_UnsupportedIndexedLiteralUsesExplicitFallback_Issue4725(
+        string query,
+        bool exact,
+        bool regex,
+        string expectedReason)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_indexed_fallback_4725");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.txt", "text", "alpha al 日本語\n");
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var reader = new DbReader(db.Connection);
+            var counts = reader.CountFindInFiles(
+                query,
+                exact: exact,
+                regex: regex,
+                useIndexedLiteralCandidates: true);
+
+            Assert.True(counts.Count > 0);
+            Assert.Equal("line_scan", counts.Scan.SearchStrategy);
+            Assert.Equal(expectedReason, counts.Scan.SearchFallbackReason);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllScopeLegacyDatabaseFallsBackUntilTrigramMigration_Issue4725()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_legacy_trigram_4725");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/legacy.txt",
+                "text",
+                "legacy-indexed-needle\n");
+
+            using (var legacyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var command = legacyDb.Connection.CreateCommand())
+            {
+                command.CommandText = """
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_ai;
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_ad;
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_au;
+                    DROP TABLE IF EXISTS fts_chunks_trigram;
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["legacy-indexed-needle", "--db", dbPath, "--all", "--json", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var fallbackDocument = ParseJsonOutput(stdout);
+            Assert.Equal("line_scan", fallbackDocument.RootElement.GetProperty("search_strategy").GetString());
+            Assert.Equal(
+                "trigram_index_unavailable",
+                fallbackDocument.RootElement.GetProperty("search_fallback_reason").GetString());
+
+            using var migratedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            migratedDb.InitializeSchema();
+            var reader = new DbReader(migratedDb.Connection);
+            var migrated = reader.CountFindInFiles(
+                "legacy-indexed-needle",
+                useIndexedLiteralCandidates: true);
+
+            Assert.Equal(1, migrated.Count);
+            Assert.Equal("indexed_trigram", migrated.Scan.SearchStrategy);
+            Assert.Null(migrated.Scan.SearchFallbackReason);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllScopeMigrationRepairsExistingTrigramTableWithoutSyncTriggers_Issue4725()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_stale_trigram_migration_4725");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/downgraded.txt",
+                "text",
+                "content before older writer rebuild\n");
+
+            using (var downgradedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var command = downgradedDb.Connection.CreateCommand())
+            {
+                command.CommandText = """
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_ai;
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_ad;
+                    DROP TRIGGER IF EXISTS fts_chunks_trigram_au;
+                    UPDATE chunks
+                    SET content = 'post-downgrade-needle'
+                    WHERE file_id = (SELECT id FROM files WHERE path = 'src/downgraded.txt');
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var (fallbackExitCode, fallbackStdout, fallbackStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["post-downgrade-needle", "--db", dbPath, "--all", "--json", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, fallbackExitCode);
+            Assert.Equal(string.Empty, fallbackStderr);
+            using (var fallbackDocument = ParseJsonOutput(fallbackStdout))
+            {
+                Assert.Equal(1, fallbackDocument.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal("line_scan", fallbackDocument.RootElement.GetProperty("search_strategy").GetString());
+                Assert.Equal(
+                    "trigram_index_unsynchronized",
+                    fallbackDocument.RootElement.GetProperty("search_fallback_reason").GetString());
+            }
+
+            using var migratedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            migratedDb.InitializeSchema();
+            var reader = new DbReader(migratedDb.Connection);
+            var migrated = reader.CountFindInFiles(
+                "post-downgrade-needle",
+                useIndexedLiteralCandidates: true);
+
+            Assert.Equal(1, migrated.Count);
+            Assert.Equal("indexed_trigram", migrated.Scan.SearchStrategy);
+            Assert.Null(migrated.Scan.SearchFallbackReason);
         }
         finally
         {
@@ -10825,6 +11083,8 @@ jobs:
             Assert.Equal(2, json.GetProperty("files_scanned").GetInt32());
             Assert.Equal(4, json.GetProperty("lines_scanned").GetInt32());
             Assert.False(json.GetProperty("scan_truncated").GetBoolean());
+            Assert.Equal("line_scan", json.GetProperty("search_strategy").GetString());
+            Assert.Equal("regex", json.GetProperty("search_fallback_reason").GetString());
         }
         finally
         {

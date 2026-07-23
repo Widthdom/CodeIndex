@@ -87,7 +87,9 @@ public readonly record struct FindScanSummary(
     bool TimedOut = false,
     string? TruncationReason = null,
     int? CandidateFileLimit = null,
-    int? LineLimit = null);
+    int? LineLimit = null,
+    string SearchStrategy = "line_scan",
+    string? SearchFallbackReason = null);
 
 public readonly record struct FindCountResult(int Count, int FileCount, FindScanSummary Scan);
 

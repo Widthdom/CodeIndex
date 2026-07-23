@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -343,7 +344,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "status",
-                "Get database statistics, readiness state, and optional CLI-style freshness checks. Use `check`, `scopes`, `staleAfterSeconds`, `explain`, `config`, `logPath`, or `format` for bounded health-check views. / DB統計、readiness 状態、必要に応じて CLI 風の freshness check を取得。`check` / `scopes` / `staleAfterSeconds` / `explain` / `config` / `logPath` / `format` で health-check 用の出力に絞り込める。",
+                "Get database statistics, readiness state, and optional CLI-style freshness checks. Use `check`, `scopes`, `staleAfterSeconds`, `explain`, `config`, `logPath`, `format`, or `fields` for bounded health-check views. / DB統計、readiness 状態、必要に応じて CLI 風の freshness check を取得。`check` / `scopes` / `staleAfterSeconds` / `explain` / `config` / `logPath` / `format` / `fields` で health-check 用の出力に絞り込める。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -356,7 +357,22 @@ public partial class McpServer
                         ["config"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include effective MCP/CLI status configuration such as DB path, version, log dir, stale threshold, and update-check request state.", ["default"] = false },
                         ["logPath"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include the resolved global tool log directory as `log_path`.", ["default"] = false },
                         ["updateCheck"] = new JsonObject { ["type"] = "boolean", ["description"] = "Run the same update check as CLI status. Defaults to false because it may perform network I/O.", ["default"] = false },
-                        ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "full", "compact" }, ["description"] = "Response shape. `compact` returns counts, freshness, readiness, and requested diagnostics without full language/kind tables.", ["default"] = "full" }
+                        ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "full", "compact" }, ["description"] = "Response shape. `compact` returns counts, freshness, readiness, and requested diagnostics without full language/kind tables.", ["default"] = "full" },
+                        ["fields"] = new JsonObject
+                        {
+                            ["oneOf"] = new JsonArray
+                            {
+                                new JsonObject { ["type"] = "string", ["minLength"] = 1, ["maxLength"] = MaxStatusProjectionFieldCharacters },
+                                new JsonObject
+                                {
+                                    ["type"] = "array",
+                                    ["minItems"] = 1,
+                                    ["maxItems"] = MaxStatusProjectionFields,
+                                    ["items"] = new JsonObject { ["type"] = "string", ["minLength"] = 1, ["maxLength"] = MaxStatusProjectionFieldCharacters }
+                                }
+                            },
+                            ["description"] = "Return only these exact top-level structured-content fields after applying `format`, plus the standard `api_version`. Accepts one field or an array; nested paths are not supported."
+                        }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -619,6 +635,17 @@ public partial class McpServer
             return CreateToolsListParamsError(id);
 
         var paramsObject = listParams as JsonObject;
+        var catalogFormat = "full";
+        if (paramsObject?.ContainsKey("format") == true
+            && (paramsObject["format"] is not JsonValue formatValue
+                || !formatValue.TryGetValue<string>(out catalogFormat)
+                || catalogFormat is not ("full" or "compact")))
+        {
+            return CreateToolsListFormatError(id);
+        }
+        if (!TryReadToolsListNames(paramsObject, out var requestedNames, out var namesError))
+            return CreateToolsListNamesError(id, namesError!);
+
         var pageSize = DefaultToolsListPageSize;
         if (paramsObject?["limit"] is JsonNode limitNode
             && (limitNode is not JsonValue limitValue
@@ -630,40 +657,77 @@ public partial class McpServer
         }
 
         var offset = 0;
-        if (paramsObject?["cursor"] is JsonNode cursorNode
-            && (cursorNode is not JsonValue cursorValue
-                || !cursorValue.TryGetValue<string>(out var cursor)
-                || !int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
-                || offset < 0
-                || offset > MaxMcpPaginationOffset))
+        if (paramsObject?["cursor"] is JsonNode cursorNode)
         {
-            return CreateToolsListCursorError(id);
+            if (cursorNode is not JsonValue cursorValue
+                || !cursorValue.TryGetValue<string>(out var cursor)
+                || !TryParseToolsListCursor(cursor, out offset, out var cursorFormat, out var cursorNames))
+            {
+                return CreateToolsListCursorError(id);
+            }
+
+            if (cursorFormat is not null)
+            {
+                if ((paramsObject.ContainsKey("format") && catalogFormat != cursorFormat)
+                    || (paramsObject.ContainsKey("names")
+                        && (requestedNames is null || cursorNames is null || !requestedNames.SetEquals(cursorNames))))
+                {
+                    return CreateToolsListCursorError(id);
+                }
+
+                catalogFormat = cursorFormat;
+                requestedNames = cursorNames;
+            }
+        }
+
+        var selected = filtered;
+        if (requestedNames is not null)
+        {
+            selected = new JsonArray();
+            foreach (var tool in filtered)
+            {
+                var name = tool?["name"]?.GetValue<string>();
+                if (name is not null && requestedNames.Contains(name))
+                    selected.Add(tool!.DeepClone());
+            }
         }
 
         var page = new JsonArray();
-        for (var i = offset; i < filtered.Count && page.Count < pageSize; i++)
-            page.Add(filtered[i]!.DeepClone());
+        for (var i = offset; i < selected.Count && page.Count < pageSize; i++)
+        {
+            var tool = selected[i]!.AsObject();
+            page.Add(catalogFormat == "compact"
+                ? BuildCompactToolCatalogEntry(tool)
+                : tool.DeepClone());
+        }
+
+        var catalogMeta = catalogFormat == "compact"
+            ? BuildCompactToolsListCatalogMeta(filtered.Count, selected.Count, page.Count, offset, pageSize, requestedNames is not null)
+            : BuildToolsListCatalogMeta(filtered, page.Count, offset, pageSize);
+        if (catalogFormat == "full" && requestedNames is not null)
+            MarkToolsListCatalogMetaNameScoped(catalogMeta, filtered.Count, selected.Count);
 
         var result = new JsonObject
         {
             ["tools"] = page,
-            ["_meta"] = BuildToolsListCatalogMeta(filtered, page.Count, offset, pageSize),
+            ["_meta"] = catalogMeta,
         };
         var nextOffset = offset + pageSize;
-        if (nextOffset <= MaxMcpPaginationOffset && nextOffset < filtered.Count)
-            result["nextCursor"] = nextOffset.ToString(CultureInfo.InvariantCulture);
+        if (nextOffset <= MaxMcpPaginationOffset && nextOffset < selected.Count)
+            result["nextCursor"] = CreateToolsListCursor(nextOffset, catalogFormat, requestedNames);
         return CreateSuccessResponse(id, result);
     }
 
     private static JsonObject CreateToolsListCursorError(JsonNode? id)
         => CreateErrorResponse(hasId: true, id: id, code: -32602,
-            message: $"tools/list cursor must be a non-negative pagination offset no greater than {MaxMcpPaginationOffset}.",
+            message: $"tools/list cursor must be a valid continuation token no longer than {MaxToolsListCursorCharacters} characters with an offset no greater than {MaxMcpPaginationOffset}.",
             category: McpErrorEnvelope.CategoryInvalidArgument,
-            suggestion: "Use the `nextCursor` value returned by the previous tools/list response, or omit params.cursor to start from the first page.",
+            suggestion: "Use the `nextCursor` value returned by the previous tools/list response without changing its format or names controls, or omit params.cursor to start from the first page.",
             retrySafe: false,
             extraData: new JsonObject
             {
                 ["max_pagination_offset"] = MaxMcpPaginationOffset,
+                ["max_tools_list_cursor_characters"] = MaxToolsListCursorCharacters,
             });
 
     private static JsonObject CreateToolsListParamsError(JsonNode? id)
@@ -684,6 +748,224 @@ public partial class McpServer
                 ["default_tools_list_page_size"] = DefaultToolsListPageSize,
                 ["max_tools_list_page_size"] = MaxToolsListPageSize,
             });
+
+    private static JsonObject CreateToolsListFormatError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: "tools/list format must be one of full, compact.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use params.format=\"compact\" for lightweight discovery or params.format=\"full\" for complete tool definitions.",
+            retrySafe: false);
+
+    private static JsonObject CreateToolsListNamesError(JsonNode? id, string message)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: message,
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: $"Pass one exact tool name or an array of up to {MaxToolsListNameFilters} names, then use format=\"full\" to retrieve complete definitions.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["max_tool_name_filters"] = MaxToolsListNameFilters,
+                ["max_tool_name_characters"] = MaxToolsListNameCharacters,
+            });
+
+    private static bool TryReadToolsListNames(
+        JsonObject? paramsObject,
+        out HashSet<string>? requestedNames,
+        out string? error)
+    {
+        requestedNames = null;
+        error = null;
+        if (paramsObject?.ContainsKey("names") != true)
+            return true;
+
+        var node = paramsObject["names"];
+        if (node is null)
+        {
+            error = "tools/list names must be a non-empty string or string array.";
+            return false;
+        }
+        IEnumerable<JsonNode?> values = node is JsonArray array ? array : new JsonNode?[] { node };
+        if (node is JsonArray namesArray && (namesArray.Count == 0 || namesArray.Count > MaxToolsListNameFilters))
+        {
+            error = $"tools/list names must contain between 1 and {MaxToolsListNameFilters} entries.";
+            return false;
+        }
+
+        requestedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            if (value is not JsonValue jsonValue
+                || !jsonValue.TryGetValue<string>(out var name)
+                || string.IsNullOrWhiteSpace(name))
+            {
+                error = "tools/list names entries must be non-empty strings.";
+                return false;
+            }
+
+            name = name.Trim();
+            if (name.Length > MaxToolsListNameCharacters)
+            {
+                error = $"tools/list names entries must be no longer than {MaxToolsListNameCharacters} characters.";
+                return false;
+            }
+            requestedNames.Add(name);
+        }
+        return true;
+    }
+
+    private static string CreateToolsListCursor(
+        int offset,
+        string catalogFormat,
+        HashSet<string>? requestedNames)
+    {
+        if (catalogFormat == "full" && requestedNames is null)
+            return offset.ToString(CultureInfo.InvariantCulture);
+
+        var payload = new JsonObject
+        {
+            ["offset"] = offset,
+            ["format"] = catalogFormat,
+        };
+        if (requestedNames is not null)
+        {
+            payload["names"] = new JsonArray(requestedNames
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .Select(name => (JsonNode?)name)
+                .ToArray());
+        }
+
+        return "v1." + Convert.ToBase64String(Encoding.UTF8.GetBytes(payload.ToJsonString()))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    private static bool TryParseToolsListCursor(
+        string cursor,
+        out int offset,
+        out string? catalogFormat,
+        out HashSet<string>? requestedNames)
+    {
+        offset = 0;
+        catalogFormat = null;
+        requestedNames = null;
+        if (cursor.Length == 0 || cursor.Length > MaxToolsListCursorCharacters)
+            return false;
+
+        if (int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out offset))
+            return offset >= 0 && offset <= MaxMcpPaginationOffset;
+
+        const string prefix = "v1.";
+        if (!cursor.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        try
+        {
+            var encoded = cursor[prefix.Length..].Replace('-', '+').Replace('_', '/');
+            encoded = (encoded.Length % 4) switch
+            {
+                0 => encoded,
+                2 => encoded + "==",
+                3 => encoded + "=",
+                _ => string.Empty,
+            };
+            if (encoded.Length == 0)
+                return false;
+
+            var payload = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded))) as JsonObject;
+            if (payload is null
+                || payload.Count is < 2 or > 3
+                || payload.Any(property => property.Key is not ("offset" or "format" or "names"))
+                || payload["offset"] is not JsonValue offsetValue
+                || !offsetValue.TryGetValue<int>(out offset)
+                || offset < 0
+                || offset > MaxMcpPaginationOffset
+                || payload["format"] is not JsonValue formatValue
+                || !formatValue.TryGetValue<string>(out catalogFormat)
+                || catalogFormat is not ("full" or "compact")
+                || !TryReadToolsListNames(payload, out requestedNames, out _))
+            {
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static JsonObject BuildCompactToolCatalogEntry(JsonObject tool)
+    {
+        var compact = new JsonObject
+        {
+            ["name"] = tool["name"]?.DeepClone(),
+            ["description"] = BuildCompactToolDescription(tool["description"]?.GetValue<string>()),
+            ["inputSchema"] = new JsonObject { ["type"] = "object" },
+        };
+        if (tool["annotations"] is not null)
+            compact["annotations"] = tool["annotations"]!.DeepClone();
+        if (tool["x-stability"] is not null)
+            compact["x-stability"] = tool["x-stability"]!.DeepClone();
+        return compact;
+    }
+
+    private static string BuildCompactToolDescription(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+            return string.Empty;
+
+        var english = description.Split(" / ", 2, StringSplitOptions.None)[0];
+        var sentenceEnd = english.IndexOf(". ", StringComparison.Ordinal);
+        if (sentenceEnd >= 0)
+            english = english[..(sentenceEnd + 1)];
+        const int maxDescriptionCharacters = 240;
+        return english.Length <= maxDescriptionCharacters
+            ? english
+            : $"{english[..(maxDescriptionCharacters - 3)].TrimEnd()}...";
+    }
+
+    private static JsonObject BuildCompactToolsListCatalogMeta(
+        int enabledToolCount,
+        int selectedToolCount,
+        int returnedToolCount,
+        int offset,
+        int pageSize,
+        bool namesFiltered) => new()
+        {
+            ["catalog_version"] = "cdidx.mcp.tools.v1",
+            ["format"] = "compact",
+            ["definitions_complete"] = false,
+            ["full_definition_request"] = new JsonObject
+            {
+                ["method"] = "tools/list",
+                ["params"] = new JsonObject
+                {
+                    ["format"] = "full",
+                    ["names"] = new JsonArray { "<tool-name>" },
+                },
+            },
+            ["discovery_contract"] = new JsonObject
+            {
+                ["disabled_tools_are_omitted"] = true,
+                ["input_schemas_are_authoritative"] = false,
+                ["full_definitions_available_on_demand"] = true,
+                ["name_filter_param"] = "params.names",
+                ["pagination_supported"] = true,
+            },
+            ["response_controls"] = new JsonObject
+            {
+                ["enabled_tools_total"] = enabledToolCount,
+                ["tools_total"] = selectedToolCount,
+                ["tools_returned"] = returnedToolCount,
+                ["tools_offset"] = offset,
+                ["tools_page_size"] = pageSize,
+                ["names_filtered"] = namesFiltered,
+                ["max_tool_name_filters"] = MaxToolsListNameFilters,
+                ["max_pagination_offset"] = MaxMcpPaginationOffset,
+            },
+        };
 
     private static JsonObject BuildToolsListCatalogMeta(JsonArray tools, int returnedToolCount, int offset, int pageSize)
     {
@@ -745,6 +1027,23 @@ public partial class McpServer
                 ["max_pagination_offset"] = MaxMcpPaginationOffset,
             },
         };
+    }
+
+    private static void MarkToolsListCatalogMetaNameScoped(
+        JsonObject catalogMeta,
+        int enabledToolCount,
+        int selectedToolCount)
+    {
+        catalogMeta["catalog_scope"] = "name_filtered";
+        var discoveryContract = catalogMeta["discovery_contract"]!.AsObject();
+        discoveryContract["tools_list_is_authoritative"] = false;
+        discoveryContract["catalog_metadata_scope"] = "enabled_tools";
+        discoveryContract["returned_tools_scope"] = "requested_names";
+
+        var responseControls = catalogMeta["response_controls"]!.AsObject();
+        responseControls["enabled_tools_total"] = enabledToolCount;
+        responseControls["tools_total"] = selectedToolCount;
+        responseControls["names_filtered"] = true;
     }
 
     private static HashSet<string> GetAdvertisedToolNames(JsonArray tools)

@@ -125,7 +125,19 @@ public static partial class QueryCommandRunner
                 FindCountResult counts;
                 try
                 {
-                    counts = reader.CountFindInFiles(options.Query, options.Lang, pathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact, options.FocusLine, options.FocusColumn, options.Regex, candidateFileLimit, lineLimit);
+                    counts = reader.CountFindInFiles(
+                        options.Query,
+                        options.Lang,
+                        pathPatterns,
+                        options.ExcludePaths,
+                        options.ExcludeTests,
+                        options.Exact,
+                        options.FocusLine,
+                        options.FocusColumn,
+                        options.Regex,
+                        candidateFileLimit,
+                        lineLimit,
+                        useIndexedLiteralCandidates: options.All);
                 }
                 catch (Exception ex) when (options.Regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
                 {
@@ -162,7 +174,24 @@ public static partial class QueryCommandRunner
             FindResults findResults;
             try
             {
-                findResults = reader.FindInFiles(options.Query, options.Limit, options.Lang, pathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex, candidateFileLimit, lineLimit, JsonEnvelopeWrapper.GetBoundedResponseOffset("find"));
+                findResults = reader.FindInFiles(
+                    options.Query,
+                    options.Limit,
+                    options.Lang,
+                    pathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    contextBefore,
+                    contextAfter,
+                    options.Exact,
+                    options.MaxLineWidth,
+                    options.FocusLine,
+                    options.FocusColumn,
+                    options.Regex,
+                    candidateFileLimit,
+                    lineLimit,
+                    JsonEnvelopeWrapper.GetBoundedResponseOffset("find"),
+                    useIndexedLiteralCandidates: options.All);
             }
             catch (ArgumentException ex) when (options.Regex)
             {
@@ -546,6 +575,9 @@ public static partial class QueryCommandRunner
         payload["scan_truncated"] = scan.Truncated;
         payload["scan_cap_reached"] = scan.CapReached;
         payload["scan_timed_out"] = scan.TimedOut;
+        payload["search_strategy"] = scan.SearchStrategy;
+        if (scan.SearchFallbackReason != null)
+            payload["search_fallback_reason"] = scan.SearchFallbackReason;
         if (scan.TruncationReason != null)
             payload["scan_truncation_reason"] = scan.TruncationReason;
         if (scan.CandidateFileLimit.HasValue)
@@ -650,6 +682,9 @@ public static partial class QueryCommandRunner
         bool countMode = false)
     {
         var summary = $"scanned {scan.FilesScanned}/{scan.CandidateFiles} candidate files, {ConsoleUi.Counted(scan.LinesScanned, "line")}";
+        summary += $"; search_strategy={scan.SearchStrategy}";
+        if (scan.SearchFallbackReason != null)
+            summary += $"; search_fallback_reason={scan.SearchFallbackReason}";
         if (scan.CandidateFileLimit.HasValue)
             summary += $"; candidate_file_limit={scan.CandidateFileLimit.Value}";
         if (scan.LineLimit.HasValue)

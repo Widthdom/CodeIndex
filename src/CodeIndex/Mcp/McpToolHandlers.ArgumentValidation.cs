@@ -253,7 +253,7 @@ public partial class McpServer
                 "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" or
                 "rawKinds" or "orderBySize" or "rawBytes" or "byBucket" or "memoryTrace" or "watch" or
                 "estimateOnly" or "listRecipes" => "boolean",
-            "project" or "capability" or "scopes" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or
+            "project" or "capability" or "scopes" or "fields" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or
                 "commits" or "changedBetween" or "files" or
                 "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or "guardScope" or
