@@ -4720,6 +4720,14 @@ public partial class McpServer : IDisposable
                     });
             }
             language = DbReader.NormalizeQueryLanguage(parsedLanguage);
+            if (string.IsNullOrEmpty(language))
+            {
+                return CreateResourcesListFilterError(
+                    id,
+                    parameter: "lang",
+                    message: "resources/list params.lang must contain at least one letter or digit after normalization.",
+                    suggestion: "Use an indexed language name or alias such as `csharp`, `cs`, `typescript`, or `python`.");
+            }
         }
 
         var includeGenerated = false;

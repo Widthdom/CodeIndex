@@ -1743,6 +1743,8 @@ public sealed class Caller
             (new JsonObject { ["path"] = new string('*', McpServer.MaxResourceListPathFilterWildcards + 1) }, "path"),
             (new JsonObject { ["path"] = tooManyPaths }, "path"),
             (new JsonObject { ["lang"] = true }, "lang"),
+            (new JsonObject { ["lang"] = "-" }, "lang"),
+            (new JsonObject { ["lang"] = "." }, "lang"),
             (new JsonObject { ["includeGenerated"] = "true" }, "includeGenerated"),
         ];
 
