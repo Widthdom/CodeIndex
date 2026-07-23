@@ -57,6 +57,20 @@ public class TestProjectHelperTests
     }
 
     [Fact]
+    public void DeleteDirectory_RemovesNestedReadOnlyFixturesAfterFailureDrivenNormalization()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fixture_readonly_cleanup");
+        var nestedDirectory = TestProjectHelper.CreateDirectory(projectRoot, "nested");
+        var nestedFile = TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("nested", "readonly.txt"), "fixture\n");
+        File.SetAttributes(nestedFile, FileAttributes.ReadOnly);
+        File.SetAttributes(nestedDirectory, File.GetAttributes(nestedDirectory) | FileAttributes.ReadOnly);
+
+        TestProjectHelper.DeleteDirectory(projectRoot);
+
+        Assert.False(Directory.Exists(projectRoot));
+    }
+
+    [Fact]
     public void CreateExecutableExtensionTestProjectScope_UsesPlatformRootAndDeletesProject()
     {
         var configuredRoot = Environment.GetEnvironmentVariable(

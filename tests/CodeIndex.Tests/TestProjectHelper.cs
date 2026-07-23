@@ -334,8 +334,6 @@ internal static class TestProjectHelper
         if (!Directory.Exists(path))
             return;
 
-        ClearAttributes(path);
-
         for (int attempt = 0; attempt < 5; attempt++)
         {
             try
