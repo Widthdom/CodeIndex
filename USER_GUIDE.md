@@ -1716,6 +1716,8 @@ cdidx report --output report.tgz --json
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable stdout summary envelope (`output_path`, `version`, `artifact_format`, `artifact_media_type`, `recommended_extensions`, `json_metadata_stdout_only`, `warnings`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `last_failure_included`, `db_included`, `db_path`) instead of the human-friendly output. |
 
+In JSON mode, `output_path` is the generated artifact's basename so automation retains a safe handle even with `--redact-paths`; diagnostic paths such as `db_path` remain `[redacted]`.
+
 ## Search query syntax
 
 Default `cdidx search` is literal-safe unless you explicitly opt into raw FTS5:
@@ -4807,6 +4809,8 @@ cdidx report --output report.tgz --json
 | `--no-log` | | ライフサイクルログを完全に省略します。有効な保存済み `last-failure.json` イベントはライフサイクルログと独立しているため、引き続き同梱されます。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定した stdout summary JSON（`output_path` / `version` / `artifact_format` / `artifact_media_type` / `recommended_extensions` / `json_metadata_stdout_only` / `warnings` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `last_failure_included` / `db_included` / `db_path`）を出力します。 |
+
+JSON mode の `output_path` は生成した artifact の basename を返すため、`--redact-paths` を指定しても automation は安全な handle を保持できます。`db_path` などの診断用 path は引き続き `[redacted]` です。
 
 ## 検索クエリ構文
 
