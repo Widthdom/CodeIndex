@@ -1057,9 +1057,9 @@ public class ExportImportCommandRunnerTests
                     """;
                 insert.ExecuteNonQuery();
             }
-            var destinationBefore = File.ReadAllBytes(destinationDb);
-            var walBefore = File.ReadAllBytes(destinationDb + "-wal");
-            var shmBefore = File.ReadAllBytes(destinationDb + "-shm");
+            var destinationBefore = ReadSqliteArtifactBytes(destinationDb);
+            var walBefore = ReadSqliteArtifactBytes(destinationDb + "-wal");
+            var shmBefore = ReadSqliteArtifactBytes(destinationDb + "-shm");
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
             var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
@@ -1069,9 +1069,9 @@ public class ExportImportCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(destinationBefore, File.ReadAllBytes(destinationDb));
-            Assert.Equal(walBefore, File.ReadAllBytes(destinationDb + "-wal"));
-            Assert.Equal(shmBefore, File.ReadAllBytes(destinationDb + "-shm"));
+            Assert.Equal(destinationBefore, ReadSqliteArtifactBytes(destinationDb));
+            Assert.Equal(walBefore, ReadSqliteArtifactBytes(destinationDb + "-wal"));
+            Assert.Equal(shmBefore, ReadSqliteArtifactBytes(destinationDb + "-shm"));
             using var document = JsonDocument.Parse(stdout);
             var comparison = document.RootElement
                 .GetProperty("destination_delta")
@@ -1832,6 +1832,14 @@ public class ExportImportCommandRunnerTests
         command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
         command.Parameters.AddWithValue("@key", key);
         return command.ExecuteScalar() as string;
+    }
+
+    private static byte[] ReadSqliteArtifactBytes(string path)
+    {
+        using var stream = BoundedFile.OpenReadForIndexContent(path);
+        var bytes = new byte[checked((int)stream.Length)];
+        stream.ReadExactly(bytes);
+        return bytes;
     }
 
     private sealed class CancelAfterFirstReadStream(byte[] data, CancellationTokenSource cancellation) : Stream
