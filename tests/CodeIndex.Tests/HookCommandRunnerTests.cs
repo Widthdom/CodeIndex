@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using Microsoft.Data.Sqlite;
@@ -90,7 +91,7 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
-    public void Hooks_Install_RepairsNonExecutableManagedHook_Issue4716()
+    public void Hooks_Install_RepairsUnusableManagedHook_Issue4716()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -129,6 +130,28 @@ public class HookCommandRunnerTests
             Assert.NotEqual(
                 UnixFileMode.None,
                 File.GetUnixFileMode(hookPath) & UnixFileMode.UserExecute);
+
+            var managedHook = File.ReadAllText(hookPath);
+            File.WriteAllText(hookPath, managedHook, Encoding.Unicode);
+
+            var encodingPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, encodingPreview.ExitCode);
+            using (var document = JsonDocument.Parse(encodingPreview.StdOut))
+            {
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal([0xff, 0xfe], File.ReadAllBytes(hookPath)[..2]);
+
+            var encodingRepair = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, encodingRepair.ExitCode);
+            using (var document = JsonDocument.Parse(encodingRepair.StdOut))
+                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(Encoding.UTF8.GetBytes(managedHook), File.ReadAllBytes(hookPath));
         }
         finally
         {

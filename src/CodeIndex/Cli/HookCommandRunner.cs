@@ -152,7 +152,7 @@ public static class HookCommandRunner
             var existingHook = ReadHookFileWithinLimit(ioHookPath);
             if (existingHook is not null && IsManagedHook(existingHook))
             {
-                if (string.Equals(existingHook, hookScript, StringComparison.Ordinal)
+                if (IsExactHookScriptFile(ioHookPath, hookScript)
                     && IsExecutableHook(ioHookPath))
                 {
                     return WriteResult(
@@ -224,7 +224,7 @@ public static class HookCommandRunner
             var existingHook = ReadHookFileWithinLimit(ioHookPath);
             if (existingHook is not null && IsManagedHook(existingHook))
             {
-                if (string.Equals(existingHook, hookScript, StringComparison.Ordinal)
+                if (IsExactHookScriptFile(ioHookPath, hookScript)
                     && IsExecutableHook(ioHookPath))
                 {
                     status = "already_installed";
@@ -392,6 +392,16 @@ public static class HookCommandRunner
 
     private static string? ReadHookFileWithinLimit(string ioHookPath)
         => DataDirectorySecurity.ReadTextWithinLimit(ioHookPath, MaxHookMarkerBytes, FileShare.ReadWrite);
+
+    private static bool IsExactHookScriptFile(string ioHookPath, string hookScript)
+    {
+        var bytes = DataDirectorySecurity.ReadBytesWithinLimit(
+            ioHookPath,
+            MaxHookMarkerBytes,
+            FileShare.ReadWrite);
+        return bytes is not null
+            && bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(hookScript));
+    }
 
     private static void ReplaceCustomHookWithManagedHook(
         string hooksDir,
