@@ -544,9 +544,10 @@ internal static class ExportImportCommandRunner
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
 
-            long totalTagCount = 0;
             long emittedCount = 0;
-            var skipReasonCounts = CreateCtagsSkipReasonCounts();
+            var skipReasonCounts = wantsJson
+                ? CountCtagsSkipReasons(db.Connection, filters)
+                : null;
             WriteCtagsFile(fullOutputPath, writer =>
             {
                 writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
@@ -556,14 +557,6 @@ internal static class ExportImportCommandRunner
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    totalTagCount++;
-                    var skipReason = ExportImportSqliteRow.ReadNullableString(reader, 8);
-                    if (skipReason != null)
-                    {
-                        IncrementCtagsSkipReason(skipReasonCounts, skipReason);
-                        continue;
-                    }
-
                     var name = SanitizeCtagsField(reader.GetString(0));
                     var path = SanitizeCtagsField(reader.GetString(1));
                     var line = Math.Max(1, reader.GetInt32(2));
@@ -589,7 +582,8 @@ internal static class ExportImportCommandRunner
 
             if (wantsJson)
             {
-                var skippedCount = Math.Max(0, totalTagCount - emittedCount);
+                var skippedCount = skipReasonCounts!.Values.Sum();
+                var totalTagCount = emittedCount + skippedCount;
                 var result = new CtagsExportResult(
                     "1",
                     "success",
@@ -631,6 +625,34 @@ internal static class ExportImportCommandRunner
     private static SqliteCommand CreateCtagsSymbolCommand(SqliteConnection connection, CtagsExportOptions filters)
     {
         var cmd = connection.CreateCommand();
+        var sql = $"""
+            SELECT
+                s.name,
+                f.path,
+                COALESCE(s.start_line, s.line, 1),
+                s.kind,
+                f.lang,
+                s.container_kind,
+                s.container_name,
+                s.visibility
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE s.name IS NOT NULL
+              AND trim(s.name) != ''
+              AND s.kind IS NOT NULL
+              AND trim(s.kind) != ''
+              AND s.kind IN ({SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds)})
+            """;
+        AppendCtagsFilters(ref sql, filters);
+        sql += " ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
+        cmd.CommandText = sql;
+        AddCtagsFilterParameters(cmd, filters);
+        return cmd;
+    }
+
+    private static SqliteCommand CreateCtagsSkipReasonCommand(SqliteConnection connection, CtagsExportOptions filters)
+    {
+        var cmd = connection.CreateCommand();
         var skipReasonCases = new List<string>
         {
             $"WHEN s.name IS NULL OR trim(s.name) = '' THEN '{CtagsSkipInvalidName}'",
@@ -657,31 +679,27 @@ internal static class ExportImportCommandRunner
             skipReasonCases.Add($"WHEN ({string.Join(" OR ", excludePathPredicates)}) THEN '{CtagsSkipExcludePathFilter}'");
         }
 
-        var sql = $"""
-            SELECT
-                s.name,
-                f.path,
-                COALESCE(s.start_line, s.line, 1),
-                s.kind,
-                f.lang,
-                s.container_kind,
-                s.container_name,
-                s.visibility,
-                CASE
-                    {string.Join(Environment.NewLine + "                    ", skipReasonCases)}
-                    ELSE NULL
-                END
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)
+        cmd.CommandText = $"""
+            SELECT skip_reason, COUNT(*)
+            FROM (
+                SELECT
+                    CASE
+                        {string.Join(Environment.NewLine + "                        ", skipReasonCases)}
+                        ELSE NULL
+                    END AS skip_reason
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+            )
+            WHERE skip_reason IS NOT NULL
+            GROUP BY skip_reason
             """;
-        cmd.CommandText = sql;
         AddCtagsFilterParameters(cmd, filters);
         return cmd;
     }
 
-    private static Dictionary<string, long> CreateCtagsSkipReasonCounts()
-        => new(StringComparer.Ordinal)
+    private static Dictionary<string, long> CountCtagsSkipReasons(SqliteConnection connection, CtagsExportOptions filters)
+    {
+        var counts = new Dictionary<string, long>(StringComparer.Ordinal)
         {
             [CtagsSkipInvalidName] = 0,
             [CtagsSkipUnsupportedKind] = 0,
@@ -692,11 +710,38 @@ internal static class ExportImportCommandRunner
             [CtagsSkipExcludePathFilter] = 0,
             [CtagsSkipOther] = 0,
         };
+        using var cmd = CreateCtagsSkipReasonCommand(connection, filters);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var reason = reader.GetString(0);
+            var boundedReason = counts.ContainsKey(reason) ? reason : CtagsSkipOther;
+            counts[boundedReason] += reader.GetInt64(1);
+        }
+        return counts;
+    }
 
-    private static void IncrementCtagsSkipReason(Dictionary<string, long> counts, string reason)
+    private static void AppendCtagsFilters(ref string sql, CtagsExportOptions filters)
     {
-        var boundedReason = counts.ContainsKey(reason) ? reason : CtagsSkipOther;
-        counts[boundedReason]++;
+        if (filters.GeneratedFileFilterAvailable && !filters.IncludeGenerated)
+            sql += " AND COALESCE(f.generated, 0) = 0";
+
+        if (!string.IsNullOrWhiteSpace(filters.Lang))
+            sql += " AND f.lang = @lang";
+
+        if (filters.ExcludeTests)
+            sql += $" AND NOT {DbReader.TestPathCondition}";
+
+        if (filters.PathPatterns.Count > 0)
+        {
+            var pathPredicates = new List<string>(filters.PathPatterns.Count);
+            for (var i = 0; i < filters.PathPatterns.Count; i++)
+                pathPredicates.Add(DbReader.BuildPathFilterPredicate("f", "pathPattern", i, filters.PathPatterns[i]));
+            sql += " AND (" + string.Join(" OR ", pathPredicates) + ")";
+        }
+
+        for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
+            sql += $" AND NOT {DbReader.BuildPathFilterPredicate("f", "excludePathPattern", i, filters.ExcludePathPatterns[i])}";
     }
 
     private static void AddCtagsFilterParameters(SqliteCommand cmd, CtagsExportOptions filters)
