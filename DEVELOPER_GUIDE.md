@@ -423,6 +423,19 @@ inlay hints are emitted only when the indexed return type is not already written
 before the declaration identifier, so explicit method return, local, and field
 types remain suppressed.
 
+Document/workspace symbol providers advertise work-done support and honor
+bounded string/integer `partialResultToken` and `workDoneToken` values. Partial
+results preserve the provider's deterministic order and use `$/progress`
+notifications capped at 100 items and 64 KiB of JSON body each; document-symbol
+partial results deliberately use flat `SymbolInformation` items, while the
+token-free response keeps the existing hierarchical `DocumentSymbol` contract.
+The stdio reader and the single response worker are separated by a bounded
+queue, so `$/cancelRequest` can cancel an active or queued symbol request without
+making database-backed request processing concurrent. Cancellation IDs retain
+their JSON type, cancelled requests end work-done progress and return `-32800`,
+and every result/progress cap is surfaced through the work-done end message or a
+bounded `window/logMessage` warning.
+
 ### Extractor performance contract
 
 Symbol and reference extractors run during `cdidx index`, so language-specific
@@ -3310,6 +3323,17 @@ identifier を確認して、古い不正確な column にも対応する。sour
 保存済み column に fallback し、column も無い場合だけ character 0 を使う。type inlay hint は
 indexed return type が declaration identifier の前に明示されていない場合だけ返すため、method の
 明示 return type、local、field の明示型は表示しない。
+
+document/workspace symbol provider は work-done 対応を advertise し、上限付きの string /
+integer `partialResultToken` と `workDoneToken` を処理する。partial result は provider の
+決定的な順序を維持し、1 notification あたり最大100 item・64 KiB JSON body の
+`$/progress` で送る。document-symbol の partial result は意図的に flat な
+`SymbolInformation` item を使い、token のない response は既存の階層化された
+`DocumentSymbol` contract を維持する。stdio reader と単一 response worker は上限付き queue
+で分離するため、database-backed request processing を並行化せずに `$/cancelRequest` で active
+または queued symbol request を cancel できる。cancellation ID は JSON 型を保持し、cancel
+された request は work-done progress を終了して `-32800` を返す。result / progress cap は
+work-done の end message または上限付き `window/logMessage` warning で必ず通知する。
 
 ### 抽出器の性能契約
 

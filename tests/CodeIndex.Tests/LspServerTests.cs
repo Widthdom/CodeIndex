@@ -264,7 +264,8 @@ public class LspServerTests
             Assert.True(capabilities["declarationProvider"]!.GetValue<bool>());
             Assert.Null(capabilities["typeDefinitionProvider"]);
             Assert.Null(capabilities["implementationProvider"]);
-            Assert.True(capabilities["documentSymbolProvider"]!.GetValue<bool>());
+            Assert.True(capabilities["documentSymbolProvider"]!["workDoneProgress"]!.GetValue<bool>());
+            Assert.True(capabilities["workspaceSymbolProvider"]!["workDoneProgress"]!.GetValue<bool>());
             Assert.True(capabilities["hoverProvider"]!.GetValue<bool>());
             Assert.True(capabilities["documentHighlightProvider"]!.GetValue<bool>());
             Assert.Equal(1, capabilities["textDocumentSync"]!["change"]!.GetValue<int>());
@@ -1044,6 +1045,236 @@ public class LspServerTests
 
             Assert.NotNull(response);
             Assert.Equal(2, response!["result"]!.AsArray().Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DocumentSymbol_StreamsBoundedPartialResultsAndWorkDoneProgress_Issue4721()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_progress");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "progress.cs");
+            var source = new StringBuilder("class ProgressSymbols\n{\n");
+            for (var i = 0; i < LspServer.MaxSymbolProgressChunkItems; i++)
+                source.Append("    void Method").Append(i.ToString("D3", CultureInfo.InvariantCulture)).Append("() { }\n");
+            source.Append("}\n");
+            File.WriteAllText(sourcePath, source.ToString());
+            TestProjectHelper.InsertIndexedFile(dbPath, "progress.cs", "csharp", source.ToString());
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 4721,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                    partialResultToken = "document-partial-4721",
+                    workDoneToken = 4721,
+                },
+            });
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(request)));
+            using var output = new MemoryStream();
+
+            var exitCode = server.Run(input, output);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var messages = ReadLspMessages(output);
+            var partialMessages = messages
+                .Where(entry => HasProgressToken(entry.Message, "document-partial-4721"))
+                .ToArray();
+            Assert.True(partialMessages.Length > 1);
+            Assert.All(partialMessages, entry =>
+            {
+                Assert.InRange(entry.Message["params"]!["value"]!.AsArray().Count, 1, LspServer.MaxSymbolProgressChunkItems);
+                Assert.InRange(entry.BodyBytes, 1, LspServer.MaxSymbolProgressChunkBytes);
+            });
+
+            var names = partialMessages
+                .SelectMany(entry => entry.Message["params"]!["value"]!.AsArray())
+                .Select(symbol => symbol!["name"]!.GetValue<string>())
+                .ToArray();
+            var expectedNames = new[] { "ProgressSymbols" }
+                .Concat(Enumerable.Range(0, LspServer.MaxSymbolProgressChunkItems)
+                    .Select(i => $"Method{i:D3}"))
+                .ToArray();
+            Assert.Equal(expectedNames, names);
+
+            var workDoneValues = messages
+                .Where(entry => HasProgressToken(entry.Message, 4721))
+                .Select(entry => entry.Message["params"]!["value"]!.AsObject())
+                .ToArray();
+            Assert.Equal("begin", workDoneValues[0]["kind"]!.GetValue<string>());
+            Assert.Contains(workDoneValues, value => value["kind"]!.GetValue<string>() == "report");
+            Assert.Equal("end", workDoneValues[^1]["kind"]!.GetValue<string>());
+            Assert.Contains("Returned 101 symbols", workDoneValues[^1]["message"]!.GetValue<string>(), StringComparison.Ordinal);
+
+            var response = Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 4721);
+            Assert.True(response.Message.ContainsKey("result"));
+            Assert.Null(response.Message["result"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WorkspaceSymbol_SurfacesPartialResultTruncation_Issue4721()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_symbol_progress");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 3; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"needle{i}.cs",
+                    "csharp",
+                    $"class Needle{i} {{ }}\n");
+            }
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 47210,
+                method = "workspace/symbol",
+                @params = new
+                {
+                    query = "Needle",
+                    limit = 2,
+                    partialResultToken = "workspace-partial-4721",
+                },
+            });
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(request)));
+            using var output = new MemoryStream();
+
+            Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
+
+            var messages = ReadLspMessages(output);
+            var partial = Assert.Single(messages, entry => HasProgressToken(entry.Message, "workspace-partial-4721"));
+            Assert.Equal(
+                ["Needle0", "Needle1"],
+                partial.Message["params"]!["value"]!.AsArray()
+                    .Select(symbol => symbol!["name"]!.GetValue<string>())
+                    .ToArray());
+            var warning = Assert.Single(
+                messages,
+                entry => entry.Message["method"]?.GetValue<string>() == "window/logMessage");
+            Assert.Contains(
+                "truncated",
+                warning.Message["params"]!["message"]!.GetValue<string>(),
+                StringComparison.OrdinalIgnoreCase);
+            var response = Assert.Single(messages, entry => entry.Message["id"]?.GetValue<int>() == 47210);
+            Assert.True(response.Message.ContainsKey("result"));
+            Assert.Null(response.Message["result"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DocumentSymbol_CancelRequestEndsProgressAndReturnsCancellationError_Issue4721()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_cancel");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "cancel.cs");
+            const string source = "class CancelSymbols { void Method() { } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "cancel.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = "request-4721",
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                    partialResultToken = "partial-cancel-4721",
+                    workDoneToken = "work-cancel-4721",
+                },
+            });
+            var cancel = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                method = "$/cancelRequest",
+                @params = new { id = "request-4721" },
+            });
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(request) + Frame(cancel)));
+            using var output = new MemoryStream();
+
+            Assert.Equal(CommandExitCodes.Success, server.Run(input, output));
+
+            var messages = ReadLspMessages(output);
+            var workDoneValues = messages
+                .Where(entry => HasProgressToken(entry.Message, "work-cancel-4721"))
+                .Select(entry => entry.Message["params"]!["value"]!.AsObject())
+                .ToArray();
+            Assert.Equal(["begin", "end"], workDoneValues.Select(value => value["kind"]!.GetValue<string>()).ToArray());
+            Assert.Contains("Cancelled", workDoneValues[^1]["message"]!.GetValue<string>(), StringComparison.Ordinal);
+            var response = Assert.Single(
+                messages,
+                entry => entry.Message["id"]?.GetValue<string>() == "request-4721");
+            Assert.Equal(-32800, response.Message["error"]!["code"]!.GetValue<int>());
+            Assert.Equal("Request cancelled", response.Message["error"]!["message"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_SymbolProgressTokensRejectUnboundedOrStructuredValues_Issue4721()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_symbol_progress_token");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var requests = new[]
+            {
+                """
+                {"jsonrpc":"2.0","id":47211,"method":"workspace/symbol","params":{"query":"","partialResultToken":{}}}
+                """,
+                JsonSerializer.Serialize(new
+                {
+                    jsonrpc = "2.0",
+                    id = 47212,
+                    method = "workspace/symbol",
+                    @params = new
+                    {
+                        query = "",
+                        workDoneToken = new string('t', LspServer.MaxRequestIdStringChars + 1),
+                    },
+                }),
+            };
+
+            foreach (var request in requests)
+            {
+                var response = server.HandleMessage(request);
+                Assert.NotNull(response);
+                Assert.Equal(-32602, response!["error"]!["code"]!.GetValue<int>());
+                Assert.Equal("Invalid params", response["error"]!["message"]!.GetValue<string>());
+            }
         }
         finally
         {
@@ -2726,6 +2957,32 @@ public class LspServerTests
 
     private static string Frame(string payload) =>
         $"Content-Length: {Encoding.UTF8.GetByteCount(payload)}\r\n\r\n{payload}";
+
+    private static List<(JsonObject Message, int BodyBytes)> ReadLspMessages(MemoryStream output)
+    {
+        output.Position = 0;
+        var messages = new List<(JsonObject, int)>();
+        while (LspServer.TryReadMessage(output, out var payload))
+        {
+            var message = JsonNode.Parse(payload)?.AsObject()
+                ?? throw new InvalidDataException("Expected an object-shaped LSP message.");
+            messages.Add((message, Encoding.UTF8.GetByteCount(payload)));
+        }
+
+        return messages;
+    }
+
+    private static bool HasProgressToken(JsonObject message, string expected) =>
+        message["method"]?.GetValue<string>() == "$/progress"
+        && message["params"]?["token"] is JsonValue token
+        && token.TryGetValue<string>(out var actual)
+        && string.Equals(actual, expected, StringComparison.Ordinal);
+
+    private static bool HasProgressToken(JsonObject message, long expected) =>
+        message["method"]?.GetValue<string>() == "$/progress"
+        && message["params"]?["token"] is JsonValue token
+        && token.TryGetValue<long>(out var actual)
+        && actual == expected;
 
     private static string CreateReferencesRequest(string sourcePath, int id, int line, int character, bool includeDeclaration = false) =>
         JsonSerializer.Serialize(new
