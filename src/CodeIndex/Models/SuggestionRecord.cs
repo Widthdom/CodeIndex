@@ -89,6 +89,18 @@ public class SuggestionRecord
     /// <summary>Current lifecycle status / 現在のライフサイクル状態</summary>
     public SuggestionStatus Status { get; set; } = SuggestionStatus.Draft;
 
+    /// <summary>Status before the most recent audited transition / 直近の監査済み遷移前の状態</summary>
+    public SuggestionStatus? PreviousStatus { get; set; }
+
+    /// <summary>UTC timestamp of the most recent audited status transition / 直近の監査済み状態遷移のUTCタイムスタンプ</summary>
+    public DateTime? StatusChangedAt { get; set; }
+
+    /// <summary>Actor that performed the most recent audited status transition / 直近の監査済み状態遷移を実行した主体</summary>
+    public string? StatusChangedBy { get; set; }
+
+    /// <summary>Optional reason for the most recent audited status transition / 直近の監査済み状態遷移の任意理由</summary>
+    public string? StatusChangeReason { get; set; }
+
     /// <summary>Agent or client identity that created the suggestion / 提案を作成したエージェントまたはクライアントID</summary>
     public string CreatedByAgent { get; set; } = "unknown";
 

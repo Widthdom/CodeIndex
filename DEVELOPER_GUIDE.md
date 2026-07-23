@@ -1468,7 +1468,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 | [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues API client (best-effort) |
 | [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` handler |
 | [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | Tool schema definition |
-| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | Local suggestion listing, export, issue-draft generation, and open-issue duplicate preflight |
+| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | Local suggestion listing, audited lifecycle transitions, bounded atomic export, issue-draft generation, and open-issue duplicate preflight |
 
 ### What is sent (when GitHub token is configured)
 
@@ -1495,7 +1495,11 @@ Local suggestion retention is bounded by `CDIDX_SUGGESTION_MAX_AGE_DAYS` and `CD
 
 ### Local lifecycle fields
 
-Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. Every GitHub submission attempt also stamps `last_submit_attempt`, increments `submit_attempt_count`, and records `last_submit_error` on failure; success clears the last error. GitHub rate-limit responses also stamp `next_retry_at`, and duplicate unsubmitted suggestions are not retried until that timestamp has passed. The remaining additive states are reserved for follow-up sync/listing flows: `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, and `superseded`. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
+Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. Every GitHub submission attempt also stamps `last_submit_attempt`, increments `submit_attempt_count`, and records `last_submit_error` on failure; success clears the last error. GitHub rate-limit responses also stamp `next_retry_at`, and duplicate unsubmitted suggestions are not retried until that timestamp has passed. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
+
+`SuggestionStore.TryTransitionStatus` is the atomic manual-transition boundary used by `suggestions update <id> --status <state>`. `submitted_pending_triage` is automatic-only. `open_in_upstream` and `resolved_in_upstream` require existing upstream evidence; `draft` requires the absence of upstream evidence; and `wont_fix`, `duplicate`, or `superseded` are local maintainer dispositions. Local dispositions suppress automatic duplicate resubmission without setting `AlreadySubmitted` or an upstream-submission response flag. Same-state transitions and transitions during an active submission reservation fail closed. The store rechecks the expected revision under its file lock, stamps the latest `previous_status`, UTC `status_changed_at`, bounded/redacted `status_changed_by`, and optional bounded/redacted `status_change_reason`, updates `resolved_at` for `resolved_in_upstream`, and recomputes `revision_hash`. Full audit values are redacted before a surrogate-safe final cap so a credential crossing the cap boundary cannot evade redaction. Content edits and lifecycle transitions are separate CLI operations so one audit event has one unambiguous meaning.
+
+`suggestions export --format markdown|issue-drafts --output <path>` renders the bounded payload in memory, rejects payloads over 16 MiB before writing, and refuses the selected database or suggestion-store path. For existing files it compares filesystem identities as well as normalized path spelling, so symlinked parents, mount aliases, and hard links cannot bypass source protection. Existing destinations are rejected unless `--overwrite` is explicit. Publication uses a sibling temporary file, flushes its contents, and performs a same-filesystem no-overwrite move or atomic replacement; failed publication cleans the temporary file. The writer emits UTF-8 without a BOM, creates missing parent directories, and keeps JSON-format suggestion exports on stdout. Tests cover the store transition/revision contract, CLI validation and filtering, source-target alias rejection, no-overwrite race safety, replacement, and temporary-file cleanup.
 
 ### GitHub retry idempotency
 
@@ -4401,7 +4405,7 @@ Unlist しても exact version restore は不可能になりません。これ�
 | [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues APIクライアント（ベストエフォート） |
 | [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` ハンドラ |
 | [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | ツールスキーマ定義 |
-| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | ローカル提案の一覧、export、issue draft 生成、open issue duplicate preflight |
+| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | ローカル提案の一覧、監査付き lifecycle 遷移、上限付き原子的 export、issue draft 生成、open issue duplicate preflight |
 
 ### 送信されるデータ（GitHubトークン設定時）
 
@@ -4428,7 +4432,11 @@ suggestion sidecar は `DataDirectorySecurity.ResolveSensitiveSidecarDirectoryFo
 
 ### ローカルライフサイクルフィールド
 
-ローカルの提案レコードは、送信済みかどうかの二値フラグではなく `status` ライフサイクルフィールドを使う。新規レコードは `draft` で始まり、GitHub への送信が成功すると `submitted_pending_triage` へ移行し、判明している範囲で `upstream_url`、`upstream_issue_number`、`last_synced_at` を記録する。GitHub 送信を試みるたびに `last_submit_attempt` を stamp し、`submit_attempt_count` を増やし、失敗時は `last_submit_error` を記録します。成功時は最後の error を clear します。GitHub の rate-limit 応答では `next_retry_at` も記録し、未送信の重複提案はその時刻を過ぎるまで再送しない。残りの追加状態は後続の sync / listing フロー向けに予約されている: `open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded`。`submitted_to_github` / `github_issue_url` を含む古いレコードは、読み取り時に新しいライフサイクルフィールドへ正規化される。
+ローカルの提案レコードは、送信済みかどうかの二値フラグではなく `status` ライフサイクルフィールドを使う。新規レコードは `draft` で始まり、GitHub への送信が成功すると `submitted_pending_triage` へ移行し、判明している範囲で `upstream_url`、`upstream_issue_number`、`last_synced_at` を記録する。GitHub 送信を試みるたびに `last_submit_attempt` を stamp し、`submit_attempt_count` を増やし、失敗時は `last_submit_error` を記録します。成功時は最後の error を clear します。GitHub の rate-limit 応答では `next_retry_at` も記録し、未送信の重複提案はその時刻を過ぎるまで再送しない。`submitted_to_github` / `github_issue_url` を含む古いレコードは、読み取り時に新しいライフサイクルフィールドへ正規化される。
+
+`SuggestionStore.TryTransitionStatus` は `suggestions update <id> --status <state>` が使う原子的な手動遷移境界です。`submitted_pending_triage` は自動設定専用です。`open_in_upstream` と `resolved_in_upstream` には既存の upstream 根拠が必要で、`draft` には upstream 根拠がないことが必要です。`wont_fix`、`duplicate`、`superseded` はメンテナーによるローカルの判断です。ローカルの判断は重複提案の自動再送を抑止しますが、`AlreadySubmitted` や upstream 送信済み response flag は設定しません。同じ状態への遷移、および送信 reservation が active な間の遷移は fail closed になります。store は file lock 内で expected revision を再確認し、最新の `previous_status`、UTC の `status_changed_at`、上限・redaction 付きの `status_changed_by`、任意の上限・redaction 付き `status_change_reason` を stamp し、`resolved_in_upstream` では `resolved_at` を更新して、`revision_hash` を再計算します。監査値全体を redaction してから surrogate-safe な最終上限を適用するため、上限境界をまたぐ credential も redaction を回避できません。1件の監査 event の意味を曖昧にしないため、content 編集と lifecycle 遷移は別々の CLI 操作です。
+
+`suggestions export --format markdown|issue-drafts --output <path>` は上限付き payload をメモリ上で描画し、書き込み前に 16 MiB 超過を拒否し、選択中の database または suggestion-store path も拒否します。既存ファイルでは正規化した path 表記に加えて filesystem identity も比較するため、symlink 付き親 directory、mount alias、hard link で source 保護を迂回できません。既存の出力先は `--overwrite` を明示しない限り拒否します。公開処理は兄弟一時ファイルを使い、内容を flush してから同一 filesystem 上で no-overwrite move または原子的置換を行い、失敗時は一時ファイルを片付けます。writer は BOM なし UTF-8 を出力し、不足している親 directory を作成し、JSON 形式の suggestion export は stdout のままです。test は store の遷移・revision 契約、CLI validation と filtering、source target alias 拒否、no-overwrite の race safety、置換、一時ファイル cleanup を網羅します。
 
 ### GitHub 再試行の冪等性
 

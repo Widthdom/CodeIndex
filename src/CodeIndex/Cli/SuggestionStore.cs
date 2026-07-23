@@ -21,6 +21,8 @@ namespace CodeIndex.Cli;
 /// </summary>
 public class SuggestionStore
 {
+    internal const int MaxStatusChangedByLength = 256;
+    internal const int MaxStatusChangeReasonLength = 2048;
     private readonly string _filePath;
     private readonly string _lockPath;
     private readonly TimeProvider _timeProvider;
@@ -116,6 +118,8 @@ public class SuggestionStore
     {
     }
 
+    internal string FilePath => _filePath;
+
     internal SuggestionStore(string cdidxDir, string? dbName, TimeProvider timeProvider)
     {
         // Derive a safe store filename from the DB identity.
@@ -157,6 +161,11 @@ public class SuggestionStore
         AppendRevisionValue(normalized, record.SampledTitle);
         AppendRevisionValues(normalized, record.SampledTags);
         AppendRevisionValues(normalized, record.EvidencePaths);
+        AppendRevisionValue(normalized, record.Status.ToString());
+        AppendRevisionValue(normalized, record.PreviousStatus?.ToString());
+        AppendRevisionValue(normalized, record.StatusChangedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+        AppendRevisionValue(normalized, record.StatusChangedBy);
+        AppendRevisionValue(normalized, record.StatusChangeReason);
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized.ToString()));
         return HexEncoding.ToLowerHexString(hashBytes);
     }
@@ -221,6 +230,7 @@ public class SuggestionStore
         NotDraft,
         SubmissionInFlight,
         RevisionConflict,
+        InvalidTransition,
     }
 
     /// <summary>
@@ -242,17 +252,15 @@ public class SuggestionStore
             var index = records.FindIndex(record => string.Equals(record.Id, id, StringComparison.Ordinal));
             if (index < 0)
                 return MutationResult.NotFound;
-            if (HasUpstreamSubmission(records[index]))
+            if (!IsEditableDraft(records[index]))
                 return MutationResult.NotDraft;
             if (IsSubmissionInFlight(records[index]))
                 return MutationResult.SubmissionInFlight;
             if (!string.Equals(records[index].RevisionHash, expectedRevisionHash, StringComparison.Ordinal))
                 return MutationResult.RevisionConflict;
 
-            replacement = RedactRecordForPersistence(replacement);
-            NormalizeRecordIdentity(replacement);
-            replacement.Id = records[index].Id;
-            replacement.Hash = records[index].Id;
+            replacement = RedactRecordForPersistence(
+                CreateContentReplacement(records[index], replacement));
             var otherRecords = records.Where((_, candidateIndex) => candidateIndex != index).ToList();
             if (FindDuplicate(otherRecords, replacement, ResolveDedupThreshold()).Record != null)
                 return MutationResult.Duplicate;
@@ -284,6 +292,51 @@ public class SuggestionStore
     }
 
     /// <summary>
+    /// Atomically applies one validated lifecycle transition and stamps bounded audit metadata.
+    /// 検証済みの lifecycle 遷移を1件だけ原子的に適用し、上限付き監査 metadata を記録する。
+    /// </summary>
+    public MutationResult TryTransitionStatus(
+        string id,
+        string expectedRevisionHash,
+        SuggestionStatus targetStatus,
+        string changedBy,
+        string? reason,
+        out SuggestionRecord? updated)
+    {
+        SuggestionRecord? result = null;
+        var mutationResult = WithFileLock(() =>
+        {
+            var records = ReadUnlocked();
+            var index = records.FindIndex(record => string.Equals(record.Id, id, StringComparison.Ordinal));
+            if (index < 0)
+                return MutationResult.NotFound;
+            if (IsSubmissionInFlight(records[index]))
+                return MutationResult.SubmissionInFlight;
+            if (!string.Equals(records[index].RevisionHash, expectedRevisionHash, StringComparison.Ordinal))
+                return MutationResult.RevisionConflict;
+
+            var record = records[index];
+            if (!CanTransitionStatus(record, targetStatus))
+                return MutationResult.InvalidTransition;
+
+            var changedAt = GetUtcNow();
+            record.PreviousStatus = record.Status;
+            record.Status = targetStatus;
+            record.StatusChangedAt = changedAt;
+            record.StatusChangedBy = string.IsNullOrWhiteSpace(changedBy) ? "cdidx-cli" : changedBy;
+            record.StatusChangeReason = reason;
+            record.ResolvedAt = targetStatus == SuggestionStatus.ResolvedInUpstream ? changedAt : null;
+            record = RedactRecordForPersistence(record);
+            records[index] = record;
+            SaveUnlocked(records);
+            result = record;
+            return MutationResult.Success;
+        });
+        updated = result;
+        return mutationResult;
+    }
+
+    /// <summary>
     /// Atomically removes a stored suggestion when its immutable ID and expected revision match.
     /// 不変 ID と expected revision が一致する場合に保存済み提案を原子的に削除する。
     /// </summary>
@@ -299,7 +352,7 @@ public class SuggestionStore
             var index = records.FindIndex(record => string.Equals(record.Id, id, StringComparison.Ordinal));
             if (index < 0)
                 return MutationResult.NotFound;
-            if (HasUpstreamSubmission(records[index]))
+            if (!IsEditableDraft(records[index]))
                 return MutationResult.NotDraft;
             if (IsSubmissionInFlight(records[index]))
                 return MutationResult.SubmissionInFlight;
@@ -341,7 +394,8 @@ public class SuggestionStore
         string? DuplicateOfHash = null,
         double? DuplicateScore = null,
         string? StoredHash = null,
-        string? StoredRevisionHash = null);
+        string? StoredRevisionHash = null,
+        bool SubmissionSuppressed = false);
 
     /// <summary>
     /// Result of a GitHub submission attempt.
@@ -440,7 +494,11 @@ public class SuggestionStore
             }
 
             var current = found!;
-            if (!alreadySubmitted && submitToGitHub != null && ShouldAttemptSubmit(current))
+            var submissionSuppressed = IsLocalDisposition(current);
+            if (!alreadySubmitted
+                && !submissionSuppressed
+                && submitToGitHub != null
+                && ShouldAttemptSubmit(current))
             {
                 var attemptedAt = GetUtcNow();
                 StampSubmitAttempt(current, attemptedAt, null, attemptedAt.Add(s_inFlightSubmitRetryDelay));
@@ -448,6 +506,7 @@ public class SuggestionStore
                 return new SubmitReservation(
                     isNew,
                     alreadySubmitted,
+                    submissionSuppressed,
                     current.Id,
                     current.RevisionHash,
                     current.Status,
@@ -464,6 +523,7 @@ public class SuggestionStore
             return new SubmitReservation(
                 isNew,
                 alreadySubmitted,
+                submissionSuppressed,
                 current.Id,
                 current.RevisionHash,
                 current.Status,
@@ -485,7 +545,8 @@ public class SuggestionStore
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore,
                 reservation.Id,
-                reservation.RevisionHash);
+                reservation.RevisionHash,
+                reservation.SubmissionSuppressed);
         }
 
         SubmitAttemptResult submitResult;
@@ -517,7 +578,8 @@ public class SuggestionStore
                     reservation.DuplicateOfHash,
                     reservation.DuplicateScore,
                     reservation.Id,
-                    reservation.RevisionHash);
+                    reservation.RevisionHash,
+                    reservation.SubmissionSuppressed);
             }
 
             var issueUrl = submitResult.IssueUrl;
@@ -536,7 +598,8 @@ public class SuggestionStore
                     reservation.DuplicateOfHash,
                     reservation.DuplicateScore,
                     found.Id,
-                    found.RevisionHash);
+                    found.RevisionHash,
+                    reservation.SubmissionSuppressed);
             }
 
             var persistedSubmitError = StampSubmitResult(found, submitResult);
@@ -553,7 +616,8 @@ public class SuggestionStore
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore,
                 found.Id,
-                found.RevisionHash);
+                found.RevisionHash,
+                reservation.SubmissionSuppressed);
         });
     }
 
@@ -992,15 +1056,55 @@ public class SuggestionStore
     }
 
     private static bool HasUpstreamSubmission(SuggestionRecord record) =>
-        record.Status != SuggestionStatus.Draft
+        record.Status is SuggestionStatus.SubmittedPendingTriage
+            or SuggestionStatus.OpenInUpstream
+            or SuggestionStatus.ResolvedInUpstream
         || record.SubmittedToGitHub == true
         || record.UpstreamIssueNumber != null
         || !string.IsNullOrWhiteSpace(record.UpstreamUrl)
         || !string.IsNullOrWhiteSpace(record.GitHubIssueUrl);
 
+    private static bool IsLocalDisposition(SuggestionRecord record) =>
+        record.Status is SuggestionStatus.WontFix
+            or SuggestionStatus.Duplicate
+            or SuggestionStatus.Superseded;
+
+    private static bool IsEditableDraft(SuggestionRecord record) =>
+        record.Status == SuggestionStatus.Draft
+        && !HasUpstreamSubmission(record);
+
+    private static bool HasUpstreamReference(SuggestionRecord record) =>
+        (record.Status is SuggestionStatus.SubmittedPendingTriage
+            or SuggestionStatus.OpenInUpstream
+            or SuggestionStatus.ResolvedInUpstream)
+        || record.SubmittedToGitHub == true
+        || record.UpstreamIssueNumber != null
+        || !string.IsNullOrWhiteSpace(record.UpstreamUrl)
+        || !string.IsNullOrWhiteSpace(record.GitHubIssueUrl);
+
+    private static bool CanTransitionStatus(SuggestionRecord record, SuggestionStatus targetStatus)
+    {
+        if (record.Status == targetStatus || targetStatus == SuggestionStatus.SubmittedPendingTriage)
+            return false;
+
+        if (targetStatus == SuggestionStatus.Draft)
+            return !HasUpstreamReference(record);
+
+        if (targetStatus is SuggestionStatus.OpenInUpstream or SuggestionStatus.ResolvedInUpstream)
+            return HasUpstreamReference(record);
+
+        return targetStatus is SuggestionStatus.WontFix
+            or SuggestionStatus.Duplicate
+            or SuggestionStatus.Superseded;
+    }
+
     private static void MarkSubmitted(SuggestionRecord record, string issueUrl, DateTime timestamp)
     {
+        record.PreviousStatus = record.Status;
         record.Status = SuggestionStatus.SubmittedPendingTriage;
+        record.StatusChangedAt = timestamp;
+        record.StatusChangedBy = "github_submission";
+        record.StatusChangeReason = "GitHub issue submission succeeded.";
         record.UpstreamUrl = issueUrl;
         record.UpstreamIssueNumber = TryParseIssueNumber(issueUrl);
         record.LastSyncedAt = timestamp;
@@ -1008,6 +1112,7 @@ public class SuggestionStore
         record.NextRetryAt = null;
         record.SubmittedToGitHub = null;
         record.GitHubIssueUrl = null;
+        record.RevisionHash = ComputeRevisionHash(record);
     }
 
     private bool ShouldAttemptSubmit(SuggestionRecord record)
@@ -1253,6 +1358,10 @@ public class SuggestionStore
         Hash = record.Hash,
         CreatedAt = record.CreatedAt,
         Status = record.Status,
+        PreviousStatus = record.PreviousStatus,
+        StatusChangedAt = record.StatusChangedAt,
+        StatusChangedBy = record.StatusChangedBy,
+        StatusChangeReason = record.StatusChangeReason,
         CreatedByAgent = record.CreatedByAgent,
         SessionId = record.SessionId,
         ClientVersion = record.ClientVersion,
@@ -1276,6 +1385,24 @@ public class SuggestionStore
         GitHubIssueUrl = record.GitHubIssueUrl,
     };
 
+    private static SuggestionRecord CreateContentReplacement(
+        SuggestionRecord current,
+        SuggestionRecord requested)
+    {
+        var replacement = CloneForSubmit(current);
+        replacement.Category = requested.Category;
+        replacement.Language = requested.Language;
+        replacement.Description = requested.Description;
+        replacement.Context = requested.Context;
+        replacement.Agent = requested.Agent;
+        replacement.ToolInvocationContext = requested.ToolInvocationContext;
+        replacement.SampledTitle = requested.SampledTitle;
+        replacement.SampledTags = requested.SampledTags?.ToArray();
+        replacement.EvidencePaths = requested.EvidencePaths?.ToArray();
+        replacement.RevisionHash = ComputeRevisionHash(replacement);
+        return replacement;
+    }
+
     internal static string RedactSensitiveText(string text, out IReadOnlyCollection<string> redactedTypes)
         => DiagnosticRedactor.RedactSuggestionText(text, out redactedTypes);
 
@@ -1286,15 +1413,27 @@ public class SuggestionStore
         var redactedToolInvocationContext = RedactNullable(record.ToolInvocationContext, out var toolInvocationTypes);
         var redactedSampledTitle = RedactNullable(record.SampledTitle, out var sampledTitleTypes);
         var redactedSampledTags = RedactArray(record.SampledTags, out var sampledTagTypes);
+        var redactedStatusChangedBy = RedactAndBoundAuditValue(
+            record.StatusChangedBy,
+            MaxStatusChangedByLength,
+            out var statusChangedByTypes);
+        var redactedStatusChangeReason = RedactAndBoundAuditValue(
+            record.StatusChangeReason,
+            MaxStatusChangeReasonLength,
+            out var statusChangeReasonTypes);
         var allTypes = descriptionTypes
             .Concat(contextTypes)
             .Concat(toolInvocationTypes)
             .Concat(sampledTitleTypes)
             .Concat(sampledTagTypes)
+            .Concat(statusChangedByTypes)
+            .Concat(statusChangeReasonTypes)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
+        record.StatusChangedBy = redactedStatusChangedBy;
+        record.StatusChangeReason = redactedStatusChangeReason;
         if (allTypes.Length == 0)
         {
             record.RevisionHash = ComputeRevisionHash(record);
@@ -1308,6 +1447,8 @@ public class SuggestionStore
         copy.ToolInvocationContext = redactedToolInvocationContext;
         copy.SampledTitle = redactedSampledTitle;
         copy.SampledTags = redactedSampledTags;
+        copy.StatusChangedBy = redactedStatusChangedBy;
+        copy.StatusChangeReason = redactedStatusChangeReason;
         copy.RevisionHash = ComputeRevisionHash(copy);
         return copy;
     }
@@ -1356,6 +1497,28 @@ public class SuggestionStore
         return redacted;
     }
 
+    private static string? RedactAndBoundAuditValue(
+        string? value,
+        int maxLength,
+        out IReadOnlyCollection<string> redactedTypes)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            redactedTypes = Array.Empty<string>();
+            return null;
+        }
+
+        var redacted = RedactSensitiveText(normalized, out redactedTypes);
+        if (redacted.Length <= maxLength)
+            return redacted;
+
+        var boundedLength = maxLength;
+        if (boundedLength > 0 && char.IsHighSurrogate(redacted[boundedLength - 1]))
+            boundedLength--;
+        return redacted[..boundedLength];
+    }
+
     private static void WriteRedactionWarning(IReadOnlyCollection<string> redactedTypes)
     {
         try
@@ -1370,6 +1533,7 @@ public class SuggestionStore
     private sealed record SubmitReservation(
         bool IsNew,
         bool AlreadySubmitted,
+        bool SubmissionSuppressed,
         string Id,
         string RevisionHash,
         SuggestionStatus Status,
@@ -1424,7 +1588,6 @@ public class SuggestionStore
 
     private static void NormalizeLegacyFields(SuggestionRecord record)
     {
-        NormalizeRecordIdentity(record);
         if (record.SubmittedToGitHub == true && record.Status == SuggestionStatus.Draft)
             record.Status = SuggestionStatus.SubmittedPendingTriage;
 
@@ -1436,6 +1599,7 @@ public class SuggestionStore
 
         record.SubmittedToGitHub = null;
         record.GitHubIssueUrl = null;
+        NormalizeRecordIdentity(record);
     }
 
     private static int? TryParseIssueNumber(string issueUrl)

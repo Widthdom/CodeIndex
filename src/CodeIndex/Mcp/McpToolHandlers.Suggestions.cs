@@ -372,6 +372,8 @@ public partial class McpServer
     {
         if (result.AlreadySubmitted || result.UpstreamUrl != null)
             return "submitted";
+        if (result.SubmissionSuppressed)
+            return "local_disposition";
         if (!githubTokenConfigured)
             return "token_not_configured";
         if (result.SubmissionError != null)
