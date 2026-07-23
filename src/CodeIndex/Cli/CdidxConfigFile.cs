@@ -29,7 +29,7 @@ internal static class CdidxConfigFile
     internal const string FileName = ".cdidxrc.json";
     internal static readonly string ProjectConfigRelativePath = Path.Combine(".cdidx", "config.json");
     internal const string DisableEnvVar = "CDIDX_DISABLE_CONFIG_FILE";
-    internal const string ConfigSourceEnvironmentVariablePrefix = "CDIDX_CONFIG_SOURCE__";
+    internal const string ConfigSourceEnvironmentVariablePrefix = CdidxConfigSourceResolver.EnvironmentVariablePrefix;
     internal const int MaxConfigFileBytes = 64 * 1024;
     internal const int MaxConfigJsonDepth = 32;
     internal const int MaxConfigStringArrayItems = 128;
@@ -85,18 +85,18 @@ internal static class CdidxConfigFile
     };
     private static readonly IReadOnlyList<string> SupportedConfigFiles = [ProjectConfigRelativePath, FileName];
 
-    internal sealed record LoadResult(string? Path, string? Error)
+    internal sealed record LoadResult(string? ConfigPath, string? Error)
     {
         private static readonly IReadOnlyDictionary<string, string> EmptySettings = new Dictionary<string, string>(StringComparer.Ordinal);
 
         internal IReadOnlyDictionary<string, string> Settings { get; init; } = EmptySettings;
         internal IReadOnlyDictionary<string, string> Sources { get; init; } = EmptySettings;
-        internal bool Loaded => Path is not null && Error is null;
+        internal bool Loaded => ConfigPath is not null && Error is null;
         internal bool Failed => Error is not null;
     }
 
     internal sealed record ConfigFileDiscoveryResult(
-        string? Path,
+        string? ConfigPath,
         IReadOnlyList<string> SearchedPaths,
         IReadOnlyList<string> SupportedFiles,
         string Status,
@@ -125,11 +125,11 @@ internal static class CdidxConfigFile
         Func<string, string?> envReader)
     {
         if (string.Equals(envReader(DisableEnvVar), "1", StringComparison.Ordinal))
-            return new LoadResult(Path: null, Error: null);
+            return new LoadResult(ConfigPath: null, Error: null);
 
         var path = FindConfigFile(startingDirectory);
         if (path is null)
-            return new LoadResult(Path: null, Error: null);
+            return new LoadResult(ConfigPath: null, Error: null);
 
         string text;
         try
@@ -139,7 +139,7 @@ internal static class CdidxConfigFile
         }
         catch (Exception ex)
         {
-            return new LoadResult(Path: path, Error: $"[cdidx] Failed to read {FileName} at {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
+            return new LoadResult(ConfigPath: path, Error: $"[cdidx] Failed to read {FileName} at {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
         }
 
         JsonDocument document;
@@ -154,14 +154,14 @@ internal static class CdidxConfigFile
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
-            return new LoadResult(Path: path, Error: $"[cdidx] Invalid JSON in {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
+            return new LoadResult(ConfigPath: path, Error: $"[cdidx] Invalid JSON in {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
         }
 
         using (document)
         {
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
-                return new LoadResult(Path: path, Error: $"{FormatConfigDiagnosticPrefix(path)} top-level value must be a JSON object.");
+                return new LoadResult(ConfigPath: path, Error: $"{FormatConfigDiagnosticPrefix(path)} top-level value must be a JSON object.");
 
             var pending = new List<(string EnvName, string Value)>();
             var errors = new List<string>();
@@ -179,7 +179,7 @@ internal static class CdidxConfigFile
             AddUnknownKeyTruncationDiagnostic(path, unknownKeys, errors);
 
             if (errors.Count > 0)
-                return new LoadResult(Path: path, Error: string.Join(Environment.NewLine, errors));
+                return new LoadResult(ConfigPath: path, Error: string.Join(Environment.NewLine, errors));
 
             // Include values only when the matching env var is not present (null), preserving the
             // documented precedence (real env wins over config-file value). An explicit
@@ -188,7 +188,7 @@ internal static class CdidxConfigFile
             // so a user clearing a checked-in value must be able to override with `export FOO=`.
             var (settings, sources) = BuildScopedEnvironmentSettings(pending, path, envReader);
 
-            return new LoadResult(Path: path, Error: null)
+            return new LoadResult(ConfigPath: path, Error: null)
             {
                 Settings = settings,
                 Sources = sources,
@@ -518,7 +518,7 @@ internal static class CdidxConfigFile
     }
 
     private static string? FindConfigFile(string startingDirectory)
-        => DiscoverConfigFile(startingDirectory).Path;
+        => DiscoverConfigFile(startingDirectory).ConfigPath;
 
     private static ConfigFileDiscoveryResult DiscoverConfigFile(string startingDirectory)
     {
@@ -634,7 +634,7 @@ internal static class CdidxConfigFile
         var configFileFound = result.Loaded;
         var payload = new ValidateConfigJsonResult(
             true,
-            result.Path,
+            result.ConfigPath,
             configFileFound ? "valid" : StatusNotFound,
             configFileFound ? null : "no supported config file was found",
             configFileFound,
@@ -687,7 +687,7 @@ internal static class CdidxConfigFile
         var loadResult = disabled
             ? new LoadResult(null, Error: null)
             : Load(Environment.CurrentDirectory, CdidxEnvironment.GetProcessEnvironmentVariable);
-        var path = disabled ? null : discovery.Path;
+        var path = disabled ? null : discovery.ConfigPath;
         var active = ActiveWorkspace.Load();
         var workspaceManifest = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
         var payload = new ConfigShowJsonResult(
@@ -737,18 +737,18 @@ internal static class CdidxConfigFile
             return new ConfigFileStatusJsonResult(
                 StatusInvalid,
                 StatusInvalid,
-                FormatConfigShowPath(loadResult.Path ?? discovery.Path, redactPaths),
+                FormatConfigShowPath(loadResult.ConfigPath ?? discovery.ConfigPath, redactPaths),
                 FormatConfigShowText(loadResult.Error, redactPaths),
                 FormatConfigShowPaths(discovery.SearchedPaths, redactPaths),
                 discovery.SupportedFiles);
         }
 
-        if (discovery.Path is not null)
+        if (discovery.ConfigPath is not null)
         {
             return new ConfigFileStatusJsonResult(
                 StatusLoaded,
                 StatusLoaded,
-                FormatConfigShowPath(discovery.Path, redactPaths),
+                FormatConfigShowPath(discovery.ConfigPath, redactPaths),
                 null,
                 FormatConfigShowPaths(discovery.SearchedPaths, redactPaths),
                 discovery.SupportedFiles);
@@ -808,7 +808,7 @@ internal static class CdidxConfigFile
             var sensitive = item.Sensitivity == EnvironmentVariableInventory.SensitivitySecret;
             var processValue = CdidxEnvironment.GetProcessEnvironmentVariable(item.Name);
             var scopedValue = CdidxEnvironment.GetEnvironmentVariable(item.Name);
-            var configSource = CdidxEnvironment.GetConfigSource(item.Name);
+            var configSource = CdidxConfigSourceResolver.GetSource(item.Name);
             var hasLoadedConfigValue = loadResult.Settings.TryGetValue(item.Name, out var loadedConfigValue);
             string rawValue;
             string source;

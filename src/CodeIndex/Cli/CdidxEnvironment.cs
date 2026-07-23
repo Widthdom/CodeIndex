@@ -11,11 +11,6 @@ internal static class CdidxEnvironment
     internal static IEnumerable<(string Key, string Value)> EnumerateProcessEnvironmentVariables()
         => global::CodeIndex.EnvironmentAccess.EnumerateProcessEnvironmentVariables();
 
-    internal static string? GetConfigSource(string name)
-        => global::CodeIndex.EnvironmentAccess.GetConfigSource(
-            name,
-            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix);
-
     internal static IDisposable Push(
         IReadOnlyDictionary<string, string>? values,
         IReadOnlyDictionary<string, string>? sources = null)

@@ -1071,7 +1071,7 @@ public static partial class QueryCommandRunner
             return "flag";
         if (CdidxEnvironment.GetEnvironmentVariable(envName) is null)
             return "default";
-        var configSource = CdidxEnvironment.GetConfigSource(envName);
+        var configSource = CdidxConfigSourceResolver.GetSource(envName);
         if (!string.IsNullOrWhiteSpace(configSource))
             return $"config:{configSource}";
         return $"env:{envName}";
@@ -1081,7 +1081,7 @@ public static partial class QueryCommandRunner
     {
         if (CdidxEnvironment.GetEnvironmentVariable(envName) is null)
             return "default";
-        var configSource = CdidxEnvironment.GetConfigSource(envName);
+        var configSource = CdidxConfigSourceResolver.GetSource(envName);
         if (!string.IsNullOrWhiteSpace(configSource))
             return $"config:{configSource}";
         return $"env:{envName}";
