@@ -3107,61 +3107,6 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpQueryRangeVariableNamedLikeEnum_OrderByCommaDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_orderby_comma_collision");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
-                    {
-                        return from Status in items
-                               orderby Status, items.Count()
-                               select Status.Ready;
-                    }
-                }
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunReferencesInProcess("Ready", dbPath, "csharp");
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
     [Fact]
     public void RunReferences_ExactJson_CSharpQueryBoundariesAndVisualBasicQuerySyntaxShareIndexedWorkspace()
     {
@@ -3481,6 +3426,16 @@ public partial class QueryCommandRunnerTests
                     public int ParenthesizedReady { get; set; }
                 }
 
+                public enum ScopeStatus
+                {
+                    ScopeReady
+                }
+
+                public sealed class ScopeHolder
+                {
+                    public int ScopeReady { get; set; }
+                }
+
                 public sealed class Uses
                 {
                     public IEnumerable<int> ReadAnonymous(IEnumerable<AnonymousHolder> items)
@@ -3505,6 +3460,13 @@ public partial class QueryCommandRunnerTests
                                orderby select(items), items.Count()
                                select ParenthesizedStatus.ParenthesizedReady;
                     }
+
+                    public IEnumerable<int> ReadScope(IEnumerable<ScopeHolder> items)
+                    {
+                        return from ScopeStatus in items
+                               orderby ScopeStatus, items.Count()
+                               select ScopeStatus.ScopeReady;
+                    }
                 }
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -3516,6 +3478,7 @@ public partial class QueryCommandRunnerTests
             AssertNoReferences("AnonymousReady");
             AssertNoReferences("NestedReady");
             AssertNoReferences("ParenthesizedReady");
+            AssertNoReferences("ScopeReady");
 
             void AssertNoReferences(string query)
             {
@@ -6056,13 +6019,13 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpQueryRangeVariableNamedLikeEnumDoesNotLeakAfterQuery()
+    public void RunReferences_ExactJson_CSharpQueryRangeVariableScopesShareDatabaseFixture()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_scope_end");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_query_range_variable_scopes");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/after-query.cs", "csharp",
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -6090,35 +6053,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
-            Assert.Equal(23, json.GetProperty("line").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpQueryRangeVariableNamedLikeEnumDoesNotLeakPastQueryArgument()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_argument_scope_end");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/query-argument.cs", "csharp",
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -6150,17 +6085,22 @@ public partial class QueryCommandRunnerTests
                 """);
             MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
+            AssertSingleReference("src/after-query.cs", expectedLine: 23);
+            AssertSingleReference("src/query-argument.cs", expectedLine: null);
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            void AssertSingleReference(string path, int? expectedLine)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    "Ready", dbPath, "csharp", true, "--path", path);
+                var json = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+                Assert.Equal("Read", json.GetProperty("container_name").GetString());
+                if (expectedLine.HasValue)
+                    Assert.Equal(expectedLine.Value, json.GetProperty("line").GetInt32());
+            }
         }
         finally
         {
