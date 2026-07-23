@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using System.Text;
 using System.Text.Json;
 
@@ -32,6 +33,166 @@ public class WorkspaceCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("cdidx.workspace.json", stdout);
             Assert.Contains("index.db", stdout);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceStatusJson_ReportsBoundedMemberIndexHealth_Issue4726()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_health");
+        var root = project.Root;
+        var readyRoot = Path.Combine(root, "members", "ready");
+        var staleRoot = Path.Combine(root, "members", "stale");
+        var futureRoot = Path.Combine(root, "members", "future");
+        var missingDbRoot = Path.Combine(root, "members", "missing-db");
+        Directory.CreateDirectory(readyRoot);
+        Directory.CreateDirectory(staleRoot);
+        Directory.CreateDirectory(futureRoot);
+        Directory.CreateDirectory(missingDbRoot);
+
+        const string IndexedContent = "class App {}\n";
+        File.WriteAllText(Path.Combine(readyRoot, "App.cs"), IndexedContent);
+        var readyDb = TestProjectHelper.CreateProjectDb(readyRoot);
+        TestProjectHelper.InsertIndexedFile(readyDb, "App.cs", "csharp", IndexedContent);
+
+        File.WriteAllText(Path.Combine(staleRoot, "App.cs"), IndexedContent);
+        var staleDb = TestProjectHelper.CreateProjectDb(staleRoot);
+        TestProjectHelper.InsertIndexedFile(staleDb, "App.cs", "csharp", IndexedContent);
+        File.WriteAllText(Path.Combine(staleRoot, "App.cs"), "class App { void Changed() {} }\n");
+
+        var futureDb = TestProjectHelper.CreateProjectDb(futureRoot);
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, futureDb))
+        {
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(
+                DbContext.GetMetadataTargetVersionMetaKey("csharp"),
+                (DbContext.MetadataTargetVersion + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
+            {
+              "members": [
+                "members/ready",
+                "members/stale",
+                "members/future",
+                "members/missing-db"
+              ]
+            }
+            """);
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var runtimeRoot = Environment.CurrentDirectory;
+            var runtimeReadyRoot = Path.Combine(runtimeRoot, "members", "ready");
+            var runtimeStaleRoot = Path.Combine(runtimeRoot, "members", "stale");
+            var runtimeFutureRoot = Path.Combine(runtimeRoot, "members", "future");
+            var runtimeMissingDbRoot = Path.Combine(runtimeRoot, "members", "missing-db");
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            var healthSummary = payload.GetProperty("member_health_summary");
+            Assert.Equal(4, healthSummary.GetProperty("member_count").GetInt32());
+            Assert.Equal(3, healthSummary.GetProperty("database_probe_count").GetInt32());
+            Assert.Equal(
+                WorkspaceCommandRunner.MaxMemberHealthDatabaseProbes,
+                healthSummary.GetProperty("database_probe_limit").GetInt32());
+            Assert.Equal(0, healthSummary.GetProperty("probe_limit_skipped_member_count").GetInt32());
+            Assert.False(healthSummary.GetProperty("truncated").GetBoolean());
+
+            var members = payload.GetProperty("members").EnumerateArray().ToArray();
+            var ready = members.Single(member => PathCasing.PathsEqual(member.GetProperty("path").GetString()!, runtimeReadyRoot))
+                .GetProperty("index_health");
+            Assert.True(ready.GetProperty("db_exists").GetBoolean());
+            Assert.True(ready.GetProperty("probed").GetBoolean());
+            Assert.True(ready.GetProperty("schema_compatible").GetBoolean());
+            Assert.True(ready.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("matched", ready.GetProperty("freshness_reason").GetString());
+            var graphTableAvailable = ready.GetProperty("graph_table_available").GetBoolean();
+            var graphDataCurrent = ready.GetProperty("graph_data_current").GetBoolean();
+            var referenceGraphComplete = ready.GetProperty("reference_graph_complete").GetBoolean();
+            var indexComplete = ready.GetProperty("index_complete").GetBoolean();
+            Assert.Equal(
+                graphTableAvailable && graphDataCurrent && referenceGraphComplete && indexComplete,
+                ready.GetProperty("graph_ready").GetBoolean());
+
+            var stale = members.Single(member => PathCasing.PathsEqual(member.GetProperty("path").GetString()!, runtimeStaleRoot))
+                .GetProperty("index_health");
+            Assert.Equal("stale", stale.GetProperty("status").GetString());
+            Assert.False(stale.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("changed_files", stale.GetProperty("freshness_reason").GetString());
+
+            var future = members.Single(member => PathCasing.PathsEqual(member.GetProperty("path").GetString()!, runtimeFutureRoot))
+                .GetProperty("index_health");
+            Assert.Equal("incompatible", future.GetProperty("status").GetString());
+            Assert.Equal("index_newer_than_reader", future.GetProperty("reason").GetString());
+            Assert.False(future.GetProperty("schema_compatible").GetBoolean());
+            Assert.True(future.GetProperty("index_newer_than_reader").GetBoolean());
+
+            var missingDb = members.Single(member => PathCasing.PathsEqual(member.GetProperty("path").GetString()!, runtimeMissingDbRoot))
+                .GetProperty("index_health");
+            Assert.Equal("missing", missingDb.GetProperty("status").GetString());
+            Assert.Equal("database_not_found", missingDb.GetProperty("reason").GetString());
+            Assert.False(missingDb.GetProperty("db_exists").GetBoolean());
+            Assert.False(missingDb.GetProperty("probed").GetBoolean());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceStatusJson_StopsDatabaseProbesAtMemberHealthLimit_Issue4726()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_health_limit");
+        var root = project.Root;
+        var memberNames = Enumerable.Range(0, WorkspaceCommandRunner.MaxMemberHealthDatabaseProbes + 1)
+            .Select(i => $"members/member-{i:D3}")
+            .ToArray();
+        foreach (var memberName in memberNames)
+        {
+            var memberRoot = Path.Combine(root, memberName);
+            var dataDirectory = Path.Combine(memberRoot, ".cdidx");
+            Directory.CreateDirectory(dataDirectory);
+            File.WriteAllBytes(Path.Combine(dataDirectory, "codeindex.db"), []);
+        }
+
+        File.WriteAllText(
+            Path.Combine(root, "cdidx.workspace.json"),
+            JsonSerializer.Serialize(new { members = memberNames }));
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            var healthSummary = payload.GetProperty("member_health_summary");
+            Assert.Equal(
+                WorkspaceCommandRunner.MaxMemberHealthDatabaseProbes,
+                healthSummary.GetProperty("database_probe_count").GetInt32());
+            Assert.Equal(1, healthSummary.GetProperty("probe_limit_skipped_member_count").GetInt32());
+            Assert.True(healthSummary.GetProperty("truncated").GetBoolean());
+
+            var lastHealth = payload.GetProperty("members").EnumerateArray().Last().GetProperty("index_health");
+            Assert.Equal("not_checked", lastHealth.GetProperty("status").GetString());
+            Assert.Equal("database_probe_limit_reached", lastHealth.GetProperty("reason").GetString());
+            Assert.False(lastHealth.GetProperty("probed").GetBoolean());
         }
         finally
         {
@@ -1199,6 +1360,83 @@ public class WorkspaceCommandRunnerTests
             Assert.Contains(Path.Combine("src", "App"), stderr);
             Assert.Contains(Path.Combine("tests", "App"), stderr);
             Assert.False(File.Exists(ActiveWorkspace.StatePath));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceUse_ManifestRelativePathSelectsRepeatedBasename_Issue4726()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_relative");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_relative_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        var selectedRoot = Path.Combine(root, "apps", "App");
+        Directory.CreateDirectory(selectedRoot);
+        Directory.CreateDirectory(Path.Combine(root, "tests", "App"));
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
+            {
+              "members": ["apps/App", "tests/App"]
+            }
+            """);
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var runtimeSelectedRoot = Path.Combine(Environment.CurrentDirectory, "apps", "App");
+            var (escapingExitCode, _, escapingStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["use", "apps/../../App"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, escapingExitCode);
+            Assert.Contains("workspace member was not found", escapingStderr);
+            Assert.False(File.Exists(ActiveWorkspace.StatePath));
+
+            foreach (var selector in new[] { "apps/App", "apps/./App", @"apps\App" })
+            {
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(
+                    () => WorkspaceCommandRunner.Run(["use", selector], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                var state = ActiveWorkspace.Load();
+                Assert.NotNull(state);
+                Assert.Equal("apps/App", state.Name);
+                Assert.True(PathCasing.PathsEqual(runtimeSelectedRoot, state.Root));
+            }
+
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
+                {
+                  "members": ["apps/App", "tests/App"],
+                  "index_strategy": "single"
+                }
+                """);
+            var (singleExitCode, _, singleStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["use", "apps/./App"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, singleExitCode);
+            Assert.Empty(singleStderr);
+            var singleState = ActiveWorkspace.Load();
+            Assert.NotNull(singleState);
+            Assert.Equal("apps/App", singleState.Name);
+            Assert.True(PathCasing.PathsEqual(Environment.CurrentDirectory, singleState.Root));
+
+            var (statusExitCode, statusStdout, statusStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Empty(statusStderr);
+            using var statusDocument = JsonDocument.Parse(statusStdout);
+            Assert.Equal(
+                "active",
+                statusDocument.RootElement
+                    .GetProperty("active_workspace_status")
+                    .GetProperty("status")
+                    .GetString());
         }
         finally
         {

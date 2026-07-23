@@ -218,9 +218,9 @@ ownership boundaries so behavior changes remain reviewable and testable.
 
 ### Workspaces
 
-`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths. In JSON mode, invalid manifest schema or safety failures are returned as a structured `workspace_manifest_invalid` error instead of falling through to the top-level crash handler.
+`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths. `workspace status` also reports each member's database existence, probe status and reason, schema compatibility, exact workspace freshness, timestamps, index completeness, and graph readiness. It probes at most 64 distinct existing member databases per invocation, reuses a probe when members share a database under the `single` strategy, and marks later members as `not_checked` with a top-level truncation summary. In JSON mode, invalid manifest schema or safety failures are returned as a structured `workspace_manifest_invalid` error instead of falling through to the top-level crash handler.
 
-`cdidx workspace use <name>` writes an existing manifest member or `default` workspace to the per-user config directory, rejects missing manifest members, and rejects ambiguous member directory names. `cdidx workspace clear` (also available as `workspace deactivate`) removes that persisted selection instead of rebinding `default` to the current directory. When `CDIDX_ACTIVE_WORKSPACE` is set, clear reports that the environment override must be unset because it takes precedence over persisted state. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
+`cdidx workspace use <name-or-relative-path>` writes an existing manifest member or `default` workspace to the per-user config directory and rejects missing manifest members. A directory name remains a shorthand when it identifies exactly one member; repeated directory names remain ambiguous. A manifest-relative path selects the exact normalized member, accepts either slash spelling, and stores the canonical forward-slash relative path in active workspace state. `cdidx workspace clear` (also available as `workspace deactivate`) removes that persisted selection instead of rebinding `default` to the current directory. When `CDIDX_ACTIVE_WORKSPACE` is set, clear reports that the environment override must be unset because it takes precedence over persisted state. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
 
 ### Observability
 
@@ -3116,10 +3116,20 @@ manifest directory 配下に残る member path、
 invalid な `members` entries は件数を制限した diagnostics で拒否され、有効な entry は DB path を
 作る前に workspace path casing policy で正規化・重複排除されます。
 `cdidx workspace list` と `cdidx workspace status` は member DB path を報告します。
+`workspace status` はさらに、member ごとの database 存在有無、probe status / reason、
+schema compatibility、workspace との厳密な freshness、timestamp、index completeness、
+graph readiness を報告します。1 回の実行で probe する既存の異なる member database は最大 64 個で、
+`single` strategy で database が共有される場合は probe 結果を再利用し、それ以降の member は
+`not_checked` として top-level の truncation summary に反映します。
 JSON mode では、manifest schema または safety validation の失敗は top-level crash handler へ
 落とさず、構造化された `workspace_manifest_invalid` error として返します。
 
-`cdidx workspace use <name>` は active workspace を per-user config directory に保存します。
+`cdidx workspace use <name-or-relative-path>` は既存の manifest member または `default` を
+active workspace として per-user config directory に保存し、存在しない member は拒否します。
+directory name は member を一意に識別できる場合の省略形として引き続き使えますが、同名 directory
+が複数ある場合は曖昧として拒否します。manifest-relative path は正規化後の member を厳密に選択し、
+slash / backslash のどちらも受け付け、active workspace state には canonical な forward-slash
+relative path を保存します。
 `cdidx workspace clear`（alias は `workspace deactivate`）は `default` を current directory に
 再設定せず、保存済みの選択を削除します。`CDIDX_ACTIVE_WORKSPACE` が設定されている場合は
 persisted state より環境変数が優先されるため、先に環境変数を解除するよう報告します。
