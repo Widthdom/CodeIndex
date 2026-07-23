@@ -519,6 +519,8 @@ be audited whenever the matching help text changes.
 | JSON envelope capture | `10,485,760` characters | `JsonEnvelopeWrapper` |
 | CLI batch line | `1,048,576` characters | `QueryCommandRunner` |
 | CLI batch arguments | `256` arguments after command name | `QueryCommandRunner` |
+| CLI batch input lines | `1,024` by default; configurable from `1` through `65,536` | `QueryCommandRunner` |
+| CLI batch JSON-summary output | `10,485,760` characters by default; configurable from `4,096` through `67,108,864` | `QueryCommandRunner` |
 
 When a default changes, update the help text, this table, affected examples, and
 the changelog fragment in the same PR so users are not asked to reconcile
@@ -1363,31 +1365,45 @@ cdidx search "authenticate" --json --verbose
 ```
 
 For scripts or editor integrations that need several queries against the same
-index, `cdidx batch --db <path>` keeps one SQLite connection open and reads one
-JSON string array per stdin line. Each array starts with a command from the
+index, `cdidx batch --db <path>` reads one JSON command per stdin line. A line
+may be the established string-array form
+`["search","Needle","--json"]` or the structured form
+`{"command":"search","args":["Needle","--json"]}`. Both forms dispatch only the
 schema-owned side-effect-free allowlist, which includes read-only navigation and
-audit commands such as `goto` and `audit`, followed by that command's normal
-arguments. Each stdin line is capped at 1,048,576 characters, each decoded
-string argument is capped at 8,192 characters, each command can carry at most
-256 arguments after the command name, and one invocation reads at most 1,024
-input lines. By default, child commands stream their normal stdout/stderr
-directly, so callers can keep the standalone command output shape. With no
-input, `batch` exits 0 and prints nothing by default. Pass `--json-summary` when
-a non-interactive caller needs a machine-readable batch stream: each non-blank
-stdin line emits one JSON envelope before the final summary. Parsed commands use
+audit commands such as `goto` and `audit`. Each stdin line is capped at
+1,048,576 characters, each decoded string argument is capped at 8,192
+characters, and each command can carry at most 256 arguments after the command
+name. The default 1,024-line input budget can be changed with
+`--max-input-lines <n>` up to the safe maximum of 65,536.
+
+Serial execution is the default and keeps one SQLite connection open. Child
+commands stream their normal stdout/stderr directly, so callers can keep the
+standalone command output shape. With no input, `batch` exits 0 and prints
+nothing by default. Pass `--json-summary` when a non-interactive caller needs a
+machine-readable batch stream: each non-blank stdin line emits one JSON envelope
+before the final summary. Parsed commands use
 `record: "batch_result"` with `line`, `command`, `arguments`, `exit_code`, and
 captured child `stderr`. Successful single-document JSON is embedded as typed
 `result`, successful NDJSON is embedded as a stable `results` array even when it
 contains one row, and text or failed output remains raw `stdout`. Malformed or
 over-limit lines use `record: "batch_error"` with an `error` object. The complete
 serialized stream, including envelopes, arguments, JSON escaping, terminal
-errors, and the final summary, is capped at 10,485,760 characters. The final
-`record: "batch_summary"` reports `commands_processed`, `line_errors`,
-`command_failures`, `exit_code`, `output_chars`, `output_char_limit`, and input /
-output limit state, including `commands_processed: 0` for immediate EOF. For
-clean automation, feed stdin from a pipe or file; an interactive TTY may echo
-typed JSONL before `cdidx` reads it, but that echo is terminal behavior rather
-than process stdout/stderr.
+errors, and the final summary, defaults to a 10,485,760-character budget.
+`--max-output-chars <n>` can change that budget from 4,096 through the safe
+maximum of 67,108,864 characters. The final `record: "batch_summary"` reports
+`commands_processed`, `line_errors`, `command_failures`, `exit_code`,
+`output_chars`, `output_char_limit`, `input_line_limit`, `parallelism`, and
+input/output limit state, including `commands_processed: 0` for immediate EOF.
+
+Use `--parallel <n>` with `--json-summary` to run up to 16 independent read-only
+items concurrently. Each worker uses an isolated query-only SQLite connection
+and isolated stdout/stderr capture; records are still emitted in input order,
+one command failure does not cancel sibling items, and caller cancellation stops
+new work. A bounded producer/consumer pipeline starts work as each line arrives
+and emits the earliest eligible ordered record without waiting for a full worker
+window or stdin EOF. For clean automation, feed stdin from a pipe or file; an interactive
+TTY may echo typed JSONL before `cdidx` reads it, but that echo is terminal
+behavior rather than process stdout/stderr.
 
 ```bash
 printf '%s\n' \
@@ -1399,6 +1415,14 @@ printf '%s\n' \
 ```bash
 printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
 # Emits one batch_summary object; output_chars equals the complete serialized stream length.
+```
+
+```bash
+printf '%s\n' \
+  '{"command":"search","args":["Authenticate","--json","--exact"]}' \
+  '{"command":"symbols","args":["AuthFixture","--json","--exact-name"]}' \
+  | cdidx batch --db .cdidx/codeindex.db --json-summary --parallel 2 \
+      --max-input-lines 4096 --max-output-chars 16777216
 ```
 
 Output:
@@ -3673,6 +3697,8 @@ render できます。
 | JSON envelope capture | `10,485,760` 文字 | `JsonEnvelopeWrapper` |
 | CLI batch line | `1,048,576` 文字 | `QueryCommandRunner` |
 | CLI batch arguments | command 名の後ろに `256` 引数 | `QueryCommandRunner` |
+| CLI batch input lines | 既定 `1,024`、`1` から `65,536` まで設定可能 | `QueryCommandRunner` |
+| CLI batch JSON-summary output | 既定 `10,485,760` 文字、`4,096` から `67,108,864` まで設定可能 | `QueryCommandRunner` |
 
 既定値を変更するときは、help text、この表、影響する examples、changelog fragment を
 同じ PR で更新してください。
@@ -4511,26 +4537,39 @@ cdidx search "authenticate" --json --verbose
 ```
 
 同じインデックスに対して複数の query を投げる script や editor integration では、
-`cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
-stdin の各行は JSON 文字列配列で、先頭に `goto` や `audit` を含む schema 管理の副作用なし
-allowlist の command 名、その後ろに通常の引数を並べます。各 stdin 行は 1,048,576 文字まで、
-デコード後の各文字列引数は 8,192 文字まで、各 command は command 名の後ろに最大 256 引数までで、
-1 回の呼び出しが読む入力は最大 1,024 行です。既定では child command の通常の stdout / stderr を
-直接 stream するため、単発 command と同じ出力形状を維持できます。入力がない場合、`batch` は
-既定で exit 0 かつ無出力です。非対話の呼び出し元が machine-readable な batch stream を
-必要とする場合は `--json-summary` を渡します。この場合、空白でない stdin 行ごとに 1 つの JSON
-envelope を出力してから final summary を出します。parse 済み command は
+`cdidx batch --db <path>` が stdin の各行から 1 つの JSON command を読みます。各行は従来の
+文字列配列 `["search","Needle","--json"]`、または structured form
+`{"command":"search","args":["Needle","--json"]}` を使用できます。どちらの form も
+`goto` や `audit` を含む schema 管理の副作用なし allowlist だけを dispatch します。各 stdin 行は
+1,048,576 文字まで、デコード後の各文字列引数は 8,192 文字まで、各 command は command 名の後ろに
+最大 256 引数までです。既定の入力 budget は 1,024 行で、`--max-input-lines <n>` により安全な最大値
+65,536 まで変更できます。
+
+既定の serial execution は 1 つの SQLite connection を開いたまま処理します。child command の
+通常の stdout / stderr を直接 stream するため、単発 command と同じ出力形状を維持できます。入力が
+ない場合、`batch` は既定で exit 0 かつ無出力です。非対話の呼び出し元が machine-readable な batch
+stream を必要とする場合は `--json-summary` を渡します。この場合、空白でない stdin 行ごとに
+1 つの JSON envelope を出力してから final summary を出します。parse 済み command は
 `record: "batch_result"` として `line`、`command`、`arguments`、`exit_code`、捕捉した child
 `stderr` を持ちます。成功した単一 document JSON は型付き `result`、成功した NDJSON は 1 row
 の場合も安定して `results` array に埋め込み、text または失敗時の出力は raw `stdout` のまま
 保持します。malformed line や上限超過 line は `record: "batch_error"` と `error` object を
 持ちます。envelope、arguments、JSON escape、terminal error、final summary を含む serialized
-stream 全体は 10,485,760 文字までです。最後の `record: "batch_summary"` object は
+stream 全体の既定 budget は 10,485,760 文字です。`--max-output-chars <n>` で 4,096 から安全な
+最大値 67,108,864 文字まで変更できます。最後の `record: "batch_summary"` object は
 `commands_processed`、`line_errors`、`command_failures`、`exit_code`、`output_chars`、
-`output_char_limit` と input / output limit state を報告し、即時 EOF では
-`commands_processed: 0` を含みます。automation で clean な入出力が必要な場合は stdin を pipe
-または file から渡してください。interactive TTY では入力した JSONL が `cdidx` の読み取り前に
-echo される場合がありますが、これは process の stdout / stderr ではなく terminal の挙動です。
+`output_char_limit`、`input_line_limit`、`parallelism` と input / output limit state を報告し、
+即時 EOF では `commands_processed: 0` を含みます。
+
+`--json-summary` とともに `--parallel <n>` を使うと、最大 16 個の独立した read-only item を
+並列実行できます。各 worker は分離された query-only SQLite connection と stdout / stderr capture
+を使い、record は完了順にかかわらず入力順で出力されます。1 command の失敗は sibling item を
+cancel せず、caller cancellation は新しい work を停止します。bounded producer / consumer
+pipeline は各行の到着時に work を開始し、worker window が満杯になることや stdin EOF を待たずに、
+入力順を守って出力可能になった最初の record を出力します。automation で clean な入出力が
+必要な場合は stdin を pipe または file から渡してください。interactive TTY では入力した JSONL が
+`cdidx` の読み取り前に echo される場合がありますが、これは process の stdout / stderr ではなく
+terminal の挙動です。
 
 ```bash
 printf '%s\n' \
@@ -4542,6 +4581,14 @@ printf '%s\n' \
 ```bash
 printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
 # batch_summary object を 1 件出力し、output_chars は serialized stream 全体の実際の長さと一致します。
+```
+
+```bash
+printf '%s\n' \
+  '{"command":"search","args":["Authenticate","--json","--exact"]}' \
+  '{"command":"symbols","args":["AuthFixture","--json","--exact-name"]}' \
+  | cdidx batch --db .cdidx/codeindex.db --json-summary --parallel 2 \
+      --max-input-lines 4096 --max-output-chars 16777216
 ```
 
 出力:
