@@ -5859,13 +5859,13 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpLambdaParameterNamedLikeEnumDoesNotLeakAfterLambda()
+    public void RunReferences_ExactJson_CSharpLambdaParameterScopesShareDatabaseFixture()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_lambda_scope_end");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_lambda_parameter_scopes");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/ordinary.cs", "csharp",
                 """
                 using System;
 
@@ -5890,35 +5890,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
-            Assert.Equal(20, json.GetProperty("line").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpLambdaParameterNamedLikeEnumDoesNotLeakAfterSameLineLambda()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_lambda_same_line_scope_end");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/same-line.cs", "csharp",
                 """
                 using System;
 
@@ -5942,34 +5914,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpParenthesizedLambdaParameterNamedLikeEnumDoesNotSuppressEarlierSameLineReference()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_lambda_prefix_scope");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/parenthesized.cs", "csharp",
                 """
                 using System;
 
@@ -6000,17 +5945,23 @@ public partial class QueryCommandRunnerTests
                 """);
             MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
+            AssertSingleReference("src/ordinary.cs", expectedLine: 20);
+            AssertSingleReference("src/same-line.cs", expectedLine: null);
+            AssertSingleReference("src/parenthesized.cs", expectedLine: null);
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            void AssertSingleReference(string path, int? expectedLine)
+            {
+                var (exitCode, stdout, stderr) = RunReferencesInProcess(
+                    "Ready", dbPath, "csharp", true, "--path", path);
+                var json = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+                Assert.Equal("Read", json.GetProperty("container_name").GetString());
+                if (expectedLine.HasValue)
+                    Assert.Equal(expectedLine.Value, json.GetProperty("line").GetInt32());
+            }
         }
         finally
         {
