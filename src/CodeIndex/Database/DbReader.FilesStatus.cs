@@ -118,7 +118,7 @@ public partial class DbReader
         set => LegacyResourceReadSqliteVmStepLimitOverride.Value = value;
     }
 
-    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0)
+    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0, bool useIndexedLiteralCandidates = false)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
             return new FindResults([], new FindScanSummary(0, 0, 0));
@@ -131,16 +131,13 @@ public partial class DbReader
             ? CreateFindRegexMatcher(query, exact)
             : null;
 
-        using var fileCmd = _conn.CreateCommand();
-        var sql = "SELECT f.id, f.path, f.lang, f.lines FROM files f WHERE 1=1";
-        if (lang != null)
-            sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {PathBucketOrder}, f.path";
-        fileCmd.CommandText = sql;
-        if (lang != null)
-            SqliteCommandPolicy.Add(fileCmd, "@lang", lang);
-        AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
+        var searchPlan = CreateFindSearchPlan(query, exact, regex, useIndexedLiteralCandidates);
+        using var fileCmd = CreateFindFileCommand(
+            searchPlan,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests);
 
         var candidateFiles = CountFindCandidateFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var filesScanned = 0;
@@ -260,7 +257,9 @@ public partial class DbReader
                 TimedOut: false,
                 truncationReason,
                 maxCandidateFiles,
-                maxLinesScanned));
+                maxLinesScanned,
+                searchPlan.Strategy,
+                searchPlan.FallbackReason));
     }
 
     public int CountFindCandidateFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -278,7 +277,7 @@ public partial class DbReader
         return SqliteCommandPolicy.ReadInt32Scalar(fileCmd, "find candidate file count");
     }
 
-    public FindCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null)
+    public FindCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, bool useIndexedLiteralCandidates = false)
     {
         if (string.IsNullOrWhiteSpace(query))
             return new FindCountResult(0, 0, new FindScanSummary(0, 0, 0));
@@ -287,16 +286,13 @@ public partial class DbReader
         var regexMatcher = regex
             ? CreateFindRegexMatcher(query, exact)
             : null;
-        using var fileCmd = _conn.CreateCommand();
-        var sql = "SELECT f.id, f.path, f.lang, f.lines FROM files f WHERE 1=1";
-        if (lang != null)
-            sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {PathBucketOrder}, f.path";
-        fileCmd.CommandText = sql;
-        if (lang != null)
-            SqliteCommandPolicy.Add(fileCmd, "@lang", lang);
-        AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
+        var searchPlan = CreateFindSearchPlan(query, exact, regex, useIndexedLiteralCandidates);
+        using var fileCmd = CreateFindFileCommand(
+            searchPlan,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests);
 
         var candidateFiles = CountFindCandidateFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var filesScanned = 0;
@@ -376,14 +372,84 @@ public partial class DbReader
                 TimedOut: false,
                 truncationReason,
                 maxCandidateFiles,
-                maxLinesScanned));
+                maxLinesScanned,
+                searchPlan.Strategy,
+                searchPlan.FallbackReason));
     }
+
+    private readonly record struct FindSearchPlan(
+        string Strategy,
+        string? FallbackReason,
+        string? TrigramMatchExpression);
 
     private readonly record struct IndexedLine(int Number, string Text);
 
     private readonly record struct FindLineMatch(int Column, int Length);
 
     private readonly record struct PendingFileFindMatch(int LineNumber, int Column, int Length, int SnippetStart, int SnippetEnd);
+
+    private FindSearchPlan CreateFindSearchPlan(
+        string query,
+        bool exact,
+        bool regex,
+        bool useIndexedLiteralCandidates)
+    {
+        if (!useIndexedLiteralCandidates)
+            return new FindSearchPlan("line_scan", null, null);
+        if (regex)
+            return new FindSearchPlan("line_scan", "regex", null);
+        if (exact)
+            return new FindSearchPlan("line_scan", "exact_source_normalization", null);
+        if (query.Length < 3)
+            return new FindSearchPlan("line_scan", "query_too_short", null);
+        if (query.Any(character => character < ' ' || character > '~'))
+            return new FindSearchPlan("line_scan", "unsupported_query_characters", null);
+        if (!HasTable(DbContext.FtsChunksTrigramTableName))
+            return new FindSearchPlan("line_scan", "trigram_index_unavailable", null);
+
+        var phrase = "\"" + query.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+        return new FindSearchPlan("indexed_trigram", null, phrase);
+    }
+
+    private SqliteCommand CreateFindFileCommand(
+        FindSearchPlan searchPlan,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        var fileCmd = _conn.CreateCommand();
+        string sql;
+        if (searchPlan.TrigramMatchExpression != null)
+        {
+            sql = $"""
+                SELECT f.id, f.path, f.lang, f.lines
+                FROM (
+                    SELECT DISTINCT find_chunk.file_id
+                    FROM {DbContext.FtsChunksTrigramTableName}
+                    JOIN chunks find_chunk ON find_chunk.id = {DbContext.FtsChunksTrigramTableName}.rowid
+                    WHERE {DbContext.FtsChunksTrigramTableName} MATCH @trigramQuery
+                ) find_candidate
+                JOIN files f ON f.id = find_candidate.file_id
+                WHERE 1=1
+                """;
+        }
+        else
+        {
+            sql = "SELECT f.id, f.path, f.lang, f.lines FROM files f WHERE 1=1";
+        }
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {PathBucketOrder}, f.path";
+        fileCmd.CommandText = sql;
+        if (searchPlan.TrigramMatchExpression != null)
+            SqliteCommandPolicy.AddText(fileCmd, "@trigramQuery", searchPlan.TrigramMatchExpression);
+        if (lang != null)
+            SqliteCommandPolicy.Add(fileCmd, "@lang", lang);
+        AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
+        return fileCmd;
+    }
 
     private IEnumerable<IndexedLine> EnumerateIndexedFileLines(long fileId)
     {

@@ -31,6 +31,7 @@ public class DbContext : IDisposable
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
+    internal const string FtsChunksTrigramTableName = "fts_chunks_trigram";
     private const int MigrationDiagnosticTextLimit = 240;
     private const int MigrationForeignKeyViolationSampleLimit = 5;
     internal const string DropFtsChunksInsertTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_ai";
@@ -60,6 +61,39 @@ public class DbContext : IDisposable
         CreateFtsChunksInsertTriggerSql + ";\n"
         + CreateFtsChunksDeleteTriggerSql + ";\n"
         + CreateFtsChunksUpdateTriggerSql;
+    internal const string DropFtsChunksTrigramInsertTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_trigram_ai";
+    internal const string DropFtsChunksTrigramDeleteTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_trigram_ad";
+    internal const string DropFtsChunksTrigramUpdateTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_trigram_au";
+    internal const string DropFtsChunksTrigramSyncTriggersSql =
+        DropFtsChunksTrigramInsertTriggerSql + ";\n"
+        + DropFtsChunksTrigramDeleteTriggerSql + ";\n"
+        + DropFtsChunksTrigramUpdateTriggerSql;
+    internal const string DropAllFtsChunksSyncTriggersSql =
+        DropFtsChunksSyncTriggersSql + ";\n"
+        + DropFtsChunksTrigramSyncTriggersSql;
+    internal const string CreateFtsChunksTrigramInsertTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS fts_chunks_trigram_ai AFTER INSERT ON chunks BEGIN
+            INSERT INTO fts_chunks_trigram(rowid, content) VALUES (new.id, new.content);
+        END
+        """;
+    internal const string CreateFtsChunksTrigramDeleteTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS fts_chunks_trigram_ad AFTER DELETE ON chunks BEGIN
+            INSERT INTO fts_chunks_trigram(fts_chunks_trigram, rowid, content) VALUES('delete', old.id, old.content);
+        END
+        """;
+    internal const string CreateFtsChunksTrigramUpdateTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS fts_chunks_trigram_au AFTER UPDATE ON chunks BEGIN
+            INSERT INTO fts_chunks_trigram(fts_chunks_trigram, rowid, content) VALUES('delete', old.id, old.content);
+            INSERT INTO fts_chunks_trigram(rowid, content) VALUES (new.id, new.content);
+        END
+        """;
+    internal const string CreateFtsChunksTrigramSyncTriggersSql =
+        CreateFtsChunksTrigramInsertTriggerSql + ";\n"
+        + CreateFtsChunksTrigramDeleteTriggerSql + ";\n"
+        + CreateFtsChunksTrigramUpdateTriggerSql;
+    internal const string CreateAllFtsChunksSyncTriggersSql =
+        CreateFtsChunksSyncTriggersSql + ";\n"
+        + CreateFtsChunksTrigramSyncTriggersSql;
     internal const string ResourceListGenerationMetaKey = "resource_list_generation";
     private const string EnsureResourceListGenerationSql = """
         INSERT INTO codeindex_meta(key, value)
@@ -218,6 +252,7 @@ public class DbContext : IDisposable
     private bool _suppressPlannerStatisticsMaintenanceOnClose;
     private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
+    private bool _rebuildTrigramFtsAfterSchemaMigration;
     private readonly DbOpenIntent _openIntent;
     private readonly DatabasePermissionPolicyMode _databasePermissionPolicy;
     private readonly IDatabaseFileModeProvider _databaseFileModeProvider;
@@ -2317,6 +2352,7 @@ public class DbContext : IDisposable
 
     public void InitializeSchema()
     {
+        _rebuildTrigramFtsAfterSchemaMigration = !TableExists(FtsChunksTrigramTableName);
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
         try
         {
@@ -2598,19 +2634,29 @@ public class DbContext : IDisposable
                 content='chunks',
                 content_rowid='id'
             )");
+                Execute($@"
+            CREATE VIRTUAL TABLE IF NOT EXISTS {FtsChunksTrigramTableName} USING fts5(
+                content,
+                content='chunks',
+                content_rowid='id',
+                tokenize='trigram'
+            )");
                 if (_rebuildFtsAfterSchemaMigration)
                 {
                     Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
                     _rebuildFtsAfterSchemaMigration = false;
                 }
+                if (_rebuildTrigramFtsAfterSchemaMigration)
+                {
+                    Execute($"INSERT INTO {FtsChunksTrigramTableName}({FtsChunksTrigramTableName}) VALUES('rebuild')");
+                    _rebuildTrigramFtsAfterSchemaMigration = false;
+                }
 
-                // FTS5 content-synced triggers — keep fts_chunks in sync with chunks table.
+                // FTS5 content-synced triggers — keep both FTS indexes in sync with chunks.
                 // Without these, CASCADE DELETEs on chunks leave orphan entries in fts_chunks.
-                // FTS5 content-synced トリガー — fts_chunksをchunksテーブルと同期する。
-                // これがないとchunksのCASCADE DELETEでfts_chunksに孤立エントリが残る。
-                Execute(CreateFtsChunksInsertTriggerSql);
-                Execute(CreateFtsChunksDeleteTriggerSql);
-                Execute(CreateFtsChunksUpdateTriggerSql);
+                // FTS5 content-synced トリガー — 両方の FTS index を chunks と同期する。
+                // これがないと chunks の CASCADE DELETE で FTS に孤立エントリが残る。
+                Execute(CreateAllFtsChunksSyncTriggersSql);
                 // Keep MCP resources/list cursors tied to the exact indexed-file snapshot.
                 // MCP resources/list カーソルをインデックス済みファイルのスナップショットに結び付ける。
                 Execute(EnsureResourceListGenerationSql);
@@ -3222,13 +3268,13 @@ public class DbContext : IDisposable
         var quotedTableName = SqliteIdentifier.Quote(tableName);
         var quotedOldTableName = SqliteIdentifier.Quote(oldTableName);
         Execute($"DROP TABLE IF EXISTS {quotedOldTableName}");
-        Execute(DropFtsChunksInsertTriggerSql);
-        Execute(DropFtsChunksDeleteTriggerSql);
-        Execute(DropFtsChunksUpdateTriggerSql);
+        Execute(DropAllFtsChunksSyncTriggersSql);
         if (string.Equals(tableName, "chunks", StringComparison.Ordinal))
         {
             Execute("DROP TABLE IF EXISTS fts_chunks");
+            Execute($"DROP TABLE IF EXISTS {FtsChunksTrigramTableName}");
             _rebuildFtsAfterSchemaMigration = true;
+            _rebuildTrigramFtsAfterSchemaMigration = true;
         }
         Execute($"DELETE FROM {quotedTableName} WHERE file_id IS NULL");
         Execute($"ALTER TABLE {quotedTableName} RENAME TO {quotedOldTableName}");
@@ -3267,9 +3313,8 @@ public class DbContext : IDisposable
         // fresh database には無効化対象がなく、この table は DropAll 後に作成される。
         if (TableExists("codeindex_meta"))
             Execute(IncrementResourceListGenerationSql);
-        Execute(DropFtsChunksInsertTriggerSql);
-        Execute(DropFtsChunksDeleteTriggerSql);
-        Execute(DropFtsChunksUpdateTriggerSql);
+        Execute(DropAllFtsChunksSyncTriggersSql);
+        Execute($"DROP TABLE IF EXISTS {FtsChunksTrigramTableName}");
         Execute("DROP TABLE IF EXISTS fts_chunks");
         Execute("DROP TABLE IF EXISTS file_issues");
         Execute("DROP TABLE IF EXISTS hotspot_reference_counts");
