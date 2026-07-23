@@ -541,8 +541,52 @@ internal static partial class ProgramRunner
         var json = false;
         bool? redactPaths = null;
         var envInventory = DoctorEnvironmentInventoryMode.None;
-        foreach (var arg in args)
+        string? envDomain = null;
+        string? envCategory = null;
+        string? envSensitivity = null;
+        int? maxJsonBytes = null;
+        for (var i = 0; i < args.Length; i++)
         {
+            var arg = args[i];
+            if (arg == "--env-domain" || arg.StartsWith("--env-domain=", StringComparison.Ordinal))
+            {
+                _ = TryReadDoctorValueOption(args, ref i, arg, "--env-domain", wantsJson, jsonOptions, out envDomain, out var optionExitCode);
+                if (optionExitCode.HasValue)
+                    return optionExitCode.Value;
+                continue;
+            }
+            if (arg == "--env-category" || arg.StartsWith("--env-category=", StringComparison.Ordinal))
+            {
+                _ = TryReadDoctorValueOption(args, ref i, arg, "--env-category", wantsJson, jsonOptions, out envCategory, out var optionExitCode);
+                if (optionExitCode.HasValue)
+                    return optionExitCode.Value;
+                continue;
+            }
+            if (arg == "--env-sensitivity" || arg.StartsWith("--env-sensitivity=", StringComparison.Ordinal))
+            {
+                _ = TryReadDoctorValueOption(args, ref i, arg, "--env-sensitivity", wantsJson, jsonOptions, out envSensitivity, out var optionExitCode);
+                if (optionExitCode.HasValue)
+                    return optionExitCode.Value;
+                continue;
+            }
+            if (arg == "--max-json-bytes" || arg.StartsWith("--max-json-bytes=", StringComparison.Ordinal))
+            {
+                if (!TryConsumeInlineOrNext(args, ref i, arg, "--max-json-bytes", out var value)
+                    || !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+                    || parsed <= 0)
+                {
+                    return CommandErrorWriter.WriteJsonOrHuman(
+                        wantsJson,
+                        jsonOptions,
+                        "--max-json-bytes requires a positive integer.",
+                        CommandExitCodes.InvalidArgument,
+                        "pass a positive UTF-8 byte limit, for example `--max-json-bytes 16384`.",
+                        usage: GetDoctorUsage());
+                }
+                maxJsonBytes = parsed;
+                continue;
+            }
+
             switch (arg)
             {
                 case "--json":
@@ -569,19 +613,58 @@ internal static partial class ProgramRunner
                             ? "doctor supports --json only; --json=<format> is not supported."
                             : $"Unknown doctor argument: {arg}",
                         CommandExitCodes.InvalidArgument,
-                        "use `cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]]`.");
+                        $"use `{GetDoctorUsage()}`.");
             }
+        }
+
+        var filtersRequested = envDomain is not null || envCategory is not null || envSensitivity is not null;
+        if (filtersRequested && envInventory != DoctorEnvironmentInventoryMode.Full)
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                "doctor environment inventory filters require --env-inventory=full.",
+                CommandExitCodes.InvalidArgument,
+                "add `--env-inventory=full` before filtering by domain, category, or sensitivity.",
+                usage: GetDoctorUsage());
+        }
+        if (maxJsonBytes.HasValue && (!json || envInventory != DoctorEnvironmentInventoryMode.Full))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                "doctor --max-json-bytes requires --json and --env-inventory=full.",
+                CommandExitCodes.InvalidArgument,
+                "use `cdidx doctor --json --env-inventory=full --max-json-bytes <n>`.",
+                usage: GetDoctorUsage());
+        }
+
+        if (!TryFilterDoctorEnvironmentInventory(
+                envDomain,
+                envCategory,
+                envSensitivity,
+                wantsJson,
+                jsonOptions,
+                out var filteredInventory,
+                out var filterExitCode))
+        {
+            return filterExitCode;
         }
 
         if (json)
         {
-            WriteDoctorJson(appVersion, jsonOptions, redactPaths ?? true, envInventory == DoctorEnvironmentInventoryMode.Full);
-            return CommandExitCodes.Success;
+            return WriteDoctorJson(
+                appVersion,
+                jsonOptions,
+                redactPaths ?? true,
+                envInventory == DoctorEnvironmentInventoryMode.Full,
+                filteredInventory,
+                maxJsonBytes);
         }
 
         if (envInventory == DoctorEnvironmentInventoryMode.Full)
         {
-            WriteEnvironmentInventory();
+            WriteEnvironmentInventory(filteredInventory);
             return CommandExitCodes.Success;
         }
 
@@ -651,7 +734,96 @@ internal static partial class ProgramRunner
         Full,
     }
 
-    private static void WriteDoctorJson(string appVersion, JsonSerializerOptions jsonOptions, bool redactPaths, bool includeFullEnvironmentInventory)
+    private static string GetDoctorUsage()
+        => "cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]] [--env-domain <domain>] [--env-category <category>] [--env-sensitivity <sensitivity>] [--max-json-bytes <n>]";
+
+    private static bool TryReadDoctorValueOption(
+        string[] args,
+        ref int index,
+        string arg,
+        string flag,
+        bool wantsJson,
+        JsonSerializerOptions jsonOptions,
+        out string? value,
+        out int? exitCode)
+    {
+        value = null;
+        exitCode = null;
+        if (arg != flag && !arg.StartsWith(flag + "=", StringComparison.Ordinal))
+            return false;
+
+        if (!TryConsumeInlineOrNext(args, ref index, arg, flag, out var parsed)
+            || string.IsNullOrWhiteSpace(parsed))
+        {
+            exitCode = CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                $"{flag} requires a non-empty value.",
+                CommandExitCodes.InvalidArgument,
+                $"pass one value reported by `cdidx doctor --env-inventory` for {flag}.",
+                usage: GetDoctorUsage());
+            return true;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    private static bool TryFilterDoctorEnvironmentInventory(
+        string? domain,
+        string? category,
+        string? sensitivity,
+        bool wantsJson,
+        JsonSerializerOptions jsonOptions,
+        out IReadOnlyList<EnvironmentVariableInventoryItem> filtered,
+        out int exitCode)
+    {
+        filtered = [];
+        exitCode = CommandExitCodes.Success;
+        foreach (var (flag, value, selector) in new (string Flag, string? Value, Func<EnvironmentVariableInventoryItem, string> Selector)[]
+                 {
+                     ("--env-domain", domain, static item => item.Domain),
+                     ("--env-category", category, static item => item.Category),
+                     ("--env-sensitivity", sensitivity, static item => item.Sensitivity),
+                 })
+        {
+            if (value is null)
+                continue;
+            if (EnvironmentVariableInventory.Items.Any(item => string.Equals(selector(item), value, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            var allowed = string.Join(
+                ", ",
+                EnvironmentVariableInventory.Items
+                    .Select(selector)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(static candidate => candidate, StringComparer.Ordinal));
+            exitCode = CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                $"Unknown {flag} value: {value}",
+                CommandExitCodes.InvalidArgument,
+                $"choose one of: {allowed}.",
+                usage: GetDoctorUsage());
+            return false;
+        }
+
+        filtered = EnvironmentVariableInventory.Items
+            .Where(item => domain is null || string.Equals(item.Domain, domain, StringComparison.OrdinalIgnoreCase))
+            .Where(item => category is null || string.Equals(item.Category, category, StringComparison.OrdinalIgnoreCase))
+            .Where(item => sensitivity is null || string.Equals(item.Sensitivity, sensitivity, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(static item => item.Name, StringComparer.Ordinal)
+            .ToArray();
+        return true;
+    }
+
+    private static int WriteDoctorJson(
+        string appVersion,
+        JsonSerializerOptions jsonOptions,
+        bool redactPaths,
+        bool includeFullEnvironmentInventory,
+        IReadOnlyList<EnvironmentVariableInventoryItem> environmentInventory,
+        int? maxJsonBytes)
     {
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null);
         var build = ConsoleUi.LoadBuildMetadata();
@@ -684,13 +856,29 @@ internal static partial class ProgramRunner
                 DotCdidxrcJson: File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not_found",
                 DisableConfigFile: FormatDoctorJsonEnvironmentValue(CdidxConfigFile.DisableEnvVar, redactPaths)),
             CdidxEnv: EnumerateCdidxEnvironmentJson(redactPaths).ToArray(),
-            EnvironmentInventorySummary: EnvironmentVariableInventory.BuildSummary(),
-            EnvironmentInventory: includeFullEnvironmentInventory ? EnvironmentVariableInventory.Items : null,
+            EnvironmentInventorySummary: includeFullEnvironmentInventory
+                ? EnvironmentVariableInventory.BuildSummary(environmentInventory)
+                : EnvironmentVariableInventory.BuildSummary(),
+            EnvironmentInventory: includeFullEnvironmentInventory ? environmentInventory : null,
             Redaction: new DoctorRedactionJsonResult(
                 PathsRedacted: redactPaths,
                 SecretsRedacted: true));
 
-        Console.WriteLine(JsonSerializer.Serialize(payload, CliJsonSerializerContextFactory.Create(jsonOptions).DoctorJsonResult));
+        var json = JsonSerializer.Serialize(payload, CliJsonSerializerContextFactory.Create(jsonOptions).DoctorJsonResult);
+        var byteCount = Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine);
+        if (maxJsonBytes.HasValue && byteCount > maxJsonBytes.Value)
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                $"doctor JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {maxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
+                CommandExitCodes.UsageError,
+                "increase --max-json-bytes or narrow the full environment inventory with --env-domain, --env-category, or --env-sensitivity.",
+                usage: GetDoctorUsage());
+        }
+
+        Console.WriteLine(json);
+        return CommandExitCodes.Success;
     }
 
     private static DoctorDisplayJsonResult BuildDoctorDisplayJson()
@@ -834,10 +1022,10 @@ internal static partial class ProgramRunner
         return value.Trim() is not ("0" or "false" or "False" or "FALSE" or "no" or "No" or "NO");
     }
 
-    private static void WriteEnvironmentInventory()
+    private static void WriteEnvironmentInventory(IReadOnlyList<EnvironmentVariableInventoryItem> items)
     {
         Console.WriteLine("environment_inventory:");
-        foreach (var item in EnvironmentVariableInventory.Items.OrderBy(static item => item.Name, StringComparer.Ordinal))
+        foreach (var item in items)
         {
             var firstLocation = item.Locations.FirstOrDefault();
             var location = firstLocation is null

@@ -27,6 +27,9 @@ internal static class ExportImportCommandRunner
     internal const int ManifestUnknownExtensionDecodedItemLimit = ManifestUnknownExtensionFileLimit;
     internal const int ManifestUnknownExtensionPathCharLimit = 4096;
     internal const int ManifestUnknownExtensionFilesTotalCharLimit = 32 * 1024;
+    internal const int MaxArchiveScopeValues = 64;
+    internal const int MaxArchiveScopeValueChars = 4096;
+    internal const int MaxArchiveScopeTotalChars = 32 * 1024;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private const string ExportCommandName = "export";
     private const string ImportCommandName = "import";
@@ -37,10 +40,13 @@ internal static class ExportImportCommandRunner
     private const string PhaseSha256 = "sha256";
     private const string PhaseSqliteValidate = "sqlite_validate";
     private const string PhasePrunePaths = "prune_paths";
+    private const string PhaseDestinationDelta = "destination_delta";
+    private const string PhaseScopeArchive = "scope_archive";
     private const string PhaseReplaceDb = "replace_db";
     private const string PhaseWriteArchive = "write_archive";
     private const string PhaseWriteCtags = "write_ctags";
-    private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]";
+    private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--limit <n<=10000>] [--offset <n>] [--json]";
+    private const string ArchiveExportUsage = "cdidx export <archive> [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]";
     private const string CtagsExportUsage = "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-generated]";
     private const string CtagsSkipInvalidName = "invalid_name";
     private const string CtagsSkipUnsupportedKind = "unsupported_kind";
@@ -71,6 +77,9 @@ internal static class ExportImportCommandRunner
         var prunePaths = false;
         var importMode = "import";
         var dryRun = false;
+        var limit = DiffCommandRunner.DefaultDiffLimit;
+        var offset = 0;
+        var pagingOptionSpecified = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -100,6 +109,32 @@ internal static class ExportImportCommandRunner
                 continue;
             }
 
+            if (TryReadValueOption(args, ref i, "--limit", arg, out var limitValue, out var limitError))
+            {
+                pagingOptionSpecified = true;
+                if (limitError != null
+                    || !int.TryParse(limitValue, NumberStyles.None, CultureInfo.InvariantCulture, out limit)
+                    || limit < 0
+                    || limit > DiffCommandRunner.MaxDiffLimit)
+                {
+                    return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_limit_invalid", $"--limit requires an integer from 0 to {DiffCommandRunner.MaxDiffLimit}.", "use `--limit 20` to bound destination delta samples.", ImportUsage);
+                }
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--offset", arg, out var offsetValue, out var offsetError))
+            {
+                pagingOptionSpecified = true;
+                if (offsetError != null
+                    || !int.TryParse(offsetValue, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
+                    || offset < 0
+                    || offset > int.MaxValue - limit)
+                {
+                    return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_offset_invalid", "--offset requires a non-negative integer that can be combined with --limit.", "use `--offset 0` for the first destination delta page.", ImportUsage);
+                }
+                continue;
+            }
+
             if (arg.StartsWith("-", StringComparison.Ordinal))
                 return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_unknown_option", $"unknown import option `{arg}`.", "use `cdidx import <archive> [--db <path>]`.", ImportUsage);
 
@@ -110,6 +145,10 @@ internal static class ExportImportCommandRunner
 
         if (string.IsNullOrWhiteSpace(archivePath))
             return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_archive_required", "import requires an archive path.", "pass an archive produced by `cdidx export <archive>`.", ImportUsage);
+        if (pagingOptionSpecified && !dryRun)
+            return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_paging_requires_dry_run", "--limit and --offset are only valid with --dry-run or --check.", "add `--dry-run` to preview bounded destination deltas.", ImportUsage);
+        if (offset > int.MaxValue - limit)
+            return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_offset_invalid", "--offset is too large for the requested --limit.", "choose a lower --offset.", ImportUsage);
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
@@ -206,6 +245,19 @@ internal static class ExportImportCommandRunner
 
             if (dryRun)
             {
+                phase = PhaseDestinationDelta;
+                var destinationDelta = BuildImportDestinationDelta(
+                    fullDbPath,
+                    tempPath,
+                    Path.GetFullPath(archivePath),
+                    limit,
+                    offset,
+                    cancellationToken);
+                AddImportValidationPhase(
+                    validationPhases,
+                    PhaseDestinationDelta,
+                    destinationDelta.Comparable ? "success" : "unavailable",
+                    destinationDelta.Message);
                 AddImportValidationPhase(validationPhases, PhaseReplaceDb, "skipped", $"{importMode} mode does not replace the destination database");
                 var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
                 if (wantsJson)
@@ -222,6 +274,7 @@ internal static class ExportImportCommandRunner
                             prunePaths ? importTargetProjectRoot : null,
                             ReplacementWouldBeAllowed: true,
                             validationPhases,
+                            DestinationDelta: destinationDelta,
                             UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
                             UnknownExtensionFiles: manifest.UnknownExtensionFiles,
                             UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
@@ -234,7 +287,7 @@ internal static class ExportImportCommandRunner
                 else
                 {
                     Console.WriteLine(FormatImportSuccessMessage(
-                        $"Validated CodeIndex archive {Path.GetFullPath(archivePath)}; replacement would be allowed for {fullDbPath}",
+                        $"Validated CodeIndex archive {Path.GetFullPath(archivePath)}; replacement would be allowed for {fullDbPath}{FormatDestinationDeltaSummary(destinationDelta)}",
                         prunePaths,
                         importTargetProjectRoot));
                 }
@@ -329,6 +382,12 @@ internal static class ExportImportCommandRunner
     {
         string? outputPath = null;
         string? dbPath = null;
+        string? lang = null;
+        string? solution = null;
+        var pathPatterns = new List<string>();
+        var excludePathPatterns = new List<string>();
+        var projects = new List<string>();
+        var excludeTests = false;
         var wantsJson = Array.Exists(args, arg => arg == "--json");
 
         for (var i = 0; i < args.Length; i++)
@@ -339,25 +398,74 @@ internal static class ExportImportCommandRunner
                 wantsJson = true;
                 continue;
             }
+            if (arg == "--exclude-tests")
+            {
+                excludeTests = true;
+                continue;
+            }
 
             if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
             {
                 if (dbError != null)
-                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_db_requires_value", dbError, "use `cdidx export <archive> --db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_db_requires_value", dbError, "use `cdidx export <archive> --db <path>`.", ArchiveExportUsage);
                 dbPath = dbValue;
                 continue;
             }
 
+            if (TryReadValueOption(args, ref i, "--lang", arg, out var langValue, out var langError))
+            {
+                if (langError != null)
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_lang_requires_value", langError, "pass a language name such as `csharp`, `cs`, or `python`.", ArchiveExportUsage);
+                lang = DbReader.NormalizeQueryLanguage(langValue);
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--path", arg, out var pathValue, out var pathError))
+            {
+                if (pathError != null)
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_path_requires_value", pathError, "pass a path substring or glob such as `src/` or `src/*.cs`.", ArchiveExportUsage);
+                pathPatterns.Add(pathValue!);
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--exclude-path", arg, out var excludePathValue, out var excludePathError))
+            {
+                if (excludePathError != null)
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_exclude_path_requires_value", excludePathError, "pass a path substring or glob to omit.", ArchiveExportUsage);
+                excludePathPatterns.Add(excludePathValue!);
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--project", arg, out var projectValue, out var projectError))
+            {
+                if (projectError != null)
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_project_requires_value", projectError, "pass a project name or project path.", ArchiveExportUsage);
+                projects.Add(projectValue!);
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--solution", arg, out var solutionValue, out var solutionError))
+            {
+                if (solutionError != null)
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_solution_requires_value", solutionError, "pass a solution path used to resolve project names.", ArchiveExportUsage);
+                solution = solutionValue;
+                continue;
+            }
+
             if (arg.StartsWith("-", StringComparison.Ordinal))
-                return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_unknown_option", $"unknown export option `{arg}`.", "use `cdidx export <archive> [--db <path>]` or `cdidx export ctags`.", "cdidx export <archive> [--db <path>] [--json]");
+                return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_unknown_option", $"unknown export option `{arg}`.", "use archive scope flags or `cdidx export ctags`.", ArchiveExportUsage);
 
             if (outputPath != null)
-                return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_extra_archive_path", $"export accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", "cdidx export <archive> [--db <path>] [--json]");
+                return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_extra_archive_path", $"export accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", ArchiveExportUsage);
             outputPath = arg;
         }
 
         if (string.IsNullOrWhiteSpace(outputPath))
-            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_required", "export requires an output archive path.", "pass a destination such as `codeindex.cdidx.zip`, or use `cdidx export ctags`.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_required", "export requires an output archive path.", "pass a destination such as `codeindex.cdidx.zip`, or use `cdidx export ctags`.", ArchiveExportUsage);
+        if (solution != null && projects.Count == 0)
+            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_solution_requires_project", "--solution requires at least one --project filter.", "add `--project <name|path>` or remove `--solution`.", ArchiveExportUsage);
+        if (!TryValidateArchiveScopeValues(pathPatterns, excludePathPatterns, projects, solution, out var scopeValidationMessage))
+            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_scope_invalid", scopeValidationMessage, "reduce or shorten the archive scope values.", ArchiveExportUsage);
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
@@ -368,15 +476,22 @@ internal static class ExportImportCommandRunner
                 out var validationMessage,
                 out _,
                 out _))
-            return WriteExportError(wantsJson, jsonOptions, PhaseSqliteValidate, "export_database_invalid", validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseSqliteValidate, "export_database_invalid", validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", ArchiveExportUsage);
 
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
         var fullOutputPath = Path.GetFullPath(outputPath);
         if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
         {
-            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_overlaps_database", "export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_overlaps_database", "export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", ArchiveExportUsage);
         }
 
+        var scopeOptions = new ArchiveExportOptions(
+            lang,
+            pathPatterns.ToArray(),
+            excludePathPatterns.ToArray(),
+            projects.ToArray(),
+            solution,
+            excludeTests);
         string? snapshotDirectory = null;
         string? snapshotPath = null;
         var phase = PhaseWriteArchive;
@@ -392,11 +507,29 @@ internal static class ExportImportCommandRunner
             phase = PhaseSqliteValidate;
             CreateDatabaseSnapshot(normalizedDbPath, snapshotPath, cancellationToken);
             ExportManifest manifest;
-            using (var snapshotConnection = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath)))
+            if (scopeOptions.IsScoped)
             {
+                using var snapshotContext = new DbContext(DbOpenIntent.Migration, snapshotPath, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                snapshotContext.TryMigrateForRead();
+                if (snapshotContext.LastMigrationFailure is { } migrationFailure)
+                {
+                    throw new InvalidDataException(
+                        $"export snapshot schema migration failed at {migrationFailure.Step}: {migrationFailure.SqliteMessage}");
+                }
+                phase = PhaseScopeArchive;
+                var snapshotConnection = snapshotContext.Connection;
+                var scope = ApplyArchiveScope(snapshotConnection, scopeOptions, cancellationToken);
+                manifest = BuildManifest(snapshotConnection, appVersion, scope, cancellationToken);
+            }
+            else
+            {
+                using var snapshotConnection = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
                 cancellationToken.ThrowIfCancellationRequested();
                 snapshotConnection.Open();
-                manifest = BuildManifest(snapshotConnection, appVersion, cancellationToken);
+                phase = PhaseScopeArchive;
+                var scope = ApplyArchiveScope(snapshotConnection, scopeOptions, cancellationToken);
+                manifest = BuildManifest(snapshotConnection, appVersion, scope, cancellationToken);
             }
             SqliteConnection.ClearAllPools();
             phase = PhaseSha256;
@@ -405,7 +538,13 @@ internal static class ExportImportCommandRunner
             WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions, cancellationToken);
 
             if (wantsJson)
-                Console.WriteLine(JsonSerializer.Serialize(new ExportArchiveResult("1", fullOutputPath, fullSourceDbPath), jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new ExportArchiveResult(
+                        "1",
+                        fullOutputPath,
+                        fullSourceDbPath,
+                        manifest.Scope ?? throw new InvalidDataException("export scope metadata was not created")),
+                    jsonOptions));
             else
                 Console.WriteLine($"Exported CodeIndex archive to {fullOutputPath}");
             return CommandExitCodes.Success;
@@ -419,12 +558,12 @@ internal static class ExportImportCommandRunner
                 CommandErrorCodes.Interrupted,
                 "export cancelled before it could complete.",
                 "retry `cdidx export` after the cancelling operation completes.",
-                "cdidx export <archive> [--db <path>] [--json]",
+                ArchiveExportUsage,
                 CommandExitCodes.CancelledBySignal);
         }
         catch (Exception ex)
         {
-            return WriteExportError(wantsJson, jsonOptions, phase, "export_failed", $"export failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the database and output archive paths.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteExportError(wantsJson, jsonOptions, phase, "export_failed", $"export failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the database, scope, project, and output archive paths.", ArchiveExportUsage);
         }
         finally
         {
@@ -765,7 +904,316 @@ internal static class ExportImportCommandRunner
             .Append(SanitizeCtagsField(value));
     }
 
-    private static ExportManifest BuildManifest(SqliteConnection connection, string appVersion, CancellationToken cancellationToken)
+    private static ArchiveExportScopeResult ApplyArchiveScope(
+        SqliteConnection connection,
+        ArchiveExportOptions options,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var sourceFileCount = ReadTableCount(connection, "files", cancellationToken);
+        var projectPathPatterns = Array.Empty<string>();
+        if (options.Projects.Count > 0)
+        {
+            var projectRoot = ReadMetaString(connection, DbContext.IndexedProjectRootMetaKey);
+            if (string.IsNullOrWhiteSpace(projectRoot))
+                throw new InvalidOperationException("archive project filters require indexed_project_root metadata");
+            projectPathPatterns = SolutionProjectResolver
+                .ResolveProjectDirectoryGlobs(projectRoot, options.Projects, options.Solution)
+                .ToArray();
+        }
+
+        var effectivePathPatterns = options.PathPatterns.Concat(projectPathPatterns).ToArray();
+        var scoped =
+            !string.IsNullOrWhiteSpace(options.Lang)
+            || effectivePathPatterns.Length > 0
+            || options.ExcludePathPatterns.Count > 0
+            || options.ExcludeTests;
+        if (!scoped)
+        {
+            return new ArchiveExportScopeResult(
+                false,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePathPatterns,
+                options.Projects,
+                options.Solution,
+                options.ExcludeTests,
+                projectPathPatterns,
+                sourceFileCount,
+                sourceFileCount);
+        }
+
+        using (var foreignKeys = connection.CreateCommand())
+        {
+            foreignKeys.CommandText = "PRAGMA foreign_keys = ON";
+            foreignKeys.ExecuteNonQuery();
+        }
+
+        using (var transaction = connection.BeginTransaction())
+        {
+            using var keepCommand = connection.CreateCommand();
+            keepCommand.Transaction = transaction;
+            keepCommand.CommandText = """
+                CREATE TEMP TABLE archive_scope_files(id INTEGER PRIMARY KEY);
+                INSERT INTO archive_scope_files(id)
+                SELECT f.id
+                FROM files f
+                WHERE 1 = 1
+                """;
+            if (!string.IsNullOrWhiteSpace(options.Lang))
+                keepCommand.CommandText += " AND f.lang = @lang";
+            if (effectivePathPatterns.Length > 0)
+            {
+                var pathPredicates = new List<string>(effectivePathPatterns.Length);
+                for (var i = 0; i < effectivePathPatterns.Length; i++)
+                    pathPredicates.Add(DbReader.BuildPathFilterPredicate("f", "archivePath", i, effectivePathPatterns[i]));
+                keepCommand.CommandText += " AND (" + string.Join(" OR ", pathPredicates) + ")";
+            }
+            for (var i = 0; i < options.ExcludePathPatterns.Count; i++)
+                keepCommand.CommandText += $" AND NOT {DbReader.BuildPathFilterPredicate("f", "archiveExcludePath", i, options.ExcludePathPatterns[i])}";
+            if (options.ExcludeTests)
+                keepCommand.CommandText += $" AND NOT {DbReader.TestPathCondition}";
+            if (!string.IsNullOrWhiteSpace(options.Lang))
+                SqliteCommandPolicy.Add(keepCommand, "@lang", options.Lang);
+            DbReader.AddPathFilterParameterSet(keepCommand, "archivePath", effectivePathPatterns);
+            DbReader.AddPathFilterParameterSet(keepCommand, "archiveExcludePath", options.ExcludePathPatterns);
+            keepCommand.ExecuteNonQuery();
+
+            using var pruneCommand = connection.CreateCommand();
+            pruneCommand.Transaction = transaction;
+            pruneCommand.CommandText = """
+                DELETE FROM symbol_reference_candidates
+                WHERE reference_id IN (
+                    SELECT r.id
+                    FROM symbol_references r
+                    WHERE r.file_id NOT IN (SELECT id FROM archive_scope_files)
+                )
+                   OR symbol_id IN (
+                    SELECT s.id
+                    FROM symbols s
+                    WHERE s.file_id NOT IN (SELECT id FROM archive_scope_files)
+                );
+
+                UPDATE symbol_references
+                SET source_symbol_id = NULL
+                WHERE source_symbol_id IN (
+                    SELECT s.id
+                    FROM symbols s
+                    WHERE s.file_id NOT IN (SELECT id FROM archive_scope_files)
+                );
+
+                UPDATE symbol_references
+                SET target_symbol_id = NULL
+                WHERE target_symbol_id IN (
+                    SELECT s.id
+                    FROM symbols s
+                    WHERE s.file_id NOT IN (SELECT id FROM archive_scope_files)
+                );
+
+                DELETE FROM files
+                WHERE id NOT IN (SELECT id FROM archive_scope_files);
+
+                DELETE FROM symbol_reference_candidates
+                WHERE reference_id NOT IN (SELECT id FROM symbol_references)
+                   OR symbol_id NOT IN (SELECT id FROM symbols);
+
+                DROP TABLE archive_scope_files;
+                """;
+            pruneCommand.ExecuteNonQuery();
+            DbWriter.RebuildRetainedReferenceGraph(connection, transaction, cancellationToken);
+            transaction.Commit();
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using (var foreignKeyCheck = connection.CreateCommand())
+        {
+            foreignKeyCheck.CommandText = "PRAGMA foreign_key_check";
+            using var reader = foreignKeyCheck.ExecuteReader();
+            if (reader.Read())
+                throw new InvalidDataException("scoped archive snapshot failed SQLite foreign-key validation");
+        }
+
+        using (var vacuum = connection.CreateCommand())
+        {
+            vacuum.CommandText = "VACUUM";
+            vacuum.ExecuteNonQuery();
+        }
+
+        var exportedFileCount = ReadTableCount(connection, "files", cancellationToken);
+        return new ArchiveExportScopeResult(
+            true,
+            options.Lang,
+            options.PathPatterns,
+            options.ExcludePathPatterns,
+            options.Projects,
+            options.Solution,
+            options.ExcludeTests,
+            projectPathPatterns,
+            sourceFileCount,
+            exportedFileCount);
+    }
+
+    private static bool TryValidateArchiveScopeValues(
+        IReadOnlyList<string> pathPatterns,
+        IReadOnlyList<string> excludePathPatterns,
+        IReadOnlyList<string> projects,
+        string? solution,
+        out string message)
+    {
+        var values = pathPatterns.Concat(excludePathPatterns).Concat(projects).ToList();
+        if (solution != null)
+            values.Add(solution);
+        if (values.Count > MaxArchiveScopeValues)
+        {
+            message = $"archive export accepts at most {MaxArchiveScopeValues} scope values";
+            return false;
+        }
+
+        var totalChars = 0;
+        foreach (var value in values)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                message = "archive scope values must not be empty";
+                return false;
+            }
+            if (value.Length > MaxArchiveScopeValueChars)
+            {
+                message = $"archive scope values must not exceed {MaxArchiveScopeValueChars} characters";
+                return false;
+            }
+            totalChars += value.Length;
+            if (totalChars > MaxArchiveScopeTotalChars)
+            {
+                message = $"archive scope values exceed the combined limit of {MaxArchiveScopeTotalChars} characters";
+                return false;
+            }
+        }
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static ImportDestinationDeltaResult BuildImportDestinationDelta(
+        string destinationDbPath,
+        string importedDbPath,
+        string archivePath,
+        int limit,
+        int offset,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!File.Exists(destinationDbPath))
+        {
+            return new ImportDestinationDeltaResult(
+                DestinationExists: false,
+                Comparable: false,
+                Status: "destination_missing",
+                Comparison: null,
+                Message: "destination database does not exist; the archive would create it");
+        }
+
+        var snapshotDirectory = Path.GetDirectoryName(importedDbPath)
+            ?? throw new InvalidOperationException("import comparison directory could not be resolved");
+        var destinationSnapshotPath = Path.Combine(snapshotDirectory, "destination-codeindex.db");
+        try
+        {
+            try
+            {
+                using (var source = BoundedFile.OpenReadForIndexContent(destinationDbPath))
+                {
+                    if (source.Length > MaxImportDatabaseBytes)
+                    {
+                        return new ImportDestinationDeltaResult(
+                            DestinationExists: true,
+                            Comparable: false,
+                            Status: "destination_too_large",
+                            Comparison: null,
+                            Message: $"destination database exceeds the comparison limit of {ConsoleUi.FormatBytes(MaxImportDatabaseBytes)}");
+                    }
+
+                    Span<byte> header = stackalloc byte[16];
+                    if (source.Read(header) != header.Length || !header.SequenceEqual("SQLite format 3\0"u8))
+                    {
+                        return new ImportDestinationDeltaResult(
+                            DestinationExists: true,
+                            Comparable: false,
+                            Status: "destination_unreadable",
+                            Comparison: null,
+                            Message: "destination database could not be compared from a non-mutating snapshot: file header is not SQLite format 3");
+                    }
+                }
+
+                CreateDatabaseSnapshot(destinationDbPath, destinationSnapshotPath, cancellationToken);
+            }
+            catch (Exception ex) when (ex is SqliteException or CodeIndexException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return new ImportDestinationDeltaResult(
+                    DestinationExists: true,
+                    Comparable: false,
+                    Status: "destination_unreadable",
+                    Comparison: null,
+                    Message: $"destination database could not be compared from a non-mutating snapshot: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
+            }
+
+            if (!DbContext.TryValidateExistingCodeIndexDb(
+                    destinationSnapshotPath,
+                    requireWritable: false,
+                    requireSupportedUserVersion: false,
+                    out var validationMessage,
+                    out _,
+                    out _,
+                    cancellationToken))
+            {
+                return new ImportDestinationDeltaResult(
+                    DestinationExists: true,
+                    Comparable: false,
+                    Status: "destination_unreadable",
+                    Comparison: null,
+                    Message: $"destination database could not be compared from a non-mutating snapshot: {validationMessage}");
+            }
+
+            var comparison = DiffCommandRunner.CompareDatabases(
+                destinationSnapshotPath,
+                importedDbPath,
+                limit,
+                offset,
+                detailed: true,
+                cancellationToken,
+                destinationDbPath,
+                archivePath);
+            var comparable = comparison.Status != "schema_mismatch";
+            return new ImportDestinationDeltaResult(
+                DestinationExists: true,
+                Comparable: comparable,
+                Status: comparable ? "compared" : "schema_mismatch",
+                Comparison: comparison,
+                Message: comparable
+                    ? "destination database was compared from a non-mutating snapshot with the validated archive snapshot"
+                    : "destination and archive schema versions differ");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteFile(destinationSnapshotPath, "import destination comparison snapshot");
+            DeleteSqliteSidecars(destinationSnapshotPath, "import destination comparison snapshot sidecar");
+        }
+    }
+
+    private static string FormatDestinationDeltaSummary(ImportDestinationDeltaResult destinationDelta)
+    {
+        if (!destinationDelta.Comparable || destinationDelta.Comparison is not { } comparison)
+            return $"; {destinationDelta.Message}";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"; destination delta: files {comparison.Summary.FileCountDelta:+#;-#;0}, symbols {comparison.Summary.SymbolCountDelta:+#;-#;0}, references {comparison.Summary.ReferenceCountDelta:+#;-#;0}");
+    }
+
+    private static ExportManifest BuildManifest(
+        SqliteConnection connection,
+        string appVersion,
+        ArchiveExportScopeResult scope,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var userVersion = ReadSqliteUserVersion(connection);
@@ -800,7 +1248,8 @@ internal static class ExportImportCommandRunner
             UnknownExtensionFilePathLimit: ReadMetaInt(connection, DbContext.UnknownExtensionFilePathLimitMetaKey),
             UnknownExtensionFileSampleCount: unknownExtensionFiles.Count,
             UnknownExtensionFileSampleLimit: unknownExtensionFiles.Limit,
-            UnknownExtensionFileSampleTruncated: unknownExtensionFiles.Truncated);
+            UnknownExtensionFileSampleTruncated: unknownExtensionFiles.Truncated,
+            Scope: scope);
     }
 
     private static void AddTextEntry(ZipArchive archive, string name, string content)
@@ -1756,7 +2205,9 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("unknown_extension_file_sample_limit")]
         int? UnknownExtensionFileSampleLimit = null,
         [property: JsonPropertyName("unknown_extension_file_sample_truncated")]
-        bool? UnknownExtensionFileSampleTruncated = null);
+        bool? UnknownExtensionFileSampleTruncated = null,
+        [property: JsonPropertyName("scope")]
+        ArchiveExportScopeResult? Scope = null);
     internal sealed record ExportImportErrorResult(
         [property: JsonPropertyName("api_version")] string ApiVersion,
         [property: JsonPropertyName("status")] string Status,
@@ -1795,6 +2246,8 @@ internal static class ExportImportCommandRunner
         string? PrunedProjectRoot,
         [property: JsonPropertyName("replacement_would_be_allowed")] bool ReplacementWouldBeAllowed,
         [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases,
+        [property: JsonPropertyName("destination_delta")]
+        ImportDestinationDeltaResult? DestinationDelta = null,
         [property: JsonPropertyName("unknown_extension_file_count")] long? UnknownExtensionFileCount = null,
         [property: JsonPropertyName("unknown_extension_files")] string[]? UnknownExtensionFiles = null,
         [property: JsonPropertyName("unknown_extension_files_truncated")] bool? UnknownExtensionFilesTruncated = null,
@@ -1802,7 +2255,46 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("unknown_extension_file_sample_count")] int? UnknownExtensionFileSampleCount = null,
         [property: JsonPropertyName("unknown_extension_file_sample_limit")] int? UnknownExtensionFileSampleLimit = null,
         [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null);
-    internal sealed record ExportArchiveResult(string ApiVersion, string ArchivePath, string DbPath);
+    internal sealed record ImportDestinationDeltaResult(
+        [property: JsonPropertyName("destination_exists")] bool DestinationExists,
+        [property: JsonPropertyName("comparable")] bool Comparable,
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("comparison")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        DiffJsonResult? Comparison,
+        [property: JsonPropertyName("message")] string Message);
+    internal sealed record ExportArchiveResult(
+        [property: JsonPropertyName("api_version")] string ApiVersion,
+        [property: JsonPropertyName("archive_path")] string ArchivePath,
+        [property: JsonPropertyName("db_path")] string DbPath,
+        [property: JsonPropertyName("scope")] ArchiveExportScopeResult Scope);
+    private sealed record ArchiveExportOptions(
+        string? Lang,
+        IReadOnlyList<string> PathPatterns,
+        IReadOnlyList<string> ExcludePathPatterns,
+        IReadOnlyList<string> Projects,
+        string? Solution,
+        bool ExcludeTests)
+    {
+        internal bool IsScoped =>
+            !string.IsNullOrWhiteSpace(Lang) ||
+            PathPatterns.Count > 0 ||
+            ExcludePathPatterns.Count > 0 ||
+            Projects.Count > 0 ||
+            !string.IsNullOrWhiteSpace(Solution) ||
+            ExcludeTests;
+    }
+    internal sealed record ArchiveExportScopeResult(
+        [property: JsonPropertyName("scoped")] bool Scoped,
+        [property: JsonPropertyName("lang")] string? Lang,
+        [property: JsonPropertyName("path")] IReadOnlyList<string> PathPatterns,
+        [property: JsonPropertyName("exclude_path")] IReadOnlyList<string> ExcludePathPatterns,
+        [property: JsonPropertyName("project")] IReadOnlyList<string> Projects,
+        [property: JsonPropertyName("solution")] string? Solution,
+        [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
+        [property: JsonPropertyName("resolved_project_path")] IReadOnlyList<string> ResolvedProjectPathPatterns,
+        [property: JsonPropertyName("source_file_count")] long SourceFileCount,
+        [property: JsonPropertyName("exported_file_count")] long ExportedFileCount);
     private sealed record CtagsExportOptions(
         string? Lang,
         IReadOnlyList<string> PathPatterns,

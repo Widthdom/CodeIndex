@@ -73,7 +73,12 @@ public sealed class DiffCommandHelpersTests
             null,
             null,
             null,
+            null,
+            null,
+            null,
+            null,
             5,
+            0,
             false);
 
     private static string CaptureStdout(Action action)
