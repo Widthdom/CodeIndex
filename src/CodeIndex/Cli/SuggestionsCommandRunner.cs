@@ -95,7 +95,10 @@ internal static class SuggestionsCommandRunner
             return WriteUsageError("--overwrite requires --output <path>.", options.Json, jsonOptions);
         if ((options.ActorSpecified || options.ReasonSpecified) && (verb != "update" || !options.StatusSpecified))
             return WriteUsageError("--actor and --reason can only be used with `suggestions update <id> --status <state>`.", options.Json, jsonOptions);
-        if (verb == "export" && options.Json && options.ExportFormat == "markdown")
+        if (verb == "export"
+            && options.Json
+            && options.ExportFormat == "markdown"
+            && options.OutputPath == null)
             return WriteUsageError(
                 "`suggestions export --format markdown` cannot be combined with --json; use --format json or remove --json.",
                 options.Json,
@@ -650,18 +653,16 @@ internal static class SuggestionsCommandRunner
                 AtomicFileWriter.WriteProfile.Public,
                 options.Overwrite);
         }
+        catch (AtomicFileWriter.DestinationAlreadyExistsException)
+        {
+            return WriteUsageError(
+                $"Suggestion export output already exists: {ConsoleUi.FormatBoundedValue(options.OutputPath)}",
+                options.Json,
+                jsonOptions,
+                "Choose another path or pass --overwrite to replace it atomically.");
+        }
         catch (Exception ex) when (IsSuggestionStoreFileSystemException(ex))
         {
-            if (!options.Overwrite
-                && fullOutputPath != null
-                && File.Exists(LongPath.EnsureWindowsPrefix(fullOutputPath)))
-            {
-                return WriteUsageError(
-                    $"Suggestion export output already exists: {ConsoleUi.FormatBoundedValue(options.OutputPath)}",
-                    options.Json,
-                    jsonOptions,
-                    "Choose another path or pass --overwrite to replace it atomically.");
-            }
 
             return CommandErrorWriter.WriteJsonOrHuman(
                 options.Json,

@@ -1391,6 +1391,24 @@ public class ConsoleUiTests
         Assert.Contains("-l output -s o -r", flagSets.FishScript);
     }
 
+    [Fact]
+    public void CompletionRenderer_SuggestionsExposesOutputAcrossShells_Issue4719()
+    {
+        var flagSets = ExtractComparableSubcommandFlagSets("suggestions", "export");
+
+        Assert.Contains("output", flagSets.Bash);
+        Assert.Contains("output", flagSets.Zsh);
+        Assert.Contains("output", flagSets.Fish);
+
+        var powerShell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        var suggestionsBranch = ExtractBetween(
+            powerShell,
+            "'suggestions' { $flags = @(",
+            ") }");
+        Assert.Contains("'--output'", suggestionsBranch, StringComparison.Ordinal);
+        Assert.Contains("'-o'", suggestionsBranch, StringComparison.Ordinal);
+    }
+
     private static (SortedSet<string> Bash, SortedSet<string> Zsh, SortedSet<string> Fish, string BashScript, string ZshScript, string FishScript)
         ExtractComparableSubcommandFlagSets(string subcommand, string nextSubcommand)
     {

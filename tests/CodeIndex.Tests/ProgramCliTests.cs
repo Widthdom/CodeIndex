@@ -1714,13 +1714,20 @@ public class ProgramCliTests
             "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown",
             "--output", outputPath, "--overwrite"
         ]);
+        var jsonOutputPath = fixture.GetPath("exports", "suggestions-summary.md");
+        var (jsonExitCode, jsonStdout, jsonStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown",
+            "--output", jsonOutputPath, "--json"
+        ]);
 
         Assert.Equal(CommandExitCodes.Success, createExitCode);
         Assert.Equal(CommandExitCodes.UsageError, refuseExitCode);
         Assert.Equal(CommandExitCodes.Success, overwriteExitCode);
+        Assert.Equal(CommandExitCodes.Success, jsonExitCode);
         Assert.Equal(string.Empty, createStderr);
         Assert.Equal(string.Empty, refuseStdout);
         Assert.Equal(string.Empty, overwriteStderr);
+        Assert.Equal(string.Empty, jsonStderr);
         Assert.Contains("Wrote 1 suggestion", createStdout);
         Assert.Contains("already exists", refuseStderr);
         Assert.Contains("--overwrite", refuseStderr);
@@ -1728,6 +1735,11 @@ public class ProgramCliTests
         Assert.False(originalBytes.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }));
         Assert.Contains("Write suggestions to a bounded file", Encoding.UTF8.GetString(originalBytes));
         Assert.Contains("Document explicit overwrite behavior", File.ReadAllText(outputPath, Encoding.UTF8));
+        using var jsonSummary = JsonDocument.Parse(jsonStdout);
+        Assert.Equal("success", jsonSummary.RootElement.GetProperty("status").GetString());
+        Assert.Equal("markdown", jsonSummary.RootElement.GetProperty("format").GetString());
+        Assert.Equal(Path.GetFullPath(jsonOutputPath), jsonSummary.RootElement.GetProperty("output_path").GetString());
+        Assert.Contains("Document explicit overwrite behavior", File.ReadAllText(jsonOutputPath, Encoding.UTF8));
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(outputPath)!, "*.tmp"));
     }
 

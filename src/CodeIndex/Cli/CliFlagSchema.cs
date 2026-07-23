@@ -428,7 +428,7 @@ internal static class CliFlagSchema
             new() { Name = "--watch", Description = "Continuous reindex on file changes (rejects --commits / --changed-between / --files / --dry-run)", PrimaryCommands = Set("index") },
             new() { Name = "--debounce", ValuePlaceholder = "<ms>", Description = "Watch only: coalesce file events into one update after <ms> of quiet (default 500)", PrimaryCommands = Set("index") },
             new() { Name = "--watch-pending-path-limit", ValuePlaceholder = "<n>", Description = "Watch only: changed-path queue limit before full-rescan fallback", PrimaryCommands = Set("index") },
-            new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", Description = "Report bundle or suggestions export output path", PrimaryCommands = Set("report"), AlsoAcceptedBy = Set("suggestions") },
+            new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", Description = "Report bundle or suggestions export output path", PrimaryCommands = Set("report", "suggestions") },
             new() { Name = "--redact-paths", Description = "Report: accepted for doctor/report parity; report paths are redacted by default", PrimaryCommands = Set("report") },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", PrimaryCommands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", PrimaryCommands = Set("report") },

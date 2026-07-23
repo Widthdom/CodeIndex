@@ -17,6 +17,14 @@ internal static class AtomicFileWriter
         Sensitive,
     }
 
+    internal sealed class DestinationAlreadyExistsException : IOException
+    {
+        public DestinationAlreadyExistsException(string path, Exception innerException)
+            : base($"Atomic file destination already exists: {ConsoleUi.FormatBoundedValue(path)}", innerException)
+        {
+        }
+    }
+
     public static void WriteText(string path, string contents, Encoding encoding, Action<string>? applyFileMode = null)
     {
         Write(
@@ -109,7 +117,15 @@ internal static class AtomicFileWriter
             }
             else
             {
-                MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
+                try
+                {
+                    MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
+                }
+                catch (IOException ex) when (File.Exists(LongPath.EnsureWindowsPrefix(path)))
+                {
+                    throw new DestinationAlreadyExistsException(path, ex);
+                }
+                moved = true;
                 FlushParentDirectoryAfterCreate(path);
             }
             moved = true;
