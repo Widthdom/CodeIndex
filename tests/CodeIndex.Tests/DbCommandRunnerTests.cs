@@ -188,12 +188,32 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_RestoreAndCheckpointCleanupDryRunsSetPreviewFlags_Issue4717()
+    {
+        var restore = DbCommandRunner.ParseArgs(["restore", "saved", "--dry-run"]);
+        var delete = DbCommandRunner.ParseArgs(["checkpoints", "--delete", "saved", "--dry-run"]);
+        var prune = DbCommandRunner.ParseArgs(["checkpoints", "--prune", "--keep", "3", "--dry-run"]);
+
+        Assert.True(restore.RestoreDryRun);
+        Assert.True(delete.CheckpointsDelete);
+        Assert.True(delete.CheckpointsDryRun);
+        Assert.Equal("saved", delete.Name);
+        Assert.True(prune.CheckpointsPrune);
+        Assert.True(prune.CheckpointsDryRun);
+        Assert.Equal(3, prune.CheckpointsKeep);
+        Assert.Null(restore.ParseError);
+        Assert.Null(delete.ParseError);
+        Assert.Null(prune.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_RestoreBackupsPruneSetsKeep_Issue3833()
     {
-        var options = DbCommandRunner.ParseArgs(["restore-backups", "--prune", "--keep", "3"]);
+        var options = DbCommandRunner.ParseArgs(["restore-backups", "--prune", "--keep", "3", "--dry-run"]);
 
         Assert.True(options.RestoreBackups);
         Assert.True(options.RestoreBackupsPrune);
+        Assert.True(options.RestoreBackupsDryRun);
         Assert.Equal(3, options.RestoreBackupsKeep);
         Assert.Null(options.ParseError);
     }
@@ -659,6 +679,84 @@ public class DbCommandRunnerTests
         }
         finally
         {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreDryRun_ValidatesManifestPathsAndSpaceWithoutMutation_Issue4717()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_dry_run_4717");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.AvailableFreeSpaceForTesting = _ => 1_000_000;
+
+            var (exitCode, json) = RunAndCaptureJson(["restore", "saved", "--dry-run", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.True(json.GetProperty("ready").GetBoolean());
+            Assert.True(json.GetProperty("manifest_valid").GetBoolean());
+            Assert.True(json.GetProperty("paths_valid").GetBoolean());
+            Assert.True(json.GetProperty("space_check_available").GetBoolean());
+            Assert.True(json.GetProperty("space_sufficient").GetBoolean());
+            Assert.True(json.GetProperty("required_space_bytes").GetInt64() > 0);
+            Assert.Equal(1_000_000, json.GetProperty("available_space_bytes").GetInt64());
+            Assert.Contains(
+                json.GetProperty("files").EnumerateArray(),
+                file => file.GetString() == "codeindex.db");
+            Assert.Equal("changed", File.ReadAllText(dbPath));
+            Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+            Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+        }
+        finally
+        {
+            DbCommandRunner.AvailableFreeSpaceForTesting = null;
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreDryRun_InvalidManifestAndInsufficientSpaceReportBlockingDiagnostics_Issue4717()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_invalid_dry_run_4717");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+            var (checkpointExit, checkpointJson) = RunAndCaptureJson(["checkpoint", "saved", "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            var checkpointPath = checkpointJson.GetProperty("checkpoint_path").GetString()!;
+            File.WriteAllText(
+                Path.Combine(checkpointPath, "manifest.txt"),
+                $"name=other{Environment.NewLine}created_at_utc=2026-01-01T00:00:00.0000000+00:00{Environment.NewLine}db_file=codeindex.db{Environment.NewLine}");
+            var before = File.ReadAllBytes(dbPath);
+            DbCommandRunner.AvailableFreeSpaceForTesting = _ => 0;
+
+            var (exitCode, json) = RunAndCaptureJson(["restore", "saved", "--dry-run", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal("invalid", json.GetProperty("status").GetString());
+            Assert.False(json.GetProperty("ready").GetBoolean());
+            Assert.False(json.GetProperty("manifest_valid").GetBoolean());
+            Assert.True(json.GetProperty("paths_valid").GetBoolean());
+            Assert.False(json.GetProperty("space_sufficient").GetBoolean());
+            Assert.Equal(CommandErrorCodes.DbError, json.GetProperty("error_code").GetString());
+            var diagnostics = json.GetProperty("diagnostics").EnumerateArray().ToArray();
+            Assert.Contains(diagnostics, diagnostic => diagnostic.GetProperty("code").GetString() == "checkpoint_manifest_invalid");
+            Assert.Contains(diagnostics, diagnostic => diagnostic.GetProperty("code").GetString() == "checkpoint_space_insufficient");
+            Assert.Equal(before, File.ReadAllBytes(dbPath));
+            Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+        }
+        finally
+        {
+            DbCommandRunner.AvailableFreeSpaceForTesting = null;
             DeleteWorkDirectory(root);
         }
     }
@@ -1156,6 +1254,73 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointsPruneAndDelete_DryRunReportsExactPathsBeforeMutation_Issue4717()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_cleanup_4717");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+            foreach (var name in new[] { "older", "middle", "newer" })
+            {
+                var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", name, "--db", dbPath]);
+                Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            }
+
+            var checkpointRoot = dbPath + ".checkpoints";
+            var older = Path.Combine(checkpointRoot, "older");
+            var middle = Path.Combine(checkpointRoot, "middle");
+            var newer = Path.Combine(checkpointRoot, "newer");
+            Directory.SetCreationTimeUtc(older, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            Directory.SetCreationTimeUtc(middle, new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+            Directory.SetCreationTimeUtc(newer, new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc));
+
+            var (dryRunExit, dryRunJson) = RunAndCaptureJson([
+                "checkpoints", "--prune", "--keep", "1", "--dry-run", "--db", dbPath, "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.Equal("dry_run", dryRunJson.GetProperty("status").GetString());
+            Assert.True(dryRunJson.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(
+                new[] { middle, older },
+                dryRunJson.GetProperty("deleted_paths").EnumerateArray().Select(path => path.GetString()).ToArray());
+            Assert.Equal(
+                new[] { newer },
+                dryRunJson.GetProperty("retained_paths").EnumerateArray().Select(path => path.GetString()).ToArray());
+            Assert.All(new[] { older, middle, newer }, path => Assert.True(Directory.Exists(path)));
+
+            var (pruneExit, pruneJson) = RunAndCaptureJson([
+                "checkpoints", "--prune", "--keep", "1", "--db", dbPath, "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, pruneExit);
+            Assert.Equal(2, pruneJson.GetProperty("deleted").GetInt32());
+            Assert.False(Directory.Exists(older));
+            Assert.False(Directory.Exists(middle));
+            Assert.True(Directory.Exists(newer));
+
+            var (deletePreviewExit, deletePreviewJson) = RunAndCaptureJson([
+                "checkpoints", "--delete", "newer", "--dry-run", "--db", dbPath, "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, deletePreviewExit);
+            Assert.Equal(newer, Assert.Single(deletePreviewJson.GetProperty("deleted_paths").EnumerateArray()).GetString());
+            Assert.True(Directory.Exists(newer));
+
+            var (deleteExit, deleteJson) = RunAndCaptureJson([
+                "checkpoints", "--delete", "newer", "--db", dbPath, "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, deleteExit);
+            Assert.Equal(1, deleteJson.GetProperty("deleted").GetInt32());
+            Assert.False(Directory.Exists(newer));
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_RestoreIncompleteCheckpoint_ReturnsErrorAndKeepsDatabase()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_bad");
@@ -1320,6 +1485,8 @@ public class DbCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, pruneExit);
             Assert.Equal(1, pruneJson.GetProperty("deleted").GetInt32());
             Assert.Equal(1, pruneJson.GetProperty("retained").GetInt32());
+            Assert.Equal(older, Assert.Single(pruneJson.GetProperty("deleted_paths").EnumerateArray()).GetString());
+            Assert.Equal(newer, Assert.Single(pruneJson.GetProperty("retained_paths").EnumerateArray()).GetString());
             Assert.False(Directory.Exists(older));
             Assert.True(Directory.Exists(newer));
         }
@@ -1330,7 +1497,7 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
-    public void Run_RestoreBackupsRejectsDryRunWithoutDeleting_Issue3833()
+    public void Run_RestoreBackupsPruneDryRunReportsExactPathsWithoutDeleting_Issue4717()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups_dry_run");
         var dbPath = Path.Combine(root, "codeindex.db");
@@ -1341,10 +1508,17 @@ public class DbCommandRunnerTests
             Directory.CreateDirectory(backup);
             File.WriteAllText(Path.Combine(backup, "codeindex.db"), "backup");
 
-            var (exitCode, _, stderr) = RunAndCaptureStreams(["restore-backups", "--prune", "--dry-run", "--keep", "0", "--db", dbPath]);
+            var (exitCode, json) = RunAndCaptureJson([
+                "restore-backups", "--prune", "--dry-run", "--keep", "0", "--db", dbPath, "--json",
+            ]);
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--dry-run and --apply are not supported", stderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(1, json.GetProperty("deleted").GetInt32());
+            Assert.Equal(0, json.GetProperty("retained").GetInt32());
+            Assert.Equal(backup, Assert.Single(json.GetProperty("deleted_paths").EnumerateArray()).GetString());
+            Assert.Empty(json.GetProperty("retained_paths").EnumerateArray());
             Assert.True(Directory.Exists(backup));
         }
         finally
@@ -1446,8 +1620,15 @@ public class DbCommandRunnerTests
             File.WriteAllText(targetPath, "not the checkpoint");
             File.CreateSymbolicLink(checkpointDbPath, targetPath);
 
+            var (previewExit, previewJson) = RunAndCaptureJson(["restore", "saved", "--dry-run", "--db", dbPath, "--json"]);
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
 
+            Assert.Equal(CommandExitCodes.DatabaseError, previewExit);
+            Assert.False(previewJson.GetProperty("ready").GetBoolean());
+            Assert.False(previewJson.GetProperty("paths_valid").GetBoolean());
+            Assert.Contains(
+                previewJson.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("code").GetString() == "checkpoint_payload_invalid");
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
             Assert.Contains("InvalidOperationException", stderr);
             Assert.DoesNotContain("not a regular file", stderr);
@@ -1766,7 +1947,9 @@ public class DbCommandRunnerTests
 
         Assert.Contains("checkpoint --dry-run", stdout);
         Assert.Contains("schema defaults to the full sqlite_master dump", stdout);
-        Assert.Contains("restore replaces the DB", stdout);
+        Assert.Contains("manifest, regular-file paths, and destination free space", stdout);
+        Assert.Contains("--delete and --prune remove snapshots", stdout);
+        Assert.Contains("--prune --dry-run reports exact deleted/retained paths", stdout);
         Assert.Contains("prune --dry-run only counts", stdout);
     }
 
