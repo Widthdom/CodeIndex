@@ -71,6 +71,20 @@ public class TestProjectHelperTests
     }
 
     [Fact]
+    public void InsertIndexedFileAndDeleteDatabaseFiles_UseFailureDrivenPoolRelease()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_fixture_database_cleanup");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App {}\n");
+
+        TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+
+        Assert.False(File.Exists(dbPath));
+        Assert.False(File.Exists(dbPath + "-wal"));
+        Assert.False(File.Exists(dbPath + "-shm"));
+    }
+
+    [Fact]
     public void CreateExecutableExtensionTestProjectScope_UsesPlatformRootAndDeletesProject()
     {
         var configuredRoot = Environment.GetEnvironmentVariable(

@@ -291,12 +291,10 @@ internal static class TestProjectHelper
             writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols, path));
         }
 
-        SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
     }
 
     internal static void DeleteSqliteDatabaseFiles(string dbPath)
     {
-        SqlitePoolCleanup.ClearPoolsAtCollectionBoundary();
         DeleteFile(dbPath);
         DeleteFile(dbPath + "-wal");
         DeleteFile(dbPath + "-shm");
