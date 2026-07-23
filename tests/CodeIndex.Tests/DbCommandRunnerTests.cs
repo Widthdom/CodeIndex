@@ -725,6 +725,46 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RestoreDryRun_ResolvesLinkedDestinationBeforeSpaceProbe_Issue4717()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_linked_space_4717");
+        var targetDirectory = Path.Combine(root, "target");
+        var linkedDirectory = Path.Combine(root, "linked");
+        var dbPath = Path.Combine(linkedDirectory, "codeindex.db");
+        string? probedDirectory = null;
+        try
+        {
+            Directory.CreateDirectory(targetDirectory);
+            Directory.CreateSymbolicLink(linkedDirectory, targetDirectory);
+            InitializeEmptyDb(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            DbCommandRunner.AvailableFreeSpaceForTesting = path =>
+            {
+                probedDirectory = path;
+                return 1_000_000;
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([
+                "restore", "saved", "--dry-run", "--db", dbPath, "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("ready").GetBoolean());
+            Assert.Equal(Path.GetFullPath(targetDirectory), probedDirectory);
+            Assert.NotEqual(Path.GetFullPath(linkedDirectory), probedDirectory);
+        }
+        finally
+        {
+            DbCommandRunner.AvailableFreeSpaceForTesting = null;
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_RestoreDryRun_InvalidManifestAndInsufficientSpaceReportBlockingDiagnostics_Issue4717()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_invalid_dry_run_4717");
@@ -1318,6 +1358,46 @@ public class DbCommandRunnerTests
         }
         finally
         {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointsPrune_UsesManifestTimestampWhenDirectoryCreationTimesTie_Issue4717()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_manifest_retention_4717");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+            DbCommandRunner.UtcNowForTesting = () => new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            var (olderExit, _, _) = RunAndCaptureStreams(["checkpoint", "a-old", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, olderExit);
+
+            DbCommandRunner.UtcNowForTesting = () => new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+            var (newerExit, _, _) = RunAndCaptureStreams(["checkpoint", "z-new", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, newerExit);
+
+            var checkpointRoot = dbPath + ".checkpoints";
+            var older = Path.Combine(checkpointRoot, "a-old");
+            var newer = Path.Combine(checkpointRoot, "z-new");
+            var tiedCreationTime = new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc);
+            Directory.SetCreationTimeUtc(older, tiedCreationTime);
+            Directory.SetCreationTimeUtc(newer, tiedCreationTime);
+
+            var (dryRunExit, json) = RunAndCaptureJson([
+                "checkpoints", "--prune", "--keep", "1", "--dry-run", "--db", dbPath, "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.Equal(older, Assert.Single(json.GetProperty("deleted_paths").EnumerateArray()).GetString());
+            Assert.Equal(newer, Assert.Single(json.GetProperty("retained_paths").EnumerateArray()).GetString());
+            Assert.True(Directory.Exists(older));
+            Assert.True(Directory.Exists(newer));
+        }
+        finally
+        {
+            DbCommandRunner.UtcNowForTesting = null;
             DeleteWorkDirectory(root);
         }
     }

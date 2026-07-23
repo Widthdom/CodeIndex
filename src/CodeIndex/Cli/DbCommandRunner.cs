@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
@@ -695,11 +696,21 @@ public static class DbCommandRunner
         }
 
         var retainableEntries = listed.Entries
-            .Where(entry => IsCheckpointRetainable(
-                fullDbPath,
-                entry.Name,
-                entry.CheckpointPath,
-                diagnostics))
+            .Select(entry => new
+            {
+                Entry = entry,
+                Retainable = TryGetCheckpointRetentionTimestamp(
+                    fullDbPath,
+                    entry.Name,
+                    entry.CheckpointPath,
+                    diagnostics,
+                    out var createdAtUtc),
+                CreatedAtUtc = createdAtUtc,
+            })
+            .Where(candidate => candidate.Retainable)
+            .OrderByDescending(candidate => candidate.CreatedAtUtc)
+            .ThenBy(candidate => candidate.Entry.Name, StringComparer.Ordinal)
+            .Select(candidate => candidate.Entry)
             .ToList();
         var retainedPaths = retainableEntries
             .Take(options.CheckpointsKeep)
@@ -2044,7 +2055,8 @@ public static class DbCommandRunner
                 fullDbPath,
                 name,
                 validatedCheckpointPath,
-                diagnostics);
+                diagnostics,
+                out _);
             payload = ValidateCheckpointPayload(
                 fullDbPath,
                 validatedCheckpointPath,
@@ -2076,12 +2088,14 @@ public static class DbCommandRunner
             diagnostics);
     }
 
-    private static bool IsCheckpointRetainable(
+    private static bool TryGetCheckpointRetentionTimestamp(
         string fullDbPath,
         string name,
         string checkpointPath,
-        List<DbDiagnosticJsonResult> diagnostics)
+        List<DbDiagnosticJsonResult> diagnostics,
+        out DateTimeOffset createdAtUtc)
     {
+        createdAtUtc = default;
         if (!TryValidateCheckpointDirectoryTarget(
                 fullDbPath,
                 checkpointPath,
@@ -2099,7 +2113,8 @@ public static class DbCommandRunner
             fullDbPath,
             name,
             validatedCheckpointPath,
-            diagnostics);
+            diagnostics,
+            out createdAtUtc);
         var payload = ValidateCheckpointPayload(
             fullDbPath,
             validatedCheckpointPath,
@@ -2163,8 +2178,10 @@ public static class DbCommandRunner
         string fullDbPath,
         string name,
         string checkpointPath,
-        List<DbDiagnosticJsonResult> diagnostics)
+        List<DbDiagnosticJsonResult> diagnostics,
+        out DateTimeOffset createdAtUtc)
     {
+        createdAtUtc = default;
         var manifestPath = Path.Combine(checkpointPath, "manifest.txt");
         try
         {
@@ -2215,7 +2232,7 @@ public static class DbCommandRunner
                     createdAt,
                     System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.RoundtripKind,
-                    out _);
+                    out createdAtUtc);
             if (valid)
                 return true;
 
@@ -2241,12 +2258,31 @@ public static class DbCommandRunner
     {
         try
         {
-            if (AvailableFreeSpaceForTesting is not null)
-                return AvailableFreeSpaceForTesting(fullDbPath);
-
             var destinationDirectory = Path.GetDirectoryName(fullDbPath);
             if (string.IsNullOrWhiteSpace(destinationDirectory))
                 throw new IOException("destination filesystem directory is unavailable");
+            var resolvedDestinationDirectory = ResolveDestinationDirectoryForSpaceProbe(destinationDirectory);
+
+            if (AvailableFreeSpaceForTesting is not null)
+                return AvailableFreeSpaceForTesting(resolvedDestinationDirectory);
+
+            if (OperatingSystem.IsWindows())
+            {
+                if (!GetDiskFreeSpaceEx(
+                        resolvedDestinationDirectory,
+                        out var availableBytes,
+                        out _,
+                        out _))
+                {
+                    throw new IOException(
+                        "destination filesystem volume is unavailable",
+                        new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()));
+                }
+
+                return availableBytes > long.MaxValue
+                    ? long.MaxValue
+                    : (long)availableBytes;
+            }
 
             DriveInfo? destinationDrive = null;
             var destinationRootLength = -1;
@@ -2258,7 +2294,7 @@ public static class DbCommandRunner
                         continue;
                     var driveRoot = drive.RootDirectory.FullName;
                     if (driveRoot.Length <= destinationRootLength
-                        || !IsPathWithinDriveRoot(driveRoot, destinationDirectory))
+                        || !IsPathWithinDriveRoot(driveRoot, resolvedDestinationDirectory))
                     {
                         continue;
                     }
@@ -2277,7 +2313,7 @@ public static class DbCommandRunner
                 throw new IOException("destination filesystem volume is unavailable");
             return destinationDrive.AvailableFreeSpace;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             diagnostics.Add(new DbDiagnosticJsonResult(
                 "checkpoint_space_unavailable",
@@ -2303,6 +2339,36 @@ public static class DbCommandRunner
             : normalizedRoot + Path.DirectorySeparatorChar;
         return normalizedPath.StartsWith(rootWithSeparator, comparison);
     }
+
+    private static string ResolveDestinationDirectoryForSpaceProbe(string destinationDirectory)
+    {
+        var fullPath = Path.GetFullPath(destinationDirectory);
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrWhiteSpace(root))
+            throw new IOException("destination filesystem root is unavailable");
+
+        var current = root;
+        var relativePath = fullPath[root.Length..];
+        foreach (var segment in relativePath.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            var target = new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true);
+            if (target is not null)
+                current = target.FullName;
+        }
+
+        return Path.GetFullPath(current);
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "GetDiskFreeSpaceExW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetDiskFreeSpaceEx(
+        string directoryName,
+        out ulong freeBytesAvailable,
+        out ulong totalNumberOfBytes,
+        out ulong totalNumberOfFreeBytes);
 
     private static string RestoreCheckpoint(string fullDbPath, string name, string checkpointPath)
     {
