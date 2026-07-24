@@ -174,6 +174,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         Script,
         Quote,
         BracedWord,
+        ExpressionWord,
         SwitchTable,
     }
 
@@ -1071,7 +1072,12 @@ internal static class DynamicDeclarativeReferenceExtractor
             || token.SequenceEqual("throw")
             || token.SequenceEqual("assert")
             || token.SequenceEqual("in")
-            || token.SequenceEqual("when");
+            || token.SequenceEqual("when")
+            || token.SequenceEqual("if")
+            || token.SequenceEqual("elsif")
+            || token.SequenceEqual("unless")
+            || token.SequenceEqual("while")
+            || token.SequenceEqual("until");
     }
 
     private static bool TryBeginCrystalPercentLiteral(
@@ -1768,6 +1774,38 @@ internal static class DynamicDeclarativeReferenceExtractor
                     continue;
                 }
 
+                if (frame.Kind == TclLexicalFrameKind.ExpressionWord)
+                {
+                    buffer[column] = ' ';
+                    if (ch == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (ch == '{')
+                    {
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.ExpressionWord, '}'));
+                        column++;
+                    }
+                    else if (ch == frame.Terminator)
+                    {
+                        frames.Pop();
+                        column++;
+                    }
+                    else if (ch == '[')
+                    {
+                        buffer[column] = '[';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
+                        suppressLeadingContinuedWord = false;
+                        column++;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
                 if (frame.Kind == TclLexicalFrameKind.Quote)
                 {
                     buffer[column] = ' ';
@@ -1900,6 +1938,8 @@ internal static class DynamicDeclarativeReferenceExtractor
                             frame,
                             wordIndex,
                             GetTclBracedWordToken(lines, lineIndex, column, braceEnd));
+                    var isExpressionArgument = !isSwitchTable
+                        && IsTclExpressionArgument(frame, wordIndex);
                     var isScriptArgument = !isSwitchTable
                         && (isConcatenatedScriptArgument
                         || scriptBodyOpenings.Contains(positionKey)
@@ -1930,6 +1970,11 @@ internal static class DynamicDeclarativeReferenceExtractor
                             : ' ';
                         frames.Push(scriptFrame);
                         suppressLeadingContinuedWord = false;
+                    }
+                    else if (isExpressionArgument)
+                    {
+                        buffer[column] = ' ';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.ExpressionWord, '}'));
                     }
                     else
                     {
@@ -2101,6 +2146,18 @@ internal static class DynamicDeclarativeReferenceExtractor
             _ => false,
         };
     }
+
+    private static bool IsTclExpressionArgument(TclLexicalFrame frame, int wordIndex) =>
+        frame.CommandName switch
+        {
+            "if" => wordIndex == 1
+                || (frame.LastBareWord == "elseif"
+                    && wordIndex == frame.LastBareWordIndex + 1),
+            "while" => wordIndex == 1,
+            "for" => wordIndex == 2,
+            "expr" => wordIndex >= 1,
+            _ => false,
+        };
 
     private static bool IsTclBareScriptCommandArgument(
         TclLexicalFrame frame,

@@ -1476,6 +1476,18 @@ public partial class ReferenceExtractorTests
             def fake
             TEXT
               regex = /ready?(value)/
+              if /ready?()/.matches?(value)
+                value
+              end
+              unless /save!()/.matches?(value)
+                value
+              end
+              while /ready?()/.matches?(value)
+                break
+              end
+              until /save!()/.matches?(value)
+                break
+              end
               literal = %q(save!(value))
               ordinary = "first
             ready?(value)
@@ -1560,6 +1572,16 @@ public partial class ReferenceExtractorTests
                 set color #fff; helper
                 set quoted "[helper]"
                 set braced {[helper]}
+                if {[helper]} {
+                    set expression_if 1
+                }
+                while {[helper]} {
+                    break
+                }
+                for {} {[helper]} {} {
+                    break
+                }
+                expr {[helper]}
                 if {1} {
                     helper
                 }
@@ -1613,7 +1635,7 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(references, "call", "split", "helper");
         AssertReferencesContain(references, "call", "continued", "helper");
         AssertReferencesContain(references, "call", "sameLine", "helper");
-        Assert.Equal(20, references.Count(reference =>
+        Assert.Equal(24, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
         Assert.Single(references, reference =>
