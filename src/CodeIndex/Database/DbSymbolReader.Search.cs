@@ -461,6 +461,9 @@ public partial class DbReader
         var startColumnSql = GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)");
         var sizeLinesSql = $"CASE WHEN ({endLineSql}) >= ({startLineSql}) THEN ({endLineSql}) - ({startLineSql}) + 1 ELSE 1 END";
         var includeRankSignals = sortMode != SymbolSortMode.Name && _hasReferencesTable;
+        // Keep aggregate grouping aligned with the NOCASE joins below. Binary grouping would emit
+        // one aggregate row per case variant and multiply the same physical s.id before LIMIT/OFFSET (#4753).
+        // 集計側と下記 NOCASE JOIN の照合順序を揃え、大小文字 variant による同一 s.id の増殖を防ぐ。
         var symbolRankJoin = includeRankSignals
             ? $@"
             LEFT JOIN (
@@ -473,7 +476,7 @@ public partial class DbReader
                 WHERE sr.reference_kind IN {CallGraphReferenceKindsSql}
                   AND sr.symbol_name IS NOT NULL
                   AND sr.symbol_name <> ''
-                GROUP BY rf.lang, sr.symbol_name
+                GROUP BY rf.lang, sr.symbol_name COLLATE NOCASE
             ) symbol_rank
               ON symbol_rank.lang = f.lang
              AND symbol_rank.symbol_name = s.name COLLATE NOCASE
@@ -486,7 +489,7 @@ public partial class DbReader
                 WHERE sr.reference_kind IN {CallGraphReferenceKindsSql}
                   AND sr.symbol_name IS NOT NULL
                   AND sr.symbol_name <> ''
-                GROUP BY sr.file_id, sr.symbol_name
+                GROUP BY sr.file_id, sr.symbol_name COLLATE NOCASE
             ) symbol_file_rank
               ON symbol_file_rank.file_id = s.file_id
              AND symbol_file_rank.symbol_name = s.name COLLATE NOCASE
@@ -498,7 +501,7 @@ public partial class DbReader
                 JOIN files df ON df.id = ds.file_id
                 WHERE ds.name IS NOT NULL
                   AND ds.name <> ''
-                GROUP BY df.lang, ds.name
+                GROUP BY df.lang, ds.name COLLATE NOCASE
             ) symbol_defs
               ON symbol_defs.lang = f.lang
              AND symbol_defs.symbol_name = s.name COLLATE NOCASE"

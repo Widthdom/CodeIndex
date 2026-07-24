@@ -1489,6 +1489,10 @@ Use `--exact-name` when you already have a precise candidate list (e.g. names re
 For audit passes, add `--sort hotspot|references|size|complexity|path`.
 `--json` rows include `sort_mode`, `reference_count`, `hotspot_score`,
 `size_lines`, and `complexity_score` whenever an audit sort is active.
+Audit sorting combines case-insensitive reference-name variants before ordering
+and limiting, so each physical `symbol_id` appears at most once. Internal offset
+pagination is applied after that deduplication, and stable tie-breakers keep
+adjacent pages deterministic without repeating a symbol.
 Use `--format compact` when discovery output must stay small: it emits one JSON
 object with `count`, `file_count`, `emitted_count`, `omitted_count`,
 `truncated`, `omitted_by`, `query_context`, and freshness metadata. Compact
@@ -4668,6 +4672,10 @@ cdidx symbols Run --format lsp                       # LSP locations。qf / sari
 audit では `--sort hotspot|references|size|complexity|path` を追加できます。
 audit sort が有効な `--json` row には `sort_mode`、`reference_count`、
 `hotspot_score`、`size_lines`、`complexity_score` が含まれます。
+audit sort は大文字小文字だけが異なる参照名を ordering / limit 適用前に統合するため、
+各物理 `symbol_id` は最大1回だけ返ります。内部 offset pagination もこの重複排除後に
+適用され、安定した tie-breaker により隣接ページ間で同じ symbol を繰り返さず
+決定的な順序を維持します。
 discovery 出力を小さく保つ必要がある場合は `--format compact` を使います。
 これは `count`、`file_count`、`emitted_count`、`omitted_count`、
 `truncated`、`omitted_by`、`query_context`、freshness metadata を含む 1 つの
