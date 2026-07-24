@@ -424,7 +424,8 @@ public static partial class ReferenceExtractor
         },
         ["d"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "assert", "cast", "debug", "mixin", "scope", "static", "unittest", "version",
+            "__traits", "assert", "cast", "debug", "extern", "is", "mixin", "pragma", "scope",
+            "static", "unittest", "version",
         },
         ["julia"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -433,8 +434,8 @@ public static partial class ReferenceExtractor
         },
         ["matlab"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "case", "catch", "classdef", "elseif", "end", "function", "import", "methods",
-            "otherwise", "parfor", "properties", "spmd",
+            "arguments", "case", "catch", "classdef", "elseif", "end", "function", "import",
+            "methods", "otherwise", "parfor", "properties", "spmd",
         },
         ["nim"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1424,6 +1425,112 @@ public static partial class ReferenceExtractor
         }
 
         return namesByLine;
+    }
+
+    private static IReadOnlyDictionary<int, Dictionary<string, HashSet<int>>>?
+        BuildScientificDefinitionNameIndicesByLine(
+            string language,
+            IReadOnlyList<string> lines,
+            IReadOnlyList<SymbolRecord> symbols,
+            IReadOnlyDictionary<int, HashSet<string>> definitionNamesByLine)
+    {
+        if (!ScientificNativeReferenceExtractor.Supports(language) || symbols.Count == 0)
+            return null;
+
+        var limits = GetSafetyLimits();
+        var comparer = GetDefinitionNamesComparer(language);
+        var comparison = comparer == StringComparer.OrdinalIgnoreCase
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var indicesByLine = new Dictionary<int, Dictionary<string, HashSet<int>>>();
+        for (var symbolIndex = 0;
+             symbolIndex < symbols.Count && symbolIndex < limits.MaxLookupSymbols;
+             symbolIndex++)
+        {
+            var symbol = symbols[symbolIndex];
+            if (symbol.Line <= 0
+                || symbol.Line > lines.Count
+                || !definitionNamesByLine.TryGetValue(symbol.Line, out var retainedNames)
+                || !retainedNames.Contains(symbol.Name))
+            {
+                continue;
+            }
+
+            var line = lines[symbol.Line - 1];
+            var searchStart = Math.Clamp(symbol.StartColumn ?? 0, 0, line.Length);
+            var definitionIndex = FindScientificDefinitionNameIndex(
+                line,
+                symbol.Name,
+                searchStart,
+                comparison);
+            if (definitionIndex < 0)
+                continue;
+
+            if (!indicesByLine.TryGetValue(symbol.Line, out var indicesByName))
+            {
+                indicesByName = new Dictionary<string, HashSet<int>>(comparer);
+                indicesByLine[symbol.Line] = indicesByName;
+            }
+
+            AddScientificDefinitionNameIndex(
+                indicesByName,
+                symbol.Name,
+                definitionIndex);
+
+            var leafSeparatorIndex = symbol.Name.LastIndexOf('.');
+            if (leafSeparatorIndex >= 0 && leafSeparatorIndex + 1 < symbol.Name.Length)
+            {
+                AddScientificDefinitionNameIndex(
+                    indicesByName,
+                    symbol.Name[(leafSeparatorIndex + 1)..],
+                    definitionIndex + leafSeparatorIndex + 1);
+            }
+        }
+
+        return indicesByLine;
+    }
+
+    private static int FindScientificDefinitionNameIndex(
+        string line,
+        string name,
+        int searchStart,
+        StringComparison comparison)
+    {
+        while (searchStart <= line.Length - name.Length)
+        {
+            var index = line.IndexOf(name, searchStart, comparison);
+            if (index < 0)
+                return -1;
+
+            var beforeIsBoundary = index == 0
+                || !IsScientificDefinitionIdentifierChar(line[index - 1]);
+            var end = index + name.Length;
+            var afterIsBoundary = end == line.Length
+                || !IsScientificDefinitionIdentifierChar(line[end]);
+            if (beforeIsBoundary && afterIsBoundary)
+                return index;
+
+            searchStart = index + 1;
+        }
+
+        return -1;
+    }
+
+    private static bool IsScientificDefinitionIdentifierChar(char value)
+        => char.IsLetterOrDigit(value) || value is '_' or '!' or '?' or '$';
+
+    private static void AddScientificDefinitionNameIndex(
+        Dictionary<string, HashSet<int>> indicesByName,
+        string name,
+        int index)
+    {
+        if (!indicesByName.TryGetValue(name, out var indices))
+        {
+            indices = [];
+            indicesByName[name] = indices;
+        }
+
+        indices.Add(index);
     }
 
     private static IReadOnlySet<string> BuildAllDefinitionNames(

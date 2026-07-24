@@ -88,6 +88,15 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
+                // Julia comprehension clauses inside delimiters do not open `end`-terminated
+                // blocks. Julia の区切り記号内にある内包表記句は `end` 終端ブロックを開かない。
+                if (language == "julia"
+                    && delimiterFrames.Count > 0
+                    && keyword is "for" or "if")
+                {
+                    continue;
+                }
+
                 depth++;
             }
 

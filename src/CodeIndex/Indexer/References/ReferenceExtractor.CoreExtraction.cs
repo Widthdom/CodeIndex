@@ -97,6 +97,11 @@ public static partial class ReferenceExtractor
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols, request.ReportDiagnostic);
+        var scientificDefinitionNameIndicesByLine = BuildScientificDefinitionNameIndicesByLine(
+            language,
+            lines,
+            symbols,
+            definitionNamesByLine);
         var allDefinitionNames = language == "stylus"
             ? BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic)
             : null;
@@ -1360,6 +1365,10 @@ public static partial class ReferenceExtractor
             var definitionNames = definitionNamesByLine.TryGetValue(lineNumber, out var namesOnLine)
                 ? namesOnLine
                 : null;
+            Dictionary<string, HashSet<int>>? scientificDefinitionNameIndices = null;
+            scientificDefinitionNameIndicesByLine?.TryGetValue(
+                lineNumber,
+                out scientificDefinitionNameIndices);
             Dictionary<string, int>? definitionNameIndices = null;
             List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
             if (language == "sql")
@@ -1608,6 +1617,14 @@ public static partial class ReferenceExtractor
                     {
                         return true;
                     }
+                }
+
+                if (scientificDefinitionNameIndices != null
+                    && scientificDefinitionNameIndices.TryGetValue(
+                        resolvedName,
+                        out var scientificDefinitionIndices))
+                {
+                    return scientificDefinitionIndices.Contains(callIndex);
                 }
 
                 if (language == "julia")

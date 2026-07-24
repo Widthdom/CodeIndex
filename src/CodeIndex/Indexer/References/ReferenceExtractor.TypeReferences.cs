@@ -2808,6 +2808,12 @@ public static partial class ReferenceExtractor
 
         if (options.UsesPercentComments)
         {
+            // Outside strings, MATLAB treats `...` and the rest of the physical line as a
+            // continuation comment. MATLAB では文字列外の `...` 以降は継続コメントになる。
+            var continuationIndex = result.IndexOf("...", StringComparison.Ordinal);
+            if (continuationIndex >= 0)
+                result = result[..continuationIndex];
+
             var percentCommentIndex = result.IndexOf('%');
             if (percentCommentIndex >= 0)
                 result = result[..percentCommentIndex];

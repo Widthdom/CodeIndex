@@ -1609,8 +1609,10 @@ public static partial class SymbolExtractor
                                             Name = name,
                                             Line = startLine,
                                             StartLine = startLine,
-                                            StartColumn = lang == "rust" && pattern.Kind == "function"
-                                                ? match.Groups["name"].Index
+                                            StartColumn = lang is "ada" or "cython" or "d" or "julia" or "matlab" or "nim"
+                                                ? lineOffset + match.Groups["name"].Index
+                                                : lang == "rust" && pattern.Kind == "function"
+                                                    ? match.Groups["name"].Index
                                                 : (csharpSingleLineCollapsedMatch
                                                     ? csharpSignatureRawStartColumn
                                                     : absoluteStartColumn),

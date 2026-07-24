@@ -1499,4 +1499,149 @@ public partial class ReferenceExtractorTests
             symbols,
             symbol => symbol.Name == $"f{functionCount - 1}").EndLine);
     }
+
+    [Theory]
+    [InlineData(
+        "julia",
+        """
+        function f()
+            f()
+        end
+        """,
+        "f")]
+    [InlineData(
+        "matlab",
+        """
+        function f()
+          f();
+        end
+        """,
+        "f")]
+    [InlineData(
+        "cython",
+        """
+        def f():
+            f()
+        """,
+        "f")]
+    [InlineData(
+        "nim",
+        """
+        proc p() =
+          p()
+        """,
+        "p")]
+    [InlineData(
+        "d",
+        """
+        id id() {
+            id();
+        }
+        """,
+        "id")]
+    public void Extract_ScientificDeclarationIdentifierSpanDoesNotHideRecursiveCall_Issue4738(
+        string language,
+        string content,
+        string functionName)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Single(references, reference =>
+            reference.SymbolName == functionName && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JuliaMultilineComprehensionDoesNotExtendFunctionRange_Issue4738()
+    {
+        const string content = """
+            function run(xs)
+                values = [
+                    helper(x)
+                    for x in xs
+                    if x > 0
+                ]
+                after()
+            end
+            outside()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Equal(8, Assert.Single(symbols, symbol => symbol.Name == "run").EndLine);
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "after" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_MatlabContinuationTailDoesNotEmitCalls_Issue4738()
+    {
+        const string content = """
+            function run(value)
+              first(value, ... ignoredCall()
+                value);
+              realCall();
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        var references = ReferenceExtractor.Extract(1, "matlab", content, symbols);
+
+        Assert.Single(references, reference =>
+            reference.SymbolName == "first" && reference.ReferenceKind == "call");
+        Assert.Single(references, reference =>
+            reference.SymbolName == "realCall" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "ignoredCall");
+    }
+
+    [Fact]
+    public void Extract_DCompileTimeConstructsDoNotEmitCalls_Issue4738()
+    {
+        const string content = """
+            extern(C) void exported() {
+                static if (is(typeof(value) == int)) {
+                    pragma(msg, __traits(compiles, helper()));
+                }
+                realCall();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "d", content);
+
+        var references = ReferenceExtractor.Extract(1, "d", content, symbols);
+
+        foreach (var name in new[] { "extern", "is", "pragma", "__traits" })
+        {
+            Assert.DoesNotContain(references, reference =>
+                reference.SymbolName == name && reference.ReferenceKind == "call");
+        }
+        Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Single(references, reference =>
+            reference.SymbolName == "realCall" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_MatlabArgumentsBlockHeaderDoesNotEmitCall_Issue4738()
+    {
+        const string content = """
+            function run(values)
+              arguments (Repeating)
+                values
+              end
+              helper();
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        var references = ReferenceExtractor.Extract(1, "matlab", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "arguments" && reference.ReferenceKind == "call");
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
 }
