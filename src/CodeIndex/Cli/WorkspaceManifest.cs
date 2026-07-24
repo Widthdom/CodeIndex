@@ -6,7 +6,36 @@ using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
-internal sealed record WorkspaceMember(string Path, string DbPath, bool Exists);
+internal sealed record WorkspaceMember(
+    string Path,
+    string DbPath,
+    bool Exists,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    WorkspaceMemberIndexHealth? IndexHealth = null);
+
+internal sealed record WorkspaceMemberIndexHealth(
+    bool DbExists,
+    bool Probed,
+    string Status,
+    string Reason,
+    bool? SchemaCompatible = null,
+    bool? IndexMatchesWorkspace = null,
+    string? FreshnessReason = null,
+    DateTime? IndexedAt = null,
+    DateTime? LatestModified = null,
+    bool? GraphTableAvailable = null,
+    bool? GraphDataCurrent = null,
+    bool? ReferenceGraphComplete = null,
+    bool? IndexComplete = null,
+    bool? GraphReady = null,
+    bool? IndexNewerThanReader = null);
+
+internal sealed record WorkspaceMemberHealthSummary(
+    int MemberCount,
+    int DatabaseProbeCount,
+    int DatabaseProbeLimit,
+    int ProbeLimitSkippedMemberCount,
+    bool Truncated);
 
 internal sealed record WorkspaceManifest(
     string Path,
@@ -20,6 +49,8 @@ internal sealed record WorkspaceListJsonResult(
     IReadOnlyList<WorkspaceMember> Members,
     WorkspaceManifestStatusJsonResult ManifestStatus,
     ActiveWorkspaceJsonResult? ActiveWorkspaceStatus = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    WorkspaceMemberHealthSummary? MemberHealthSummary = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult
 {
     [JsonPropertyName("manifest_found")]
@@ -76,8 +107,9 @@ internal sealed record ActiveWorkspaceJsonResult : IVersionedJsonResult
         var result = From(state, path);
         if (state is null
             || manifest is null
-            || string.Equals(state.Name, "default", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(state.Name, "env", StringComparison.OrdinalIgnoreCase))
+            || (!state.ManifestMember
+                && (string.Equals(state.Name, "default", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(state.Name, "env", StringComparison.OrdinalIgnoreCase))))
         {
             return result;
         }
@@ -112,9 +144,10 @@ internal sealed record ActiveWorkspaceJsonResult : IVersionedJsonResult
         var singleStrategy = string.Equals(manifest.IndexStrategy, "single", StringComparison.OrdinalIgnoreCase);
         foreach (var member in manifest.Members)
         {
+            var memberSelectorMatches = MemberSelectorMatches(state.Name, member, manifest, comparison);
             if (singleStrategy)
             {
-                if (string.Equals(System.IO.Path.GetFileName(member.Path), state.Name, comparison)
+                if (memberSelectorMatches
                     && PathCasing.PathsEqual(manifest.Root, state.Root)
                     && PathCasing.PathsEqual(member.DbPath, state.DbPath))
                 {
@@ -130,6 +163,17 @@ internal sealed record ActiveWorkspaceJsonResult : IVersionedJsonResult
 
         return null;
     }
+
+    private static bool MemberSelectorMatches(
+        string stateName,
+        WorkspaceMember member,
+        WorkspaceManifest manifest,
+        StringComparison comparison)
+        => string.Equals(System.IO.Path.GetFileName(member.Path), stateName, comparison)
+           || string.Equals(
+               WorkspaceManifestLoader.GetManifestRelativeMemberPath(manifest, member),
+               FileIndexer.NormalizePathSeparators(stateName),
+               comparison);
 }
 
 internal sealed record ConfigShowJsonResult(
@@ -287,6 +331,45 @@ internal static class WorkspaceManifestLoader
 
         return new WorkspaceManifest(fullPath, root, strategy, dbName, members);
     }
+
+    internal static bool TryResolveMemberSelectorPath(
+        WorkspaceManifest manifest,
+        string selector,
+        out string? fullPath,
+        out string? relativePath)
+    {
+        fullPath = null;
+        relativePath = null;
+        if (string.IsNullOrWhiteSpace(selector)
+            || selector.Length > MaxManifestMemberPathChars
+            || (!selector.Contains('/') && !selector.Contains('\\') && selector is not "." and not ".."))
+        {
+            return false;
+        }
+
+        try
+        {
+            var platformSelector = selector
+                .Replace('\\', Path.DirectorySeparatorChar)
+                .Replace('/', Path.DirectorySeparatorChar);
+            fullPath = ResolveMemberPath(manifest.Root, platformSelector);
+            relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(manifest.Root, fullPath));
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                      or InvalidDataException
+                                      or IOException
+                                      or NotSupportedException
+                                      or PathTooLongException)
+        {
+            fullPath = null;
+            relativePath = null;
+            return false;
+        }
+    }
+
+    internal static string GetManifestRelativeMemberPath(WorkspaceManifest manifest, WorkspaceMember member)
+        => FileIndexer.NormalizePathSeparators(Path.GetRelativePath(manifest.Root, member.Path));
 
     private static string? ReadString(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

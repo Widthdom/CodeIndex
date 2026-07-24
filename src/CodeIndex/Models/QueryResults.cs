@@ -1990,6 +1990,29 @@ public class SymbolAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? WorktreeHeadChanged { get; set; }
     public string? GraphLanguage { get; set; }
+    /// <summary>
+    /// Provenance for <see cref="GraphLanguage"/>: `language_filter`, `definition`, or
+    /// `graph_evidence`.
+    /// <see cref="GraphLanguage"/> の由来: `language_filter`、`definition`、`graph_evidence`。
+    /// </summary>
+    public string? GraphLanguageSource { get; set; }
+    /// <summary>
+    /// Confidence of the graph-language decision: `authoritative`, `inferred_consistent`,
+    /// or `conflicted`.
+    /// graph language 判定の信頼度: `authoritative`、`inferred_consistent`、`conflicted`。
+    /// </summary>
+    public string? GraphLanguageConfidence { get; set; }
+    /// <summary>
+    /// Distinct graph-result languages considered when no filter or definition supplied
+    /// an authoritative language.
+    /// filter / definition から authoritative な言語が得られない場合に検討した graph result 言語。
+    /// </summary>
+    public List<string> GraphLanguageCandidates { get; set; } = [];
+    /// <summary>
+    /// True when definition-free graph evidence contains more than one language.
+    /// definition が無い graph evidence に複数言語が含まれる場合は true。
+    /// </summary>
+    public bool GraphLanguageConflict { get; set; }
     public bool? GraphSupported { get; set; }
     public string? GraphSupportReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

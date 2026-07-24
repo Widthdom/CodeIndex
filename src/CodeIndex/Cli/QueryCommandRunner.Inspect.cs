@@ -340,6 +340,10 @@ public static partial class QueryCommandRunner
                 break;
             case "graph":
                 keep.Add("graph_language");
+                keep.Add("graph_language_source");
+                keep.Add("graph_language_confidence");
+                keep.Add("graph_language_candidates");
+                keep.Add("graph_language_conflict");
                 keep.Add("graph_supported");
                 keep.Add("graph_support_reason");
                 keep.Add("graph_degraded");
