@@ -280,6 +280,59 @@ public class ProgramRunnerTests
         Assert.True(document.RootElement.TryGetProperty("count", out _));
     }
 
+    [Fact]
+    public void RunRecipesAlias_QueryValueFormsAndMissingValue_Issue4755()
+    {
+        var (separatedExitCode, separatedStdout, separatedStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["recipes", "--query", "risky-code", "--names", "--json"],
+            appVersion: "1.10.0"));
+        var (inlineExitCode, inlineStdout, inlineStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["recipes", "--query=risky-code", "--names", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, separatedExitCode);
+        Assert.Equal(CommandExitCodes.Success, inlineExitCode);
+        Assert.Empty(separatedStderr);
+        Assert.Empty(inlineStderr);
+        Assert.Equal(inlineStdout, separatedStdout);
+        using (var document = JsonDocument.Parse(separatedStdout))
+        {
+            Assert.Contains(
+                document.RootElement.GetProperty("names").EnumerateArray(),
+                name => name.GetString() == "risky-code");
+        }
+
+        var (optionValueExitCode, optionValueStdout, optionValueStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["recipes", "--query", "--definitely-no-such-recipe-filter", "--names", "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, optionValueExitCode);
+        Assert.Empty(optionValueStderr);
+        using (var document = JsonDocument.Parse(optionValueStdout))
+            Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+
+        var (missingExitCode, missingStdout, missingStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["recipes", "--query"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, missingExitCode);
+        Assert.Empty(missingStdout);
+        Assert.Contains("--query requires a value", missingStderr, StringComparison.Ordinal);
+        Assert.Contains("Usage: cdidx recipes", missingStderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunRecipesAlias_HelpListsQueryFilterOption_Issue4755()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["recipes", "--help"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("  --query <query>", stdout, StringComparison.Ordinal);
+        Assert.Empty(stderr);
+    }
+
     [Theory]
     [InlineData(new[] { "recipes", "list", "extra" }, "1 unexpected extra positional argument for recipes")]
     [InlineData(new[] { "recipes", "--unsupported" }, "--unsupported")]

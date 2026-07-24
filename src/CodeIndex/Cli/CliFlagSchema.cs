@@ -86,7 +86,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] QueryCommands =
     [
-        "search", "definition", "goto", "references", "callers", "callees",
+        "search", "recipes", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "inspect", "impact",
     ];
 
