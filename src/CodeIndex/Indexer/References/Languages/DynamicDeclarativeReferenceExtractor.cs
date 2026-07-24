@@ -82,6 +82,9 @@ internal static class DynamicDeclarativeReferenceExtractor
     private static readonly Regex PrologHeadRegex = new(
         @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*$))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PrologMultilineHeadRegex = new(
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CrystalRequireRegex = new(
         @"^\s*require\s+['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -213,6 +216,9 @@ internal static class DynamicDeclarativeReferenceExtractor
         public int LastBareWordIndex { get; set; } = -1;
         public int SwitchStringWordIndex { get; set; } = -1;
         public bool SwitchOptionsEnded { get; set; }
+        public bool SwitchOptionValuePending { get; set; }
+        public int TryClauseWordIndex { get; set; } = 2;
+        public int TryScriptWordIndex { get; set; } = 1;
 
         public void ResetCommand()
         {
@@ -224,6 +230,9 @@ internal static class DynamicDeclarativeReferenceExtractor
             LastBareWordIndex = -1;
             SwitchStringWordIndex = -1;
             SwitchOptionsEnded = false;
+            SwitchOptionValuePending = false;
+            TryClauseWordIndex = 2;
+            TryScriptWordIndex = 1;
         }
     }
 
@@ -1531,6 +1540,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                             lines,
                             braceEnd: null);
                         UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
+                        UpdateTclTryArgumentState(frame, wordIndex, string.Empty, isScriptArgument);
                     }
                     buffer[column] = isScriptArgument ? ';' : ' ';
                     frames.Push(new TclLexicalFrame(
@@ -1549,6 +1559,11 @@ internal static class DynamicDeclarativeReferenceExtractor
                     {
                         var wordIndex = frame.WordIndex++;
                         UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
+                        UpdateTclTryArgumentState(
+                            frame,
+                            wordIndex,
+                            string.Empty,
+                            isScriptArgument: false);
                     }
                     frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
                     frame.CommandStart = false;
@@ -1577,6 +1592,11 @@ internal static class DynamicDeclarativeReferenceExtractor
                             lines,
                             braceEnd));
                     UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
+                    UpdateTclTryArgumentState(
+                        frame,
+                        wordIndex,
+                        string.Empty,
+                        isScriptArgument);
                     if (isSwitchTable)
                     {
                         buffer[column] = ' ';
@@ -1621,7 +1641,14 @@ internal static class DynamicDeclarativeReferenceExtractor
                     if (wordIndex == 0)
                         frame.CommandName = token;
                     else
+                    {
                         UpdateTclSwitchArgumentState(frame, wordIndex, token);
+                        UpdateTclTryArgumentState(
+                            frame,
+                            wordIndex,
+                            token,
+                            isScriptCommand);
+                    }
                     if (token.Length > 0)
                     {
                         frame.LastBareWord = token;
@@ -1734,7 +1761,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             "eval" => wordIndex >= 1,
             "after" => wordIndex == 2,
             "uplevel" => wordIndex is 1 or 2,
-            "try" => wordIndex == 1,
+            "try" => wordIndex == frame.TryScriptWordIndex,
             "namespace" => wordIndex == 3,
             "dict" => frame.LastBareWord == "for"
                 && wordIndex == frame.LastBareWordIndex + 3,
@@ -1793,14 +1820,49 @@ internal static class DynamicDeclarativeReferenceExtractor
             return;
         }
 
+        if (frame.SwitchOptionValuePending)
+        {
+            frame.SwitchOptionValuePending = false;
+            return;
+        }
+
         if (!frame.SwitchOptionsEnded && token.StartsWith("-", StringComparison.Ordinal))
         {
             if (token == "--")
                 frame.SwitchOptionsEnded = true;
+            else if (token is "-matchvar" or "-indexvar")
+                frame.SwitchOptionValuePending = true;
             return;
         }
 
         frame.SwitchStringWordIndex = wordIndex;
+    }
+
+    private static void UpdateTclTryArgumentState(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string token,
+        bool isScriptArgument)
+    {
+        if (frame.CommandName != "try")
+            return;
+
+        if (isScriptArgument)
+        {
+            frame.TryClauseWordIndex = wordIndex + 1;
+            frame.TryScriptWordIndex = -1;
+            return;
+        }
+
+        if (wordIndex != frame.TryClauseWordIndex)
+            return;
+
+        frame.TryScriptWordIndex = token switch
+        {
+            "on" or "trap" => wordIndex + 3,
+            "finally" => wordIndex + 1,
+            _ => -1,
+        };
     }
 
     private static bool IsTclLastCommandWord(
@@ -1830,6 +1892,9 @@ internal static class DynamicDeclarativeReferenceExtractor
         var frames = new Stack<PrologLexicalFrame>();
         var expectGoal = true;
         SymbolRecord? activeContainer = null;
+        var scanningMultilineHead = false;
+        var multilineHeadParenthesisDepth = 0;
+        var multilineHeadParenthesesClosed = false;
 
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
@@ -1839,6 +1904,9 @@ internal static class DynamicDeclarativeReferenceExtractor
                 frames.Clear();
                 activeContainer = null;
                 expectGoal = true;
+                scanningMultilineHead = false;
+                multilineHeadParenthesisDepth = 0;
+                multilineHeadParenthesesClosed = false;
                 continue;
             }
 
@@ -1849,12 +1917,30 @@ internal static class DynamicDeclarativeReferenceExtractor
                 frames.Clear();
                 activeContainer = container;
                 expectGoal = true;
+                scanningMultilineHead = container.StartLine == lineNumber
+                    && !PrologHeadRegex.IsMatch(lines[lineIndex])
+                    && PrologMultilineHeadRegex.IsMatch(lines[lineIndex]);
+                multilineHeadParenthesisDepth = 0;
+                multilineHeadParenthesesClosed = false;
             }
 
-            var callScanLine = PreparePrologCallScanLine(
-                "prolog",
-                lines[lineIndex],
-                container.StartLine < lineNumber);
+            string callScanLine;
+            if (scanningMultilineHead)
+            {
+                callScanLine = PreparePrologMultilineHeadScanLine(
+                    lines[lineIndex],
+                    ref multilineHeadParenthesisDepth,
+                    ref multilineHeadParenthesesClosed,
+                    out var headEnded);
+                scanningMultilineHead = !headEnded;
+            }
+            else
+            {
+                callScanLine = PreparePrologCallScanLine(
+                    "prolog",
+                    lines[lineIndex],
+                    container.StartLine < lineNumber);
+            }
             var lineCalls = new List<PrologGoalCall>();
             ScanPrologGoalLine(
                 callScanLine,
@@ -1874,6 +1960,60 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
 
         return result;
+    }
+
+    private static string PreparePrologMultilineHeadScanLine(
+        string line,
+        ref int parenthesisDepth,
+        ref bool parenthesesClosed,
+        out bool headEnded)
+    {
+        headEnded = false;
+        for (var column = 0; column < line.Length; column++)
+        {
+            var ch = line[column];
+            if (ch is '\'' or '"')
+            {
+                column = SkipQuotedToken(line, column, ch) - 1;
+                continue;
+            }
+
+            if (!parenthesesClosed)
+            {
+                if (ch == '(')
+                {
+                    parenthesisDepth++;
+                }
+                else if (ch == ')' && parenthesisDepth > 0)
+                {
+                    parenthesisDepth--;
+                    parenthesesClosed = parenthesisDepth == 0;
+                }
+                continue;
+            }
+
+            if (line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal))
+            {
+                var masked = line.ToCharArray();
+                FillWithSpaces(masked, 0, column + 3);
+                headEnded = true;
+                return new string(masked);
+            }
+            if (line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal))
+            {
+                var masked = line.ToCharArray();
+                FillWithSpaces(masked, 0, column + 2);
+                headEnded = true;
+                return new string(masked);
+            }
+            if (IsPrologClauseTerminator(line, column))
+            {
+                headEnded = true;
+                return new string(' ', line.Length);
+            }
+        }
+
+        return new string(' ', line.Length);
     }
 
     private static void ScanPrologGoalLine(
@@ -2179,6 +2319,8 @@ internal static class DynamicDeclarativeReferenceExtractor
 
             var startLineIndex = symbol.StartLine - 1;
             var headMatch = PrologHeadRegex.Match(lines[startLineIndex]);
+            if (!headMatch.Success)
+                headMatch = PrologMultilineHeadRegex.Match(lines[startLineIndex]);
             if (!headMatch.Success
                 || !string.Equals(headMatch.Groups["name"].Value, symbol.Name, StringComparison.Ordinal))
             {

@@ -1207,6 +1207,46 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Tcl_IndexesSwitchOptionAndTryHandlerScripts_Issue4746()
+    {
+        const string content = """
+            proc helper {} {
+                return 1
+            }
+
+            proc switch_run {value} {
+                switch -regexp -matchvar matched -indexvar indices -- $value {
+                    one { helper }
+                    default { helper }
+                }
+            }
+
+            proc try_run {} {
+                try {
+                    helper
+                } on error {message options} {
+                    helper
+                } trap {POSIX SIG} {message options} {
+                    helper
+                } finally {
+                    helper
+                }
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "switch_run"
+            && reference.SymbolName == "helper"));
+        Assert.Equal(4, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "try_run"
+            && reference.SymbolName == "helper"));
+    }
+
+    [Fact]
     public void Extract_Prolog_IndexesModulesImportsAndPredicateCallsWithCaller_Issue4746()
     {
         const string content = """
@@ -1229,6 +1269,30 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName is "module" or "use_module" or "ancestor");
+    }
+
+    [Theory]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void Extract_Prolog_IndexesMultilinePredicateHeadsWithoutPhantomDeclarations_Issue4746(
+        string language)
+    {
+        const string content = """
+            helper.
+            multi_line_head(
+                X
+            ) :-
+                helper.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences(language, content);
+
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "multi_line_head");
+        AssertReferencesContain(references, "call", "multi_line_head", "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "multi_line_head");
     }
 
     [Fact]

@@ -165,9 +165,15 @@ public static partial class SymbolExtractor
         var shellScannerLines = lang == "shell"
             ? MaskShellHeredocLines(lines)
             : null;
-        var prologClauseContinuationLines = lang is "prolog" or "ambiguous_pl"
-            ? BuildPrologClauseContinuationLines(structuralLines)
-            : null;
+        bool[]? prologClauseContinuationLines = null;
+        Dictionary<int, string>? prologMultilineHeads = null;
+        if (lang is "prolog" or "ambiguous_pl")
+        {
+            prologMultilineHeads = [];
+            prologClauseContinuationLines = BuildPrologClauseContinuationLines(
+                structuralLines,
+                prologMultilineHeads);
+        }
         var powershellEnumBodyLines = lang == "powershell"
             ? FindPowerShellEnumBodyLines(structuralLines)
             : null;
@@ -2145,6 +2151,15 @@ public static partial class SymbolExtractor
             ExtractSectionHeadingSymbols(fileId, lang, lines, symbols);
         if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
             ExtractRazorDirectiveSymbols(fileId, lines, symbols);
+        if (prologMultilineHeads is { Count: > 0 })
+        {
+            AddPrologMultilineHeadSymbols(
+                fileId,
+                lines,
+                symbols,
+                extractionState,
+                prologMultilineHeads);
+        }
         AssignContainers(symbols, lines, getCSharpLineStartStates);
         if (lang is "shell" or "powershell")
             AddScriptScopeSymbol(fileId, lines, symbols);
@@ -2169,8 +2184,13 @@ public static partial class SymbolExtractor
     private static readonly Regex PrologOpenClauseRegex = new(
         @"^\s*(?:(?:[a-z][A-Za-z0-9_]*\s*(?:\([^\r\n]*\))?\s*(?::-|-->))|:-)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PrologMultilineHeadStartRegex = new(
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?<open>\()",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static bool[] BuildPrologClauseContinuationLines(IReadOnlyList<string> structuralLines)
+    private static bool[] BuildPrologClauseContinuationLines(
+        IReadOnlyList<string> structuralLines,
+        Dictionary<int, string> multilineHeads)
     {
         var continuationLines = new bool[structuralLines.Count];
         var clauseOpen = false;
@@ -2186,10 +2206,106 @@ public static partial class SymbolExtractor
             }
 
             if (PrologOpenClauseRegex.IsMatch(line) && !HasPrologClauseTerminator(line))
+            {
                 clauseOpen = true;
+                continue;
+            }
+
+            var multilineHead = PrologMultilineHeadStartRegex.Match(line);
+            if (multilineHead.Success
+                && !HasPrologClauseTerminator(line)
+                && IsValidatedMultilinePrologHead(
+                    structuralLines,
+                    lineIndex,
+                    multilineHead.Groups["open"].Index))
+            {
+                multilineHeads[lineIndex] = multilineHead.Groups["name"].Value;
+                clauseOpen = true;
+            }
         }
 
         return continuationLines;
+    }
+
+    private static bool IsValidatedMultilinePrologHead(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int openingParenthesisColumn)
+    {
+        var parenthesisDepth = 0;
+        var headClosed = false;
+        for (var lineIndex = startLineIndex; lineIndex < structuralLines.Count; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var startColumn = lineIndex == startLineIndex ? openingParenthesisColumn : 0;
+            for (var column = startColumn; column < line.Length; column++)
+            {
+                var ch = line[column];
+                if (ch is '\'' or '"')
+                {
+                    column = SkipPrologQuotedTerm(line, column, ch) - 1;
+                    continue;
+                }
+
+                if (!headClosed)
+                {
+                    if (ch == '(')
+                    {
+                        parenthesisDepth++;
+                    }
+                    else if (ch == ')' && parenthesisDepth > 0)
+                    {
+                        parenthesisDepth--;
+                        headClosed = parenthesisDepth == 0;
+                    }
+                    continue;
+                }
+
+                if (char.IsWhiteSpace(ch))
+                    continue;
+                if (line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal)
+                    || line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal)
+                    || DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AddPrologMultilineHeadSymbols(
+        long fileId,
+        IReadOnlyList<string> lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState,
+        IReadOnlyDictionary<int, string> multilineHeads)
+    {
+        foreach (var (lineIndex, name) in multilineHeads)
+        {
+            var lineNumber = lineIndex + 1;
+            var line = lines[lineIndex];
+            AddSymbolRecord(
+                symbols,
+                extractionState,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = 0,
+                    EndLine = lineNumber,
+                    Signature = line.Trim(),
+                },
+                line);
+        }
     }
 
     private static bool HasPrologClauseTerminator(string line)
