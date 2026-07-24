@@ -196,6 +196,7 @@ public static partial class QueryCommandRunner
         SearchCursor? searchCursor = null;
         int? unusedCursorOffset = null;
         int? outlineCursorOffset = null;
+        string? rawCursorValue = null;
         DependencyCycleCursor? dependencyCycleCursor = null;
         var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
@@ -747,16 +748,21 @@ public static partial class QueryCommandRunner
                     if (TryReadStringOptionValue(args, ref i, "--cursor", inlineValue, allowSeparatedDashPrefixedLiteralValue: allowSeparatedDashPrefixedCursorValue, out var cursorValue, out var cursorError))
                     {
                         WarnIfDuplicateSingleValueOption("--cursor", cursorValue!);
-                        if (TryParseSearchCursor(cursorValue!, out var parsedCursor))
+                        var parsedCursorValue = cursorValue!;
+                        if (TryParseSearchCursor(parsedCursorValue, out var parsedCursor))
                             searchCursor = parsedCursor;
-                        else if (TryParseUnusedCursor(cursorValue!, out var parsedUnusedCursorOffset))
+                        else if (TryParseUnusedCursor(parsedCursorValue, out var parsedUnusedCursorOffset))
                             unusedCursorOffset = parsedUnusedCursorOffset;
-                        else if (TryParseOutlineCursor(cursorValue!, out var parsedOutlineCursorOffset))
+                        else if (TryParseOutlineCursor(parsedCursorValue, out var parsedOutlineCursorOffset))
                             outlineCursorOffset = parsedOutlineCursorOffset;
-                        else if (TryParseDependencyCycleCursor(cursorValue!, out var parsedDependencyCycleCursor))
+                        else if (TryParseDependencyCycleCursor(parsedCursorValue, out var parsedDependencyCycleCursor))
                             dependencyCycleCursor = parsedDependencyCycleCursor;
                         else
+                        {
                             AddParseError("Error: --cursor must be a search, unused, outline, or dependency-cycle pagination cursor returned as `next_cursor`.");
+                            break;
+                        }
+                        rawCursorValue = parsedCursorValue;
                     }
                     else
                     {
@@ -1771,6 +1777,7 @@ public static partial class QueryCommandRunner
             SearchCursor = searchCursor,
             UnusedCursorOffset = unusedCursorOffset,
             OutlineCursorOffset = outlineCursorOffset,
+            CursorValue = rawCursorValue,
             DependencyCycleCursor = dependencyCycleCursor,
             NamedSearchQueries = namedSearchQueries,
             LanguagesIndexedOnly = languagesIndexedOnly,

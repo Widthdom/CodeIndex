@@ -659,9 +659,7 @@ public static partial class QueryCommandRunner
 
             if (options.CountOnly)
             {
-                var counts = HasSearchOriginFilters(options)
-                    ? CountFilteredSearchResults(reader, options, exactSearch)
-                    : reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exactSearch, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow, options.GuardScope, options.TokenBoundary);
+                var counts = CountSearchMatches(reader, options, exactSearch);
                 var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
@@ -714,6 +712,9 @@ public static partial class QueryCommandRunner
             }
 
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
+            var groupedCounts = options.OutputFormat == OutputFormatGrouped
+                ? CountSearchMatches(reader, options, exactSearch)
+                : default;
             var displayRows = ReadSearchDisplayRows(reader, options, exactSearch);
             var selection = ApplySearchOutputSelection(displayRows, options);
             displayRows = selection.Rows;
@@ -726,7 +727,7 @@ public static partial class QueryCommandRunner
                 }
                 if (options.Json && options.OutputFormat == OutputFormatGrouped)
                 {
-                    var groupedExitCode = WriteGroupedSearchResults([], options, jsonOptions);
+                    var groupedExitCode = WriteGroupedSearchResults([], groupedCounts, options, jsonOptions);
                     return groupedExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : groupedExitCode;
                 }
                 if (options.Json && TryWriteEmptySearchJsonWithOptionalByteLimit(options, jsonOptions, out var emptyJsonExitCode))
@@ -818,7 +819,7 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatGrouped)
                 {
-                    return WriteGroupedSearchResults(displayRows, options, jsonOptions);
+                    return WriteGroupedSearchResults(displayRows, groupedCounts, options, jsonOptions);
                 }
                 if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
                 {

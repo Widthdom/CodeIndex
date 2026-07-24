@@ -2732,6 +2732,35 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_FormatCountIgnoresRowLimit_Issue4730()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_count_limit_issue4730");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
+
+        var (baselineExitCode, baselineStdout, baselineStderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--format", "count"], _jsonOptions));
+        var (limitedExitCode, limitedStdout, limitedStderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--format", "count", "--limit", "1"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, baselineExitCode);
+        Assert.Equal(CommandExitCodes.Success, limitedExitCode);
+        Assert.Equal(string.Empty, baselineStderr);
+        Assert.Equal(string.Empty, limitedStderr);
+        using var baselineDocument = ParseJsonOutput(baselineStdout);
+        using var limitedDocument = ParseJsonOutput(limitedStdout);
+        var baseline = baselineDocument.RootElement;
+        var limited = limitedDocument.RootElement;
+
+        Assert.Equal(2, baseline.GetProperty("count").GetInt32());
+        Assert.Equal(baseline.GetProperty("count").GetInt32(), limited.GetProperty("count").GetInt32());
+        Assert.Equal(
+            baseline.GetProperty("capability_counts").GetRawText(),
+            limited.GetProperty("capability_counts").GetRawText());
+    }
+
+    [Fact]
     public void RunLanguages_SummaryOnlyJsonReturnsCapabilitySummary_Issue4316()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
@@ -4982,7 +5011,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, outlineExitCode);
             Assert.Contains("outline --cursor must use an outline pagination cursor", outlineStderr, StringComparison.Ordinal);
             Assert.Equal(CommandExitCodes.UsageError, unusedExitCode);
-            Assert.Contains("cursor for unused must use the `unused:<offset>` cursor", unusedStderr, StringComparison.Ordinal);
+            Assert.Contains("cursor for unused must use the opaque cursor returned by a previous unused response", unusedStderr, StringComparison.Ordinal);
         }
         finally
         {
