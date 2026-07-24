@@ -219,8 +219,14 @@ public class ConsoleCaptureTests
     [Fact]
     public async Task CaptureAsync_TimeoutRestoresOnlyAfterCallbackObservesCancellation_Issue4749()
     {
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
+        TextWriter originalOut;
+        TextWriter originalError;
+        lock (TestConsoleLock.Gate)
+        {
+            originalOut = Console.Out;
+            originalError = Console.Error;
+        }
+
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
         var callbackExited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -244,9 +250,12 @@ public class ConsoleCaptureTests
 
         Assert.Contains("within", exception.Message, StringComparison.Ordinal);
         Assert.True(callbackExited.Task.IsCompletedSuccessfully);
-        Assert.Same(originalOut, Console.Out);
-        Assert.Same(originalError, Console.Error);
-        Assert.Null(Record.Exception(() => Console.Out.Flush()));
-        Assert.Null(Record.Exception(() => Console.Error.Flush()));
+        lock (TestConsoleLock.Gate)
+        {
+            Assert.Same(originalOut, Console.Out);
+            Assert.Same(originalError, Console.Error);
+            Assert.Null(Record.Exception(() => Console.Out.Flush()));
+            Assert.Null(Record.Exception(() => Console.Error.Flush()));
+        }
     }
 }
