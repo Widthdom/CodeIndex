@@ -101,7 +101,7 @@ public static partial class ReferenceExtractor
                     ? MaskCStyleBlockCommentLines(language, structuralLines)
                     : structuralLines;
         referenceStructuralLines = ScientificNativeCommentMasker.MaskBlockComments(language, referenceStructuralLines);
-        if (language == "python")
+        if (language is "python" or "cython")
             referenceStructuralLines = MaskPythonFStrings(referenceStructuralLines);
 
         var linePrepareOptions = CreateReferenceLinePrepareOptions(language);

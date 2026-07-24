@@ -195,7 +195,7 @@ public partial class DbReader
         if (!exact)
             callersQueryParam = $"%{EscapeLikeQuery(query)}%";
         else if (_foldReady)
-            callersQueryParam = NameFold.Fold(query) ?? query;
+            callersQueryParam = FoldNameForLanguage(query, lang);
         else
             callersQueryParam = query;
         SqliteCommandPolicy.Add(cmd, "@query", callersQueryParam);
@@ -339,7 +339,7 @@ public partial class DbReader
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
-                ? NameFold.Fold(query) ?? query
+                ? FoldNameForLanguage(query, lang)
                 : query;
         SqliteCommandPolicy.Add(cmd, "@query", value);
         SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
@@ -446,7 +446,7 @@ public partial class DbReader
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
-                ? NameFold.Fold(query) ?? query
+              ? FoldNameForLanguage(query, lang)
                 : query;
         SqliteCommandPolicy.Add(cmd, "@query", value);
         SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
@@ -572,7 +572,7 @@ public partial class DbReader
         if (!exact)
             calleesQueryParam = $"%{EscapeLikeQuery(query)}%";
         else if (_foldReady)
-            calleesQueryParam = NameFold.Fold(query) ?? query;
+            calleesQueryParam = FoldNameForLanguage(query, lang);
         else
             calleesQueryParam = query;
         SqliteCommandPolicy.Add(cmd, "@query", calleesQueryParam);
@@ -704,7 +704,7 @@ public partial class DbReader
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
-                ? NameFold.Fold(query) ?? query
+                ? FoldNameForLanguage(query, lang)
                 : query;
         SqliteCommandPolicy.Add(cmd, "@query", value);
         SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
@@ -803,7 +803,7 @@ public partial class DbReader
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
-                ? NameFold.Fold(query) ?? query
+                ? FoldNameForLanguage(query, lang)
                 : query;
         SqliteCommandPolicy.Add(cmd, "@query", value);
         SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
@@ -1042,7 +1042,7 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         SqliteCommandPolicy.Add(cmd, "@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
-            SqliteCommandPolicy.Add(cmd, "@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
+            SqliteCommandPolicy.Add(cmd, "@symbolNameFolded", FoldNameForLanguage(symbolName, lang));
         for (var i = 0; i < polymorphicCSharpSymbolNames.Count; i++)
         {
             if (_foldReady)
@@ -2177,9 +2177,9 @@ public partial class DbReader
         cmd.CommandText = sql;
         SqliteCommandPolicy.Add(cmd, "@resolvedName", resolvedName);
         SqliteCommandPolicy.Add(cmd, "@resolvedNameNormalized", normalizedName);
-        SqliteCommandPolicy.Add(cmd, "@resolvedNameNormalizedFolded", NameFold.Fold(normalizedName) ?? normalizedName);
+        SqliteCommandPolicy.Add(cmd, "@resolvedNameNormalizedFolded", FoldNameForLanguage(normalizedName, lang));
         SqliteCommandPolicy.Add(cmd, "@resolvedNameLeaf", leafName);
-        SqliteCommandPolicy.Add(cmd, "@resolvedNameLeafFolded", NameFold.Fold(leafName) ?? leafName);
+        SqliteCommandPolicy.Add(cmd, "@resolvedNameLeafFolded", FoldNameForLanguage(leafName, lang));
         SqliteCommandPolicy.Add(cmd, "@resolvedNameSegmentCount", segmentCount);
         SqliteCommandPolicy.Add(cmd, "@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (SqlNameResolver.HasQualifier(resolvedName))
@@ -2189,7 +2189,7 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@resolvedNameContainerSuffix", $"%.{EscapeLikeQuery(container)}");
         }
         if (_foldReady)
-            SqliteCommandPolicy.Add(cmd, "@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
+            SqliteCommandPolicy.Add(cmd, "@resolvedNameFolded", FoldNameForLanguage(resolvedName, lang));
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         SqliteCommandPolicy.Add(cmd, "@definitionLimit", Math.Max(1, representativeLimit));

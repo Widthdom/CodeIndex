@@ -408,7 +408,7 @@ public partial class DbReader
             if (!exact)
                 queryParam = $"%{EscapeLikeQuery(query)}%";
             else if (_foldReady)
-                queryParam = NameFold.Fold(query) ?? query;
+                queryParam = FoldNameForLanguage(query, lang);
             else
                 queryParam = query;
             SqliteCommandPolicy.Add(cmd, "@query", queryParam);
@@ -784,7 +784,7 @@ public partial class DbReader
             var value = !exact
                 ? $"%{EscapeLikeQuery(query)}%"
                 : _foldReady
-                    ? NameFold.Fold(query) ?? query
+                    ? FoldNameForLanguage(query, lang)
                     : query;
             SqliteCommandPolicy.Add(cmd, "@query", value);
             SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
@@ -923,7 +923,7 @@ public partial class DbReader
             var value = !exact
                 ? $"%{EscapeLikeQuery(query)}%"
                 : _foldReady
-                    ? NameFold.Fold(query) ?? query
+                      ? FoldNameForLanguage(query, lang)
                     : query;
             SqliteCommandPolicy.Add(cmd, "@query", value);
             SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);

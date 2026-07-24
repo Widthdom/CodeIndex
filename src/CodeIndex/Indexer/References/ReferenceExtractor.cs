@@ -2101,18 +2101,29 @@ public static partial class ReferenceExtractor
         var dedupeKey = CreateReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container);
         if (!seen.Add(dedupeKey))
             return;
+        var currentContainerReceiver = string.Equals(
+            targetQualifier,
+            ScientificNativeReferenceExtractor.CurrentContainerReceiverMarker,
+            StringComparison.Ordinal);
 
         TryAddReference(references, new ReferenceRecord
         {
             FileId = fileId,
             SymbolName = name,
+            IdentitySymbolNameFolded = language == "nim"
+                ? NimIdentifierIdentity.Fold(name)
+                : null,
             ReferenceKind = referenceKind,
             Line = lineNumber,
             Column = column,
             Context = context,
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
-            TargetQualifier = targetQualifier,
+            IdentityContainerNameFolded = language == "nim"
+                ? NimIdentifierIdentity.Fold(container?.Name)
+                : null,
+            TargetQualifier = currentContainerReceiver ? null : targetQualifier,
+            SuppressInferredTargetQualifier = currentContainerReceiver,
             IsSelfReference = IsSameReferenceName(container?.Name, name),
         });
     }

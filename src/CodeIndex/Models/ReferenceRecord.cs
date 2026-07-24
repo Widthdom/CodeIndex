@@ -12,6 +12,9 @@ public class ReferenceRecord
     /// <summary>Referenced symbol name / 参照先シンボル名</summary>
     public string SymbolName { get; set; } = string.Empty;
 
+    /// <summary>Language-specific persisted identity key when generic folding is insufficient / 一般的なfoldでは不十分な場合の言語固有identity key</summary>
+    internal string? IdentitySymbolNameFolded { get; set; }
+
     /// <summary>Reference kind such as call or instantiate / 参照種別</summary>
     public string ReferenceKind { get; set; } = string.Empty;
 
@@ -30,12 +33,18 @@ public class ReferenceRecord
     /// <summary>Enclosing symbol name when known / 親シンボル名</summary>
     public string? ContainerName { get; set; }
 
+    /// <summary>Language-specific persisted container identity key / 言語固有の永続化container identity key</summary>
+    internal string? IdentityContainerNameFolded { get; set; }
+
     /// <summary>
     /// Receiver/type qualifier immediately before the referenced name when it is a stable
     /// type-like identifier (for example <c>FileShare</c> in <c>FileShare.ReadWrite</c>).
     /// 参照名直前の安定した型相当修飾子（例: <c>FileShare.ReadWrite</c> の <c>FileShare</c>）。
     /// </summary>
     public string? TargetQualifier { get; set; }
+
+    /// <summary>True when a language-specific receiver explicitly denotes the current container / 言語固有receiverが現在のcontainerを明示する場合はtrue</summary>
+    internal bool SuppressInferredTargetQualifier { get; set; }
 
     /// <summary>True when the enclosing symbol references itself / 親シンボル自身への参照なら true</summary>
     public bool IsSelfReference { get; set; }

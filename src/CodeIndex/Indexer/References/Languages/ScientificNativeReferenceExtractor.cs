@@ -6,6 +6,7 @@ namespace CodeIndex.Indexer;
 
 internal static class ScientificNativeReferenceExtractor
 {
+    internal const string CurrentContainerReceiverMarker = "\u001fcurrent-container";
     private const string JuliaIdentifierPattern = @"[\p{L}_]\w*";
     private const string JuliaCallableIdentifierPattern = JuliaIdentifierPattern + @"!?";
 
@@ -96,6 +97,7 @@ internal static class ScientificNativeReferenceExtractor
     internal static bool Supports(string language) => SupportedLanguages.Contains(language);
 
     internal static string? GetParenthesizedCallTargetQualifier(
+        string language,
         string preparedLine,
         int callIndex)
     {
@@ -135,6 +137,12 @@ internal static class ScientificNativeReferenceExtractor
         }
 
         segments.Reverse();
+        if ((language == "cython" && segments[0] is "self" or "cls")
+            || (language == "d" && segments[0] is "this" or "super"))
+        {
+            return CurrentContainerReceiverMarker;
+        }
+
         return string.Join('.', segments);
     }
 

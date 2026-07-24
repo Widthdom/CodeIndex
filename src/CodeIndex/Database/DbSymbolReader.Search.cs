@@ -246,7 +246,7 @@ public partial class DbReader
             var paramValue = !exact
                 ? $"%{EscapeLikeQuery(value)}%"
                 : _foldReady
-                    ? NameFold.Fold(value) ?? value
+                    ? FoldNameForLanguage(value, lang)
                     : value;
             SqliteCommandPolicy.Add(cmd, "@query0", paramValue);
             SqliteCommandPolicy.Add(cmd, "@query0Normalized", SqlNameResolver.NormalizeQualifiedName(value));
@@ -363,7 +363,7 @@ public partial class DbReader
                 var paramValue = !exact
                     ? $"%{EscapeLikeQuery(value)}%"
                     : _foldReady
-                        ? NameFold.Fold(value) ?? value
+                        ? FoldNameForLanguage(value, lang)
                         : value;
                 SqliteCommandPolicy.Add(cmd, $"@query{i}", paramValue);
                 SqliteCommandPolicy.Add(cmd, $"@query{i}Normalized", SqlNameResolver.NormalizeQualifiedName(value));
@@ -652,7 +652,7 @@ public partial class DbReader
                 if (!exact)
                     paramValue = $"%{EscapeLikeQuery(effectiveQueries[idx])}%";
                 else if (_foldReady)
-                    paramValue = NameFold.Fold(effectiveQueries[idx]) ?? effectiveQueries[idx];
+                    paramValue = FoldNameForLanguage(effectiveQueries[idx], lang);
                 else
                     paramValue = effectiveQueries[idx];
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}", paramValue);
@@ -854,6 +854,14 @@ public partial class DbReader
         if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "javascript", StringComparison.OrdinalIgnoreCase))
             return NormalizeJavaScriptSymbolSearchQuery(query);
 
+        if (exact
+            && !string.IsNullOrWhiteSpace(lang)
+            && string.Equals(lang, "nim", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(query))
+        {
+            return NimIdentifierIdentity.Fold(query.Trim());
+        }
+
         // Terraform dotted prefixes (var.X / local.X / module.X / data.TYPE.X) are stored as bare names in
         // the references and symbols tables. Strip the prefix so queries pasted from HCL still resolve.
         // Terraform の dotted prefix（var.X / local.X / module.X / data.TYPE.X）は参照/シンボルの bare 名で格納されるため、
@@ -1052,7 +1060,7 @@ public partial class DbReader
         if (ShouldPreserveRustQualifiedExactQuery(query, lang, exact))
             return query?.Trim();
 
-        return NormalizeSymbolSearchQuery(query, lang) ?? query;
+        return NormalizeSymbolSearchQuery(query, lang, exact) ?? query;
     }
 
     private static (string? QualifiedPath, string? ContainerPath, string? LeafName) NormalizeRustQualifiedExactQueryParts(string query)

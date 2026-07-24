@@ -2209,6 +2209,11 @@ public static partial class SymbolExtractor
         if (lang == "shell")
             ExpandShellAliasSymbols(fileId, lines, symbols, extractionState);
         PopulateDeclaredContainerQualifiedNames(symbols);
+        if (lang == "nim")
+        {
+            foreach (var symbol in symbols)
+                symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
+        }
         return symbols;
     }
 

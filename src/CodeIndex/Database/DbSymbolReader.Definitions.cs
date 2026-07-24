@@ -367,7 +367,7 @@ public partial class DbReader
             var paramValue = !exact
                 ? $"%{EscapeLikeQuery(normalizedQuery)}%"
                 : _foldReady
-                    ? NameFold.Fold(normalizedQuery) ?? normalizedQuery
+                    ? FoldNameForLanguage(normalizedQuery, lang)
                     : normalizedQuery;
             SqliteCommandPolicy.Add(cmd, "@query", paramValue);
             SqliteCommandPolicy.Add(cmd, "@queryNormalized", SqlNameResolver.NormalizeQualifiedName(normalizedQuery));

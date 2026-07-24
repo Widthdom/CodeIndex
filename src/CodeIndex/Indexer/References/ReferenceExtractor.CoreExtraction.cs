@@ -1631,6 +1631,7 @@ public static partial class ReferenceExtractor
                 {
                     var targetQualifier =
                         ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                            language,
                             preparedLine,
                             callIndex);
                     if (targetQualifier != null)
@@ -2340,6 +2341,7 @@ public static partial class ReferenceExtractor
                     callIndex,
                     ScientificNativeReferenceExtractor.Supports(language)
                         ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                            language,
                             preparedLine,
                             callIndex)
                         : null);
@@ -2540,6 +2542,7 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     callContainer,
+                    language,
                     targetQualifier: targetQualifier);
                 return true;
 
@@ -2686,6 +2689,7 @@ public static partial class ReferenceExtractor
                             callIndex,
                             ScientificNativeReferenceExtractor.Supports(language)
                                 ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                                    language,
                                     preparedLine,
                                     callIndex)
                                 : null))

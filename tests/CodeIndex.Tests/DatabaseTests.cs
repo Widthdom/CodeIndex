@@ -1114,6 +1114,122 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraph_CythonSelfReceiverResolvesSameClassDuplicateLeaf_Issue4738()
+    {
+        const string content = """
+            cdef class A:
+                def helper(self):
+                    pass
+                def run(self):
+                    self.helper()
+            cdef class B:
+                def helper(self):
+                    pass
+            """;
+        var fileId = UpsertTestFileWithLanguage(
+            "src/workers.pyx",
+            "cython",
+            "cython-self-receiver");
+        var symbols = SymbolExtractor.Extract(fileId, "cython", content);
+        _writer.InsertSymbols(symbols);
+        var references = ReferenceExtractor.Extract(fileId, "cython", content, symbols);
+        _writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        var helperReference = Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Null(helperReference.TargetQualifier);
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'helper'
+              AND container_name = 'A'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'helper'
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+    }
+
+    [Fact]
+    public void ReferenceGraph_NimStyleInsensitiveIdentityResolvesAndSearches_Issue4738()
+    {
+        const string content = """
+            proc myProc() = discard
+            proc RunGraph() =
+              my_proc()
+            """;
+        var fileId = UpsertTestFileWithLanguage(
+            "src/style.nim",
+            "nim",
+            "nim-style-insensitive");
+        var symbols = SymbolExtractor.Extract(fileId, "nim", content);
+        _writer.InsertSymbols(symbols);
+        var references = ReferenceExtractor.Extract(fileId, "nim", content, symbols);
+        _writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+        Assert.True(_writer.MarkFoldReady(
+            stampCurrentSymbolExtractorVersions: true,
+            symbolExtractorLanguagesToStamp: ["nim"]));
+        _writer.MarkGraphReady();
+
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'myProc'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'my_proc'
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+        var expectedSourceId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'RunGraph'
+            """);
+        Assert.Equal(expectedSourceId, ExecuteScalarLong($"""
+            SELECT source_symbol_id
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'my_proc'
+            """));
+        Assert.Equal("myproc", ExecuteScalarString($"""
+            SELECT name_folded
+            FROM symbols
+            WHERE id = {expectedTargetId.ToString(CultureInfo.InvariantCulture)}
+            """));
+        Assert.Equal("myproc", ExecuteScalarString($"""
+            SELECT symbol_name_folded
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'my_proc'
+            """));
+        Assert.Equal("Myproc", DbReader.FoldNameForLanguage("My_proc", "nim"));
+        Assert.Equal(0, ExecuteScalarLong("""
+            SELECT COUNT(*)
+            FROM symbols
+            WHERE name_folded = 'Myproc'
+            """));
+
+        var reader = new DbReader(_db.Connection);
+        Assert.Single(reader.SearchSymbols("my_proc", lang: "nim", exact: true));
+        Assert.Single(reader.SearchReferences("myProc", lang: "nim", exact: true));
+        Assert.Empty(reader.SearchSymbols("My_proc", lang: "nim", exact: true));
+        Assert.Empty(reader.SearchReferences("MyProc", lang: "nim", exact: true));
+    }
+
+    [Fact]
     public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
     {
         var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");

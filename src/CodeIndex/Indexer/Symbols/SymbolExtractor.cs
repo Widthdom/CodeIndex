@@ -24,7 +24,7 @@ public static partial class SymbolExtractor
     public const int FunctionalLanguageContractVersion = 3;
     public const int DynamicLanguageContractVersion = 2;
     public const int SystemsLanguageContractVersion = 2;
-    public const int ScientificNativeGraphContractVersion = 3;
+    public const int ScientificNativeGraphContractVersion = 4;
     public const int RepositoryMetadataContractVersion = 2;
     public const int ApplicationManifestContractVersion = 3;
     private static readonly string[] AdditionalSymbolLanguages =
@@ -499,6 +499,7 @@ public static partial class SymbolExtractor
         JuliaShortFunction,
         VisualBasicEnd,
         PascalEnd,
+        AdaEnd,
         SmalltalkMethod,
         SqlProcBody,
     }
@@ -1654,7 +1655,7 @@ public static partial class SymbolExtractor
             new("type",     new Regex(@"^\s*(?:abstract|primitive)\s+type\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
             new("function", new Regex(@"^\s*function\s+(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
             new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("function", new Regex(@"^\s*(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*\([^)\r\n]*\)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.JuliaShortFunction),
+            new("function", new Regex(@"^\s*(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*\([^)\r\n]*\)\s*(?:where\s*(?:\{[^}\r\n]*\}|[A-Za-z_]\w*)\s*)?=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.JuliaShortFunction),
             new("property", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:using|import)\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
@@ -1668,10 +1669,10 @@ public static partial class SymbolExtractor
         ],
         ["ada"] =
         [
-            new("namespace", new Regex(@"^\s*package\s+(?:body\s+)?(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
+            new("namespace", new Regex(@"^\s*package\s+(?:body\s+)?(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.AdaEnd),
             new("type",      new Regex(@"^\s*(?:subtype|type)\s+(?<name>[A-Za-z]\w*)\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("type",      new Regex(@"^\s*(?:task|protected)\s+(?:type\s+)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
-            new("function",  new Regex(@"^\s*(?:(?:overriding|not\s+overriding)\s+)?(?:function|procedure)\s+(?:(?:[A-Za-z]\w*)\.)*(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
+            new("type",      new Regex(@"^\s*(?:task|protected)\s+(?:type\s+)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.AdaEnd),
+            new("function",  new Regex(@"^\s*(?:(?:overriding|not\s+overriding)\s+)?(?:function|procedure)\s+(?:(?:[A-Za-z]\w*)\.)*(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.AdaEnd),
             new("import",    new Regex(@"^\s*with\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["d"] =
@@ -4834,6 +4835,7 @@ public static partial class SymbolExtractor
                 startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
             BodyStyle.PascalEnd => FindPascalRange(lines, startIndex),
+            BodyStyle.AdaEnd => FindAdaRange(lines, startIndex),
             BodyStyle.SmalltalkMethod => FindSmalltalkMethodRange(lines, startIndex),
             BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),

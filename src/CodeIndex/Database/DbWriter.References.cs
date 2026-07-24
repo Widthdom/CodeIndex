@@ -836,8 +836,14 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
-                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
-                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(
+                    reference.SymbolName,
+                    reference.IdentitySymbolNameFolded,
+                    foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(
+                    reference.ContainerName,
+                    reference.IdentityContainerNameFolded,
+                    foldedNameCache);
                 cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
                 cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
                 cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
@@ -1210,6 +1216,9 @@ public partial class DbWriter
 
     private static string? ExtractTargetQualifier(ReferenceRecord reference)
     {
+        if (reference.SuppressInferredTargetQualifier)
+            return null;
+
         if (!string.IsNullOrWhiteSpace(reference.TargetQualifier))
         {
             var explicitQualifier = reference.TargetQualifier.Trim();

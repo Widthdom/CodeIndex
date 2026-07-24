@@ -1709,4 +1709,97 @@ public partial class ReferenceExtractorTests
         Assert.Equal("run", Assert.Single(references, reference =>
             reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
     }
+
+    [Theory]
+    [InlineData(
+        "cython",
+        """
+        cdef class Worker:
+            def run(self):
+                self.helper()
+        """)]
+    [InlineData(
+        "d",
+        """
+        class Worker {
+            void run() {
+                this.helper();
+            }
+        }
+        """)]
+    public void Extract_InstanceReceiversUseCurrentContainerResolution_Issue4738(
+        string language,
+        string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        var helper = Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Equal("run", helper.ContainerName);
+        Assert.Null(helper.TargetQualifier);
+    }
+
+    [Fact]
+    public void Extract_AdaNestedEndsPreserveOuterProcedureScope_Issue4738()
+    {
+        const string content = """
+            procedure Run is
+            begin
+              if Ready then
+                First;
+              end if;
+              Later;
+            end Run;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "ada", content);
+
+        var references = ReferenceExtractor.Extract(1, "ada", content, symbols);
+
+        Assert.Equal(7, Assert.Single(symbols, symbol => symbol.Name == "Run").EndLine);
+        foreach (var name in new[] { "First", "Later" })
+        {
+            Assert.Equal("Run", Assert.Single(references, reference =>
+                reference.SymbolName == name && reference.ReferenceKind == "call").ContainerName);
+        }
+    }
+
+    [Fact]
+    public void Extract_CythonFStringExpressionsEmitCalls_Issue4738()
+    {
+        const string content = """
+            def run():
+                value = f"{pkg.helper()}"
+            """;
+        var symbols = SymbolExtractor.Extract(1, "cython", content);
+
+        var references = ReferenceExtractor.Extract(1, "cython", content, symbols);
+
+        var helper = Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Equal("run", helper.ContainerName);
+        Assert.Equal("pkg", helper.TargetQualifier);
+        Assert.Equal(20, helper.Column);
+    }
+
+    [Fact]
+    public void Extract_JuliaWhereShortFunctionOwnsRhsCalls_Issue4738()
+    {
+        const string content = """
+            f(x::T) where {T} = helper(x)
+            outside()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Equal(1, Assert.Single(symbols, symbol => symbol.Name == "f").EndLine);
+        Assert.Equal("f", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "f" && reference.ReferenceKind == "call");
+    }
 }

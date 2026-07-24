@@ -1659,6 +1659,11 @@ public partial class DbReader : IDisposable
             : normalized;
     }
 
+    internal static string FoldNameForLanguage(string value, string? lang) =>
+        string.Equals(NormalizeQueryLanguage(lang), "nim", StringComparison.Ordinal)
+            ? NimIdentifierIdentity.Fold(value) ?? value
+            : NameFold.Fold(value) ?? value;
+
     internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
         => langs.Any(IsSqlLanguage);
 

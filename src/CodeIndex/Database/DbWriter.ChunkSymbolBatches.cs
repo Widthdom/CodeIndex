@@ -244,7 +244,10 @@ public partial class DbWriter
                     ? (symbol.IsMetadataTarget.Value ? 1 : 0)
                     : (object)DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)symbol.MetadataTargetSource ?? DBNull.Value;
-                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(
+                    symbol.Name,
+                    symbol.IdentityNameFolded,
+                    foldedNameCache);
             }
 
             cmd.ExecuteNonQuery();
