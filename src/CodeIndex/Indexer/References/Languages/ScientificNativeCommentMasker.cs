@@ -19,11 +19,7 @@ internal static class ScientificNativeCommentMasker
                 "=#",
                 "#",
                 singleQuoteCanBePostfix: true),
-            "nim" => MaskNestedBlockComments(
-                MaskTripleQuotedStrings(lines, "#[", "]#", "#"),
-                "#[",
-                "]#",
-                "#"),
+            "nim" => MaskNimNonCodeRegions(lines),
             "matlab" => MaskMatlabBlockComments(lines),
             _ => lines,
         };
@@ -274,6 +270,27 @@ internal static class ScientificNativeCommentMasker
         }
 
         return chars is null ? line : new string(chars);
+    }
+
+    private static string[] MaskNimNonCodeRegions(string[] lines)
+    {
+        string[]? rawStringMaskedLines = null;
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var maskedLine = MaskNimRawStringLiterals(lines[lineIndex]);
+            if (ReferenceEquals(maskedLine, lines[lineIndex]))
+                continue;
+
+            rawStringMaskedLines ??= (string[])lines.Clone();
+            rawStringMaskedLines[lineIndex] = maskedLine;
+        }
+
+        var preparedLines = rawStringMaskedLines ?? lines;
+        return MaskNestedBlockComments(
+            MaskTripleQuotedStrings(preparedLines, "#[", "]#", "#"),
+            "#[",
+            "]#",
+            "#");
     }
 
     private static string[] MaskDNonCodeRegions(string[] lines)

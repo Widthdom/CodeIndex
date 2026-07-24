@@ -186,6 +186,19 @@ internal static class AmbiguousMContentMasker
             previousIndex--;
         }
 
+        if (previousIndex > 0
+            && content[previousIndex] is '+' or '-'
+            && content[previousIndex - 1] == content[previousIndex])
+        {
+            previousIndex -= 2;
+            while (previousIndex >= 0
+                && content[previousIndex] is not '\r' and not '\n'
+                && char.IsWhiteSpace(content[previousIndex]))
+            {
+                previousIndex--;
+            }
+        }
+
         if (previousIndex < 0
             || content[previousIndex] is '\r' or '\n'
             || !IsTransposeOperandEnd(content[previousIndex]))

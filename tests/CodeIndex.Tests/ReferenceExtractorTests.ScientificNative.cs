@@ -358,6 +358,20 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DManyTemplateInvocationsSuppressArgumentCallsInOnePass_Issue4738()
+    {
+        var content = "void run() { " + string.Join(' ', Enumerable.Repeat("helper!Type();", 512)) + " }";
+        var symbols = SymbolExtractor.Extract(1, "d", content);
+
+        var references = ReferenceExtractor.Extract(1, "d", content, symbols);
+
+        Assert.Equal(512, references.Count(reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call"));
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Type" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_AdaQualifiedBareCallUsesResolvableLeafName_Issue4738()
     {
         const string content = """
@@ -520,7 +534,7 @@ public partial class ReferenceExtractorTests
         const string content = """
             function first()
               helper1();
-            function second()
+                function second()
               helper2();
             """;
         var symbols = SymbolExtractor.Extract(1, "matlab", content);
@@ -821,6 +835,25 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JuliaShortFunctionTrailingAssignmentKeepsIndentedRhsContainer_Issue4738()
+    {
+        const string content = """
+            f(x) =
+                helper(x)
+            outside()
+            """;
+        var symbol = Assert.Single(SymbolExtractor.Extract(1, "julia", content));
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, [symbol]);
+
+        Assert.Equal(2, symbol.EndLine);
+        Assert.Equal("f", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
     public void Extract_DTokenStringNestedLiteralsAndCommentsDoNotChangeBraceDepth_Issue4738()
     {
         const string content = """
@@ -889,6 +922,27 @@ public partial class ReferenceExtractorTests
         Assert.Equal("run", Assert.Single(references, reference =>
             reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
         Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+    }
+
+    [Fact]
+    public void Extract_NimRawStringBeforeBlockCommentDoesNotExposeCommentCode_Issue4738()
+    {
+        const string content = """
+            let text = r"literal\" #[
+            proc Phantom() = discard
+            phantomCall()
+            ]#
+            proc real() =
+              helper()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "nim", content);
+
+        var references = ReferenceExtractor.Extract(1, "nim", content, symbols);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "Phantom");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "phantomCall");
+        Assert.Equal("real", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
     }
 
     [Fact]
@@ -1018,6 +1072,8 @@ public partial class ReferenceExtractorTests
                 int third = left % *pointer();
                 value %= divisor;
                 afterAssignment();
+                int fourth = index++ % postIncrement();
+                int fifth = index-- % postDecrement();
             }
             @end
             """;
@@ -1025,7 +1081,15 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ambiguous_m", content, "unknown.m");
         var references = ReferenceExtractor.Extract(1, "ambiguous_m", content, symbols, "unknown.m");
 
-        foreach (var name in new[] { "helper", "other", "pointer", "afterAssignment" })
+        foreach (var name in new[]
+        {
+            "helper",
+            "other",
+            "pointer",
+            "afterAssignment",
+            "postIncrement",
+            "postDecrement",
+        })
         {
             Assert.Single(references, reference =>
                 reference.SymbolName == name && reference.ReferenceKind == "call");

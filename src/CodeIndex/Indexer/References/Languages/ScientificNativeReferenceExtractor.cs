@@ -6,6 +6,8 @@ namespace CodeIndex.Indexer;
 
 internal static class ScientificNativeReferenceExtractor
 {
+    internal readonly record struct DTemplateArgumentCallSpan(int Start, int EndExclusive);
+
     private static readonly HashSet<string> SupportedLanguages =
         new(StringComparer.Ordinal) { "ada", "cython", "d", "julia", "matlab", "nim", "objc" };
 
@@ -77,22 +79,21 @@ internal static class ScientificNativeReferenceExtractor
 
     internal static bool Supports(string language) => SupportedLanguages.Contains(language);
 
-    internal static bool IsDTemplateArgumentCall(string line, int callIndex)
+    internal static bool IsDTemplateArgumentCall(
+        IReadOnlyList<DTemplateArgumentCallSpan>? spans,
+        ref int spanIndex,
+        int callIndex)
     {
-        foreach (Match match in DTemplateInvocationRegex.Matches(line))
-        {
-            var name = match.Groups["name"];
-            if (callIndex >= name.Index + name.Length
-                && callIndex < match.Index + match.Length)
-            {
-                return true;
-            }
-        }
+        if (spans == null)
+            return false;
 
-        return false;
+        while (spanIndex < spans.Count && callIndex >= spans[spanIndex].EndExclusive)
+            spanIndex++;
+
+        return spanIndex < spans.Count && callIndex >= spans[spanIndex].Start;
     }
 
-    internal static void EmitReferences(
+    internal static IReadOnlyList<DTemplateArgumentCallSpan>? EmitReferences(
         string language,
         string preparedLine,
         List<ReferenceRecord> references,
@@ -106,6 +107,7 @@ internal static class ScientificNativeReferenceExtractor
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
         var dependencyLimitReported = false;
+        List<DTemplateArgumentCallSpan>? dTemplateArgumentCallSpans = null;
 
         switch (language)
         {
@@ -145,6 +147,10 @@ internal static class ScientificNativeReferenceExtractor
                 {
                     var group = match.Groups["name"];
                     addCallLikeReference(group.Value, group.Index);
+                    (dTemplateArgumentCallSpans ??= []).Add(
+                        new DTemplateArgumentCallSpan(
+                            group.Index + group.Length,
+                            match.Index + match.Length));
                 }
                 break;
             case "cython":
@@ -168,6 +174,8 @@ internal static class ScientificNativeReferenceExtractor
                 EmitMatch(ObjectiveCImportRegex, "import");
                 break;
         }
+
+        return dTemplateArgumentCallSpans;
 
         void EmitMatch(
             Regex regex,

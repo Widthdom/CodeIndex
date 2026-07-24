@@ -2565,9 +2565,11 @@ public static partial class ReferenceExtractor
             }
             else
             {
+                IReadOnlyList<ScientificNativeReferenceExtractor.DTemplateArgumentCallSpan>?
+                    dTemplateArgumentCallSpans = null;
                 if (ScientificNativeReferenceExtractor.Supports(language))
                 {
-                    ScientificNativeReferenceExtractor.EmitReferences(
+                    dTemplateArgumentCallSpans = ScientificNativeReferenceExtractor.EmitReferences(
                         language,
                         preparedLine,
                         references,
@@ -2581,6 +2583,7 @@ public static partial class ReferenceExtractor
                         request.ReportDiagnostic);
                 }
 
+                var dTemplateArgumentCallSpanIndex = 0;
                 foreach (Match match in CallRegex.Matches(preparedLine))
                 {
                     var name = match.Groups["name"].Value;
@@ -2588,7 +2591,10 @@ public static partial class ReferenceExtractor
                     if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
                         continue;
                     if (language == "d"
-                        && ScientificNativeReferenceExtractor.IsDTemplateArgumentCall(preparedLine, callIndex))
+                        && ScientificNativeReferenceExtractor.IsDTemplateArgumentCall(
+                            dTemplateArgumentCallSpans,
+                            ref dTemplateArgumentCallSpanIndex,
+                            callIndex))
                     {
                         continue;
                     }

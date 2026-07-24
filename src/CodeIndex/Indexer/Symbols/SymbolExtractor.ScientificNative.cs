@@ -23,7 +23,6 @@ public static partial class SymbolExtractor
             : MatlabScientificBlockTokenRegex;
         var depth = 0;
         int? bodyStartLine = null;
-        var declarationColumn = GetFirstNonWhitespaceColumn(scannerLines[startIndex]);
         var delimiterFrames = new Stack<(char ClosingDelimiter, int BlockDepth)>();
 
         for (var lineIndex = startIndex; lineIndex < scannerLines.Length; lineIndex++)
@@ -42,8 +41,7 @@ public static partial class SymbolExtractor
                     scannerLines,
                     lineIndex,
                     code,
-                    matches,
-                    declarationColumn))
+                    matches))
             {
                 return bodyStartLine == null
                     ? (lineIndex, null, null)
@@ -246,8 +244,14 @@ public static partial class SymbolExtractor
         var assignmentIndex = parameterEnd >= 0
             ? startLine.IndexOf('=', parameterEnd + 1)
             : -1;
-        if (assignmentIndex < 0
-            || !EndsWithJuliaContinuationOperator(startLine[(assignmentIndex + 1)..]))
+        if (assignmentIndex < 0)
+        {
+            return false;
+        }
+
+        var initialExpression = startLine[(assignmentIndex + 1)..];
+        if (!string.IsNullOrWhiteSpace(initialExpression)
+            && !EndsWithJuliaContinuationOperator(initialExpression))
         {
             return false;
         }
@@ -299,14 +303,10 @@ public static partial class SymbolExtractor
         string[] scannerLines,
         int lineIndex,
         string code,
-        MatchCollection matches,
-        int declarationColumn)
+        MatchCollection matches)
     {
         foreach (Match match in matches)
         {
-            if (match.Index > declarationColumn)
-                return false;
-
             var keyword = match.Groups["keyword"].Value;
             if (!keyword.Equals("function", StringComparison.OrdinalIgnoreCase)
                 && !keyword.Equals("classdef", StringComparison.OrdinalIgnoreCase))
