@@ -194,6 +194,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Outline kind sorting and default source-order field projection share one ranking fixture.
   Deps JSON and json-graph byte-limit failures share one SQL graph fixture.
   Deps JSON summary output and json-graph summary rejection share one SQL graph fixture.
+  Dependency-cycle coverage must prove that the graph budget is independent of the display limit, SCC ranking remains stable when the page size grows, opaque cursors return the next ranked component, mismatched cursor filters fail closed, and graph-budget exhaustion marks totals as non-authoritative.
   Exact-symbol dependency coverage reuses the C# source-candidate fixture to prove that a `--limit 1` query can select a symbol beyond the unfiltered candidate window. The repository-scale guard builds 10,001 candidate symbols, runs on non-Windows .NET 8, and keeps query-only work within 2 seconds and 32 MiB of current-thread allocation; fixture construction stays outside the measured interval. Windows retains the lightweight functional pushdown coverage but omits this scale fixture because its bounded full-suite session already runs close to the one-hour timeout.
   References stale-SQL-contract count and result envelopes share one downgraded graph fixture.
   Callers and callees stale-SQL-contract result envelopes share one downgraded graph fixture.
@@ -1023,6 +1024,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   outlineのkind sortとdefault source-order field projectionは1つのranking fixtureを共有してください。
   depsのJSONとjson-graphのbyte-limit failureは1つのSQL graph fixtureを共有してください。
   depsのJSON summary outputとjson-graph summary rejectionは1つのSQL graph fixtureを共有してください。
+  dependency-cycle coverage では、graph budget が表示 limit から独立していること、page size を増やしても SCC 順位が安定すること、不透明 cursor が次の順位の component を返すこと、cursor と filter の不一致が fail-closed になること、graph-budget 枯渇時に総件数が non-authoritative と示されることを検証してください。
   完全一致シンボルの dependency coverage は C# の source-candidate fixture を再利用し、絞り込み前の候補範囲より後ろにあるシンボルでも `--limit 1` query で選択できることを検証してください。repository-scale guard は10,001個の候補シンボルを構築し、Windows 以外の .NET 8 で実行し、query 部分だけを2秒以内かつ current-thread allocation 32 MiB以内に保ちます。fixture 構築は計測区間の外に置いてください。Windows では軽量な filter pushdown の機能検証を維持しつつ、全 suite が1時間の session 上限に近いため、この scale fixture は除外します。
   referencesのstale SQL contract count envelopeとresult envelopeは1つのdowngraded graph fixtureを共有してください。
   callersとcalleesのstale SQL contract result envelopeは1つのdowngraded graph fixtureを共有してください。

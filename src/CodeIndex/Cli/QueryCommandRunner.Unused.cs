@@ -49,6 +49,14 @@ public static partial class QueryCommandRunner
                 "`outline:<offset>` cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
+        if (options.DependencyCycleCursor.HasValue)
+        {
+            WriteUsageError(
+                "--cursor for unused must use the `unused:<offset>` cursor returned by a previous unused response.",
+                GetUsageLineOrThrow("unused"),
+                "Dependency-cycle cursors are for `cdidx deps --cycles`.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.UnusedCursorOffset.HasValue && (options.CountOnly || options.SummaryOnly))
         {
             WriteUsageError(
