@@ -89,6 +89,49 @@ internal static class JsonReferenceExtractor
         return references;
     }
 
+    internal static List<ReferenceRecord> ExtractJsonLines(
+        long fileId,
+        string[] lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        int? maxReferenceCount)
+    {
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount, Math.Min(lines.Length, 64));
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var record = lines[lineIndex];
+            if (string.IsNullOrWhiteSpace(record))
+                continue;
+
+            var recordReferences = Extract(fileId, record, [record], maxReferenceCount);
+            var container = FindJsonLinesRecordContainer(symbols, lineIndex + 1);
+            foreach (var reference in recordReferences)
+            {
+                reference.Line = lineIndex + 1;
+                reference.Context = record;
+                reference.ContainerKind = container?.Kind;
+                reference.ContainerName = container?.Name;
+                if (!ReferenceExtractor.TryAddReference(references, reference))
+                    return references;
+            }
+        }
+
+        return references;
+    }
+
+    private static SymbolRecord? FindJsonLinesRecordContainer(
+        IReadOnlyList<SymbolRecord> symbols,
+        int lineNumber)
+    {
+        for (var index = symbols.Count - 1; index >= 0; index--)
+        {
+            var symbol = symbols[index];
+            if (symbol.Line == lineNumber && symbol.Kind == "record")
+                return symbol;
+        }
+
+        return null;
+    }
+
     private static int MapDecodedIndexToSourceCharacterOffset(ReadOnlySpan<byte> rawValue, int decodedIndex)
     {
         var rawByteIndex = 0;

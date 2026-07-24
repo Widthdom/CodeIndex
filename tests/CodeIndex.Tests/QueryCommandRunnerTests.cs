@@ -3380,6 +3380,28 @@ public partial class QueryCommandRunnerTests
             Assert.Empty(languages[markupSchema].GetProperty("capability_gaps").EnumerateArray());
         }
 
+        foreach (var repositoryMetadata in new[]
+                 {
+                     "toml",
+                     "jsonl",
+                     "gitignore",
+                     "gitattributes",
+                     "editorconfig",
+                     "dockerignore",
+                     "config",
+                     "app_manifest",
+                 })
+        {
+            Assert.True(languages.ContainsKey(repositoryMetadata), $"expected '{repositoryMetadata}' to be listed");
+            Assert.True(languages[repositoryMetadata].GetProperty("symbol_extraction").GetBoolean(),
+                $"{repositoryMetadata} must advertise symbol_extraction=true");
+            Assert.True(languages[repositoryMetadata].GetProperty("reference_extraction").GetBoolean(),
+                $"{repositoryMetadata} must advertise reference_extraction=true");
+            Assert.True(languages[repositoryMetadata].GetProperty("graph_queries").GetBoolean(),
+                $"{repositoryMetadata} must advertise graph_queries=true");
+            Assert.Empty(languages[repositoryMetadata].GetProperty("capability_gaps").EnumerateArray());
+        }
+
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
         // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。
         var cythonExts = languages["cython"].GetProperty("extensions").EnumerateArray()

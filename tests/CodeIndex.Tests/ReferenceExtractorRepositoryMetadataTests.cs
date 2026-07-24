@@ -1,0 +1,148 @@
+using CodeIndex.Indexer;
+
+namespace CodeIndex.Tests;
+
+public partial class ReferenceExtractorTests
+{
+    [Theory]
+    [InlineData("toml", "[build]\ninclude = \"config/shared.toml\"\n", "config/shared.toml", 2)]
+    [InlineData("gitignore", "# generated\nartifacts/\n", "artifacts", 2)]
+    [InlineData("gitattributes", "docs/** linguist-documentation\n", "docs/**", 1)]
+    [InlineData("editorconfig", "[src/**/*.cs]\nindent_style = space\n", "src/**/*.cs", 1)]
+    [InlineData("dockerignore", "bin/\n", "bin", 1)]
+    [InlineData("config", "rule(\ninclude = [\"rules/common.rules\"]\n)\n", "rules/common.rules", 2)]
+    public void Extract_RepositoryMetadata_IndexesLocalPathReferences_Issue4740(
+        string language,
+        string content,
+        string expectedPath,
+        int expectedLine)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(
+            references,
+            reference => reference.ReferenceKind == "project_reference"
+                && reference.SymbolName == expectedPath
+                && reference.Line == expectedLine);
+    }
+
+    [Fact]
+    public void Extract_JsonLines_IndexesEachValidRecordWithoutFlatteningMalformedRecords_Issue4740()
+    {
+        const string content = """
+            {"input":"src/first.cs"}
+            not json
+            {"output":"artifacts/result.json"}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "jsonl", content);
+        var references = ReferenceExtractor.Extract(1, "jsonl", content, symbols);
+
+        Assert.Contains(
+            references,
+            reference => reference.SymbolName == "src/first.cs"
+                && reference.ReferenceKind == "project_reference"
+                && reference.ContainerName == "[0]"
+                && reference.Line == 1);
+        Assert.Contains(
+            references,
+            reference => reference.SymbolName == "artifacts/result.json"
+                && reference.ReferenceKind == "project_reference"
+                && reference.ContainerName == "[2]"
+                && reference.Line == 3);
+        Assert.DoesNotContain(references, reference => reference.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_ApplicationManifest_IndexesDependenciesAndLocalPaths_Issue4740()
+    {
+        const string content = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <assembly xmlns="urn:schemas-microsoft-com:asm.v1">
+              <assemblyIdentity name="Contoso.App" version="1.0.0.0" />
+              <dependency>
+                <dependentAssembly>
+                  <assemblyIdentity name="Contoso.Core" version="2.0.0.0" />
+                  <codeBase href="lib/Contoso.Core.dll" />
+                </dependentAssembly>
+              </dependency>
+              <dependency>
+                <dependentAssembly>
+                  <assemblyIdentity name="https://example.com/unsafe.dll" />
+                </dependentAssembly>
+              </dependency>
+              <file name="plugins/helper.dll" />
+              <file name="/etc/unsafe.dll" />
+              <codeBase href="https://example.com/remote.dll" />
+              <probing privatePath="lib;plugins" />
+            </assembly>
+            """;
+        var symbols = SymbolExtractor.Extract(1, "app_manifest", content);
+        var references = ReferenceExtractor.Extract(1, "app_manifest", content, symbols);
+
+        Assert.Contains(
+            references,
+            reference => reference.ReferenceKind == "dependency"
+                && reference.SymbolName == "Contoso.Core"
+                && reference.ContainerName == "Contoso.App"
+                && reference.Line == 6);
+        Assert.DoesNotContain(
+            references,
+            reference => reference.ReferenceKind == "dependency"
+                && reference.SymbolName == "Contoso.App");
+        AssertReferencesContain(
+            references,
+            "project_reference",
+            containerName: "Contoso.App",
+            "lib/Contoso.Core.dll",
+            "plugins/helper.dll",
+            "lib",
+            "plugins");
+        Assert.DoesNotContain(references, reference => reference.SymbolName.Contains("unsafe", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference => reference.SymbolName.Contains("example.com", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SupportedLanguages_RepositoryMetadataAndManifestAdvertiseReferences_Issue4740()
+    {
+        var supported = ReferenceExtractor.GetSupportedLanguages();
+
+        Assert.All(
+            new[]
+            {
+                "toml",
+                "jsonl",
+                "gitignore",
+                "gitattributes",
+                "editorconfig",
+                "dockerignore",
+                "config",
+                "app_manifest",
+            },
+            language => Assert.Contains(language, supported));
+    }
+
+    [Fact]
+    public void Extract_RepositoryMetadata_RejectsRemoteAbsoluteAndParentTraversalReferences_Issue4740()
+    {
+        const string toml = """
+            version = "1.2.3"
+            remote = "https://example.com/config.toml"
+            absolute = "/etc/config.toml"
+            parent = "../shared/config.toml"
+            environment = "${ROOT}/config.toml"
+            comment = "value" # see "docs/comment-only.md"
+            local = "config/local.toml"
+            """;
+        var tomlSymbols = SymbolExtractor.Extract(1, "toml", toml);
+        var tomlReferences = ReferenceExtractor.Extract(1, "toml", toml, tomlSymbols);
+
+        Assert.Single(tomlReferences);
+        Assert.Equal("config/local.toml", tomlReferences[0].SymbolName);
+
+        const string attributes = "../outside/** export-ignore\n";
+        var attributeSymbols = SymbolExtractor.Extract(1, "gitattributes", attributes);
+        var attributeReferences = ReferenceExtractor.Extract(1, "gitattributes", attributes, attributeSymbols);
+        Assert.Empty(attributeReferences);
+    }
+}
