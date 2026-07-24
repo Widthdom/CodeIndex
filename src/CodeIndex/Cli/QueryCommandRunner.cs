@@ -22,9 +22,10 @@ public static partial class QueryCommandRunner
     internal const int MapIssueDraftLineThreshold = 800;
     internal const long MapIssueDraftByteThreshold = 64 * 1024;
     internal const int DefaultImpactLimit = 50;
-    internal const int DefaultDependencyCycleGraphLimit = 50;
+    internal const int DefaultDependencyCycleGraphBudget = 10_000;
+    internal const int MaxDependencyCycleGraphBudget = 1_000_000;
     internal const int GraphLivenessLimitThreshold = 80;
-    internal const string DependencyCycleDetectionMode = "bounded_approximate_candidate_edges";
+    internal const string DependencyCycleDetectionMode = "deterministic_scc";
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
     internal const int FindAllCandidateFileLimit = 4096;
@@ -179,6 +180,7 @@ public sealed class QueryCommandOptions
     public bool SummaryOnly { get; init; }
     public bool MapSummaryOnly { get; init; }
     public bool DependencyCycles { get; init; }
+    public int DependencyCycleGraphBudget { get; init; } = QueryCommandRunner.DefaultDependencyCycleGraphBudget;
     public bool DependencySuppressNoise { get; init; }
     public List<string> DependencySymbols { get; init; } = [];
     public List<string> DependencySymbolFamilies { get; init; } = [];
@@ -201,6 +203,7 @@ public sealed class QueryCommandOptions
     public SearchCursor? SearchCursor { get; init; }
     public int? UnusedCursorOffset { get; init; }
     public int? OutlineCursorOffset { get; init; }
+    public DependencyCycleCursor? DependencyCycleCursor { get; init; }
     public List<SearchNamedQuery> NamedSearchQueries { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];
@@ -213,3 +216,5 @@ public sealed class QueryCommandOptions
 }
 
 public sealed record SearchNamedQuery(string Name, string Query);
+
+public readonly record struct DependencyCycleCursor(int Offset, string Fingerprint);

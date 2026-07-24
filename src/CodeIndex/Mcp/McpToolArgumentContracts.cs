@@ -27,7 +27,7 @@ public partial class McpServer
         "status" => new HashSet<string>(StringComparer.Ordinal) { "check", "scopes", "staleAfterSeconds", "explain", "config", "logPath", "updateCheck", "format", "fields" },
         "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries", "maxResponseBytes", "estimateOnly" },
-        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "includeGenerated", "project", "solution" },
+        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "graphBudget", "cursor", "excludePaths", "excludeTests", "includeGenerated", "project", "solution" },
         "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
         "languages" => new HashSet<string>(StringComparer.Ordinal) { "indexedOnly", "capability", "extension", "alias" },
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "severity", "limit", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution" },

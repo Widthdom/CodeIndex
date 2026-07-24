@@ -38,7 +38,9 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("outline", options))
             return CommandExitCodes.UsageError;
-        if (options.SearchCursor.HasValue || options.UnusedCursorOffset.HasValue)
+        if (options.SearchCursor.HasValue
+            || options.UnusedCursorOffset.HasValue
+            || options.DependencyCycleCursor.HasValue)
         {
             WriteUsageError(
                 "outline --cursor must use an outline pagination cursor.",

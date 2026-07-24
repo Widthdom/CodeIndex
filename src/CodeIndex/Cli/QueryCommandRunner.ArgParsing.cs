@@ -171,6 +171,7 @@ public static partial class QueryCommandRunner
         bool summaryOnly = false;
         bool mapSummaryOnly = false;
         bool dependencyCycles = false;
+        int dependencyCycleGraphBudget = DefaultDependencyCycleGraphBudget;
         bool dependencySuppressNoise = false;
         var dependencySymbols = new List<string>();
         var dependencySymbolFamilies = new List<string>();
@@ -195,6 +196,7 @@ public static partial class QueryCommandRunner
         SearchCursor? searchCursor = null;
         int? unusedCursorOffset = null;
         int? outlineCursorOffset = null;
+        DependencyCycleCursor? dependencyCycleCursor = null;
         var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
@@ -552,6 +554,17 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError(limitError!);
                     break;
+                case "--graph-budget":
+                    if (!TryReadRawOptionValue(args, ref i, "--graph-budget", inlineValue, out var graphBudgetValue, out var missingGraphBudgetError))
+                        AddParseError(missingGraphBudgetError!);
+                    else if (TryParsePositiveInt(graphBudgetValue!, "--graph-budget", out var parsedGraphBudget, out var graphBudgetError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--graph-budget", graphBudgetValue!);
+                        dependencyCycleGraphBudget = parsedGraphBudget;
+                    }
+                    else
+                        AddParseError(graphBudgetError!);
+                    break;
                 case "--total-limit":
                     if (!TryReadRawOptionValue(args, ref i, "--total-limit", inlineValue, out var totalLimitValue, out var missingTotalLimitError))
                         AddParseError(missingTotalLimitError!);
@@ -740,8 +753,10 @@ public static partial class QueryCommandRunner
                             unusedCursorOffset = parsedUnusedCursorOffset;
                         else if (TryParseOutlineCursor(cursorValue!, out var parsedOutlineCursorOffset))
                             outlineCursorOffset = parsedOutlineCursorOffset;
+                        else if (TryParseDependencyCycleCursor(cursorValue!, out var parsedDependencyCycleCursor))
+                            dependencyCycleCursor = parsedDependencyCycleCursor;
                         else
-                            AddParseError("Error: --cursor must be a search, unused, or outline pagination cursor returned as `next_cursor`.");
+                            AddParseError("Error: --cursor must be a search, unused, outline, or dependency-cycle pagination cursor returned as `next_cursor`.");
                     }
                     else
                     {
@@ -1733,6 +1748,7 @@ public static partial class QueryCommandRunner
             SummaryOnly = summaryOnly,
             MapSummaryOnly = mapSummaryOnly,
             DependencyCycles = dependencyCycles,
+            DependencyCycleGraphBudget = dependencyCycleGraphBudget,
             DependencySuppressNoise = dependencySuppressNoise,
             DependencySymbols = dependencySymbols,
             DependencySymbolFamilies = dependencySymbolFamilies,
@@ -1755,6 +1771,7 @@ public static partial class QueryCommandRunner
             SearchCursor = searchCursor,
             UnusedCursorOffset = unusedCursorOffset,
             OutlineCursorOffset = outlineCursorOffset,
+            DependencyCycleCursor = dependencyCycleCursor,
             NamedSearchQueries = namedSearchQueries,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
