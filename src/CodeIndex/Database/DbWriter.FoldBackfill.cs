@@ -8,6 +8,7 @@ public partial class DbWriter
     private const string FoldBackfillPhaseMetaKey = "fold_backfill_phase";
     private const string FoldBackfillLastSymbolIdMetaKey = "fold_backfill_last_symbol_id";
     private const string FoldBackfillLastReferenceIdMetaKey = "fold_backfill_last_reference_id";
+    private const string FoldBackfillGraphRefreshPendingMetaKey = "fold_backfill_graph_refresh_pending";
 
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
@@ -254,6 +255,21 @@ public partial class DbWriter
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var graphRefreshPending = string.Equals(
+            GetMetaString(FoldBackfillGraphRefreshPendingMetaKey),
+            "1",
+            StringComparison.Ordinal);
+        var pendingRows = CountBackfillFoldedColumns(rewriteAll);
+        if (!graphRefreshPending && (pendingRows.Symbols > 0 || pendingRows.SymbolReferences > 0))
+        {
+            // Persist this before the first row mutation so cancellation after the rewrite but
+            // before graph refresh cannot make a retry mistake the operation for a no-op.
+            // 最初の行を書き換える前に pending を永続化し、書換え後から graph refresh
+            // までの中断を retry が no-op と誤認しないようにする。
+            SetMeta(FoldBackfillGraphRefreshPendingMetaKey, "1");
+            graphRefreshPending = true;
+        }
+
         var foldBackfillPhase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
         var symbols = BackfillSymbolFoldedRows(rewriteAll, cancellationToken);
         if (rewriteAll && foldBackfillPhase != "references")
@@ -264,6 +280,15 @@ public partial class DbWriter
 
         var symbolReferences = BackfillReferenceFoldedRows(rewriteAll, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        if (graphRefreshPending)
+        {
+            // Candidate membership and resolved identities depend on the persisted folded keys.
+            // Refresh them before advertising the rewritten rows as current.
+            // candidate と解決済み identity は永続化 folded key に依存するため、
+            // 書換え後の key を current と公開する前に graph を再解決する。
+            RefreshMutualRecursionFlags(cancellationToken);
+            SetMeta(FoldBackfillGraphRefreshPendingMetaKey, null);
+        }
         if (rewriteAll)
             ClearFoldBackfillCheckpoint();
 

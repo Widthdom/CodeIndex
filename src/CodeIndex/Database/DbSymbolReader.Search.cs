@@ -854,14 +854,6 @@ public partial class DbReader
         if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "javascript", StringComparison.OrdinalIgnoreCase))
             return NormalizeJavaScriptSymbolSearchQuery(query);
 
-        if (exact
-            && !string.IsNullOrWhiteSpace(lang)
-            && string.Equals(lang, "nim", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(query))
-        {
-            return NimIdentifierIdentity.Fold(query.Trim());
-        }
-
         // Terraform dotted prefixes (var.X / local.X / module.X / data.TYPE.X) are stored as bare names in
         // the references and symbols tables. Strip the prefix so queries pasted from HCL still resolve.
         // Terraform の dotted prefix（var.X / local.X / module.X / data.TYPE.X）は参照/シンボルの bare 名で格納されるため、

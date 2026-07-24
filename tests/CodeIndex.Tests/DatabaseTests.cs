@@ -1230,6 +1230,160 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraph_NimBackfillRewritesLegacyKeysAndRefreshesCandidates_Issue4738()
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/legacy-style.nim",
+            "nim",
+            "nim-legacy-style");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "my_proc",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "RunGraph",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 3,
+                BodyStartLine = 3,
+                BodyEndLine = 3,
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "myProc",
+                ReferenceKind = "call",
+                Line = 3,
+                Column = 3,
+                ContainerKind = "function",
+                ContainerName = "RunGraph",
+                Context = "myProc()",
+            },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal("unresolved", ReadReferenceResolutionState(fileId));
+
+        var rewritten = _writer.BackfillFoldedColumns(rewriteAll: true);
+
+        Assert.Equal((2, 1), rewritten);
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'my_proc'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+    }
+
+    [Fact]
+    public void ReferenceGraph_NimBackfillRetriesInterruptedGraphRefresh_Issue4738()
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/interrupted-style.nim",
+            "nim",
+            "nim-interrupted-style");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "my_proc",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "myProc",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 1,
+                Context = "myProc()",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var interruptRefresh = true;
+        try
+        {
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                previousRefreshHook?.Invoke();
+                if (interruptRefresh)
+                    throw new OperationCanceledException("interrupt fold graph refresh");
+            };
+
+            Assert.Throws<OperationCanceledException>(
+                () => _writer.BackfillFoldedColumns(rewriteAll: true));
+
+            interruptRefresh = false;
+            Assert.Equal((0, 0), _writer.BackfillFoldedColumns(rewriteAll: true));
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+        }
+
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+    }
+
+    [Fact]
+    public void SearchSymbols_NimExactDegradedPathPreservesRawUnderscores_Issue4738()
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/degraded-style.nim",
+            "nim",
+            "nim-degraded-style");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "my_proc",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        _writer.SetMeta(
+            "fold_key_version",
+            (NameFold.Version - 1).ToString(CultureInfo.InvariantCulture));
+        _writer.SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
+        using (var ready = _db.Connection.CreateCommand())
+        {
+            ready.CommandText =
+                $"PRAGMA user_version = {_db.GetUserVersion() | DbContext.FoldReadyFlag}";
+            ready.ExecuteNonQuery();
+        }
+
+        var reader = new DbReader(_db.Connection);
+
+        Assert.False(reader._foldReady);
+        Assert.Single(reader.SearchSymbols("my_proc", lang: "nim", exact: true));
+        Assert.Empty(reader.SearchSymbols("myProc", lang: "nim", exact: true));
+    }
+
+    [Fact]
     public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
     {
         var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");

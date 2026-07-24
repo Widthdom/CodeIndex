@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CodeIndex.Models;
 
 /// <summary>
@@ -13,6 +15,7 @@ public class ReferenceRecord
     public string SymbolName { get; set; } = string.Empty;
 
     /// <summary>Language-specific persisted identity key when generic folding is insufficient / 一般的なfoldでは不十分な場合の言語固有identity key</summary>
+    [JsonInclude]
     internal string? IdentitySymbolNameFolded { get; set; }
 
     /// <summary>Reference kind such as call or instantiate / 参照種別</summary>
@@ -34,6 +37,7 @@ public class ReferenceRecord
     public string? ContainerName { get; set; }
 
     /// <summary>Language-specific persisted container identity key / 言語固有の永続化container identity key</summary>
+    [JsonInclude]
     internal string? IdentityContainerNameFolded { get; set; }
 
     /// <summary>
@@ -44,6 +48,7 @@ public class ReferenceRecord
     public string? TargetQualifier { get; set; }
 
     /// <summary>True when a language-specific receiver explicitly denotes the current container / 言語固有receiverが現在のcontainerを明示する場合はtrue</summary>
+    [JsonInclude]
     internal bool SuppressInferredTargetQualifier { get; set; }
 
     /// <summary>True when the enclosing symbol references itself / 親シンボル自身への参照なら true</summary>

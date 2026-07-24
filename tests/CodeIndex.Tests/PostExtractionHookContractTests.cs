@@ -46,6 +46,49 @@ public class PostExtractionHookContractTests
     }
 
     [Fact]
+    public void CallbackProtocol_RoundTripsLanguageIdentityState_Issue4738()
+    {
+        var request = new PostExtractionHookCallbackProtocol.WorkerRequest(
+            nameof(IPostExtractionHook.OnReferencesExtracted),
+            new FileContext("project", "src/style.nim", "/project/src/style.nim", "nim"),
+            [
+                new SymbolRecord
+                {
+                    FileId = 5,
+                    Kind = "function",
+                    Name = "my_proc",
+                    IdentityNameFolded = "myproc",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                },
+            ],
+            [
+                new ReferenceRecord
+                {
+                    FileId = 5,
+                    SymbolName = "myProc",
+                    IdentitySymbolNameFolded = "myproc",
+                    ReferenceKind = "call",
+                    Line = 2,
+                    Column = 5,
+                    ContainerName = "RunGraph",
+                    IdentityContainerNameFolded = "Rungraph",
+                    SuppressInferredTargetQualifier = true,
+                },
+            ]);
+
+        var roundTripped = PostExtractionHookCallbackProtocol.DeserializeRequest(
+            PostExtractionHookCallbackProtocol.SerializeRequest(request));
+
+        Assert.Equal("myproc", Assert.Single(roundTripped.Symbols!).IdentityNameFolded);
+        var reference = Assert.Single(roundTripped.References!);
+        Assert.Equal("myproc", reference.IdentitySymbolNameFolded);
+        Assert.Equal("Rungraph", reference.IdentityContainerNameFolded);
+        Assert.True(reference.SuppressInferredTargetQualifier);
+    }
+
+    [Fact]
     public void MutationMaterializer_ClonesAndTrimsRecordsWithinContracts_Issue4185()
     {
         var symbols = new List<SymbolRecord>

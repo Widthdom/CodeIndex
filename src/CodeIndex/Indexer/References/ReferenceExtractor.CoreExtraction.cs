@@ -2542,7 +2542,7 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     callContainer,
-                    language,
+                    ScientificNativeReferenceExtractor.Supports(language) ? language : null,
                     targetQualifier: targetQualifier);
                 return true;
 

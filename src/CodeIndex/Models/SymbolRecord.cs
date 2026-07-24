@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CodeIndex.Models;
 
 /// <summary>
@@ -22,6 +24,7 @@ public class SymbolRecord
     public string Name { get; set; } = string.Empty;
 
     /// <summary>Language-specific persisted identity key when generic folding is insufficient / 一般的なfoldでは不十分な場合の言語固有identity key</summary>
+    [JsonInclude]
     internal string? IdentityNameFolded { get; set; }
 
     /// <summary>Line number (1-based) / 行番号（1始まり）</summary>
