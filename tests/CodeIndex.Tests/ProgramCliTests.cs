@@ -547,7 +547,7 @@ public class ProgramCliTests
         Assert.Contains("Usage:", stdout);
         Assert.Contains(expectedUsage, stdout);
         Assert.Contains("Run `cdidx --help`", stdout);
-        if (command is "mcp" or "lsp" or "completions" or "references" or "callers" or "callees" or "backfill-fold" or "excerpt" or "inspect" or "status" or "symbols" or "search" or "find" or "map")
+        if (command is "index" or "mcp" or "lsp" or "completions" or "references" or "callers" or "callees" or "backfill-fold" or "excerpt" or "inspect" or "status" or "symbols" or "search" or "find" or "map")
         {
             Assert.Contains("Notes:", stdout);
             if (command is "mcp" or "completions")

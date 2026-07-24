@@ -419,6 +419,7 @@ internal static class CliFlagSchema
             new() { Name = "--version", ValuePlaceholder = "<tag>", Description = "Upgrade: install a specific release tag", PrimaryCommands = Set("upgrade") },
             new() { Name = "--integrity-check", Description = "Run PRAGMA integrity_check on the database", PrimaryCommands = Set("db") },
             new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", PrimaryCommands = Set("index") },
+            new() { Name = "--yes", Description = "Confirm --rebuild when stdin is redirected; interactive terminals prompt instead", PrimaryCommands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", PrimaryCommands = Set("index") },
             new() { Name = "--symbols-only", Description = "Build chunks and symbols while skipping reference graph extraction", PrimaryCommands = Set("index") },
             new() { Name = "--dry-run", Description = "Preview without writing", PrimaryCommands = Set("index", "backfill-fold", "optimize", "vacuum") },

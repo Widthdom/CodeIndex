@@ -206,7 +206,10 @@ definitions, and `ConsoleUi.PrintCommandUsage` uses them when the shared parser 
 the authoritative option inventory. Dedicated or nested parsers retain exact
 usage-specific syntax until their subcommand metadata is complete. Add new CLI
 metadata there first so parser validation, help, completion, and generated
-next-step flags stay aligned without emitting partial option lists.
+next-step flags stay aligned without emitting partial option lists. Every verb
+listed by `CliCommandCatalog.CommandSubcommands` must also resolve to a hidden,
+verb-specific `ConsoleUi` usage entry with its constraints, side effects, and
+an example; aggregate usage lines must enumerate accepted public flags.
 
 Full scans no longer create or consume the legacy `.cdidx/scan-checkpoint.json` resume state because a HEAD-bound directory list cannot prove in-place, untracked, or configuration freshness. After the first immutable scan-input barrier, both successful and partial runs delete any legacy file; a delete failure is a bounded warning and never changes the indexing result.
 
@@ -3154,6 +3157,9 @@ placeholder、description、command applicability は `CliFlagSchema` が管理�
 は subcommand metadata が揃うまで usage 固有の正確な構文を維持します。新しい CLI
 metadata はまず共有定義へ追加し、不完全な option 一覧を出さずに parser validation、
 help、completion、生成される next-step flag の同期を維持してください。
+`CliCommandCatalog.CommandSubcommands` に掲載するすべての verb は、制約、副作用、例を
+記載した hidden な verb 固有 `ConsoleUi` usage entry に解決させ、aggregate usage line
+には受理する公開 flag を漏れなく列挙してください。
 
 大きな command / extractor file については
 [docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md)

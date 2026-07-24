@@ -44,6 +44,9 @@ internal static class SuggestionsCommandRunner
           Records are deduplicated by normalized category, language, and description; adding a duplicate succeeds without creating another record.
           --duplicate-confidence and --duplicate-threshold apply only to `suggestions export --format issue-drafts`.
 
+        Side effects:
+          Writes one local draft to the suggestion store selected by --db; it does not submit or open a GitHub issue.
+
         Examples:
           cdidx suggestions add "Missing record extraction" --category symbol_extraction --language csharp
           cdidx suggestions add --description "Improve macro handling" --category language_support --evidence-path src/parser.rs --json
@@ -82,7 +85,7 @@ internal static class SuggestionsCommandRunner
             return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
         if (options.OpenIssuesRepository != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--repo can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
-        if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState
+        if (options.IssueStateSpecified
             && (verb != "export" || options.ExportFormat != "issue-drafts" || !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath)))
             return WriteUsageError("--issue-state can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
         if (verb == "show" && options.HasPagination)
@@ -1461,6 +1464,7 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.IssueState = issueState!.ToLowerInvariant();
+                    options.IssueStateSpecified = true;
                     break;
                 case "--duplicate-confidence":
                     if (!TryReadSchemaValue("--duplicate-confidence", out var duplicateConfidence, out var duplicateConfidenceError))
@@ -1606,6 +1610,7 @@ internal static class SuggestionsCommandRunner
         public string? OpenIssuesPath { get; set; }
         public string? OpenIssuesRepository { get; set; }
         public string IssueState { get; set; } = IssueDuplicatePreflight.DefaultIssueState;
+        public bool IssueStateSpecified { get; set; }
         public string DuplicateConfidence { get; set; } = IssueDuplicatePreflight.DefaultDuplicateConfidence;
         public double DuplicateThreshold { get; set; } = IssueDuplicatePreflight.DefaultDuplicateThreshold;
         public bool DuplicateConfidenceSpecified { get; set; }
@@ -1615,7 +1620,7 @@ internal static class SuggestionsCommandRunner
         public bool HasPagination => Limit.HasValue || OffsetSpecified;
         public bool HasContentEditableFields => LanguageSpecified || CategorySpecified || DescriptionSpecified || ContextSpecified || TitleSpecified || EvidencePathsSpecified || AgentSpecified;
         public bool HasQueryOnlyOptions => HasQueryOnlyOptionsExceptStatus || StatusSpecified;
-        public bool HasQueryOnlyOptionsExceptStatus => HasPagination || Since != null || FormatSpecified || OutputPath != null || Overwrite || OpenIssuesPath != null || OpenIssuesRepository != null || IssueState != IssueDuplicatePreflight.DefaultIssueState || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
+        public bool HasQueryOnlyOptionsExceptStatus => HasPagination || Since != null || FormatSpecified || OutputPath != null || Overwrite || OpenIssuesPath != null || OpenIssuesRepository != null || IssueStateSpecified || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
     }
 }
 
