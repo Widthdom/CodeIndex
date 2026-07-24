@@ -10,6 +10,37 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunReferences_ConfigLanguageSelectsRulesReferences_Issue4740()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_config_language");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "rules/policy.rules",
+                "config",
+                """prefix_rule(include = ["rules/common.rules"], decision = "allow")""");
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["rules/common.rules", "--db", dbPath, "--json", "--lang", "config", "--exact-name"],
+                _jsonOptions));
+            var rows = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var row = Assert.Single(rows);
+            Assert.Equal("config", row.GetProperty("lang").GetString());
+            Assert.Equal("rules/common.rules", row.GetProperty("symbol_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void GraphQueries_ReportMissingHdlGraphContractWithoutExactMode_Issue4742()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hdl_graph_contract_queries");
@@ -1625,12 +1656,12 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["MissingSymbol", "--db", dbPath, "--lang", "toml"],
+                ["MissingSymbol", "--db", dbPath, "--lang", "text"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No references found.", stderr);
-            Assert.Contains("call-graph queries are not indexed for 'toml'", stderr);
+            Assert.Contains("call-graph queries are not indexed for 'text'", stderr);
         }
         finally
         {
