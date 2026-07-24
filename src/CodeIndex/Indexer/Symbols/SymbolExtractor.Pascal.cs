@@ -22,6 +22,12 @@ public static partial class SymbolExtractor
     private static readonly Regex AdaUnnamedOuterEndRegex = new(
         @"\bend\s*;",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex AdaBodylessAfterIsRegex = new(
+        @"^(?:abstract|separate|null|new)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex AdaRoutineBodySignatureRegex = new(
+        @"^\s*(?:(?:overriding|not\s+overriding)\s+)?(?:procedure\b[\s\S]*?\bis\b|function\b[\s\S]*?\breturn\b[\s\S]*?\bis\b)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindAdaRange(
         string[] lines,
@@ -30,6 +36,9 @@ public static partial class SymbolExtractor
         var declaration = AdaRangeDeclarationNameRegex.Match(lines[startIndex]);
         if (!declaration.Success)
             return (startIndex + 1, null, null);
+
+        if (TryFindAdaBodylessDeclarationEnd(lines, startIndex, out var declarationEndLine))
+            return (declarationEndLine, null, null);
 
         var declarationName = declaration.Groups["name"].Value;
         int? bodyStartLine = null;
@@ -51,13 +60,76 @@ public static partial class SymbolExtractor
         if (bodyStartLine == null)
             return (startIndex + 1, null, null);
 
+        var beginDepth = 0;
         for (var i = bodyStartLine.Value - 1; i < lines.Length; i++)
         {
-            if (AdaUnnamedOuterEndRegex.IsMatch(MaskAdaRangeStringsAndComments(lines[i])))
-                return (i + 1, bodyStartLine, i + 1);
+            var code = MaskAdaRangeStringsAndComments(lines[i]);
+            beginDepth += AdaBeginRegex.Matches(code).Count;
+            foreach (Match _ in AdaUnnamedOuterEndRegex.Matches(code))
+            {
+                if (beginDepth > 0)
+                    beginDepth--;
+                if (beginDepth == 0)
+                    return (i + 1, bodyStartLine, i + 1);
+            }
         }
 
         return (lines.Length, bodyStartLine, lines.Length);
+    }
+
+    private static bool TryFindAdaBodylessDeclarationEnd(
+        string[] lines,
+        int startIndex,
+        out int declarationEndLine)
+    {
+        declarationEndLine = startIndex + 1;
+        var delimiterDepth = 0;
+        for (var lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var code = MaskAdaRangeStringsAndComments(lines[lineIndex]);
+            for (var index = 0; index < code.Length; index++)
+            {
+                if (code[index] is '(' or '[')
+                {
+                    delimiterDepth++;
+                    continue;
+                }
+                if (code[index] is ')' or ']')
+                {
+                    delimiterDepth = Math.Max(0, delimiterDepth - 1);
+                    continue;
+                }
+                if (delimiterDepth != 0)
+                    continue;
+
+                if (code[index] == ';')
+                {
+                    declarationEndLine = lineIndex + 1;
+                    return true;
+                }
+
+                if (index + 2 > code.Length
+                    || !code.AsSpan(index, 2).Equals("is", StringComparison.OrdinalIgnoreCase)
+                    || (index > 0 && (char.IsLetterOrDigit(code[index - 1]) || code[index - 1] == '_'))
+                    || (index + 2 < code.Length
+                        && (char.IsLetterOrDigit(code[index + 2]) || code[index + 2] == '_')))
+                {
+                    continue;
+                }
+
+                var tail = code[(index + 2)..].TrimStart();
+                for (var tailLineIndex = lineIndex + 1;
+                     tail.Length == 0 && tailLineIndex < lines.Length;
+                     tailLineIndex++)
+                {
+                    tail = MaskAdaRangeStringsAndComments(lines[tailLineIndex]).TrimStart();
+                }
+
+                return tail.StartsWith('(') || AdaBodylessAfterIsRegex.IsMatch(tail);
+            }
+        }
+
+        return false;
     }
 
     private static string MaskAdaRangeStringsAndComments(string line)

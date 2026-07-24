@@ -2124,7 +2124,8 @@ public static partial class ReferenceExtractor
                 : null,
             TargetQualifier = currentContainerReceiver ? null : targetQualifier,
             SuppressInferredTargetQualifier = currentContainerReceiver,
-            IsSelfReference = IsSameReferenceName(container?.Name, name),
+            IsSelfReference = (targetQualifier == null || currentContainerReceiver)
+                && IsSameReferenceName(container?.Name, name),
         });
     }
 

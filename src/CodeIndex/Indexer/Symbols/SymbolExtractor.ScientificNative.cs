@@ -74,6 +74,18 @@ public static partial class SymbolExtractor
                 if (!IsScientificBlockTokenAtStatementBoundary(code, match.Index, keyword, language))
                     continue;
 
+                // In Julia, `begin` inside square-bracket indexing is a first-index sentinel,
+                // not a `begin ... end` block opener (`A[begin]`).
+                // Julia の角括弧 index 内の `begin` は先頭 index sentinel であり、
+                // `begin ... end` block の開始ではない。
+                if (language == "julia"
+                    && keyword == "begin"
+                    && delimiterFrames.TryPeek(out var indexingFrame)
+                    && indexingFrame.ClosingDelimiter == ']')
+                {
+                    continue;
+                }
+
                 if (keyword.Equals("end", StringComparison.OrdinalIgnoreCase))
                 {
                     if (delimiterFrames.TryPeek(out var delimiterFrame)
@@ -173,12 +185,43 @@ public static partial class SymbolExtractor
         foreach (Match match in JuliaScientificBlockTokenRegex.Matches(expression))
         {
             var keyword = match.Groups["keyword"].Value;
+            if (keyword == "begin" && IsJuliaSquareBracketIndexToken(expression, match.Index))
+                continue;
             if (IsJuliaExpressionPositionBlockOpener(expression, match.Index, keyword)
                 || (keyword == "for" && IsJuliaShortForBlockStart(expression, match.Index)))
                 return true;
         }
 
         return false;
+    }
+
+    private static bool IsJuliaSquareBracketIndexToken(string expression, int tokenIndex)
+    {
+        var delimiters = new Stack<char>();
+        for (var index = 0; index < tokenIndex; index++)
+        {
+            var closingDelimiter = expression[index] switch
+            {
+                '(' => ')',
+                '[' => ']',
+                '{' => '}',
+                _ => '\0',
+            };
+            if (closingDelimiter != '\0')
+            {
+                delimiters.Push(closingDelimiter);
+                continue;
+            }
+
+            if (delimiters.TryPeek(out var expectedClosingDelimiter)
+                && expression[index] == expectedClosingDelimiter)
+            {
+                delimiters.Pop();
+            }
+        }
+
+        return delimiters.TryPeek(out var enclosingDelimiter)
+            && enclosingDelimiter == ']';
     }
 
     private static bool TryFindJuliaShortDelimitedExpressionEnd(

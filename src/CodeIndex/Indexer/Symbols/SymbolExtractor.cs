@@ -4771,7 +4771,8 @@ public static partial class SymbolExtractor
             var signature = prior.Signature?.TrimStart();
             if (signature != null
                 && (signature.StartsWith("declare ", StringComparison.Ordinal)
-                    || CSharpPartialFunctionDeclarationSignatureRegex.IsMatch(signature)))
+                    || CSharpPartialFunctionDeclarationSignatureRegex.IsMatch(signature)
+                    || IsAdaForwardDeclarationPair(signature, symbol.Signature)))
             {
                 break;
             }
@@ -4779,6 +4780,28 @@ public static partial class SymbolExtractor
             extractionState.Remove(prior);
             symbols.RemoveAt(index);
         }
+    }
+
+    private static bool IsAdaForwardDeclarationPair(
+        string declarationSignature,
+        string? implementationSignature)
+    {
+        if (implementationSignature == null
+            || !AdaRoutineBodySignatureRegex.IsMatch(implementationSignature))
+        {
+            return false;
+        }
+
+        var trimmed = declarationSignature.Trim();
+        if (!trimmed.EndsWith(';'))
+            return false;
+
+        return trimmed.StartsWith("procedure ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("function ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("overriding procedure ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("overriding function ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("not overriding procedure ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("not overriding function ", StringComparison.OrdinalIgnoreCase);
     }
 
     // Some compact same-line C# fixtures can legitimately contain two distinct siblings with

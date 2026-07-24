@@ -138,7 +138,7 @@ internal static class ScientificNativeReferenceExtractor
 
         segments.Reverse();
         if ((language == "cython" && segments[0] is "self" or "cls")
-            || (language == "d" && segments[0] is "this" or "super"))
+            || (language == "d" && segments[0] == "this"))
         {
             return CurrentContainerReceiverMarker;
         }

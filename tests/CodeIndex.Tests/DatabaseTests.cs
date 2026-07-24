@@ -1168,6 +1168,16 @@ public class DatabaseTests : IDisposable
             "src/style.nim",
             "nim",
             "nim-style-insensitive");
+        _writer.InsertChunks([
+            new()
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 3,
+                Content = content,
+            },
+        ]);
         var symbols = SymbolExtractor.Extract(fileId, "nim", content);
         _writer.InsertSymbols(symbols);
         var references = ReferenceExtractor.Extract(fileId, "nim", content, symbols);
@@ -1227,6 +1237,23 @@ public class DatabaseTests : IDisposable
         Assert.Single(reader.SearchReferences("myProc", lang: "nim", exact: true));
         Assert.Empty(reader.SearchSymbols("My_proc", lang: "nim", exact: true));
         Assert.Empty(reader.SearchReferences("MyProc", lang: "nim", exact: true));
+
+        Assert.Single(reader.SearchSymbols("my_proc", exact: true));
+        Assert.Equal(1, reader.CountSearchSymbols("my_proc", exact: true));
+        Assert.Equal(1, reader.CountDefinitionsTotal("my_proc", exact: true).Count);
+        Assert.Single(reader.SearchReferences("my_proc", exact: true));
+        Assert.Equal(1, reader.CountSearchReferences("my_proc", exact: true));
+        Assert.Equal(1, reader.CountSearchReferencesTotal("my_proc", exact: true).Count);
+        Assert.Single(reader.GetCallers("my_proc", exact: true));
+        Assert.Equal(1, reader.CountCallers("my_proc", exact: true));
+        Assert.Equal(1, reader.CountCallersTotal("my_proc", exact: true).Count);
+        Assert.Single(reader.GetCallees("Run_Graph", exact: true));
+        Assert.Equal(1, reader.CountCallees("Run_Graph", exact: true));
+        Assert.Equal(1, reader.CountCalleesTotal("Run_Graph", exact: true).Count);
+        Assert.Empty(reader.SearchSymbols("My_proc", exact: true));
+        Assert.Empty(reader.SearchReferences("My_proc", exact: true));
+        Assert.Empty(reader.GetCallers("My_proc", exact: true));
+        Assert.Empty(reader.GetCallees("run_graph", exact: true));
     }
 
     [Fact]

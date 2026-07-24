@@ -1802,4 +1802,94 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "f" && reference.ReferenceKind == "call");
     }
+
+    [Theory]
+    [InlineData(
+        """
+        function f(A)
+            value = A[begin]
+        end
+        outside()
+        """)]
+    [InlineData(
+        """
+        f(A) = A[begin]
+        outside()
+        """)]
+    public void Extract_JuliaIndexBeginDoesNotExtendFunctionRange_Issue4738(string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_DSuperReceiverDoesNotBecomeCurrentContainerSelfCall_Issue4738()
+    {
+        const string content = """
+            class Base {
+                void run() { }
+            }
+            class Child : Base {
+                override void run() { super.run(); }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "d", content);
+
+        var references = ReferenceExtractor.Extract(1, "d", content, symbols);
+
+        var call = Assert.Single(references, reference =>
+            reference.SymbolName == "run" && reference.ReferenceKind == "call");
+        Assert.Equal("super", call.TargetQualifier);
+        Assert.False(call.IsSelfReference);
+    }
+
+    [Fact]
+    public void Extract_AdaUnnamedOuterEndTracksNestedDeclareBlock_Issue4738()
+    {
+        const string content = """
+            procedure Outer is
+            begin
+              declare
+              begin
+                Inner;
+              end;
+              Later;
+            end;
+            outside;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "ada", content);
+
+        var references = ReferenceExtractor.Extract(1, "ada", content, symbols);
+
+        Assert.Equal(8, Assert.Single(symbols, symbol => symbol.Name == "Outer").EndLine);
+        Assert.Equal("Outer", Assert.Single(references, reference =>
+            reference.SymbolName == "Later" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_AdaForwardDeclarationDoesNotBorrowLaterBodyRange_Issue4738()
+    {
+        const string content = """
+            procedure Inner;
+            procedure Inner is
+            begin
+              Helper;
+            end Inner;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ada", content);
+
+        var declarations = symbols.Where(symbol => symbol.Name == "Inner").ToList();
+        Assert.Equal(2, declarations.Count);
+        Assert.Equal(1, declarations[0].EndLine);
+        Assert.Null(declarations[0].BodyStartLine);
+        Assert.Equal(5, declarations[1].EndLine);
+        Assert.Equal(3, declarations[1].BodyStartLine);
+    }
 }
