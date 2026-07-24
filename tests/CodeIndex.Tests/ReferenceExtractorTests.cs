@@ -1488,6 +1488,15 @@ public partial class ReferenceExtractorTests
               until /save!()/.matches?(value)
                 break
               end
+              cast = value.as(String)
+              checked_cast = value.as?(String)
+              pointer = pointerof(value)
+              instance_size = instance_sizeof(String)
+              alignment = alignof(String)
+              instance_alignment = instance_alignof(String)
+              offset = offsetof(Tuple(Int32), 0)
+              type = typeof(value)
+              size = sizeof(String)
               literal = %q(save!(value))
               ordinary = "first
             ready?(value)
@@ -1514,6 +1523,16 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "save!"));
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "as"
+                or "pointerof"
+                or "instance_sizeof"
+                or "alignof"
+                or "instance_alignof"
+                or "offsetof"
+                or "typeof"
+                or "sizeof");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
     }
 

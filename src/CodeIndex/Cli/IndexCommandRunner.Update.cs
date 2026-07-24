@@ -208,6 +208,34 @@ public static partial class IndexCommandRunner
         var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
         var csharpMetadataTargetsNeedRefresh = !priorMetadataTargetCsharpMatchesCurrent;
         var symbolsDroppedByKindFilter = 0;
+        var refreshedDynamicGraphFileCounts = new Dictionary<string, long>(StringComparer.Ordinal);
+
+        void RecordDynamicGraphFileRefresh(string? language)
+        {
+            if (options.SymbolsOnly
+                || !SymbolExtractor.RequiresExplicitReferenceGraphContractStamp(language))
+            {
+                return;
+            }
+
+            refreshedDynamicGraphFileCounts.TryGetValue(language!, out var refreshedCount);
+            refreshedDynamicGraphFileCounts[language!] = refreshedCount + 1;
+        }
+
+        string[] GetFullyRefreshedDynamicGraphLanguages()
+        {
+            if (options.SymbolsOnly || refreshedDynamicGraphFileCounts.Count == 0)
+                return [];
+
+            using var reader = new DbReader(writer.Connection);
+            var currentLanguageCounts = reader.GetIndexedLanguageCounts();
+            return refreshedDynamicGraphFileCounts
+                .Where(entry =>
+                    currentLanguageCounts.TryGetValue(entry.Key, out var currentCount)
+                    && currentCount == entry.Value)
+                .Select(entry => entry.Key)
+                .ToArray();
+        }
 
         void DemoteReadinessOnce()
         {
@@ -1932,6 +1960,7 @@ public static partial class IndexCommandRunner
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
+                        RecordDynamicGraphFileRefresh(record.Lang);
                         updated++;
                         ftsMutated = true;
                         WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, generated-code extraction skipped)");
@@ -1979,6 +2008,7 @@ public static partial class IndexCommandRunner
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
+                        RecordDynamicGraphFileRefresh(record.Lang);
                         updated++;
                         ftsMutated = true;
                         WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
@@ -1999,6 +2029,7 @@ public static partial class IndexCommandRunner
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
+                        RecordDynamicGraphFileRefresh(record.Lang);
                         updated++;
                         ftsMutated = true;
                         WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
@@ -2055,6 +2086,7 @@ public static partial class IndexCommandRunner
                     writer.ClearBatchInProgress();
                     txn.Commit();
 
+                    RecordDynamicGraphFileRefresh(record.Lang);
                     updated++;
                     ftsMutated = true;
                     if (!options.SymbolsOnly && (symbols.Count > 0 || references.Count > 0))
@@ -2154,6 +2186,7 @@ public static partial class IndexCommandRunner
                             writer.InsertIssues(fileId, [BuildNullByteIssue(binaryFile)]);
                             writer.ClearBatchInProgress();
                             txn.Commit();
+                            RecordDynamicGraphFileRefresh(skippedRecord.Lang);
                             skippedBinaryBatchMarkerOwned = false;
                         }
                         catch (CSharpWorkspaceChangedException workspaceChanged)
@@ -2266,6 +2299,7 @@ public static partial class IndexCommandRunner
                             ]);
                             writer.ClearBatchInProgress();
                             txn.Commit();
+                            RecordDynamicGraphFileRefresh(skippedRecord.Lang);
                             skippedOversizedBatchMarkerOwned = false;
                         }
                         catch (CSharpWorkspaceChangedException workspaceChanged)
@@ -2506,6 +2540,9 @@ public static partial class IndexCommandRunner
                 (DbContext.LastFailedIndexRunRecoveryHintMetaKey, "Fix the reported file/extractor error, then rerun the same index command. Successful files and graph edges remain persisted; a rebuild is not required."),
                 (DbContext.LastFailedIndexRunFileErrorsMetaKey, JsonSerializer.Serialize(fileErrorList, StatusMetadataJsonContext.Default.ListStatusIndexFileError)));
         }
+        var fullyRefreshedDynamicGraphLanguages = errors == 0 && readinessDemoted
+            ? GetFullyRefreshedDynamicGraphLanguages()
+            : [];
         if (readinessDemoted && errors == 0)
         {
             writer.MarkBatchInProgress();
@@ -2536,6 +2573,15 @@ public static partial class IndexCommandRunner
             {
                 writer.MarkReferenceIdentityContractReady();
             }
+            // A scoped update can certify a per-language graph contract only when every
+            // remaining file in that language was regenerated by this run. This covers a
+            // newly introduced language and an explicitly complete language refresh without
+            // hiding stale graph rows from untouched files of the same language.
+            // scoped update では、対象言語の現存ファイルを今回すべて再生成した場合だけ
+            // graph contract を stamp する。新規言語と全件更新を復元しつつ、未更新の
+            // stale row を current と誤認しない。
+            writer.StampSymbolExtractorVersions(fullyRefreshedDynamicGraphLanguages);
+            writer.StampDynamicReferenceGraphContracts(fullyRefreshedDynamicGraphLanguages);
             if ((priorReadiness & DbContext.IssuesReadyFlag) != 0)
             {
                 writer.MarkIssuesReady();

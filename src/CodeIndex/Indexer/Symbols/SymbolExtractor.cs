@@ -26,6 +26,8 @@ public static partial class SymbolExtractor
     public const int DynamicReferenceGraphContractVersion = 3;
     public const int PrologReferenceGraphContractVersion = 2;
     public const int SystemsLanguageContractVersion = 2;
+    private static readonly string[] ExplicitReferenceGraphContractLanguages =
+        ["crystal", "groovy", "tcl", "prolog", "ambiguous_pl"];
     private static readonly string[] AdditionalSymbolLanguages =
     [
         "app_manifest",
@@ -90,8 +92,12 @@ public static partial class SymbolExtractor
         };
     }
 
+    internal static IReadOnlyList<string> GetExplicitReferenceGraphContractLanguages() =>
+        ExplicitReferenceGraphContractLanguages;
+
     internal static bool RequiresExplicitReferenceGraphContractStamp(string? lang) =>
-        lang is "crystal" or "groovy" or "tcl" or "prolog" or "ambiguous_pl";
+        lang != null
+        && ExplicitReferenceGraphContractLanguages.Contains(lang, StringComparer.Ordinal);
 
     internal static int GetReferenceGraphContractVersion(string lang) =>
         GetContractVersion(lang);

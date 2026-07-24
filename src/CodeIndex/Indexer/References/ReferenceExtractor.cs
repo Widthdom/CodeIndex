@@ -285,6 +285,8 @@ public static partial class ReferenceExtractor
             "elsif", "end", "ensure", "enum", "extend", "for", "fun", "if", "include", "lib",
             "macro", "module", "next", "of", "private", "protected", "require", "rescue",
             "return", "select", "struct", "then", "unless", "until", "when", "while", "with", "yield",
+            "as", "alignof", "instance_alignof", "instance_sizeof", "is_a?", "offsetof", "pointerof",
+            "responds_to?",
         },
         ["groovy"] = new HashSet<string>(StringComparer.Ordinal)
         {

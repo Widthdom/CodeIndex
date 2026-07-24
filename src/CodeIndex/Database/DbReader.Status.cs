@@ -302,7 +302,7 @@ public partial class DbReader
         return reasons;
     }
 
-    private Dictionary<string, long> GetIndexedLanguageCounts()
+    internal Dictionary<string, long> GetIndexedLanguageCounts()
     {
         var languages = new Dictionary<string, long>();
         using var cmd = _conn.CreateCommand();

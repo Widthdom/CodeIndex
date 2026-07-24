@@ -4071,6 +4071,71 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ScopedUpdate_StampsFullyRefreshedDynamicGraphLanguages_Issue4746()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "initial.cs"),
+                "class Initial { void Run() { } }");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var tclPath = Path.Combine(projectRoot, "commands.tcl");
+            File.WriteAllText(
+                tclPath,
+                """
+                proc helper {} { return 1 }
+                proc run {} { helper }
+                """);
+
+            var (addedExitCode, addedJson) = RunAndCaptureJson(
+                [projectRoot, "--files", tclPath, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, addedExitCode);
+            Assert.True(addedJson.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.True(addedJson.GetProperty("graph_data_current").GetBoolean());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"""
+                    SELECT value
+                    FROM codeindex_meta
+                    WHERE key = '{DbContext.GetDynamicReferenceGraphContractVersionMetaKey("tcl")}';
+                    """;
+                Assert.Equal(
+                    SymbolExtractor.DynamicReferenceGraphContractVersion.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture),
+                    cmd.ExecuteScalar() as string);
+
+                cmd.CommandText = $"""
+                    DELETE FROM codeindex_meta
+                    WHERE key = '{DbContext.GetDynamicReferenceGraphContractVersionMetaKey("tcl")}';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            File.AppendAllText(tclPath, "\nproc second {} { helper }\n");
+            File.SetLastWriteTimeUtc(tclPath, DateTime.UtcNow.AddSeconds(2));
+            var (refreshedExitCode, refreshedJson) = RunAndCaptureJson(
+                [projectRoot, "--files", tclPath, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshedExitCode);
+            Assert.True(refreshedJson.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.True(refreshedJson.GetProperty("graph_data_current").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ScopedUpdate_KeepsFoldReadyIndependentOfStaleDynamicGraphContract_Issue4746()
     {
         var projectRoot = CreateTempProject();

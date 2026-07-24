@@ -5049,6 +5049,30 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("9.99.0", status.IndexWriterVersion);
     }
 
+    [Theory]
+    [InlineData("crystal")]
+    [InlineData("groovy")]
+    [InlineData("tcl")]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void GetStatus_FlagsIndexNewerThanReaderWhenDynamicGraphVersionExceedsCurrent_Issue4746(
+        string language)
+    {
+        _writer.SetMeta(
+            DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language),
+            (SymbolExtractor.GetReferenceGraphContractVersion(language) + 1).ToString(
+                CultureInfo.InvariantCulture));
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.True(status.IndexNewerThanReader);
+        Assert.NotNull(status.IndexNewerThanReaderReason);
+        Assert.Contains(
+            $"dynamic_reference_graph_contract_version_{language}",
+            status.IndexNewerThanReaderReason);
+    }
+
     [Fact]
     public void GetStatus_FlagsIndexNewerThanReaderWhenUserVersionCarriesUnknownReadyBit()
     {
