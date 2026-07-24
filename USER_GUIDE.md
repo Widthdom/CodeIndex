@@ -1849,7 +1849,7 @@ same source location.
 | `--search-fields <fields>` | `search` | Project compact JSON fields, including recipe `query_name` and `recipe` |
 | `--results-only` | `search`, `symbols`, `files` | Emit result-only NDJSON without a stream terminal record for shell pipelines |
 | `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | Bound broad audit output by file, deterministic sample size, or recipe total rows |
-| `--max-json-bytes <n>` | `search`, `recipes`, `audit`, `deps`, `hotspots` | Fail before emitting JSON that exceeds this UTF-8 byte budget. For large graph outputs, pair it with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
+| `--max-json-bytes <n>` | `search`, `definition`, `recipes`, `audit`, `deps`, `hotspots` | Fail before emitting JSON that exceeds this UTF-8 byte budget. A `definition --json` miss preflights its structured not-found object against the same cap and reports a usage error on stderr without oversized stdout when the object cannot fit. For large graph outputs, pair the cap with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
@@ -1899,7 +1899,7 @@ same source location.
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | Restrict dependency edges by an exact symbol, a symbol-name prefix, or the built-in noise profile. These filters run in SQLite before candidate ranking and `--limit`, including cycle and cross-workspace queries. `reference_count`, ranking, and JSON `symbol_filter` counters therefore describe the filtered scope. |
 | `--cycles` / `--graph-budget <n>` / `--cursor <value>` | `deps` | Compute deterministic, stably ranked dependency SCCs. `--graph-budget` independently bounds analyzed edges (default `10000`), while `--limit` pages the ranked SCCs and an opaque `next_cursor` continues the same filtered graph. JSON reports `analysis_complete`, `graph_edge_count`, `graph_edge_budget`, ranking metadata, authoritative-total status, and continuation metadata. When the graph budget is exhausted, the SCC set and total are explicitly non-authoritative; increase `--graph-budget` or narrow the graph with `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path`. |
-| `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
+| `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries normally exit `0` and keep their normal empty/zero-result output; the default-format `definition --json` miss is an intentional exception that always emits `E018_QUERY_NOT_FOUND` and exits `2`. |
 | `--top <n>` | Query commands | Alias for `--limit` |
 | `--max-results <n>` | `search` | Alias for `--limit` |
 | `--color <when>` | All commands | Control ANSI color output. Accepts `auto` (default), `always`, or `never`. Precedence: `--color` flag > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > terminal capability auto-detect. Auto mode treats redirected stdout and StringWriter-style test capture as non-ANSI; on Windows it also accepts ConPTY/Windows Terminal virtual-terminal support and terminal hints such as `WT_SESSION`, `WT_PROFILE_ID`, `TERM_PROGRAM`, or non-`dumb` `TERM`. Use `--color=always` to keep colored kind labels through a pager such as `cdidx symbols Foo \| less -R`; use `--color=never` (or `NO_COLOR=1`) to suppress ANSI even on a TTY. |
@@ -1912,9 +1912,9 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 | Code | Meaning |
 |---|---|
-| `0` | Success, including valid queries that produce zero rows |
+| `0` | Success, including valid queries that produce zero rows, except a default-format `definition --json` miss |
 | `1` | Usage error (missing command, missing required positional input, or command-shape error) |
-| `2` | Not found (missing indexed path or zero-result query when `--strict-not-found` is set) |
+| `2` | Not found (missing indexed path, zero-result query when `--strict-not-found` is set, or a default-format `definition --json` miss) |
 | `3` | Permanent database error |
 | `4` | Feature unavailable on this build (for example CLI `--json` on a manually trimmed custom build) |
 | `5` | Stale index (`status --check` found DB/workspace differences) |
@@ -1927,7 +1927,7 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 ### Error codes
 
-For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `definition` / `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. A `definition` miss uses `E018_QUERY_NOT_FOUND` and exit code `2`; bounded-envelope controls retain the error under `metadata.error` with an empty `results` array, while an explicitly impossible `--max-json-bytes` cap instead produces a usage error on stderr before any oversized stdout is written. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
 
 | Code | When emitted |
 |---|---|
@@ -2374,7 +2374,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - HDL: Verilog, SystemVerilog, and VHDL module/package/type/function/resource declarations are indexed as symbols. References and graph queries are not advertised for HDL yet.
 - SQL: query-time `--lang tsql` is accepted as a SQL alias, and T-SQL aggregate, assembly, and XML schema collection declarations are searchable.
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
-- Functional symbol-only languages: Clojure, Erlang, OCaml, and Raku expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
+- Functional graph languages: Clojure, Erlang, OCaml, and Raku expose conservative declarations plus bounded imports, aliases, calls, and type/protocol/behaviour relationships. References and graph queries are advertised for these languages.
 - Dynamic symbol-only languages: Crystal, Groovy, and Tcl expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
 - Scientific and native-extension graphs: Julia, MATLAB, Nim, D, Cython, and Ada emit bounded language-aware import/module, base/type, and call references. Julia macro invocations and Ada procedure-style calls without parentheses are also represented.
 - Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
@@ -2419,8 +2419,8 @@ entries with the unsupported capability, an explanatory message, and
 | MATLAB / Julia / Nim / D / Ada / Cython | classes/modules/types, functions/procedures, imports | bounded calls, imports/modules, base/type references; Julia macros and Ada procedure-style calls | Static syntax is indexed conservatively; dynamic dispatch, generated code, and macro expansion may still require `search`. |
 | Prolog | modules, predicates, imports | none yet | `.pl` is classified conservatively; declaration symbols are searchable, but use `search` for reference and graph questions. |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | functions, types, methods, imports/modules | calls, constructors, macro invocations where supported, type references | C++ templates/macros and Rust macro expansion are not evaluated; Rust macro invocations are still reference edges. |
-| CUDA | C++-style functions/types plus CUDA kernel/device/host sub-kinds | none yet | CUDA kernel/device/host declarations are indexed as C++-style symbols with CUDA sub-kinds; use `search` for call/reference questions. |
-| GLSL / HLSL / Metal / WGSL | entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, uniforms/inputs/outputs | none yet | Shader entry points and resource declarations are searchable as symbols; use `search` for data-flow, binding compatibility, and call/reference questions. |
+| CUDA | C++-style functions/types plus CUDA kernel/device/host sub-kinds | calls and kernel launches, includes, workspace-backed user-defined type references, constant bindings, scoped kernel-parameter resource uses | CUDA references are bounded syntactic edges. Macro-generated launches, function pointers, and semantic data flow still require `search`. |
+| GLSL / HLSL / Metal / WGSL | entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, uniforms/inputs/outputs | entry-point/helper calls, includes where supported, workspace-backed user-defined type references, block/direct resource uses, binding metadata | Shader references are bounded syntactic edges. They do not validate binding compatibility or model semantic data flow; use `search` for those questions. |
 | Verilog / SystemVerilog / VHDL | modules, packages, interfaces, classes, functions/tasks/processes, types, signals/parameters | none yet | HDL declarations are available to `symbols`, `definition`, `outline`, and symbol-aware `search`; use plain `search` for netlist/reference questions. |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
 | Solution / application manifest | solution projects and manifest identity/settings | solution project references; application manifests are symbol-only | `.sln` project paths are graph edges for repository structure; use `symbols --lang app_manifest` for Windows manifest metadata. |
@@ -2428,6 +2428,11 @@ entries with the unsupported capability, an explanatory message, and
 | Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | headings, anchors, selectors, UI elements, generic XML element/attribute paths, schema types/messages where supported | links/assets/components, local anchors, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Generic non-XAML XML emits bounded structural symbols; use `search` for prose and generated markup. |
 | Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
 | Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
+
+CUDA, GLSL, HLSL, Metal, and WGSL report `reference_extraction: true` and
+`graph_queries: true` in `languages --json`. This readiness means the bounded,
+statically visible edges listed above are indexed; it is not a claim of compiler
+or driver-level semantic analysis.
 
 The graph commands surface `graph_supported` / `graph_support_reason` in JSON and
 MCP outputs when a language filter is provided. An empty unsupported-language
@@ -5003,7 +5008,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--search-fields <fields>` | `search` | recipe の `query_name` / `recipe` を含む compact JSON field を projection する |
 | `--results-only` | `search`、`symbols`、`files` | shell pipeline 向けに stream の終端レコードを含まない result-only NDJSON を出力する |
 | `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数で広い audit 出力を制限する |
-| `--max-json-bytes <n>` | `search`、`recipes`、`audit`、`deps`、`hotspots` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
+| `--max-json-bytes <n>` | `search`、`definition`、`recipes`、`audit`、`deps`、`hotspots` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。`definition --json` の未検出時も構造化 not-found object を同じ上限に対して事前検査し、object が収まらない場合は上限超過の stdout を出さず stderr に usage error を報告する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
@@ -5051,6 +5056,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | 完全一致のシンボル、シンボル名の接頭辞、または組み込み noise profile で依存 edge を絞り込む。cycle と cross-workspace query を含め、これらの filter は候補の ranking と `--limit` より前に SQLite 内で適用される。そのため `reference_count`、ranking、JSON の `symbol_filter` counter は絞り込み後の scope を表す。 |
 | `--cycles` / `--graph-budget <n>` / `--cursor <value>` | `deps` | 決定的かつ安定順位付きの依存 SCC を計算する。`--graph-budget` は解析する edge 数を独立して制限し（既定値 `10000`）、`--limit` は順位付け済み SCC をページ分割し、不透明な `next_cursor` で同じ filter 済み graph の続きを取得する。JSON は `analysis_complete`、`graph_edge_count`、`graph_edge_budget`、ranking metadata、総件数が authoritative かどうか、continuation metadata を返す。graph budget 枯渇時は SCC 集合と総件数が non-authoritative であることを明示するため、`--graph-budget` を増やすか、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` で graph を絞り込む。 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。最大 7 個の distinct な追加 DB（`--db` を含め合計 8 個）まで繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
+| `--strict-not-found` | クエリ系 | 有効な query の結果が 0 件なら終了コード `2` を返す。この flag がない場合、0 件の query は通常、既存の empty / zero-result output を維持して終了コード `0` を返す。ただし既定 format の `definition --json` 未検出は意図的な例外で、常に `E018_QUERY_NOT_FOUND` と終了コード `2` を返す。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--max-results <n>` | `search` | `--limit` のエイリアス |
 | `--color <when>` | 全コマンド | ANSI カラー出力の制御。`auto`（既定）、`always`、`never` を受け付ける。優先順位: `--color` フラグ > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > 端末能力の自動判定。auto では redirected stdout と StringWriter 風のテスト capture を非 ANSI とみなし、Windows では ConPTY / Windows Terminal の virtual-terminal 対応と `WT_SESSION`、`WT_PROFILE_ID`、`TERM_PROGRAM`、非 `dumb` の `TERM` などの端末ヒントも見る。`cdidx symbols Foo \| less -R` のような pager pipe でも色を維持したい場合は `--color=always`、TTY 上でも ANSI を抑止したい場合は `--color=never`（または `NO_COLOR=1`）を指定する。 |
@@ -5063,9 +5069,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 
 | コード | 意味 |
 |---|---|
-| `0` | 成功 |
+| `0` | 成功（有効な query の結果が 0 件の場合を含む。ただし既定 format の `definition --json` 未検出を除く） |
 | `1` | 引数エラー |
-| `2` | 未検出（検索結果なし、ディレクトリ不在） |
+| `2` | 未検出（index 済み path の不在、`--strict-not-found` 指定時の 0 件 query、または既定 format の `definition --json` 未検出） |
 | `3` | データベースエラー |
 | `4` | この build では機能未提供（例: trim 済み自己完結リリース上の CLI `--json`） |
 | `5` | stale index（`status --check` が DB / workspace の差分を検出） |
@@ -5078,7 +5084,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 
 ### エラーコード
 
-スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`definition` / `goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。`definition` の未検出は `E018_QUERY_NOT_FOUND` と終了コード `2` を使い、bounded-envelope control の使用時も空の `results` array と `metadata.error` に error を維持します。明示した `--max-json-bytes` が object を格納できない場合は、上限超過の stdout を書く前に stderr の usage error で終了します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
 
 | コード | 発行条件 |
 |---|---|
@@ -5520,7 +5526,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - HDL: Verilog、SystemVerilog、VHDL の module / package / type / function / resource 宣言をシンボルとして索引します。HDL の references と graph queries はまだ対応として広告しません。
 - SQL: クエリ時の `--lang tsql` は SQL の別名です。T-SQL の aggregate、assembly、XML schema collection 宣言も検索対象です。
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
-- 関数型言語のシンボル専用対応: Clojure、Erlang、OCaml、Raku は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
+- 関数型言語のグラフ対応: Clojure、Erlang、OCaml、Raku は保守的な宣言に加え、上限付きの import、alias、call、type / protocol / behaviour 関係を公開します。これらの言語では references と graph queries を対応済みとして広告します。
 - 動的言語のシンボル専用対応: Crystal、Groovy、Tcl は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
 - 科学技術・ネイティブ拡張言語のグラフ: Julia、MATLAB、Nim、D、Cython、Ada は、言語構文に応じた import/module、基底型/type、call 参照を上限付きで出力します。Julia の macro invocation と、括弧を伴わない Ada の procedure call も記録します。
 - Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
@@ -5559,8 +5565,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | MATLAB / Julia / Nim / D / Ada / Cython | class/module/type、function/procedure、import | 上限付きの call、import/module、基底型/type reference。Julia macro と Ada の procedure-style call | 静的な構文を保守的に索引します。dynamic dispatch、generated code、macro expansion には `search` が必要な場合があります。 |
 | Prolog | module、predicate、import | まだなし | `.pl` は保守的に分類され、宣言 symbol は検索できます。reference / graph の調査には `search` を使ってください。 |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | function、type、method、import/module | call、constructor、対応言語の macro invocation、type reference | C++ template/macro と Rust macro expansion は評価しません。Rust macro invocation 自体は reference edge です。 |
-| CUDA | C++ 風の function/type と CUDA kernel/device/host sub-kind | まだなし | CUDA の kernel / device / host 宣言は CUDA sub-kind 付きの C++ 風シンボルとして索引します。call/reference の調査には `search` を使ってください。 |
-| GLSL / HLSL / Metal / WGSL | entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output | まだなし | Shader entry point と resource 宣言はシンボルとして検索できます。data-flow、binding compatibility、call/reference の調査には `search` を使ってください。 |
+| CUDA | C++ 風の function/type と CUDA kernel/device/host sub-kind | call と kernel launch、include、workspace に基づくユーザー定義型参照、constant binding、scope 付き kernel parameter の resource 利用 | CUDA の参照は上限付きの構文エッジです。macro 生成 launch、function pointer、意味的 data flow には引き続き `search` を使ってください。 |
+| GLSL / HLSL / Metal / WGSL | entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output | entry point/helper の call、対応言語の include、workspace に基づくユーザー定義型参照、block / direct resource 利用、binding metadata | Shader の参照は上限付きの構文エッジです。binding compatibility の検証や意味的 data flow の modeling は行わないため、それらには `search` を使ってください。 |
 | Verilog / SystemVerilog / VHDL | module、package、interface、class、function/task/process、type、signal/parameter | まだなし | HDL 宣言は `symbols`、`definition`、`outline`、symbol-aware `search` で使えます。netlist / reference の調査には通常の `search` を使ってください。 |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
 | ソリューション / アプリケーションマニフェスト | solution project、manifest identity / setting | `.sln` の project reference。manifest は symbol-only | `.sln` の project path はリポジトリ構造の graph edge です。Windows manifest metadata は `symbols --lang app_manifest` で確認できます。 |
@@ -5568,6 +5574,11 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | heading、anchor、selector、UI element、汎用 XML の要素・属性パス、対応 schema type/message | link/asset/component、local anchor、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | 汎用の非 XAML XML は上限付きの構造シンボルを出力します。prose や generated markup には `search` を使ってください。 |
 | Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
 | その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
+
+CUDA、GLSL、HLSL、Metal、WGSL は `languages --json` で
+`reference_extraction: true` と `graph_queries: true` を返します。この readiness は上記の
+上限付きで静的に確認できるエッジを索引することを意味し、compiler / driver レベルの
+意味解析を保証するものではありません。
 
 Language filter を指定した graph commands は、JSON / MCP 出力に
 `graph_supported` / `graph_support_reason` を含めます。Unsupported language の空結果は

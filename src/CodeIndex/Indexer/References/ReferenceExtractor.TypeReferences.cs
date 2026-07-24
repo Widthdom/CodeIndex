@@ -3002,7 +3002,16 @@ public static partial class ReferenceExtractor
     }
 
     private static bool UsesCStyleBlockComments(string language) =>
-        language is "c" or "cpp" or "go" or "objc" or "dart";
+        language is "c"
+            or "cpp"
+            or "cuda"
+            or "glsl"
+            or "hlsl"
+            or "metal"
+            or "wgsl"
+            or "go"
+            or "objc"
+            or "dart";
 
     private static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
     {
@@ -3010,7 +3019,7 @@ public static partial class ReferenceExtractor
             return lineArray;
 
         var result = new string[lines.Count];
-        var inBlockComment = false;
+        var blockCommentDepth = 0;
         var inGoRawString = false;
         char dartTripleQuote = '\0';
         string? cppRawStringTerminator = null;
@@ -3033,13 +3042,24 @@ public static partial class ReferenceExtractor
             var cursor = 0;
             while (cursor < line.Length)
             {
-                if (inBlockComment)
+                if (blockCommentDepth > 0)
                 {
                     MaskAt(cursor);
+                    if (language == "wgsl"
+                        && line[cursor] == '/'
+                        && cursor + 1 < line.Length
+                        && line[cursor + 1] == '*')
+                    {
+                        MaskAt(cursor + 1);
+                        blockCommentDepth++;
+                        cursor += 2;
+                        continue;
+                    }
+
                     if (line[cursor] == '*' && cursor + 1 < line.Length && line[cursor + 1] == '/')
                     {
                         MaskAt(cursor + 1);
-                        inBlockComment = false;
+                        blockCommentDepth--;
                         cursor += 2;
                         continue;
                     }
@@ -3139,7 +3159,7 @@ public static partial class ReferenceExtractor
                     MaskAt(cursor);
                     cursor++;
                     MaskAt(cursor);
-                    inBlockComment = true;
+                    blockCommentDepth = 1;
                     cursor++;
                     continue;
                 }

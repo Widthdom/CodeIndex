@@ -977,10 +977,26 @@ Reference extraction deduplicates only within the same indexed file and language
 | `razor_event_binding` | `subscribe` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
 | `subscribe`, `unsubscribe` | `subscribe` | Event wiring edges kept visible in default call-graph queries. |
 | `generic_type_argument`, `friend`, `capture`, `consumes_hook`, `project_reference` | raw label | Dependency/metadata edges excluded from default `callers` / `callees`; available through `references`, an explicit kind filter, and the applicable dependency/impact surfaces. |
+| `binding`, `resource_reference`, `import` | raw label | GPU/shader binding declarations, resource uses, and statically visible includes; excluded from invocation graphs and available through `references --kind <kind>` and raw reference exports/queries. |
 | `system_variable` | raw label | SQL execution-context variables such as T-SQL `@@ROWCOUNT` / `@@IDENTITY` and MySQL `@@session.sql_mode` / `@@global.max_connections`; intrinsic variables have no definition site. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
+
+### GPU and shader reference extraction
+
+CUDA, GLSL, HLSL, Metal, and WGSL use a request-scoped, stateless reference
+extractor. Ordinary helper and entry-point invocations, including CUDA
+`kernel<<<...>>>(...)` launches, emit `call` edges and therefore participate in
+default call graphs. Statically visible includes, bindings, resource uses, and
+user-defined type uses emit `import`, `binding`, `resource_reference`, and
+`type_reference` metadata rows. Included-file type declarations can be supplied
+through the bounded workspace-symbol snapshot. The extractor masks comments, suppresses
+attribute/binding syntax as phantom calls, caps tracked names and per-line
+scans, and intentionally does not perform macro expansion, binding validation,
+function-pointer resolution, or semantic data-flow analysis. Registration in
+the built-in extractor registry is the readiness contract exposed as
+`reference_extraction` and `graph_queries` by `languages --json`.
 
 ### Python symbol taxonomy
 
@@ -1261,6 +1277,7 @@ Supported symbol kinds by language:
 | Scala | `def`, `implicit` declarations, `given`, classes, objects, traits, enums | imports, type aliases, block calls, `for` generators, implicit conversion types, `given` / `using` evidence types | yes |
 | Elixir | `def`, `defp`, modules, protocols | `import`, `alias`, `use`, `require` | yes |
 | Common Lisp / Racket | packages/modules, functions/macros, classes, structs, variables | S-expression call heads, `#'name` function references, `make-instance` instantiation | yes |
+| Clojure / Erlang / OCaml / Raku | namespaces/modules, functions, records/types/classes, protocols/roles | bounded imports, aliases, calls, and type/protocol/behaviour relationships | yes |
 | SQL | procedures/functions/triggers, DDL objects, schemas, enum types, extensions | source/target dependencies, procedure calls, temp-object tracking | yes |
 | Shell | function declarations | command-style calls, sources, aliases | -- |
 | Terraform | variables, outputs, locals, resources, data sources, modules, dotted dependencies | same-file `var.*`, `local.*`, `module.*`, `data.*`, `TYPE.NAME` references | -- |
@@ -1282,7 +1299,7 @@ For JavaScript / TypeScript, reference extraction also captures tagged template 
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column. SQL graph extraction emits `reference` edges for named source/target forms such as `FROM`, `JOIN`, `INSERT INTO`, `UPDATE`, `TRUNCATE TABLE`, `DELETE FROM`, `DELETE ... USING`, and `MERGE ... USING`; procedure and table-valued-function calls stay on the `call` path.
 
-Additionally, 18 languages are detected and indexed as raw text without symbol extraction: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, yaml.
+Languages without a registered symbol extractor remain available for text search; use `languages --json` to inspect the current symbol, reference, and graph capability flags.
 
 VB.NET container patterns use `RegexOptions.IgnoreCase` plus `VisualBasicEnd`-based range tracking, so `Partial` spelling differences and multi-file type families still receive stable definition ranges and hotspot-family metadata.
 
@@ -1353,6 +1370,7 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 |---|---|
 | Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `outline`, `suggestions`) default to **human-readable output**. |
 | `--json` | Emits JSON lines output, one JSON object per line, designed for easy parsing by AI agents. |
+| `definition --json` miss | A default-format definition lookup that finds no matching symbol emits the shared versioned `E018_QUERY_NOT_FOUND` command-error object and exits `2`, with or without `--body`; it never succeeds with empty stdout. Bounded-envelope controls move the object to `metadata.error` and keep `results` empty instead of projecting it as a location row. The object is preflighted against `--max-json-bytes`; an impossible cap returns a usage error without oversized stdout. `--count` still returns its structured zero-count object, and explicit location formats retain their existing format-specific empty-result output. |
 | Raw discovery JSON shape | `symbols` and `files` preserve the selected flat shape for every result cardinality and under `--max-json-bytes`: zero-result NDJSON is an empty stream, `--json=array` is always an array, and byte-capped output omits whole trailing rows without changing the top-level type. Use `--format compact` or `--json-envelope` when truncation and freshness metadata must accompany the results. |
 | Generated-code filtering metadata | DB-backed discovery `query_context` always reports `include_generated`, `generated_code_policy`, and `generated_file_filter_available`. The `files --count --json` and every JSON `map` summary (including `issue-drafts`) also report `generated_file_count_excluded` and `generated_file_count_excluded_authoritative`. The excluded count is `0` when generated files are included. For a legacy DB without `files.generated` when filtering is requested, the policy is `unavailable`, the count is `null`, and the authoritative/available flags are `false` rather than claiming that an unavailable filter ran; explicit `--include-generated` remains `include` with an authoritative excluded count of `0`. Byte-capped and uncapped raw discovery arrays retain SQLite trust diagnostics even when the query returns no result rows. |
 | Map scope, depth, and freshness | `map --depth <n>` applies path, language, test, generated-code, and exclusion filters before aggregating modules by the requested prefix depth. Scoped map output excludes the workspace-global decomposition plan. Workspace HEAD metadata is read in one query from the same SQLite snapshot as the map and remains explicit under `head_freshness`: `scope=workspace`, `indexed_head_source=latest_index` for the current successful index stamp (or `legacy_full_scan` only when it is the fallback), and `legacy_full_scan_head` for the separately labeled compatibility stamp. `issue-drafts` evaluates every scoped file for its thresholds, so `candidate_source=evaluated_scoped_candidates`, candidate counts, group totals, omitted counts, and `truncation.issue_draft_candidates` are candidate-based even though candidate details remain bounded; `truncation.largest_files` is a labeled compatibility alias only. |
@@ -3966,10 +3984,25 @@ authoritative な判定と一貫した推論を区別し、複数言語の evide
 | `razor_event_binding` | `subscribe` | Razor の `@on...="Handler"` event binding から C# handler 名への edge。 |
 | `subscribe`, `unsubscribe` | `subscribe` | 既定の call-graph query で可視化するイベント配線エッジ。 |
 | `generic_type_argument`, `friend`, `capture`, `consumes_hook`, `project_reference` | raw label | 既定の `callers` / `callees` から除外する依存関係 / metadata edge。`references`、明示 kind filter、対応する dependency / impact surface では利用できる。 |
+| `binding`, `resource_reference`, `import` | raw label | GPU / shader の binding 宣言、resource 利用、静的に確認できる include。invocation graph から除外し、`references --kind <kind>` と raw reference の export / query で利用できる。 |
 | `system_variable` | raw label | T-SQL `@@ROWCOUNT` / `@@IDENTITY` や MySQL `@@session.sql_mode` / `@@global.max_connections` など、SQL 実行 context variable。intrinsic variable なので definition site は持たない。 |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
 
 TypeScript decorator は decorator 名を `annotation` 行として出力し、decorated declaration の型位置エッジを隠してはならない。たとえば `constructor(@Inject() svc: Service)` は `Inject` を `annotation`、`Service` を `type_reference` として記録し、`@Input() profile: UserProfile` も decorator と field type の両方を記録する。
+
+### GPU / shader の参照抽出
+
+CUDA、GLSL、HLSL、Metal、WGSL は request ごとの stateless な参照 extractor を使う。
+通常の helper / entry point 呼び出しと CUDA の `kernel<<<...>>>(...)` launch は `call`
+edge を出力し、既定の call graph に参加する。静的に確認できる include、binding、
+resource 利用、ユーザー定義型の利用はそれぞれ `import`、`binding`、
+`resource_reference`、`type_reference` metadata 行になる。include 先ファイルの型宣言は
+上限付き workspace symbol snapshot から供給できる。extractor は comment を
+mask し、attribute / binding 構文を phantom call として出さず、追跡名数と1行あたりの
+走査数に上限を設ける。macro expansion、binding validation、function pointer 解決、
+意味的 data-flow 解析は意図的に行わない。built-in extractor registry への登録が
+`languages --json` の `reference_extraction` と `graph_queries` に公開される readiness
+contract である。
 
 ### Python シンボル分類
 
@@ -4245,6 +4278,7 @@ SQL 固有の symbol extraction:
 | Scala | `def`、class、object、trait、enum | import、type alias、block call | yes |
 | Elixir | `def`、`defp`、module、protocol | `import`、`alias`、`use`、`require` | yes |
 | Common Lisp / Racket | package/module、function/macro、class、struct、variable | S 式の call head、`#'name` function reference、`make-instance` instantiation | yes |
+| Clojure / Erlang / OCaml / Raku | namespace/module、function、record/type/class、protocol/role | 上限付きの import、alias、call、type / protocol / behaviour 関係 | yes |
 | SQL | procedure/function/trigger、DDL object、schema、enum type、extension | source/target dependency、procedure call、temp-object tracking | yes |
 | Shell | function declaration | command-style call、source、alias | -- |
 | Terraform | variable、output、locals、resource、data、module、dotted dependency | same-file `var.*`, `local.*`, `module.*`, `data.*`, `TYPE.NAME` reference | -- |
@@ -4266,7 +4300,7 @@ JavaScript / TypeScript では、reference extraction が `` gql`...` ``、`` st
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力するが、上の要約表には namespace 専用列はない。SQL graph extraction は `FROM`、`JOIN`、`INSERT INTO`、`UPDATE`、`TRUNCATE TABLE`、`DELETE FROM`、`DELETE ... USING`、`MERGE ... USING` のような source/target 形を `reference` edge として出力し、procedure call と table-valued function 使用は `call` 経路に残す。
 
-他に18言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, yaml。
+登録済みのシンボル抽出器がない言語もテキスト検索には利用できます。現在の symbol / reference / graph capability flag は `languages --json` で確認してください。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 
@@ -4353,6 +4387,7 @@ AI エージェント向け検索ルールのテンプレートについては�
 |---|---|
 | human-readable default | query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`、`outline`、`suggestions`）は既定で**人間向け出力**です。 |
 | `--json` | JSON lines output（1 行 1 JSON object）に切り替えます。AI agent が容易に parse できるよう設計されています。 |
+| `definition --json` の未検出 | 既定 format の definition lookup で一致する symbol がない場合、`--body` の有無にかかわらず、共通の versioned `E018_QUERY_NOT_FOUND` command-error object を出力して終了コード `2` を返します。空の stdout のまま成功することはありません。bounded-envelope control の使用時は object を location row として projection せず `metadata.error` に移し、`results` は空のままにします。この object は `--max-json-bytes` に対して事前検査され、収まらない上限では oversized stdout を出さず usage error を返します。`--count` は引き続き構造化された 0 件 object を返し、明示的な location format も既存の format 固有の empty-result output を維持します。 |
 | raw discovery JSON shape | `symbols` と `files` は、結果件数や `--max-json-bytes` の有無にかかわらず、選択した flat shape を維持します。0 件の NDJSON は空 stream、`--json=array` は常に array となり、byte cap 到達時は top-level type を変えずに末尾の完全な row を省略します。truncation / freshness metadata も結果と一緒に必要な場合は `--format compact` または `--json-envelope` を使用します。 |
 | generated-code filtering metadata | DB-backed discovery の `query_context` は常に `include_generated`、`generated_code_policy`、`generated_file_filter_available` を返します。`files --count --json` と `issue-drafts` を含むすべての JSON `map` summary は、`generated_file_count_excluded` と `generated_file_count_excluded_authoritative` も返します。generated file を含める場合、除外数は `0` です。`files.generated` が無い legacy DB で filter が要求された場合、未実行の filter を実行済みと誤認させないよう、policy は `unavailable`、count は `null`、authoritative / available flag は `false` になります。明示的な `--include-generated` は `include` のままで、authoritative な除外数 `0` を返します。byte cap の有無にかかわらず、raw discovery array は query result row が 0 件でも SQLite trust diagnostics を維持します。 |
 | map の scope、depth、freshness | `map --depth <n>` は path、language、test、generated-code、除外条件を適用してから、指定した prefix depth で module を集計します。scope を絞った map output からは workspace 全体向けの decomposition plan を除外します。workspace HEAD metadata は map と同じ SQLite snapshot から 1 query で読み、`head_freshness` に `scope=workspace`、現在の成功 index stamp なら `indexed_head_source=latest_index`（fallback の場合だけ `legacy_full_scan`）、互換用 stamp は別名の `legacy_full_scan_head` として明示します。`issue-drafts` は scope 内の全 file を閾値評価するため、`candidate_source=evaluated_scoped_candidates`、candidate 件数、group 合計、省略数、`truncation.issue_draft_candidates` は candidate 基準になります。`truncation.largest_files` は明示的な互換 alias としてのみ残します。 |
