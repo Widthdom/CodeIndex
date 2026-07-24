@@ -2760,13 +2760,51 @@ sleep 30
 """);
                 File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
                 var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
-                using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+                using var cts = new CancellationTokenSource();
+                var pid = 0;
+                var pidReady = false;
+                var cancellationThread = new Thread(() =>
+                {
+                    pidReady = SpinWait.SpinUntil(
+                        () =>
+                        {
+                            try
+                            {
+                                return int.TryParse(
+                                    File.ReadAllText(pidFile),
+                                    NumberStyles.Integer,
+                                    CultureInfo.InvariantCulture,
+                                    out pid)
+                                    && pid > 0;
+                            }
+                            catch (FileNotFoundException)
+                            {
+                                return false;
+                            }
+                            catch (IOException)
+                            {
+                                return false;
+                            }
+                        },
+                        TimeSpan.FromSeconds(10));
+                    cts.Cancel();
+                });
+                cancellationThread.Start();
 
-                Assert.ThrowsAny<OperationCanceledException>(() =>
-                    ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromSeconds(30), cts.Token));
+                try
+                {
+                    Assert.ThrowsAny<OperationCanceledException>(() =>
+                        ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromSeconds(30), cts.Token));
+                }
+                finally
+                {
+                    cts.Cancel();
+                    Assert.True(
+                        cancellationThread.Join(TimeSpan.FromSeconds(10)),
+                        "The installer PID readiness waiter did not stop.");
+                }
 
-                Assert.True(File.Exists(pidFile));
-                var pid = int.Parse(File.ReadAllText(pidFile), CultureInfo.InvariantCulture);
+                Assert.True(pidReady, "The installer PID file did not contain a complete positive integer.");
                 Assert.False(IsProcessRunning(pid));
             }
             finally
