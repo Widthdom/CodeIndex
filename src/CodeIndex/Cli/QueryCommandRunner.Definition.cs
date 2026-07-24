@@ -183,14 +183,24 @@ public static partial class QueryCommandRunner
                     return ZeroResultExitCode(options);
                 if (options.Json)
                 {
-                    return CommandErrorWriter.WriteJsonOrHuman(
-                        json: true,
-                        jsonOptions,
-                        BuildZeroResultLine("No definitions found", options),
-                        CommandExitCodes.NotFound,
-                        "Check the symbol spelling or narrow/adjust --kind, --lang, and --path filters.",
-                        errorCode: CommandErrorCodes.QueryNotFound,
-                        category: "not_found");
+                    const string hint = "Check the symbol spelling or narrow/adjust --kind, --lang, and --path filters.";
+                    var notFoundJson = JsonSerializer.Serialize(
+                        new CommandErrorJsonResult(
+                            "error",
+                            BuildZeroResultLine("No definitions found", options),
+                            hint,
+                            CommandErrorCodes.QueryNotFound,
+                            Category: "not_found"),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult);
+                    var writeExitCode = WriteJsonObjectWithOptionalByteLimit(
+                        notFoundJson,
+                        options,
+                        "definition not-found response",
+                        "Increase --max-json-bytes to allow the structured not-found response.",
+                        "definition");
+                    return writeExitCode == CommandExitCodes.Success
+                        ? CommandExitCodes.NotFound
+                        : writeExitCode;
                 }
                 if (!options.Json)
                 {

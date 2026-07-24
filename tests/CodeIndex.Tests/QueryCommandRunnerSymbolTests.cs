@@ -6325,6 +6325,23 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal("not_found", json.GetProperty("category").GetString());
                 Assert.Equal("1", json.GetProperty("api_version").GetString());
             }
+
+            var (boundedExitCode, boundedStdout, boundedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunDefinition(
+                    [
+                        "MissingDefinitionIssue4744",
+                        "--db",
+                        dbPath,
+                        "--json",
+                        "--exact-name",
+                        "--max-json-bytes",
+                        "20",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, boundedExitCode);
+            Assert.Equal(string.Empty, boundedStdout);
+            Assert.Contains("exceeds --max-json-bytes 20", boundedStderr);
         }
         finally
         {
