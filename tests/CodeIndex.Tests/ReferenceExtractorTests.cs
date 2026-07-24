@@ -1230,6 +1230,1135 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Crystal_IndexesImportsParenthesizedAndCommandCalls_Issue4746()
+    {
+        const string content = """
+            require "./support"
+
+            def helper(value)
+              value
+            end
+
+            def run(value)
+              helper value
+              helper(value)
+              if helper
+                helper value
+              end
+              helper value unless helper
+              while helper
+                break
+              end
+              until helper
+                break
+              end
+              text = "123456789"; helper(value)
+              multiline = "helper()
+            continued"
+              divided = value // 2; helper(value)
+              [value].each { helper }
+              helper = 1
+            end
+
+            class Inline; def inline_helper(); end; end
+
+            abstract class Base
+              abstract def declared(value)
+            end
+
+            lib LibC
+              fun puts(value : UInt8*) : Int32
+            end
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("crystal", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "declared");
+        AssertReferencesContain(references, "type_reference", null, "support");
+        AssertReferencesContain(references, "call", "run", "helper");
+        Assert.Equal(11, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper"));
+        var stringCallLine = Array.FindIndex(
+            content.Split('\n'),
+            line => line.Contains("text =", StringComparison.Ordinal)) + 1;
+        var stringCall = Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"
+            && reference.Line == stringCallLine);
+        Assert.Equal(
+            content.Split('\n')[stringCallLine - 1].IndexOf("helper", StringComparison.Ordinal) + 1,
+            stringCall.Column);
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "require" or "def" or "inline_helper" or "declared" or "puts");
+    }
+
+    [Fact]
+    public void Extract_Groovy_IndexesImportsParenthesizedAndCommandCalls_Issue4746()
+    {
+        const string content = """
+            import demo.Support
+
+            class Runner {
+                @Inject Runner(
+                    int seed
+                ) {
+                    super(seed)
+                }
+
+                static def helper(value) {
+                    value
+                }
+
+                @Override def annotated(value) {
+                    value
+                }
+
+                Map<String, Integer> convert(String value) {
+                    [:]
+                }
+
+                public <T> T genericConvert(T value) {
+                    value
+                }
+
+                def run(value) {
+                    helper value
+                    helper(value)
+                    if (value) helper value
+                    while (value) helper value
+                    for (item in [value]) helper item
+                    if (nested(value)) helper value
+                    def text = "123456789"; helper(value)
+                    [1].each { helper it }
+                    annotated(value)
+                    convert("value")
+                    genericConvert(value)
+                    helper = 1
+                    synchronized(value) {}
+                }
+            }
+
+            class InlineRunner { InlineRunner() {}; def inlineHelper() {} }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("groovy", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "annotated");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "convert");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "genericConvert");
+        AssertReferencesContain(references, "type_reference", null, "Support");
+        AssertReferencesContain(references, "call", "run", "helper");
+        Assert.Equal(8, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper"));
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "annotated");
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "convert");
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "genericConvert");
+        var stringCallLine = Array.FindIndex(
+            content.Split('\n'),
+            line => line.Contains("text =", StringComparison.Ordinal)) + 1;
+        var stringCall = Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"
+            && reference.Line == stringCallLine);
+        Assert.Equal(
+            content.Split('\n')[stringCallLine - 1].IndexOf("helper", StringComparison.Ordinal) + 1,
+            stringCall.Column);
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "import" or "def" or "Runner" or "InlineRunner"
+                or "inlineHelper" or "super" or "synchronized");
+    }
+
+    [Fact]
+    public void Extract_Tcl_PreservesConcatenatedScriptStateAndBareLoopBodies_Issue4746()
+    {
+        const string content = """
+            proc helper {value} { return $value }
+            proc arg {} { return 2 }
+            proc extra {} { return 3 }
+            proc run {} {
+                eval {helper} {arg}
+                eval {helper} {; extra}
+                uplevel helper arg
+                uplevel #0 helper arg
+                foreach value {1 2} helper
+                lmap value {1 2} helper
+                dict for {key value} key\ value { helper }
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Equal(7, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper"));
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "extra");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "arg");
+    }
+
+    [Fact]
+    public void Extract_Tcl_IndexesInlineScriptProcWithCaller_Issue4746()
+    {
+        const string content = """
+            proc helper {} { return 1 }
+            namespace eval ::demo { proc run {} { helper } }
+            set literal { proc fake {} { helper } }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        var run = Assert.Single(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "run");
+        Assert.Equal("::demo", run.ContainerName);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "fake");
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+    }
+
+    [Fact]
+    public void Extract_Tcl_OnlyIndexesScriptsForSelectedSubcommands_Issue4746()
+    {
+        const string content = """
+            proc helper {} { return 1 }
+            proc run {} {
+                after idle helper
+                namespace eval ::tmp { helper }
+                after 1 {set pending 1;} {helper}
+                namespace eval ::tmp {set pending 1;} {helper}
+                after cancel helper
+                after info helper
+                namespace export alpha helper
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Equal(4, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper"));
+    }
+
+    [Fact]
+    public void Extract_Tcl_ResolvesNamespaceQualifiedProcCalls_Issue4746()
+    {
+        const string content = """
+            namespace eval ::alpha { proc worker {} { return 1 } }
+            namespace eval ::beta { proc worker {} { return 2 } }
+            proc driver {} {
+                alpha::worker
+                ::beta::worker
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+        var calls = references
+            .Where(reference =>
+                reference.ReferenceKind == "call"
+                && reference.ContainerName == "driver"
+                && reference.SymbolName == "worker")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+
+        Assert.Collection(
+            calls,
+            reference =>
+            {
+                Assert.Equal("::alpha", reference.TargetQualifier);
+                Assert.Equal(12, reference.Column);
+            },
+            reference =>
+            {
+                Assert.Equal("::beta", reference.TargetQualifier);
+                Assert.Equal(13, reference.Column);
+            });
+    }
+
+    [Fact]
+    public void Extract_Tcl_IndexesPackagesAndProcCommandCallsWithCaller_Issue4746()
+    {
+        const string content = """
+            package require json
+
+            proc helper {value} {
+                return $value
+            }
+
+            proc run {value} {
+                helper $value
+                set result [helper $value]
+            }
+
+            proc variadic args {
+                helper
+            }
+
+            proc quoted {} "helper"
+            proc multiline_quoted {} "
+                helper
+            "
+            proc bare {} helper
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        AssertReferencesContain(references, "type_reference", null, "json");
+        AssertReferencesContain(references, "call", "run", "helper");
+        AssertReferencesContain(references, "call", "variadic", "helper");
+        AssertReferencesContain(references, "call", "quoted", "helper");
+        AssertReferencesContain(references, "call", "multiline_quoted", "helper");
+        AssertReferencesContain(references, "call", "bare", "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "package" or "proc" or "set");
+    }
+
+    [Fact]
+    public void Extract_Tcl_IndexesSwitchOptionAndTryHandlerScripts_Issue4746()
+    {
+        const string content = """
+            proc helper {} {
+                return 1
+            }
+
+            proc switch_run {value} {
+                switch -regexp -matchvar matched -indexvar indices -- $value {
+                    one { helper }
+                    quoted "helper"
+                    bare helper
+                    default { helper }
+                }
+            }
+
+            proc try_run {} {
+                try {
+                    helper
+                } on error {message options} {
+                    helper
+                } trap {POSIX SIG} {message options} {
+                    helper
+                } finally {
+                    helper
+                }
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Equal(4, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "switch_run"
+            && reference.SymbolName == "helper"));
+        Assert.Equal(4, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "try_run"
+            && reference.SymbolName == "helper"));
+    }
+
+    [Fact]
+    public void Extract_Tcl_RejectsSyntaxMarkersAndPartialCommandWords_Issue4746()
+    {
+        const string content = """
+            proc then {} { return 1 }
+            proc helper {} { return 1 }
+            proc run {value} {
+                if {$value} then { helper }
+                helper()
+                set generic External<Outer<Type>>()
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "then" or "External");
+    }
+
+    [Fact]
+    public void Extract_Prolog_IndexesModulesImportsAndPredicateCallsWithCaller_Issue4746()
+    {
+        const string content = """
+            :- module(family, [ancestor/2]).
+            :- use_module(library(lists)).
+              parent(alice, bob).
+              ready.
+            ancestor(X, Y) :-
+                parent(X, Y),
+                ready.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("prolog", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "ancestor");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "parent");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "ready");
+        AssertReferencesContain(references, "type_reference", null, "lists");
+        AssertReferencesContain(references, "call", "ancestor", "parent", "ready");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "module" or "use_module" or "ancestor");
+    }
+
+    [Theory]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void Extract_Prolog_IndexesTopLevelDirectiveGoals_Issue4746(string language)
+    {
+        const string content = """
+            helper.
+            :- helper.
+            :- initialization(helper).
+            :- initialization(
+                helper
+            ).
+            :- external_goal().
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences(language, content);
+
+        Assert.Equal(3, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == null
+            && reference.SymbolName == "helper"));
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "external_goal");
+    }
+
+    [Theory]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void Extract_Prolog_IndexesMultilinePredicateHeadsWithoutPhantomDeclarations_Issue4746(
+        string language)
+    {
+        const string content = """
+            helper.
+            multi_line_head(
+                X
+            ) :-
+                helper.
+            no_argument_rule
+            :-
+                helper.
+            no_argument_dcg
+            -->
+                helper.
+            no_argument_fact
+            .
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences(language, content);
+
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "multi_line_head");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "no_argument_rule");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "no_argument_dcg");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "no_argument_fact");
+        AssertReferencesContain(references, "call", "multi_line_head", "helper");
+        AssertReferencesContain(references, "call", "no_argument_rule", "helper");
+        AssertReferencesContain(references, "call", "no_argument_dcg", "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "multi_line_head");
+    }
+
+    [Theory]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void Extract_Prolog_IndexesSameLineClausesWithCorrectCallers_Issue4746(
+        string language)
+    {
+        const string content = """
+            a.
+            b.
+            first. second.
+            run :- a. other :- b.
+            continued :-
+                a. continuation_sibling :- b.
+            fact. :- a.
+            before_directive. :- dynamic before_directive/0.
+            before_multiline. multiline_after(
+                X
+            ) :-
+                a.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences(language, content);
+
+        foreach (var name in new[]
+            {
+                "first",
+                "second",
+                "run",
+                "other",
+                "continued",
+                "continuation_sibling",
+                "fact",
+                "before_directive",
+                "before_multiline",
+                "multiline_after",
+            })
+        {
+            Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == name);
+        }
+        AssertReferencesContain(references, "call", "run", "a");
+        AssertReferencesContain(references, "call", "other", "b");
+        AssertReferencesContain(references, "call", "continued", "a");
+        AssertReferencesContain(references, "call", "continuation_sibling", "b");
+        AssertReferencesContain(references, "call", "multiline_after", "a");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == null
+            && reference.SymbolName == "a");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "fact"
+            && reference.SymbolName == "a");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "b");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "other"
+            && reference.SymbolName == "a");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "continued"
+            && reference.SymbolName == "b");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_IndexesPerlAndPrologReferencesWithoutReclassification_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            use Shared::Tools;
+            sub perl_helper { return 1; }
+            :- module(hybrid, [prolog_helper/0]).
+            prolog_helper :- perl_helper().
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Hybrid");
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "hybrid");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Shared::Tools"
+            && reference.ReferenceKind == "reference");
+        AssertReferencesContain(references, "call", "prolog_helper", "perl_helper");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_MasksPerlQuoteLikeRegexBodies_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            :- module(hybrid, [helper/0]).
+            sub helper { return 1; }
+            my $regex = qr/helper()/;
+            my $match = m{helper()};
+            my $subst = s/helper()/replacement/;
+            my $paired = s{helper()}{replacement};
+            my $translated = tr/helper()/replacement/;
+            my $quoted = q(helper());
+            my $spacedQuoted = q {helper()};
+            my $spacedRegex = qr {helper()};
+            my $spacedSubstitution = s {helper()} {replacement};
+            my $multiline = qr{
+                helper()
+            };
+            prolog_run :- helper.
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "prolog_run"
+            && reference.SymbolName == "helper");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_PreservesFatArrowPairsAndShortPrologHeads_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            sub helper { return 1; }
+            my %dispatch = (s => helper(), qr => helper());
+            :- module(hybrid, [q/0]).
+            q :- helper.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "q");
+        Assert.Equal(3, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"));
+        AssertReferencesContain(references, "call", "q", "helper");
+    }
+
+    [Fact]
+    public void Extract_Prolog_ManyClauseTerminatorsCompletesWithinRunawayGuard_Issue4746()
+    {
+        const int terminatorCount = 50_000;
+        var content = "run :-\n" + string.Concat(Enumerable.Repeat(". ", terminatorCount));
+        var symbols = SymbolExtractor.Extract(1, "prolog", content);
+
+        var stopwatch = Stopwatch.StartNew();
+        var references = ReferenceExtractor.Extract(1, "prolog", content, symbols);
+        stopwatch.Stop();
+
+        Assert.Empty(references);
+        var runawayBudget = TimeSpan.FromSeconds(5);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Prolog clause terminator extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
+    public void Extract_Crystal_PreservesPredicateAndBangCallsWhileMaskingCommentsAndHeredocs_Issue4746()
+    {
+        const string content = """
+            def ready?(value)
+              value
+            end
+
+            def save!(value)
+              value
+            end
+
+            def run(value)
+              # ready?(value)
+              text = <<-TEXT
+            ready?(value)
+            save!(value)
+            def fake
+            TEXT
+              regex = /ready?(value)/
+              if /ready?()/.matches?(value)
+                value
+              end
+              unless /save!()/.matches?(value)
+                value
+              end
+              while /ready?()/.matches?(value)
+                break
+              end
+              until /save!()/.matches?(value)
+                break
+              end
+              cast = value.as(String)
+              checked_cast = value.as?(String)
+              pointer = pointerof(value)
+              instance_size = instance_sizeof(String)
+              alignment = alignof(String)
+              instance_alignment = instance_alignof(String)
+              offset = offsetof(Tuple(Int32), 0)
+              type = typeof(value)
+              size = sizeof(String)
+              literal = %q(save!(value))
+              ordinary = "first
+            ready?(value)
+            def phantom
+            last"
+              value %= 2
+              ready? value
+              ready?(value)
+              save! value
+              save!(value)
+              fake value
+            end
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("crystal", content);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "fake");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "phantom");
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "ready?"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "save!"));
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "as"
+                or "pointerof"
+                or "instance_sizeof"
+                or "alignof"
+                or "instance_alignof"
+                or "offsetof"
+                or "typeof"
+                or "sizeof");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+    }
+
+    [Fact]
+    public void Extract_Groovy_MasksTripleQuotedStringsAndComments_Issue4746()
+    {
+        const string content = """"
+            def helper() {}
+
+            def run() {
+                // helper()
+                def singleQuoted = '''
+            helper()
+            def fake() {}
+            '''
+                def doubleQuoted = """
+            helper()
+            """
+                def slashy = /helper()/
+                def dollarSlashy = $/helper()/$
+                def returned = { return /helper()/ }
+                fake 1
+                helper()
+            }
+            """";
+
+        var (symbols, references) = ExtractSymbolsAndReferences("groovy", content);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "fake");
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+    }
+
+    [Fact]
+    public void Extract_Groovy_DoesNotTreatClosureParametersAsBareCalls_Issue4746()
+    {
+        const string content = """
+            def helper() {}
+
+            def run() {
+                [1].each { helper -> println helper }
+            }
+
+            def actual() {
+                helper; [1].each { value -> println value }
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("groovy", content);
+
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "actual"
+            && reference.SymbolName == "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+    }
+
+    [Fact]
+    public void Extract_Tcl_IndexesSingleLineProcBodiesAndMasksComments_Issue4746()
+    {
+        const string content = """
+            # continued declaration comment \
+            proc fake {} { helper }
+            proc helper {} { return 1 }
+            # [helper]
+            if {1} { # continued script comment \
+            proc script_comment_fake {} { helper }
+            }
+            proc run {helper} {
+                set literal {helper}
+                set substituted [helper]
+            }
+            proc multiline {} {
+                set value 1 ;# [helper]
+                # continued comment \
+                helper
+                set color #fff; helper
+                set quoted "[helper]"
+                set braced {[helper]}
+                if {[helper]} {
+                    set expression_if 1
+                }
+                while {[helper]} {
+                    break
+                }
+                for {} {[helper]} {} {
+                    break
+                }
+                expr {[helper]}
+                if {1} {
+                    helper
+                }
+                foreach item {1 2} {
+                    helper
+                }
+                while {0} {
+                    helper
+                }
+                catch {
+                    helper
+                }
+                if {1} "helper"
+                eval helper
+                after 1 helper
+                uplevel helper
+                switch $value {
+                    one { helper }
+                    default {
+                        helper
+                    }
+                }
+                switch -exact -- $value one {
+                    helper
+                } default { helper }
+                puts \
+                    helper
+                set callback helper()
+                puts helper()
+                set escaped_command \[helper]
+                set escaped_separator \; helper
+                helper
+            }
+            proc split {value}
+            {
+                helper
+            }
+            proc continued {} \
+            {
+                helper
+            }
+            proc sameLine {} { helper }; helper
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "fake");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "script_comment_fake");
+        AssertReferencesContain(references, "call", "run", "helper");
+        AssertReferencesContain(references, "call", "multiline", "helper");
+        AssertReferencesContain(references, "call", "split", "helper");
+        AssertReferencesContain(references, "call", "continued", "helper");
+        AssertReferencesContain(references, "call", "sameLine", "helper");
+        Assert.Equal(24, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"));
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"
+            && reference.ContainerName == null);
+    }
+
+    [Fact]
+    public void Extract_Prolog_IndexesRelativeImportsAndDecimalHeadsWhileMaskingComments_Issue4746()
+    {
+        const string content = """
+            :- use_module('./support.pl').
+            helper.
+            threshold(1.5) :-
+                helper.
+            quoted('value.') :-
+                helper.
+            bar(_).
+            nested(bar(X)).
+            process(_).
+            data_only(X) :-
+                X = bar(value),
+                process(bar(X)).
+            list_data(X) :-
+                X = [bar(value), bar(other)],
+                process(X).
+            operator_data :-
+                bar(value) = bar(other),
+                bar = value,
+                process(value).
+            division_data(X) :-
+                Y is X // 2,
+                process(Y).
+            meta :-
+                call(helper).
+            build(Term) :-
+                Term =.. [node,
+                          value],
+                helper.
+            qualified :-
+                demo:helper.
+            % helper().
+            /*
+            helper().
+            */
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("prolog", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "threshold");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "quoted");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "build");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
+        AssertReferencesContain(references, "type_reference", null, "support");
+        Assert.Equal(5, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName is "threshold" or "quoted" or "meta" or "build" or "qualified"
+            && reference.SymbolName == "helper"));
+        Assert.Equal(4, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && (reference.ContainerName is "data_only" or "list_data" or "operator_data" or "division_data")
+            && reference.SymbolName == "process"));
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "threshold" or "bar");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_MasksPerlAndPrologCommentsAndPod_Issue4746()
+    {
+        const string content = """
+            sub helper { return 1; }
+            prolog_entry :- helper().
+            my %cache = (answer => helper());
+            my $fallback = undef // helper();
+            my @items = (1, 2);
+            my $last = $#items; helper();
+            my $braced_last = $#{items}; helper();
+            clp_entry(X) :- X #= 1, helper.
+            prolog_comment :-
+                %TODO
+                helper.
+            inline_comment :- helper. %comment
+            after_inline :- helper.
+            # helper();
+            % helper().
+            %helper().
+            =pod
+            helper();
+            =cut
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Equal(9, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"));
+        AssertReferencesContain(references, "call", "prolog_entry", "helper");
+        AssertReferencesContain(references, "call", "clp_entry", "helper");
+        AssertReferencesContain(references, "call", "prolog_comment", "helper");
+        AssertReferencesContain(references, "call", "inline_comment", "helper");
+        AssertReferencesContain(references, "call", "after_inline", "helper");
+    }
+
+    [Theory]
+    [InlineData("__DATA__")]
+    [InlineData("__END__")]
+    public void Extract_AmbiguousPl_MasksPerlTerminalDataSections_Issue4746(
+        string marker)
+    {
+        var content = $$"""
+            package Hybrid;
+            sub helper { return 1; }
+            :- module(hybrid, [entry/0]).
+            entry :- helper.
+            {{marker}}
+            fake :- helper.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        AssertReferencesContain(references, "call", "entry", "helper");
+        Assert.DoesNotContain(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "fake");
+        Assert.DoesNotContain(references, reference =>
+            reference.ContainerName == "fake");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_MasksPerlHeredocBodies_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            sub helper { return 1; }
+            :- module(hybrid, [entry/0, after_payloads/0]).
+            entry :- helper.
+            my $quoted = <<'QUOTED_PAYLOAD';
+            helper();
+            sub quoted_fake { helper(); }
+            quoted_fake_predicate :- helper.
+            QUOTED_PAYLOAD
+            my $bare = <<BARE_PAYLOAD;
+            helper();
+            sub bare_fake { helper(); }
+            BARE_PAYLOAD
+            my $indented = <<~"INDENTED_PAYLOAD";
+                helper();
+                sub indented_fake { helper(); }
+                INDENTED_PAYLOAD
+            after_payloads :- helper.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"));
+        AssertReferencesContain(references, "call", "entry", "helper");
+        AssertReferencesContain(references, "call", "after_payloads", "helper");
+        Assert.DoesNotContain(symbols, symbol =>
+            symbol.Name is "quoted_fake" or "quoted_fake_predicate"
+                or "bare_fake" or "indented_fake");
+    }
+
+    [Fact]
+    public void Extract_CrystalAndGroovy_DoNotTreatColonLabelsAsBareCalls_Issue4746()
+    {
+        const string crystalContent = """
+            def helper
+              1
+            end
+            def run
+              consume(
+                helper: 1
+              )
+            end
+            """;
+        const string groovyContent = """
+            def helper() {}
+            def run() {
+                def options = [
+                    helper: 1
+                ]
+            }
+            """;
+
+        var (_, crystalReferences) = ExtractSymbolsAndReferences("crystal", crystalContent);
+        var (_, groovyReferences) = ExtractSymbolsAndReferences("groovy", groovyContent);
+
+        Assert.DoesNotContain(crystalReferences, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+        Assert.DoesNotContain(groovyReferences, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+    }
+
+    [Fact]
+    public void Extract_Prolog_SuppressesMultilineDataTermsAndTracksLaterContinuedClause_Issue4746()
+    {
+        const string content = """
+            bar(_).
+            process(_).
+            operator_data :-
+                bar(
+                    value
+                )
+                = bar(other),
+                process(value).
+            phantom.
+            run :- seed. other :-
+                phantom.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("prolog", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "other");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "phantom");
+        AssertReferencesContain(references, "call", "operator_data", "process");
+        AssertReferencesContain(references, "call", "other", "phantom");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "operator_data"
+            && reference.SymbolName == "bar");
+    }
+
+    [Fact]
+    public void Extract_Tcl_RejectsProcTextInsideLiteralBracedWords_Issue4746()
+    {
+        const string content = """
+            set data {
+                proc fake {} { return 1 }
+                package require fakepkg
+            }
+            set quoted "
+                package require quotedfake
+            "
+            package require realpkg
+            proc helper {} { return 1 }
+            proc run {} {
+                fake
+                helper
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "fake");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "fakepkg" or "quotedfake");
+        AssertReferencesContain(references, "type_reference", null, "realpkg");
+        AssertReferencesContain(references, "call", "run", "helper");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_PreservesPerlModuloAndRejectsPrologIfThenArrow_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            sub helper { return 1; }
+            :- module(hybrid, [entry/0]).
+            entry :- condition -> external_goal.
+            sub run {
+                my $value = 5 % 2; helper();
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        AssertReferencesContain(references, "call", "run", "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "entry"
+            && reference.SymbolName == "external_goal");
+    }
+
+    [Fact]
     public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
     {
         const string content = """

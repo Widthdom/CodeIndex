@@ -1,0 +1,3880 @@
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
+using CodeIndex.Models;
+using Regex = CodeIndex.Indexer.BoundedRegex;
+
+namespace CodeIndex.Indexer;
+
+internal static class DynamicDeclarativeReferenceExtractor
+{
+    private static readonly ConditionalWeakTable<string, PrologClauseTerminatorMap>
+        PrologClauseTerminatorMaps = new();
+
+    internal sealed class ExtractionState
+    {
+        public ExtractionState(
+            HashSet<string> callableNames,
+            HashSet<DeclarationPosition> declarationPositions,
+            IReadOnlyDictionary<int, SymbolRecord> containersByLine,
+            IReadOnlyList<TclContainerScope> tclContainerScopes,
+            IReadOnlyDictionary<string, TclCallableTarget> tclQualifiedCallableTargets,
+            IReadOnlyDictionary<int, List<SymbolRecord>> prologContainersByLine,
+            IReadOnlyList<string>? tclCallLines,
+            IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine,
+            IReadOnlySet<int> prologDirectiveLines)
+        {
+            CallableNames = callableNames;
+            DeclarationPositions = declarationPositions;
+            ContainersByLine = containersByLine;
+            TclContainerScopes = tclContainerScopes;
+            TclQualifiedCallableTargets = tclQualifiedCallableTargets;
+            PrologContainersByLine = prologContainersByLine;
+            TclCallLines = tclCallLines;
+            PrologGoalCallsByLine = prologGoalCallsByLine;
+            PrologDirectiveLines = prologDirectiveLines;
+        }
+
+        public HashSet<string> CallableNames { get; }
+        private HashSet<DeclarationPosition> DeclarationPositions { get; }
+        public IReadOnlyDictionary<int, SymbolRecord> ContainersByLine { get; }
+        private IReadOnlyList<TclContainerScope> TclContainerScopes { get; }
+        private IReadOnlyDictionary<string, TclCallableTarget> TclQualifiedCallableTargets { get; }
+        private IReadOnlyDictionary<int, List<SymbolRecord>> PrologContainersByLine { get; }
+        private IReadOnlyList<string>? TclCallLines { get; }
+        private IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? PrologGoalCallsByLine { get; }
+        private IReadOnlySet<int> PrologDirectiveLines { get; }
+
+        public SymbolRecord? ResolveContainer(int lineNumber, int column, SymbolRecord? fallback)
+        {
+            for (var scopeIndex = TclContainerScopes.Count - 1; scopeIndex >= 0; scopeIndex--)
+            {
+                var scope = TclContainerScopes[scopeIndex];
+                if (scope.Contains(lineNumber, column))
+                    return scope.Symbol;
+            }
+
+            if (PrologContainersByLine.TryGetValue(lineNumber, out var prologContainers))
+            {
+                for (var containerIndex = prologContainers.Count - 1;
+                    containerIndex >= 0;
+                    containerIndex--)
+                {
+                    var prologContainer = prologContainers[containerIndex];
+                    if (prologContainer.StartColumn is { } startColumn && startColumn < column)
+                        return prologContainer;
+                }
+            }
+
+            return ContainersByLine.TryGetValue(lineNumber, out var container) ? container : fallback;
+        }
+
+        public string GetCallScanLine(string language, int lineNumber, string preparedLine)
+        {
+            if (language == "tcl"
+                && TclCallLines != null
+                && lineNumber > 0
+                && lineNumber <= TclCallLines.Count)
+            {
+                return TclCallLines[lineNumber - 1];
+            }
+
+            var isClauseContinuation = ContainersByLine.TryGetValue(lineNumber, out var container)
+                && container.StartLine < lineNumber;
+            return PreparePrologCallScanLine(language, preparedLine, isClauseContinuation);
+        }
+
+        public bool TryResolveTclCallable(
+            string callName,
+            out string referenceName,
+            out string? targetQualifier,
+            out int referenceNameOffset)
+        {
+            referenceName = callName;
+            targetQualifier = null;
+            referenceNameOffset = 0;
+            if (CallableNames.Contains(callName))
+                return true;
+
+            var normalizedCallName = NormalizeTclQualifiedName(callName);
+            if (TclQualifiedCallableTargets.TryGetValue(normalizedCallName, out var target))
+            {
+                referenceName = target.Name;
+                targetQualifier = target.Qualifier;
+                referenceNameOffset = callName.LastIndexOf("::", StringComparison.Ordinal) + 2;
+                return true;
+            }
+
+            if (!normalizedCallName.Contains("::", StringComparison.Ordinal)
+                && CallableNames.Contains(normalizedCallName))
+            {
+                referenceName = normalizedCallName;
+                referenceNameOffset = callName.Length - normalizedCallName.Length;
+                return true;
+            }
+
+            return false;
+        }
+
+        public IReadOnlyList<PrologGoalCall> GetPrologGoalCalls(int lineNumber)
+        {
+            if (PrologGoalCallsByLine != null
+                && PrologGoalCallsByLine.TryGetValue(lineNumber, out var calls))
+            {
+                return calls;
+            }
+
+            return Array.Empty<PrologGoalCall>();
+        }
+
+        public bool HasPrologContainer(int lineNumber) =>
+            ContainersByLine.ContainsKey(lineNumber)
+            || PrologContainersByLine.ContainsKey(lineNumber);
+
+        public bool IsPrologDirectiveLine(int lineNumber) =>
+            PrologDirectiveLines.Contains(lineNumber);
+
+        public bool IsDeclarationAt(int lineNumber, int column, string name) =>
+            DeclarationPositions.Contains(new DeclarationPosition(lineNumber, column, name));
+    }
+
+    private static readonly Regex TclProcRegex = new(
+        @"(?<![\w:.-])proc\s+(?<name>[A-Za-z_:][\w:.-]*)\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TclInlineProcRegex = new(
+        @"(?:^|[;\[])\s*proc\s+(?<name>[A-Za-z_:][\w:.-]*)\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PrologHeadRegex = new(
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*(?:$|:-|[a-z][A-Za-z0-9_]*\s*\(\s*$|[a-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s*(?::-|-->|\.))))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PrologMultilineHeadRegex = new(
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)(?:(?<open>\s*\()|\s*$)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalRequireRegex = new(
+        @"^\s*require\s+['""](?<name>[^'""]+)['""]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GroovyImportRegex = new(
+        @"^\s*import\s+(?:static\s+)?(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\.\*)?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TclPackageRegex = new(
+        @"^\s*package\s+require\s+(?:-exact\s+)?(?<name>[A-Za-z_:][\w:.-]*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PrologImportRegex = new(
+        @"^\s*:-\s*use_module\s*\(\s*(?:library\s*\(\s*)?['""]?(?<name>(?:\.\.?/)*[a-z][A-Za-z0-9_./-]*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalBareCallRegex = new(
+        @"(?:^|[;={]|\b(?:then|do)\b|&&|\|\|)\s*(?:return\s+)?(?<name>[A-Za-z_]\w*[?!]?)(?![\w?!])(?!\s*(?::|\(|(?:<<|>>|[+\-*/%&|^])?=))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalSuffixedParenthesizedCallRegex = new(
+        @"(?<![\w])(?<name>[A-Za-z_]\w*[?!])\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalControlPredicateCallRegex = new(
+        @"\b(?:if|unless|while|until)\s+(?<name>[A-Za-z_]\w*[?!]?)(?![\w?!])(?!\s*(?::|(?:<<|>>|[+\-*/%&|^])?=))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GroovyBareCallRegex = new(
+        @"(?:^|[;={])\s*(?:return\s+)?(?<name>[A-Za-z_]\w*)\b(?!\s*(?::|\(|(?:<<|>>|[+\-*/%&|^])?=))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GroovyConstructorDeclarationRegex = new(
+        @"(?:^|[;{])\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?:(?:public|protected|private)\s+)*(?<name>[A-Z]\w*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GroovyMethodDeclarationRegex = new(
+        @"(?:^|[;{])\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?:(?:public|private|protected|static|final|abstract|synchronized|native|strictfp)\s+)*(?:<[^(){}\r\n]+>\s+)?(?:def|void|boolean|byte|char|short|int|long|float|double|BigDecimal|BigInteger|String|[A-Za-z_$][\w.$]*(?:\s*<[^(){}\r\n]+>)?(?:\s*\[\])*)\s+(?<name>[A-Za-z_]\w*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalMethodDeclarationRegex = new(
+        @"(?:^|;)\s*(?:(?:private|protected|abstract)\s+)*def\s+(?:self\.)?(?<name>[A-Za-z_]\w*[?!]?)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalFunDeclarationRegex = new(
+        @"(?:^|;)\s*fun\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*[?!]?)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TclCommandRegex = new(
+        @"(?:^|[;\[])\s*(?<name>[A-Za-z_:][\w:.-]*)(?=$|[\s;\]}""])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalHeredocOpenerRegex = new(
+        @"<<-\s*['""]?(?<delimiter>[A-Za-z_]\w*)['""]?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    internal readonly record struct TclContainerScope(
+        SymbolRecord Symbol,
+        int BodyStartLine,
+        int BodyStartColumn,
+        int BodyEndLine,
+        int BodyEndColumn)
+    {
+        public bool Contains(int lineNumber, int column)
+        {
+            if (lineNumber < BodyStartLine || lineNumber > BodyEndLine)
+                return false;
+            if (BodyStartLine == BodyEndLine)
+                return column > BodyStartColumn && column < BodyEndColumn;
+            if (lineNumber == BodyStartLine)
+                return column > BodyStartColumn;
+            if (lineNumber == BodyEndLine)
+                return column < BodyEndColumn;
+            return true;
+        }
+    }
+
+    private readonly record struct TclBraceEnd(
+        int Line,
+        int Column);
+
+    internal readonly record struct TclCallableTarget(
+        string Name,
+        string Qualifier);
+
+    private enum TclLexicalFrameKind
+    {
+        Script,
+        Quote,
+        BracedWord,
+        ExpressionWord,
+        SwitchTable,
+    }
+
+    internal readonly record struct PrologGoalCall(
+        string Name,
+        int Column,
+        bool IsTopLevelDirective = false);
+
+    internal readonly record struct DeclarationPosition(int Line, int Column, string Name);
+
+    private enum PrologLexicalFrameKind
+    {
+        PredicateArguments,
+        GoalGroup,
+        MetaArguments,
+        TermGroup,
+    }
+
+    private sealed class PrologLexicalFrame(
+        PrologLexicalFrameKind kind,
+        IReadOnlySet<int>? goalArgumentIndices = null,
+        char terminator = ')')
+    {
+        public PrologLexicalFrameKind Kind { get; } = kind;
+        public IReadOnlySet<int>? GoalArgumentIndices { get; } = goalArgumentIndices;
+        public char Terminator { get; } = terminator;
+        public int ArgumentIndex { get; set; }
+        public bool CurrentArgumentIsGoal =>
+            GoalArgumentIndices?.Contains(ArgumentIndex) == true;
+    }
+
+    private sealed class AmbiguousPerlQuoteLikeState(
+        char openingDelimiter,
+        char closingDelimiter,
+        int remainingSegments)
+    {
+        public char OpeningDelimiter { get; set; } = openingDelimiter;
+        public char ClosingDelimiter { get; set; } = closingDelimiter;
+        public int RemainingSegments { get; set; } = remainingSegments;
+        public int DelimiterDepth { get; set; } = openingDelimiter == closingDelimiter ? 0 : 1;
+        public bool AwaitingNextOpeningDelimiter { get; set; }
+    }
+
+    private readonly record struct AmbiguousPerlHeredocDelimiter(
+        string Value,
+        bool AllowIndent)
+    {
+        public bool MatchesTerminator(string line)
+        {
+            var candidate = line.AsSpan().TrimEnd();
+            if (AllowIndent)
+                candidate = candidate.TrimStart();
+            return candidate.SequenceEqual(Value);
+        }
+    }
+
+    private static readonly IReadOnlyDictionary<string, IReadOnlySet<int>> PrologMetaGoalArguments =
+        new Dictionary<string, IReadOnlySet<int>>(StringComparer.Ordinal)
+        {
+            ["call"] = new HashSet<int> { 0 },
+            ["initialization"] = new HashSet<int> { 0 },
+            ["once"] = new HashSet<int> { 0 },
+            ["ignore"] = new HashSet<int> { 0 },
+            ["not"] = new HashSet<int> { 0 },
+            ["catch"] = new HashSet<int> { 0, 2 },
+            ["call_cleanup"] = new HashSet<int> { 0, 1 },
+            ["setup_call_cleanup"] = new HashSet<int> { 0, 1, 2 },
+            ["findall"] = new HashSet<int> { 1 },
+            ["bagof"] = new HashSet<int> { 1 },
+            ["setof"] = new HashSet<int> { 1 },
+            ["forall"] = new HashSet<int> { 0, 1 },
+            ["phrase"] = new HashSet<int> { 0 },
+            ["maplist"] = new HashSet<int> { 0 },
+            ["include"] = new HashSet<int> { 0 },
+            ["exclude"] = new HashSet<int> { 0 },
+            ["foldl"] = new HashSet<int> { 0 },
+            ["convlist"] = new HashSet<int> { 0 },
+        };
+
+    private sealed class TclLexicalFrame(
+        TclLexicalFrameKind kind,
+        char terminator = '\0',
+        TclLexicalFrame? concatenationOwner = null)
+    {
+        public TclLexicalFrameKind Kind { get; } = kind;
+        public char Terminator { get; } = terminator;
+        public TclLexicalFrame? ConcatenationOwner { get; } = concatenationOwner;
+        public bool CommandStart { get; set; } = true;
+        public bool WordStart { get; set; } = true;
+        public int WordIndex { get; set; }
+        public string? CommandName { get; set; }
+        public string? FirstArgument { get; set; }
+        public string? LastBareWord { get; set; }
+        public int LastBareWordIndex { get; set; } = -1;
+        public int SwitchStringWordIndex { get; set; } = -1;
+        public bool SwitchOptionsEnded { get; set; }
+        public bool SwitchOptionValuePending { get; set; }
+        public int TryClauseWordIndex { get; set; } = 2;
+        public int TryScriptWordIndex { get; set; } = 1;
+        public int DictScriptWordIndex { get; set; } = -1;
+        public int UplevelScriptWordIndex { get; set; } = -1;
+        public TclLexicalFrame? ConcatenatedScriptState { get; set; }
+
+        public void CopyCommandStateFrom(TclLexicalFrame source)
+        {
+            CommandStart = source.CommandStart;
+            WordStart = source.WordStart;
+            WordIndex = source.WordIndex;
+            CommandName = source.CommandName;
+            FirstArgument = source.FirstArgument;
+            LastBareWord = source.LastBareWord;
+            LastBareWordIndex = source.LastBareWordIndex;
+            SwitchStringWordIndex = source.SwitchStringWordIndex;
+            SwitchOptionsEnded = source.SwitchOptionsEnded;
+            SwitchOptionValuePending = source.SwitchOptionValuePending;
+            TryClauseWordIndex = source.TryClauseWordIndex;
+            TryScriptWordIndex = source.TryScriptWordIndex;
+            DictScriptWordIndex = source.DictScriptWordIndex;
+            UplevelScriptWordIndex = source.UplevelScriptWordIndex;
+            ConcatenatedScriptState = source.ConcatenatedScriptState;
+        }
+
+        public void ResetCommand()
+        {
+            CommandStart = true;
+            WordStart = true;
+            WordIndex = 0;
+            CommandName = null;
+            FirstArgument = null;
+            LastBareWord = null;
+            LastBareWordIndex = -1;
+            SwitchStringWordIndex = -1;
+            SwitchOptionsEnded = false;
+            SwitchOptionValuePending = false;
+            TryClauseWordIndex = 2;
+            TryScriptWordIndex = 1;
+            DictScriptWordIndex = -1;
+            UplevelScriptWordIndex = -1;
+            ConcatenatedScriptState = null;
+        }
+    }
+
+    public static string[] MaskNonCodeLines(string language, IReadOnlyList<string> lines)
+    {
+        if (language is not ("crystal" or "groovy" or "tcl" or "prolog" or "ambiguous_pl"))
+            return lines as string[] ?? lines.ToArray();
+
+        var result = new string[lines.Count];
+        var insideBlockComment = false;
+        char groovyTripleQuote = '\0';
+        string? crystalHeredocDelimiter = null;
+        var insideAmbiguousPerlPod = false;
+        var insideAmbiguousPerlData = false;
+        var ambiguousPerlHeredocDelimiters =
+            new Queue<AmbiguousPerlHeredocDelimiter>();
+        AmbiguousPerlQuoteLikeState? ambiguousPerlQuoteLikeState = null;
+        var insideSlashyLiteral = false;
+        var insideGroovyDollarSlashyLiteral = false;
+        char crystalMultilineQuote = '\0';
+        char crystalPercentOpeningDelimiter = '\0';
+        char crystalPercentClosingDelimiter = '\0';
+        var crystalPercentDelimiterDepth = 0;
+        var tclCommentContinued = false;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            if (language == "tcl" && tclCommentContinued)
+            {
+                result[lineIndex] = new string(' ', line.Length);
+                tclCommentContinued = HasTclEscapedNewline(line);
+                continue;
+            }
+            if (crystalHeredocDelimiter != null)
+            {
+                result[lineIndex] = new string(' ', line.Length);
+                if (string.Equals(line.Trim(), crystalHeredocDelimiter, StringComparison.Ordinal))
+                    crystalHeredocDelimiter = null;
+                continue;
+            }
+
+            if (language == "ambiguous_pl")
+            {
+                var trimmed = line.AsSpan().TrimStart();
+                if (ambiguousPerlHeredocDelimiters.TryPeek(out var heredocDelimiter))
+                {
+                    result[lineIndex] = new string(' ', line.Length);
+                    if (heredocDelimiter.MatchesTerminator(line))
+                        ambiguousPerlHeredocDelimiters.Dequeue();
+                    continue;
+                }
+
+                if (insideAmbiguousPerlData)
+                {
+                    result[lineIndex] = new string(' ', line.Length);
+                    continue;
+                }
+
+                var trimmedMarker = trimmed.TrimEnd();
+                if (trimmedMarker.SequenceEqual("__DATA__")
+                    || trimmedMarker.SequenceEqual("__END__"))
+                {
+                    result[lineIndex] = new string(' ', line.Length);
+                    insideAmbiguousPerlData = true;
+                    continue;
+                }
+
+                if (insideAmbiguousPerlPod)
+                {
+                    result[lineIndex] = new string(' ', line.Length);
+                    if (trimmed.StartsWith("=cut", StringComparison.Ordinal))
+                        insideAmbiguousPerlPod = false;
+                    continue;
+                }
+
+                if (trimmed.Length > 1
+                    && trimmed[0] == '='
+                    && char.IsLetter(trimmed[1]))
+                {
+                    result[lineIndex] = new string(' ', line.Length);
+                    insideAmbiguousPerlPod = !trimmed.StartsWith("=cut", StringComparison.Ordinal);
+                    continue;
+                }
+            }
+
+            var buffer = line.ToCharArray();
+            var tclCommentStart = language == "tcl"
+                ? FindTclCommentStart(line)
+                : -1;
+            var hasPrologLineStructure = language == "ambiguous_pl"
+                && (StartsWithPrologGoalDirective(line) || PrologHeadRegex.IsMatch(line));
+            for (var column = 0; column < line.Length;)
+            {
+                if (ambiguousPerlQuoteLikeState != null)
+                {
+                    MaskAmbiguousPerlQuoteLikeCharacter(
+                        line,
+                        buffer,
+                        ref column,
+                        ref ambiguousPerlQuoteLikeState);
+                    continue;
+                }
+
+                if (crystalMultilineQuote != '\0')
+                {
+                    buffer[column] = ' ';
+                    if (line[column] == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (line[column] == crystalMultilineQuote)
+                    {
+                        crystalMultilineQuote = '\0';
+                        column++;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (insideBlockComment)
+                {
+                    buffer[column] = ' ';
+                    if (column + 1 < line.Length && line[column] == '*' && line[column + 1] == '/')
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                        insideBlockComment = false;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (groovyTripleQuote != '\0')
+                {
+                    buffer[column] = ' ';
+                    if (column + 2 < line.Length
+                        && line[column] == groovyTripleQuote
+                        && line[column + 1] == groovyTripleQuote
+                        && line[column + 2] == groovyTripleQuote)
+                    {
+                        buffer[column + 1] = ' ';
+                        buffer[column + 2] = ' ';
+                        column += 3;
+                        groovyTripleQuote = '\0';
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (insideGroovyDollarSlashyLiteral)
+                {
+                    buffer[column] = ' ';
+                    if (column + 1 < line.Length
+                        && line[column] == '/'
+                        && line[column + 1] == '$')
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                        insideGroovyDollarSlashyLiteral = false;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (insideSlashyLiteral)
+                {
+                    buffer[column] = ' ';
+                    if (line[column] == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (line[column] == '/')
+                    {
+                        column++;
+                        insideSlashyLiteral = false;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (crystalPercentClosingDelimiter != '\0')
+                {
+                    buffer[column] = ' ';
+                    if (line[column] == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                        continue;
+                    }
+
+                    if (crystalPercentOpeningDelimiter != crystalPercentClosingDelimiter
+                        && line[column] == crystalPercentOpeningDelimiter)
+                    {
+                        crystalPercentDelimiterDepth++;
+                    }
+                    else if (line[column] == crystalPercentClosingDelimiter
+                        && --crystalPercentDelimiterDepth == 0)
+                    {
+                        crystalPercentOpeningDelimiter = '\0';
+                        crystalPercentClosingDelimiter = '\0';
+                    }
+
+                    column++;
+                    continue;
+                }
+
+                var ch = line[column];
+                if (language == "tcl"
+                    && ch == '#'
+                    && column == tclCommentStart)
+                {
+                    FillWithSpaces(buffer, column);
+                    tclCommentContinued = HasTclEscapedNewline(line);
+                    break;
+                }
+                if (language == "groovy"
+                    && ch is '\'' or '"'
+                    && column + 2 < line.Length
+                    && line[column + 1] == ch
+                    && line[column + 2] == ch)
+                {
+                    buffer[column] = ' ';
+                    buffer[column + 1] = ' ';
+                    buffer[column + 2] = ' ';
+                    groovyTripleQuote = ch;
+                    column += 3;
+                    continue;
+                }
+
+                if (ch is '\'' or '"' or '`')
+                {
+                    if (language == "crystal"
+                        && ch is '"' or '`'
+                        && !HasClosingQuotedDelimiter(line, column, ch))
+                    {
+                        FillWithSpaces(buffer, column);
+                        crystalMultilineQuote = ch;
+                        column = line.Length;
+                        continue;
+                    }
+
+                    column = SkipQuotedToken(line, column, ch);
+                    continue;
+                }
+
+                if (language == "ambiguous_pl"
+                    && !hasPrologLineStructure
+                    && TryBeginAmbiguousPerlQuoteLikeLiteral(
+                        line,
+                        buffer,
+                        column,
+                        out var perlQuoteLikeState,
+                        out var perlContentColumn))
+                {
+                    ambiguousPerlQuoteLikeState = perlQuoteLikeState;
+                    column = perlContentColumn;
+                    continue;
+                }
+
+                if (language == "crystal"
+                    && column + 2 < line.Length
+                    && line[column] == '<'
+                    && line[column + 1] == '<'
+                    && line[column + 2] == '-')
+                {
+                    var heredocMatch = CrystalHeredocOpenerRegex.Match(line, column);
+                    if (heredocMatch.Success && heredocMatch.Index == column)
+                        crystalHeredocDelimiter = heredocMatch.Groups["delimiter"].Value;
+                }
+
+                if ((language is "groovy" or "prolog" or "ambiguous_pl")
+                    && column + 1 < line.Length
+                    && line[column] == '/'
+                    && line[column + 1] == '*')
+                {
+                    buffer[column] = ' ';
+                    buffer[column + 1] = ' ';
+                    column += 2;
+                    insideBlockComment = true;
+                    continue;
+                }
+
+                if (language == "groovy"
+                    && column + 1 < line.Length
+                    && line[column] == '/'
+                    && line[column + 1] == '/')
+                {
+                    FillWithSpaces(buffer, column);
+                    break;
+                }
+
+                if (language == "crystal" && ch == '#')
+                {
+                    FillWithSpaces(buffer, column);
+                    break;
+                }
+
+                if (language == "prolog" && ch == '%')
+                {
+                    FillWithSpaces(buffer, column);
+                    break;
+                }
+
+                if (language == "ambiguous_pl" && ch == '#')
+                {
+                    if (IsPrologHashOperator(line, column)
+                        || IsPerlLastIndexVariable(line, column))
+                    {
+                        column++;
+                        continue;
+                    }
+
+                    FillWithSpaces(buffer, column);
+                    break;
+                }
+
+                if (language == "ambiguous_pl" && ch == '%')
+                {
+                    if (IsPerlHashSigil(line, column)
+                        || IsLikelyPerlModuloOperator(line, column))
+                    {
+                        column++;
+                        continue;
+                    }
+
+                    FillWithSpaces(buffer, column);
+                    break;
+                }
+
+                if (language == "groovy"
+                    && ch == '$'
+                    && column + 1 < line.Length
+                    && line[column + 1] == '/')
+                {
+                    buffer[column] = ' ';
+                    buffer[column + 1] = ' ';
+                    column += 2;
+                    insideGroovyDollarSlashyLiteral = true;
+                    continue;
+                }
+
+                if (language == "crystal"
+                    && TryBeginCrystalPercentLiteral(
+                        line,
+                        column,
+                        out var percentOpeningDelimiter,
+                        out var percentClosingDelimiter,
+                        out var percentContentColumn))
+                {
+                    FillWithSpaces(buffer, column, percentContentColumn);
+                    crystalPercentOpeningDelimiter = percentOpeningDelimiter;
+                    crystalPercentClosingDelimiter = percentClosingDelimiter;
+                    crystalPercentDelimiterDepth = 1;
+                    column = percentContentColumn;
+                    continue;
+                }
+
+                if (language is "groovy" or "crystal"
+                    && ch == '/'
+                    && IsLikelySlashyLiteralStart(line, column))
+                {
+                    buffer[column] = ' ';
+                    column++;
+                    insideSlashyLiteral = true;
+                    continue;
+                }
+
+                column++;
+            }
+
+            result[lineIndex] = new string(buffer);
+            if (language == "ambiguous_pl")
+            {
+                EnqueueAmbiguousPerlHeredocDelimiters(
+                    line,
+                    result[lineIndex],
+                    ambiguousPerlHeredocDelimiters);
+            }
+        }
+
+        return result;
+    }
+
+    public static string[] MaskTclContinuedCommentLines(
+        IReadOnlyList<string> rawLines,
+        IReadOnlyList<string> maskedLines)
+    {
+        if (rawLines.Count == 0)
+            return maskedLines as string[] ?? maskedLines.ToArray();
+
+        var commentColumns = new Dictionary<int, int>();
+        _ = BuildTclCallLines(
+            maskedLines,
+            BuildTclBraceEndPositions(maskedLines),
+            new HashSet<long>(),
+            commentColumns);
+        if (commentColumns.Count == 0)
+            return maskedLines as string[] ?? maskedLines.ToArray();
+
+        var result = maskedLines.ToArray();
+        foreach (var (lineIndex, commentColumn) in commentColumns)
+        {
+            var buffer = result[lineIndex].ToCharArray();
+            FillWithSpaces(buffer, commentColumn);
+            result[lineIndex] = new string(buffer);
+        }
+
+        return result;
+    }
+
+    public static string[] MaskTclNonScriptLines(IReadOnlyList<string> maskedLines) =>
+        BuildTclCallLines(
+            maskedLines,
+            BuildTclBraceEndPositions(maskedLines),
+            new HashSet<long>());
+
+    public static void AddTclInlineProcSymbols(
+        long fileId,
+        IReadOnlyList<string> rawLines,
+        IReadOnlyList<string> scriptLines,
+        List<SymbolRecord> symbols)
+    {
+        var declarationContainerScopes = BuildTclDeclarationContainerScopes(
+            rawLines,
+            symbols);
+        var existingDeclarations = new HashSet<(int Line, string Name)>(
+            symbols
+                .Where(static symbol => symbol.Kind == "function")
+                .Select(static symbol => (symbol.StartLine, symbol.Name)));
+        for (var lineIndex = 0; lineIndex < scriptLines.Count; lineIndex++)
+        {
+            foreach (Match match in BoundedRegex.EnumerateMatches(
+                TclInlineProcRegex,
+                scriptLines[lineIndex]))
+            {
+                var nameGroup = match.Groups["name"];
+                var lineNumber = lineIndex + 1;
+                if (!existingDeclarations.Add((lineNumber, nameGroup.Value)))
+                    continue;
+
+                var symbol = new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = nameGroup.Value,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = rawLines[lineIndex].Trim(),
+                };
+                for (var scopeIndex = declarationContainerScopes.Count - 1;
+                    scopeIndex >= 0;
+                    scopeIndex--)
+                {
+                    var scope = declarationContainerScopes[scopeIndex];
+                    if (!scope.Contains(lineNumber, nameGroup.Index))
+                        continue;
+                    symbol.ContainerKind = scope.Symbol.Kind;
+                    symbol.ContainerName = scope.Symbol.Name;
+                    break;
+                }
+                symbols.Add(symbol);
+            }
+        }
+    }
+
+    private static IReadOnlyList<TclContainerScope> BuildTclDeclarationContainerScopes(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var braceEnds = BuildTclBraceEndPositions(lines);
+        var scopes = new List<TclContainerScope>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("namespace" or "class")
+                || symbol.StartLine < 1
+                || symbol.StartLine > lines.Count)
+            {
+                continue;
+            }
+
+            var lineIndex = symbol.StartLine - 1;
+            var nameColumn = lines[lineIndex].IndexOf(
+                symbol.Name,
+                StringComparison.Ordinal);
+            if (nameColumn < 0)
+                continue;
+            var openingColumn = lines[lineIndex].IndexOf(
+                '{',
+                nameColumn + symbol.Name.Length);
+            if (openingColumn < 0
+                || !braceEnds.TryGetValue(
+                    GetTclPositionKey(lineIndex, openingColumn),
+                    out var bodyEnd))
+            {
+                continue;
+            }
+
+            scopes.Add(new TclContainerScope(
+                symbol,
+                lineIndex + 1,
+                openingColumn,
+                bodyEnd.Line + 1,
+                bodyEnd.Column));
+        }
+
+        return scopes;
+    }
+
+    public static ExtractionState? CreateState(
+        string language,
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<string> structuralLines,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (language is not ("crystal" or "groovy" or "tcl" or "prolog" or "ambiguous_pl"))
+            return null;
+
+        var callableNames = new HashSet<string>(StringComparer.Ordinal);
+        var declarationPositions = new HashSet<DeclarationPosition>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is "function" or "lambda" or "operator")
+            {
+                callableNames.Add(symbol.Name);
+                if (symbol.StartColumn is { } startColumn)
+                {
+                    declarationPositions.Add(new DeclarationPosition(
+                        symbol.StartLine,
+                        startColumn,
+                        symbol.Name));
+                }
+            }
+        }
+
+        var containersByLine = new Dictionary<int, SymbolRecord>();
+        var tclContainerScopes = new List<TclContainerScope>();
+        var tclQualifiedCallableTargets =
+            new Dictionary<string, TclCallableTarget>(StringComparer.Ordinal);
+        var prologContainersByLine = new Dictionary<int, List<SymbolRecord>>();
+        string[]? tclCallLines = null;
+        IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine = null;
+        IReadOnlySet<int> prologDirectiveLines = new HashSet<int>();
+        if (language == "tcl")
+        {
+            foreach (var symbol in symbols)
+            {
+                if (symbol.Kind is not ("function" or "lambda" or "operator")
+                    || string.IsNullOrWhiteSpace(symbol.ContainerName))
+                {
+                    continue;
+                }
+
+                var normalizedContainer = NormalizeTclQualifiedName(symbol.ContainerName);
+                var normalizedName = NormalizeTclQualifiedName(symbol.Name);
+                if (normalizedContainer.Length == 0 || normalizedName.Length == 0)
+                    continue;
+
+                tclQualifiedCallableTargets[
+                    $"{normalizedContainer}::{normalizedName}"] =
+                    new TclCallableTarget(symbol.Name, symbol.ContainerName);
+            }
+
+            var tclScriptBodyOpenings = new HashSet<long>();
+            var tclBraceEnds = BuildTclBraceEndPositions(structuralLines);
+            AddTclContainers(
+                structuralLines,
+                symbols,
+                tclBraceEnds,
+                tclContainerScopes,
+                tclScriptBodyOpenings);
+            tclCallLines = BuildTclCallLines(
+                structuralLines,
+                tclBraceEnds,
+                tclScriptBodyOpenings);
+        }
+        else if (language is "prolog" or "ambiguous_pl")
+        {
+            AddPrologContainers(
+                preparedLines,
+                symbols,
+                containersByLine,
+                prologContainersByLine);
+            prologGoalCallsByLine = BuildPrologGoalCalls(
+                preparedLines,
+                containersByLine,
+                callableNames);
+            prologDirectiveLines = BuildPrologDirectiveLines(preparedLines);
+        }
+
+        return new ExtractionState(
+            callableNames,
+            declarationPositions,
+            containersByLine,
+            tclContainerScopes,
+            tclQualifiedCallableTargets,
+            prologContainersByLine,
+            tclCallLines,
+            prologGoalCallsByLine,
+            prologDirectiveLines);
+    }
+
+    public static void EmitAdditionalReferences(
+        string language,
+        string preparedLine,
+        string structuralLine,
+        ExtractionState state,
+        List<ReferenceRecord> references,
+        ReferenceDedupeSet seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Action<string, int> addCallLikeReference)
+    {
+        var importScanLine = language == "tcl"
+            ? state.GetCallScanLine(language, lineNumber, structuralLine)
+            : structuralLine;
+        EmitImportReference(
+            language,
+            importScanLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForCall);
+
+        if (language is "prolog" or "ambiguous_pl")
+        {
+            foreach (var call in state.GetPrologGoalCalls(lineNumber))
+            {
+                if (!state.CallableNames.Contains(call.Name))
+                    continue;
+
+                var prologContainer = call.IsTopLevelDirective
+                    ? null
+                    : state.ResolveContainer(lineNumber, call.Column, fallback: null);
+                if (call.IsTopLevelDirective)
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        call.Name,
+                        call.Column,
+                        "call",
+                        context,
+                        lineNumber,
+                        container: null,
+                        language);
+                    continue;
+                }
+
+                if (prologContainer != null
+                    && !string.Equals(prologContainer.Name, call.Name, StringComparison.Ordinal))
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        call.Name,
+                        call.Column,
+                        "call",
+                        context,
+                        lineNumber,
+                        prologContainer,
+                        language);
+                    continue;
+                }
+
+                addCallLikeReference(call.Name, call.Column);
+            }
+
+            return;
+        }
+
+        var callRegex = language switch
+        {
+            "crystal" => CrystalBareCallRegex,
+            "groovy" => GroovyBareCallRegex,
+            "tcl" => TclCommandRegex,
+            _ => null,
+        };
+        if (callRegex == null)
+            return;
+
+        if (language == "crystal")
+        {
+            foreach (Match match in BoundedRegex.EnumerateMatches(CrystalSuffixedParenthesizedCallRegex, preparedLine))
+            {
+                var nameGroup = match.Groups["name"];
+                if (state.CallableNames.Contains(nameGroup.Value))
+                    addCallLikeReference(nameGroup.Value, nameGroup.Index);
+            }
+
+            foreach (Match match in BoundedRegex.EnumerateMatches(CrystalControlPredicateCallRegex, preparedLine))
+            {
+                var nameGroup = match.Groups["name"];
+                if (state.CallableNames.Contains(nameGroup.Value))
+                    addCallLikeReference(nameGroup.Value, nameGroup.Index);
+            }
+        }
+        else if (language == "groovy")
+        {
+            EmitGroovyControlBodyBareCalls(
+                preparedLine,
+                state.CallableNames,
+                addCallLikeReference);
+        }
+
+        foreach (Match match in BoundedRegex.EnumerateMatches(callRegex, preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (language == "tcl")
+            {
+                if (!state.TryResolveTclCallable(
+                        nameGroup.Value,
+                        out var referenceName,
+                        out var targetQualifier,
+                        out var referenceNameOffset))
+                {
+                    continue;
+                }
+
+                if (targetQualifier != null
+                    || !string.Equals(referenceName, nameGroup.Value, StringComparison.Ordinal))
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        referenceName,
+                        nameGroup.Index + referenceNameOffset,
+                        "call",
+                        context,
+                        lineNumber,
+                        resolveContainerForCall(nameGroup.Index),
+                        language,
+                        targetQualifier);
+                }
+                else
+                {
+                    addCallLikeReference(nameGroup.Value, nameGroup.Index);
+                }
+
+                continue;
+            }
+
+            if (!state.CallableNames.Contains(nameGroup.Value))
+                continue;
+            if (language == "groovy"
+                && IsGroovyClosureParameterHeader(preparedLine, nameGroup.Index))
+            {
+                continue;
+            }
+
+            addCallLikeReference(nameGroup.Value, nameGroup.Index);
+        }
+
+    }
+
+    private static void EmitGroovyControlBodyBareCalls(
+        string line,
+        IReadOnlySet<string> callableNames,
+        Action<string, int> addCallLikeReference)
+    {
+        for (var keywordColumn = 0; keywordColumn < line.Length; keywordColumn++)
+        {
+            if (!char.IsLetter(line[keywordColumn]))
+                continue;
+
+            var keywordEnd = keywordColumn + 1;
+            while (keywordEnd < line.Length
+                && (char.IsLetterOrDigit(line[keywordEnd]) || line[keywordEnd] == '_'))
+            {
+                keywordEnd++;
+            }
+
+            var keyword = line.AsSpan(keywordColumn, keywordEnd - keywordColumn);
+            if (!keyword.SequenceEqual("if")
+                && !keyword.SequenceEqual("while")
+                && !keyword.SequenceEqual("for"))
+            {
+                keywordColumn = keywordEnd - 1;
+                continue;
+            }
+
+            var openingColumn = SkipWhitespace(line, keywordEnd);
+            if (openingColumn >= line.Length || line[openingColumn] != '(')
+            {
+                keywordColumn = keywordEnd - 1;
+                continue;
+            }
+
+            var closingColumn = FindMatchingParenthesis(line, openingColumn);
+            if (closingColumn < 0)
+            {
+                keywordColumn = keywordEnd - 1;
+                continue;
+            }
+
+            var nameColumn = SkipWhitespace(line, closingColumn + 1);
+            if (nameColumn >= line.Length
+                || !IsIdentifierStart(line[nameColumn]))
+            {
+                keywordColumn = closingColumn;
+                continue;
+            }
+
+            var nameEnd = nameColumn + 1;
+            while (nameEnd < line.Length
+                && (char.IsLetterOrDigit(line[nameEnd]) || line[nameEnd] == '_'))
+            {
+                nameEnd++;
+            }
+
+            var name = line[nameColumn..nameEnd];
+            var nextColumn = SkipWhitespace(line, nameEnd);
+            if (callableNames.Contains(name)
+                && (nextColumn >= line.Length
+                    || (line[nextColumn] != '('
+                        && line[nextColumn] != ':'
+                        && line[nextColumn] != '=')))
+            {
+                addCallLikeReference(name, nameColumn);
+            }
+
+            keywordColumn = closingColumn;
+        }
+    }
+
+    private static int FindMatchingParenthesis(string line, int openingColumn)
+    {
+        var depth = 0;
+        for (var column = openingColumn; column < line.Length; column++)
+        {
+            if (line[column] == '(')
+            {
+                depth++;
+            }
+            else if (line[column] == ')' && --depth == 0)
+            {
+                return column;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsGroovyClosureParameterHeader(string line, int nameColumn)
+    {
+        var openingBrace = line.LastIndexOf('{', Math.Max(0, nameColumn - 1));
+        if (openingBrace < 0)
+            return false;
+
+        var closingBraceBeforeName = line.LastIndexOf('}', Math.Max(0, nameColumn - 1));
+        if (closingBraceBeforeName > openingBrace)
+            return false;
+
+        var arrowColumn = line.IndexOf("->", nameColumn, StringComparison.Ordinal);
+        if (arrowColumn < 0)
+            return false;
+
+        var closingBraceAfterName = line.IndexOf('}', nameColumn);
+        if (closingBraceAfterName >= 0 && closingBraceAfterName < arrowColumn)
+            return false;
+
+        return line.AsSpan(nameColumn, arrowColumn - nameColumn)
+            .IndexOfAny(';', '{', '}') < 0;
+    }
+
+    private static int SkipWhitespace(string line, int column)
+    {
+        while (column < line.Length && char.IsWhiteSpace(line[column]))
+            column++;
+        return column;
+    }
+
+    private static bool IsIdentifierStart(char value) =>
+        value == '_' || char.IsLetter(value);
+
+    public static bool ShouldSuppressGenericCall(
+        string language,
+        string preparedLine,
+        string name,
+        int callIndex,
+        int lineNumber,
+        ExtractionState? state,
+        SymbolRecord? container)
+    {
+        if (language == "ambiguous_pl")
+            return state?.HasPrologContainer(lineNumber) == true
+                || state?.IsPrologDirectiveLine(lineNumber) == true;
+        if (state?.IsDeclarationAt(lineNumber, callIndex, name) == true)
+            return true;
+        if (language == "crystal")
+        {
+            return MatchesDeclarationAt(CrystalMethodDeclarationRegex, preparedLine, name, callIndex)
+                || MatchesDeclarationAt(CrystalFunDeclarationRegex, preparedLine, name, callIndex);
+        }
+        if (language != "groovy")
+            return false;
+        if (name is "super" or "synchronized" or "this")
+            return true;
+
+        if (MatchesDeclarationAt(GroovyMethodDeclarationRegex, preparedLine, name, callIndex))
+            return true;
+        return container?.Kind == "class"
+            && string.Equals(container.Name, name, StringComparison.Ordinal)
+            && MatchesDeclarationAt(GroovyConstructorDeclarationRegex, preparedLine, name, callIndex);
+    }
+
+    private static bool MatchesDeclarationAt(
+        Regex regex,
+        string line,
+        string name,
+        int callIndex)
+    {
+        foreach (Match declaration in BoundedRegex.EnumerateMatches(regex, line))
+        {
+            var nameGroup = declaration.Groups["name"];
+            if (nameGroup.Index == callIndex
+                && string.Equals(nameGroup.Value, name, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int SkipQuotedToken(string line, int startColumn, char delimiter)
+    {
+        for (var column = startColumn + 1; column < line.Length; column++)
+        {
+            if (line[column] == '\\')
+            {
+                column++;
+                continue;
+            }
+
+            if (line[column] != delimiter)
+                continue;
+
+            if (column + 1 < line.Length && line[column + 1] == delimiter)
+            {
+                column++;
+                continue;
+            }
+
+            return column + 1;
+        }
+
+        return line.Length;
+    }
+
+    private static bool HasClosingQuotedDelimiter(
+        string line,
+        int startColumn,
+        char delimiter)
+    {
+        for (var column = startColumn + 1; column < line.Length; column++)
+        {
+            if (line[column] == '\\')
+            {
+                column++;
+                continue;
+            }
+
+            if (line[column] == delimiter)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void FillWithSpaces(char[] buffer, int startColumn)
+    {
+        for (var column = startColumn; column < buffer.Length; column++)
+            buffer[column] = ' ';
+    }
+
+    private static void FillWithSpaces(char[] buffer, int startColumn, int endColumn)
+    {
+        for (var column = startColumn; column < endColumn && column < buffer.Length; column++)
+            buffer[column] = ' ';
+    }
+
+    private static bool IsPrologHashOperator(string line, int column)
+    {
+        if (column + 1 >= line.Length)
+            return false;
+
+        return line[column + 1] is '=' or '<' or '>' or '\\' or '/' or '#';
+    }
+
+    private static bool IsPerlLastIndexVariable(string line, int column)
+    {
+        if (column <= 0
+            || line[column - 1] != '$'
+            || column + 1 >= line.Length)
+        {
+            return false;
+        }
+
+        return line[column + 1] == '{'
+            || line[column + 1] == '_'
+            || char.IsLetter(line[column + 1]);
+    }
+
+    private static bool IsPerlHashSigil(string line, int column)
+    {
+        if (column + 1 >= line.Length
+            || (line[column + 1] != '{'
+                && line[column + 1] != '_'
+                && !char.IsLetter(line[column + 1])))
+        {
+            return false;
+        }
+
+        var previousColumn = column - 1;
+        while (previousColumn >= 0 && char.IsWhiteSpace(line[previousColumn]))
+            previousColumn--;
+
+        var tokenEnd = column + 1;
+        if (line[tokenEnd] == '{')
+            return true;
+        while (tokenEnd < line.Length
+            && (char.IsLetterOrDigit(line[tokenEnd]) || line[tokenEnd] == '_'))
+        {
+            tokenEnd++;
+        }
+        while (tokenEnd < line.Length && char.IsWhiteSpace(line[tokenEnd]))
+            tokenEnd++;
+
+        if (previousColumn < 0)
+            return tokenEnd < line.Length && line[tokenEnd] is '=' or '{' or '[';
+
+        var prefix = line.AsSpan(0, previousColumn + 1);
+        if (prefix.Contains(":-", StringComparison.Ordinal)
+            || prefix.Contains("-->", StringComparison.Ordinal)
+            || line[previousColumn] == '.')
+        {
+            return false;
+        }
+
+        if (line[previousColumn] is '=' or '(' or '[' or '{' or ',' or '\\')
+            return true;
+        if (line[previousColumn] == '>'
+            && previousColumn > 0
+            && line[previousColumn - 1] == '=')
+        {
+            return true;
+        }
+
+        var previousTokenStart = previousColumn;
+        while (previousTokenStart >= 0
+            && (char.IsLetterOrDigit(line[previousTokenStart])
+                || line[previousTokenStart] == '_'))
+        {
+            previousTokenStart--;
+        }
+        var previousToken = line.AsSpan(previousTokenStart + 1, previousColumn - previousTokenStart);
+        return previousToken.Equals("my", StringComparison.Ordinal)
+            || previousToken.Equals("our", StringComparison.Ordinal)
+            || previousToken.Equals("state", StringComparison.Ordinal)
+            || previousToken.Equals("local", StringComparison.Ordinal)
+            || previousToken.Equals("return", StringComparison.Ordinal)
+            || previousToken.Equals("keys", StringComparison.Ordinal)
+            || previousToken.Equals("values", StringComparison.Ordinal)
+            || previousToken.Equals("each", StringComparison.Ordinal)
+            || previousToken.Equals("delete", StringComparison.Ordinal)
+            || previousToken.Equals("exists", StringComparison.Ordinal)
+            || previousToken.Equals("defined", StringComparison.Ordinal)
+            || previousToken.Equals("scalar", StringComparison.Ordinal);
+    }
+
+    private static bool IsLikelyPerlModuloOperator(string line, int column)
+    {
+        var prefix = line.AsSpan(0, column);
+        var hasPerlContext = prefix.Contains('$')
+            || prefix.Contains('@')
+            || StartsWithPerlStatementKeyword(prefix);
+        if (!hasPerlContext)
+            return false;
+
+        var previousColumn = column - 1;
+        while (previousColumn >= 0 && char.IsWhiteSpace(line[previousColumn]))
+            previousColumn--;
+        if (previousColumn < 0)
+            return false;
+
+        if (column + 1 < line.Length && line[column + 1] == '=')
+            return true;
+
+        var nextColumn = column + 1;
+        while (nextColumn < line.Length && char.IsWhiteSpace(line[nextColumn]))
+            nextColumn++;
+        if (nextColumn >= line.Length)
+            return false;
+
+        var previous = line[previousColumn];
+        var next = line[nextColumn];
+        return (char.IsLetterOrDigit(previous) || previous is '_' or ')' or ']' or '}')
+            && (char.IsLetterOrDigit(next) || next is '_' or '$' or '@' or '(' or '+' or '-');
+    }
+
+    private static bool StartsWithPerlStatementKeyword(ReadOnlySpan<char> prefix)
+    {
+        prefix = prefix.TrimStart();
+        foreach (var keyword in new[] { "my", "our", "state", "local", "return" })
+        {
+            if (!prefix.StartsWith(keyword, StringComparison.Ordinal))
+                continue;
+            if (prefix.Length == keyword.Length || char.IsWhiteSpace(prefix[keyword.Length]))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsLikelySlashyLiteralStart(string line, int column)
+    {
+        if (column + 1 >= line.Length || line[column + 1] is '/' or '*')
+            return false;
+
+        var previousColumn = column - 1;
+        while (previousColumn >= 0 && char.IsWhiteSpace(line[previousColumn]))
+            previousColumn--;
+
+        if (previousColumn < 0)
+            return true;
+
+        if (line[previousColumn] is '=' or '(' or '[' or '{' or ',' or ':' or ';'
+            or '!' or '&' or '|' or '?' or '+' or '-' or '*' or '%' or '~')
+        {
+            return true;
+        }
+
+        var tokenEnd = previousColumn + 1;
+        while (previousColumn >= 0
+            && (char.IsLetterOrDigit(line[previousColumn]) || line[previousColumn] == '_'))
+        {
+            previousColumn--;
+        }
+
+        var token = line.AsSpan(previousColumn + 1, tokenEnd - previousColumn - 1);
+        return token.SequenceEqual("return")
+            || token.SequenceEqual("case")
+            || token.SequenceEqual("throw")
+            || token.SequenceEqual("assert")
+            || token.SequenceEqual("in")
+            || token.SequenceEqual("when")
+            || token.SequenceEqual("if")
+            || token.SequenceEqual("elsif")
+            || token.SequenceEqual("unless")
+            || token.SequenceEqual("while")
+            || token.SequenceEqual("until");
+    }
+
+    private static void EnqueueAmbiguousPerlHeredocDelimiters(
+        string line,
+        string maskedLine,
+        Queue<AmbiguousPerlHeredocDelimiter> delimiters)
+    {
+        for (var column = 0; column + 1 < line.Length;)
+        {
+            if (line[column] is '\'' or '"' or '`')
+            {
+                column = SkipQuotedToken(line, column, line[column]);
+                continue;
+            }
+
+            if (line[column] != '<'
+                || line[column + 1] != '<'
+                || maskedLine[column] != '<'
+                || maskedLine[column + 1] != '<')
+            {
+                column++;
+                continue;
+            }
+
+            var delimiterColumn = column + 2;
+            var allowIndent = delimiterColumn < line.Length
+                && line[delimiterColumn] == '~';
+            if (allowIndent)
+                delimiterColumn++;
+
+            var beforeWhitespace = delimiterColumn;
+            delimiterColumn = SkipWhitespace(line, delimiterColumn);
+            var hasWhitespace = delimiterColumn > beforeWhitespace;
+            if (delimiterColumn >= line.Length)
+                break;
+
+            string? delimiter = null;
+            var nextColumn = delimiterColumn + 1;
+            if (line[delimiterColumn] is '\'' or '"' or '`')
+            {
+                var quote = line[delimiterColumn];
+                var closingColumn = delimiterColumn + 1;
+                while (closingColumn < line.Length
+                    && line[closingColumn] != quote)
+                {
+                    if (line[closingColumn] == '\\'
+                        && closingColumn + 1 < line.Length)
+                    {
+                        closingColumn += 2;
+                    }
+                    else
+                    {
+                        closingColumn++;
+                    }
+                }
+
+                if (closingColumn < line.Length)
+                {
+                    delimiter = line[(delimiterColumn + 1)..closingColumn];
+                    nextColumn = closingColumn + 1;
+                }
+            }
+            else
+            {
+                if (line[delimiterColumn] == '\\')
+                {
+                    delimiterColumn++;
+                }
+                else if (hasWhitespace)
+                {
+                    column += 2;
+                    continue;
+                }
+
+                var delimiterEnd = delimiterColumn;
+                while (delimiterEnd < line.Length
+                    && (char.IsLetterOrDigit(line[delimiterEnd])
+                        || line[delimiterEnd] == '_'))
+                {
+                    delimiterEnd++;
+                }
+
+                if (delimiterEnd > delimiterColumn
+                    && (char.IsLetter(line[delimiterColumn])
+                        || line[delimiterColumn] == '_'))
+                {
+                    delimiter = line[delimiterColumn..delimiterEnd];
+                    nextColumn = delimiterEnd;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(delimiter))
+                delimiters.Enqueue(new AmbiguousPerlHeredocDelimiter(delimiter, allowIndent));
+            column = Math.Max(nextColumn, column + 2);
+        }
+    }
+
+    private static bool TryBeginAmbiguousPerlQuoteLikeLiteral(
+        string line,
+        char[] buffer,
+        int column,
+        out AmbiguousPerlQuoteLikeState state,
+        out int contentColumn)
+    {
+        state = null!;
+        contentColumn = column;
+        if (column > 0
+            && (char.IsLetterOrDigit(line[column - 1]) || line[column - 1] == '_'))
+        {
+            return false;
+        }
+
+        var operatorLength = line.AsSpan(column) switch
+        {
+            var span when span.StartsWith("qq", StringComparison.Ordinal)
+                || span.StartsWith("qr", StringComparison.Ordinal)
+                || span.StartsWith("qw", StringComparison.Ordinal)
+                || span.StartsWith("qx", StringComparison.Ordinal)
+                || span.StartsWith("tr", StringComparison.Ordinal) => 2,
+            var span when span.StartsWith("q", StringComparison.Ordinal)
+                || span.StartsWith("m", StringComparison.Ordinal)
+                || span.StartsWith("s", StringComparison.Ordinal)
+                || span.StartsWith("y", StringComparison.Ordinal) => 1,
+            _ => 0,
+        };
+        if (operatorLength == 0)
+            return false;
+
+        var delimiterColumn = SkipWhitespace(line, column + operatorLength);
+        if (delimiterColumn >= line.Length
+            || char.IsLetterOrDigit(line[delimiterColumn])
+            || line[delimiterColumn] == '_')
+        {
+            return false;
+        }
+        var delimiterSpan = line.AsSpan(delimiterColumn);
+        if (delimiterSpan.StartsWith("=>", StringComparison.Ordinal)
+            || delimiterSpan.StartsWith(":-", StringComparison.Ordinal)
+            || delimiterSpan.StartsWith("-->", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var openingDelimiter = line[delimiterColumn];
+        var closingDelimiter = GetPairedClosingDelimiter(openingDelimiter);
+        var remainingSegments = line.AsSpan(column, operatorLength).SequenceEqual("s")
+            || line.AsSpan(column, operatorLength).SequenceEqual("tr")
+            || line.AsSpan(column, operatorLength).SequenceEqual("y")
+                ? 2
+                : 1;
+        FillWithSpaces(buffer, column, delimiterColumn + 1);
+        state = new AmbiguousPerlQuoteLikeState(
+            openingDelimiter,
+            closingDelimiter,
+            remainingSegments);
+        contentColumn = delimiterColumn + 1;
+        return true;
+    }
+
+    private static void MaskAmbiguousPerlQuoteLikeCharacter(
+        string line,
+        char[] buffer,
+        ref int column,
+        ref AmbiguousPerlQuoteLikeState? state)
+    {
+        var current = state!;
+        buffer[column] = ' ';
+        if (current.AwaitingNextOpeningDelimiter)
+        {
+            if (char.IsWhiteSpace(line[column]))
+            {
+                column++;
+                return;
+            }
+
+            current.OpeningDelimiter = line[column];
+            current.ClosingDelimiter = GetPairedClosingDelimiter(line[column]);
+            current.DelimiterDepth = current.OpeningDelimiter == current.ClosingDelimiter ? 0 : 1;
+            current.AwaitingNextOpeningDelimiter = false;
+            column++;
+            return;
+        }
+
+        if (line[column] == '\\' && column + 1 < line.Length)
+        {
+            buffer[column + 1] = ' ';
+            column += 2;
+            return;
+        }
+
+        if (current.OpeningDelimiter != current.ClosingDelimiter
+            && line[column] == current.OpeningDelimiter)
+        {
+            current.DelimiterDepth++;
+            column++;
+            return;
+        }
+
+        if (line[column] != current.ClosingDelimiter)
+        {
+            column++;
+            return;
+        }
+
+        if (current.OpeningDelimiter != current.ClosingDelimiter
+            && --current.DelimiterDepth > 0)
+        {
+            column++;
+            return;
+        }
+
+        current.RemainingSegments--;
+        if (current.RemainingSegments == 0)
+        {
+            state = null;
+        }
+        else if (current.OpeningDelimiter != current.ClosingDelimiter)
+        {
+            current.AwaitingNextOpeningDelimiter = true;
+        }
+        else
+        {
+            current.DelimiterDepth = 0;
+        }
+
+        column++;
+    }
+
+    private static char GetPairedClosingDelimiter(char openingDelimiter) =>
+        openingDelimiter switch
+        {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '<' => '>',
+            _ => openingDelimiter,
+        };
+
+    private static bool TryBeginCrystalPercentLiteral(
+        string line,
+        int column,
+        out char openingDelimiter,
+        out char closingDelimiter,
+        out int contentColumn)
+    {
+        openingDelimiter = '\0';
+        closingDelimiter = '\0';
+        contentColumn = column;
+        if (line[column] != '%' || column + 1 >= line.Length)
+            return false;
+
+        var delimiterColumn = column + 1;
+        var hasTypePrefix = line[delimiterColumn] is 'q' or 'Q' or 'w' or 'W' or 'i' or 'I' or 'x' or 'r';
+        if (hasTypePrefix)
+            delimiterColumn++;
+        if (delimiterColumn >= line.Length
+            || char.IsLetterOrDigit(line[delimiterColumn])
+            || char.IsWhiteSpace(line[delimiterColumn])
+            || (!hasTypePrefix && line[delimiterColumn] is not ('(' or '[' or '{' or '<')))
+        {
+            return false;
+        }
+
+        openingDelimiter = line[delimiterColumn];
+        closingDelimiter = openingDelimiter switch
+        {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '<' => '>',
+            _ => openingDelimiter,
+        };
+        contentColumn = delimiterColumn + 1;
+        return true;
+    }
+
+    private static string PreparePrologCallScanLine(
+        string language,
+        string line,
+        bool isClauseContinuation)
+    {
+        if (language is not ("prolog" or "ambiguous_pl"))
+            return line;
+
+        var masked = line.ToCharArray();
+        var clauseStartColumn = isClauseContinuation
+            ? FindPrologClauseTerminator(line, 0) + 1
+            : 0;
+        if (isClauseContinuation && clauseStartColumn == 0)
+            return line;
+        var changed = false;
+        while (TryFindNextPrologClauseStart(line, clauseStartColumn, out var headStartColumn)
+            && TryFindPrologHeadBoundary(
+                line,
+                headStartColumn,
+                out var bodyStartColumn,
+                out var clauseEndColumn))
+        {
+            if (bodyStartColumn >= 0)
+            {
+                FillWithSpaces(masked, headStartColumn, bodyStartColumn);
+                changed = true;
+                if (clauseEndColumn < 0)
+                    break;
+            }
+            else
+            {
+                FillWithSpaces(masked, headStartColumn, clauseEndColumn + 1);
+                changed = true;
+            }
+
+            clauseStartColumn = clauseEndColumn + 1;
+        }
+
+        return changed ? new string(masked) : line;
+    }
+
+    private static bool TryFindNextPrologClauseStart(
+        string line,
+        int searchColumn,
+        out int clauseStartColumn)
+    {
+        for (var column = Math.Max(0, searchColumn); column < line.Length; column++)
+        {
+            if (char.IsWhiteSpace(line[column]))
+                continue;
+
+            clauseStartColumn = column;
+            return char.IsLower(line[column]);
+        }
+
+        clauseStartColumn = -1;
+        return false;
+    }
+
+    private static bool TryFindPrologHeadBoundary(
+        string line,
+        int headStartColumn,
+        out int bodyStartColumn,
+        out int clauseEndColumn)
+    {
+        bodyStartColumn = -1;
+        clauseEndColumn = -1;
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var column = headStartColumn; column < line.Length; column++)
+        {
+            var ch = line[column];
+            if (ch is '\'' or '"')
+            {
+                column = SkipQuotedToken(line, column, ch) - 1;
+                continue;
+            }
+            switch (ch)
+            {
+                case '(':
+                    parenthesisDepth++;
+                    continue;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    continue;
+            }
+            if (parenthesisDepth != 0 || bracketDepth != 0 || braceDepth != 0)
+                continue;
+
+            var separatorLength = line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal)
+                ? 3
+                : line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal)
+                    ? 2
+                    : 0;
+            if (separatorLength > 0)
+            {
+                bodyStartColumn = column + separatorLength;
+                clauseEndColumn = FindPrologClauseTerminator(line, bodyStartColumn);
+                return true;
+            }
+            if (IsPrologClauseTerminator(line, column))
+            {
+                clauseEndColumn = column;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    internal static bool IsPrologClauseTerminator(string line, int column)
+    {
+        if (column < 0 || column >= line.Length || line[column] != '.')
+            return false;
+
+        return PrologClauseTerminatorMaps
+            .GetValue(line, static currentLine => new PrologClauseTerminatorMap(currentLine))
+            .IsTerminator(column);
+    }
+
+    private sealed class PrologClauseTerminatorMap
+    {
+        private readonly bool[] _terminatorColumns;
+
+        public PrologClauseTerminatorMap(string line)
+        {
+            _terminatorColumns = new bool[line.Length];
+            var parenthesisDepth = 0;
+            var bracketDepth = 0;
+            var braceDepth = 0;
+            for (var column = 0; column < line.Length; column++)
+            {
+                var ch = line[column];
+                if (ch is '\'' or '"')
+                {
+                    column = SkipQuotedToken(line, column, ch) - 1;
+                    continue;
+                }
+                switch (ch)
+                {
+                    case '(':
+                        parenthesisDepth++;
+                        continue;
+                    case ')' when parenthesisDepth > 0:
+                        parenthesisDepth--;
+                        continue;
+                    case '[':
+                        bracketDepth++;
+                        continue;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        continue;
+                    case '{':
+                        braceDepth++;
+                        continue;
+                    case '}' when braceDepth > 0:
+                        braceDepth--;
+                        continue;
+                }
+
+                if (ch != '.'
+                    || parenthesisDepth != 0
+                    || bracketDepth != 0
+                    || braceDepth != 0)
+                {
+                    continue;
+                }
+
+                var previous = column > 0 ? line[column - 1] : '\0';
+                var next = column + 1 < line.Length ? line[column + 1] : '\0';
+                if (previous != '.'
+                    && next != '.'
+                    && !(char.IsDigit(previous) && char.IsDigit(next))
+                    && (next == '\0' || char.IsWhiteSpace(next)))
+                {
+                    _terminatorColumns[column] = true;
+                }
+            }
+        }
+
+        public bool IsTerminator(int column) => _terminatorColumns[column];
+    }
+
+    private static int FindPrologClauseTerminator(string line, int startColumn)
+    {
+        for (var column = Math.Max(0, startColumn); column < line.Length; column++)
+        {
+            if (IsPrologClauseTerminator(line, column))
+                return column;
+        }
+
+        return -1;
+    }
+
+    private static void EmitImportReference(
+        string language,
+        string originalLine,
+        List<ReferenceRecord> references,
+        ReferenceDedupeSet seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var match = language switch
+        {
+            "crystal" => CrystalRequireRegex.Match(originalLine),
+            "groovy" => GroovyImportRegex.Match(originalLine),
+            "tcl" => TclPackageRegex.Match(originalLine),
+            "prolog" or "ambiguous_pl" => PrologImportRegex.Match(originalLine),
+            _ => Match.Empty,
+        };
+        if (!match.Success)
+            return;
+
+        var nameGroup = match.Groups["name"];
+        var name = NormalizeImportTarget(language, nameGroup.Value);
+        if (name.Length == 0)
+            return;
+
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            name,
+            nameGroup.Index,
+            "type_reference",
+            context,
+            lineNumber,
+            resolveContainerForCall(nameGroup.Index),
+            language);
+    }
+
+    private static string NormalizeImportTarget(string language, string name)
+    {
+        var normalized = name.Replace('\\', '/').TrimEnd('/');
+        if (language == "groovy")
+            return normalized[(normalized.LastIndexOf('.') + 1)..];
+        if (language is "crystal" or "prolog" or "ambiguous_pl")
+        {
+            normalized = normalized[(normalized.LastIndexOf('/') + 1)..];
+            var extensionIndex = normalized.LastIndexOf('.');
+            if (extensionIndex > 0)
+                normalized = normalized[..extensionIndex];
+        }
+        return normalized;
+    }
+
+    private static void AddTclContainers(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyDictionary<long, TclBraceEnd> braceEnds,
+        List<TclContainerScope> scopes,
+        HashSet<long> scriptBodyOpenings)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || symbol.StartLine < 1 || symbol.StartLine > lines.Count)
+                continue;
+
+            var startLineIndex = symbol.StartLine - 1;
+            var declarationMatch = FindTclProcDeclaration(lines[startLineIndex], symbol);
+            if (declarationMatch == null
+                || !TryFindTclBodyEnd(
+                    lines,
+                    braceEnds,
+                    startLineIndex,
+                    declarationMatch.Index + declarationMatch.Length,
+                    out var bodyStartLineIndex,
+                    out var bodyStartColumn,
+                    out var bodyEnd))
+            {
+                continue;
+            }
+
+            scopes.Add(new TclContainerScope(
+                symbol,
+                bodyStartLineIndex + 1,
+                lines[bodyStartLineIndex][bodyStartColumn] is '{' or '"'
+                    ? bodyStartColumn
+                    : bodyStartColumn - 1,
+                bodyEnd.Line + 1,
+                lines[bodyStartLineIndex][bodyStartColumn] is '{' or '"'
+                    ? bodyEnd.Column
+                    : bodyEnd.Column + 1));
+            if (lines[bodyStartLineIndex][bodyStartColumn] == '{')
+                scriptBodyOpenings.Add(GetTclPositionKey(bodyStartLineIndex, bodyStartColumn));
+        }
+
+        scopes.Sort(static (left, right) =>
+        {
+            var startComparison = left.BodyStartLine.CompareTo(right.BodyStartLine);
+            return startComparison != 0
+                ? startComparison
+                : left.BodyStartColumn.CompareTo(right.BodyStartColumn);
+        });
+    }
+
+    private static Match? FindTclProcDeclaration(string line, SymbolRecord symbol)
+    {
+        Match? fallback = null;
+        foreach (Match match in BoundedRegex.EnumerateMatches(TclProcRegex, line))
+        {
+            var nameGroup = match.Groups["name"];
+            if (!string.Equals(nameGroup.Value, symbol.Name, StringComparison.Ordinal))
+                continue;
+            if (symbol.StartColumn == nameGroup.Index)
+                return match;
+            fallback ??= match;
+        }
+
+        return fallback;
+    }
+
+    private static bool TryFindTclBodyEnd(
+        IReadOnlyList<string> lines,
+        IReadOnlyDictionary<long, TclBraceEnd> braceEnds,
+        int startLineIndex,
+        int searchColumn,
+        out int bodyStartLineIndex,
+        out int bodyStartColumn,
+        out TclBraceEnd bodyEnd)
+    {
+        bodyStartLineIndex = startLineIndex;
+        bodyStartColumn = -1;
+        bodyEnd = default;
+        if (!TryFindNextNonWhitespace(lines[startLineIndex], searchColumn, out var argsColumn)
+            || !TryFindTclWordEnd(
+                lines,
+                braceEnds,
+                startLineIndex,
+                argsColumn,
+                out var argsEndLine,
+                out var argsEndColumn)
+            || !TryFindNextNonWhitespace(
+                lines,
+                argsEndLine,
+                argsEndColumn + 1,
+                out bodyStartLineIndex,
+                out bodyStartColumn)
+            || !TryFindTclWordEnd(
+                lines,
+                braceEnds,
+                bodyStartLineIndex,
+                bodyStartColumn,
+                out var bodyEndLine,
+                out var bodyEndColumn))
+        {
+            return false;
+        }
+
+        bodyEnd = new TclBraceEnd(bodyEndLine, bodyEndColumn);
+        return true;
+    }
+
+    private static bool TryFindTclWordEnd(
+        IReadOnlyList<string> lines,
+        IReadOnlyDictionary<long, TclBraceEnd> braceEnds,
+        int startLine,
+        int startColumn,
+        out int endLine,
+        out int endColumn)
+    {
+        var line = lines[startLine];
+        if (line[startColumn] == '{')
+        {
+            if (braceEnds.TryGetValue(GetTclPositionKey(startLine, startColumn), out var braceEnd))
+            {
+                endLine = braceEnd.Line;
+                endColumn = braceEnd.Column;
+                return true;
+            }
+
+            endLine = -1;
+            endColumn = -1;
+            return false;
+        }
+
+        if (line[startColumn] == '"')
+        {
+            for (var lineIndex = startLine; lineIndex < lines.Count; lineIndex++)
+            {
+                line = lines[lineIndex];
+                var firstColumn = lineIndex == startLine ? startColumn + 1 : 0;
+                for (var column = firstColumn; column < line.Length; column++)
+                {
+                    if (line[column] == '\\')
+                    {
+                        column++;
+                        continue;
+                    }
+                    if (line[column] == '"')
+                    {
+                        endLine = lineIndex;
+                        endColumn = column;
+                        return true;
+                    }
+                }
+            }
+
+            endLine = -1;
+            endColumn = -1;
+            return false;
+        }
+
+        var wordEnd = startColumn;
+        while (wordEnd + 1 < line.Length && !char.IsWhiteSpace(line[wordEnd + 1]))
+            wordEnd++;
+        endLine = startLine;
+        endColumn = wordEnd;
+        return true;
+    }
+
+    private static bool TryFindNextNonWhitespace(
+        string line,
+        int startColumn,
+        out int foundColumn)
+    {
+        for (var column = startColumn; column < line.Length; column++)
+        {
+            if (!char.IsWhiteSpace(line[column]))
+            {
+                foundColumn = column;
+                return true;
+            }
+        }
+
+        foundColumn = -1;
+        return false;
+    }
+
+    private static bool TryFindNextNonWhitespace(
+        IReadOnlyList<string> lines,
+        int startLine,
+        int startColumn,
+        out int foundLine,
+        out int foundColumn)
+    {
+        for (var lineIndex = startLine; lineIndex < lines.Count; lineIndex++)
+        {
+            var column = lineIndex == startLine ? startColumn : 0;
+            if (TryFindNextNonWhitespace(lines[lineIndex], column, out foundColumn))
+            {
+                if (foundColumn == lines[lineIndex].Length - 1
+                    && lines[lineIndex][foundColumn] == '\\')
+                {
+                    continue;
+                }
+
+                foundLine = lineIndex;
+                return true;
+            }
+        }
+
+        foundLine = -1;
+        foundColumn = -1;
+        return false;
+    }
+
+    private static Dictionary<long, TclBraceEnd> BuildTclBraceEndPositions(IReadOnlyList<string> lines)
+    {
+        var result = new Dictionary<long, TclBraceEnd>();
+        var openings = new Stack<(int Line, int Column)>();
+        var commandStart = true;
+        var wordStart = true;
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            for (var column = 0; column < line.Length; column++)
+            {
+                var ch = line[column];
+                if (openings.Count > 0)
+                {
+                    if (ch == '\\')
+                    {
+                        column++;
+                        continue;
+                    }
+                    if (ch == '{')
+                    {
+                        openings.Push((lineIndex, column));
+                    }
+                    else if (ch == '}')
+                    {
+                        var opening = openings.Pop();
+                        result[GetTclPositionKey(opening.Line, opening.Column)] =
+                            new TclBraceEnd(lineIndex, column);
+                    }
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    column++;
+                    commandStart = false;
+                    wordStart = false;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    column = SkipQuotedToken(line, column, ch) - 1;
+                    commandStart = false;
+                    wordStart = false;
+                    continue;
+                }
+
+                if (ch == '#' && commandStart)
+                    break;
+                if (ch == ';' || ch == '[')
+                {
+                    commandStart = true;
+                    wordStart = true;
+                    continue;
+                }
+                if (char.IsWhiteSpace(ch))
+                {
+                    wordStart = true;
+                    continue;
+                }
+                if (ch == '{' && wordStart)
+                {
+                    openings.Push((lineIndex, column));
+                    commandStart = false;
+                    wordStart = false;
+                    continue;
+                }
+
+                commandStart = false;
+                wordStart = false;
+            }
+
+            if (openings.Count == 0)
+            {
+                commandStart = true;
+                wordStart = true;
+            }
+        }
+
+        return result;
+    }
+
+    private static string[] BuildTclCallLines(
+        IReadOnlyList<string> lines,
+        IReadOnlyDictionary<long, TclBraceEnd> braceEnds,
+        IReadOnlySet<long> scriptBodyOpenings,
+        IDictionary<int, int>? commentColumns = null)
+    {
+        var result = new string[lines.Count];
+        var frames = new Stack<TclLexicalFrame>();
+        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script));
+        var commentContinued = false;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            if (commentContinued)
+            {
+                result[lineIndex] = new string(' ', line.Length);
+                commentColumns?.TryAdd(lineIndex, 0);
+                commentContinued = HasTclEscapedNewline(line);
+                continue;
+            }
+
+            var buffer = line.ToCharArray();
+            var lineContinued = false;
+            var suppressLeadingContinuedWord = frames.Peek().Kind != TclLexicalFrameKind.Script
+                || !frames.Peek().CommandStart;
+            for (var column = 0; column < line.Length;)
+            {
+                var frame = frames.Peek();
+                var ch = line[column];
+                if (frame.Kind == TclLexicalFrameKind.SwitchTable)
+                {
+                    buffer[column] = ' ';
+                    if (ch == frame.Terminator)
+                    {
+                        frames.Pop();
+                        column++;
+                    }
+                    else if (ch == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        frame.WordStart = false;
+                        column += 2;
+                    }
+                    else if (char.IsWhiteSpace(ch))
+                    {
+                        frame.WordStart = true;
+                        column++;
+                    }
+                    else if (ch == '{' && frame.WordStart)
+                    {
+                        var wordIndex = frame.WordIndex++;
+                        if (wordIndex % 2 == 1)
+                        {
+                            buffer[column] = ';';
+                            frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, '}'));
+                            suppressLeadingContinuedWord = false;
+                        }
+                        else
+                        {
+                            frames.Push(new TclLexicalFrame(TclLexicalFrameKind.BracedWord, '}'));
+                        }
+
+                        frame.WordStart = false;
+                        column++;
+                    }
+                    else if (ch == '"' && frame.WordStart)
+                    {
+                        var wordIndex = frame.WordIndex++;
+                        if (wordIndex % 2 == 1)
+                        {
+                            buffer[column] = ';';
+                            frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, '"'));
+                            suppressLeadingContinuedWord = false;
+                        }
+                        else
+                        {
+                            var endColumn = SkipQuotedToken(line, column, '"');
+                            FillWithSpaces(buffer, column, endColumn);
+                            column = endColumn - 1;
+                        }
+                        frame.WordStart = false;
+                        column++;
+                    }
+                    else
+                    {
+                        if (frame.WordStart)
+                        {
+                            var wordIndex = frame.WordIndex++;
+                            if (wordIndex % 2 == 1)
+                            {
+                                var endColumn = column;
+                                while (endColumn < line.Length
+                                    && !char.IsWhiteSpace(line[endColumn])
+                                    && line[endColumn] != frame.Terminator)
+                                {
+                                    buffer[endColumn] = line[endColumn];
+                                    endColumn++;
+                                }
+                                MarkTclBareScriptCommandBoundary(buffer, column);
+                                column = endColumn - 1;
+                            }
+                        }
+                        frame.WordStart = false;
+                        column++;
+                    }
+
+                    continue;
+                }
+
+                if (frame.Kind == TclLexicalFrameKind.BracedWord)
+                {
+                    buffer[column] = ' ';
+                    if (ch == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (ch == '{')
+                    {
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.BracedWord, '}'));
+                        column++;
+                    }
+                    else if (ch == frame.Terminator)
+                    {
+                        frames.Pop();
+                        column++;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (frame.Kind == TclLexicalFrameKind.ExpressionWord)
+                {
+                    buffer[column] = ' ';
+                    if (ch == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (ch == '{')
+                    {
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.ExpressionWord, '}'));
+                        column++;
+                    }
+                    else if (ch == frame.Terminator)
+                    {
+                        frames.Pop();
+                        column++;
+                    }
+                    else if (ch == '[')
+                    {
+                        buffer[column] = '[';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
+                        suppressLeadingContinuedWord = false;
+                        column++;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (frame.Kind == TclLexicalFrameKind.Quote)
+                {
+                    buffer[column] = ' ';
+                    if (ch == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (ch == frame.Terminator)
+                    {
+                        frames.Pop();
+                        column++;
+                    }
+                    else if (ch == '[')
+                    {
+                        buffer[column] = '[';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
+                        suppressLeadingContinuedWord = false;
+                        column++;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (frame.Terminator != '\0' && ch == frame.Terminator)
+                {
+                    PersistTclConcatenatedScriptState(frame);
+                    frames.Pop();
+                    buffer[column] = frame.Terminator == '}' ? ' ' : ch;
+                    column++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    buffer[column] = ' ';
+                    if (column + 1 >= line.Length)
+                    {
+                        lineContinued = true;
+                        frame.WordStart = true;
+                        column++;
+                        continue;
+                    }
+
+                    if (frame.WordStart)
+                        frame.WordIndex++;
+                    buffer[column + 1] = ' ';
+                    column += 2;
+                    frame.CommandStart = false;
+                    frame.WordStart = false;
+                    continue;
+                }
+                if (ch == '#' && frame.CommandStart)
+                {
+                    FillWithSpaces(buffer, column);
+                    commentColumns?.TryAdd(lineIndex, column);
+                    commentContinued = HasTclEscapedNewline(line);
+                    break;
+                }
+                if (ch == '"')
+                {
+                    var isScriptArgument = false;
+                    var isConcatenatedScriptArgument = false;
+                    if (frame.WordStart)
+                    {
+                        var wordIndex = frame.WordIndex++;
+                        var token = GetTclQuotedWordToken(line, column);
+                        isConcatenatedScriptArgument = IsTclConcatenatedScriptArgument(
+                            frame,
+                            wordIndex,
+                            token);
+                        isScriptArgument = isConcatenatedScriptArgument
+                            || IsTclScriptArgument(
+                                frame,
+                                wordIndex,
+                                lines,
+                                braceEnd: null);
+                        UpdateTclFirstArgument(frame, wordIndex, token);
+                        UpdateTclDictArgumentState(frame, wordIndex, token);
+                        UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
+                        UpdateTclTryArgumentState(frame, wordIndex, string.Empty, isScriptArgument);
+                    }
+                    var quotedFrame = isScriptArgument
+                        ? CreateTclScriptFrame(frame, '"', isConcatenatedScriptArgument)
+                        : new TclLexicalFrame(TclLexicalFrameKind.Quote, '"');
+                    buffer[column] = isScriptArgument
+                        && (!isConcatenatedScriptArgument || quotedFrame.CommandStart)
+                            ? ';'
+                            : ' ';
+                    frames.Push(quotedFrame);
+                    frame.CommandStart = false;
+                    frame.WordStart = false;
+                    if (isScriptArgument)
+                        suppressLeadingContinuedWord = false;
+                    column++;
+                    continue;
+                }
+                if (ch == '[')
+                {
+                    if (frame.WordStart)
+                    {
+                        var wordIndex = frame.WordIndex++;
+                        UpdateTclDictArgumentState(frame, wordIndex, token: null);
+                        UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
+                        UpdateTclTryArgumentState(
+                            frame,
+                            wordIndex,
+                            string.Empty,
+                            isScriptArgument: false);
+                    }
+                    frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
+                    frame.CommandStart = false;
+                    frame.WordStart = false;
+                    suppressLeadingContinuedWord = false;
+                    column++;
+                    continue;
+                }
+                if (ch == '{' && frame.WordStart)
+                {
+                    var wordIndex = frame.WordIndex++;
+                    var positionKey = GetTclPositionKey(lineIndex, column);
+                    TclBraceEnd? braceEnd = braceEnds.TryGetValue(positionKey, out var foundBraceEnd)
+                        ? foundBraceEnd
+                        : null;
+                    var isSwitchTable = IsTclSwitchTableArgument(
+                        frame,
+                        wordIndex,
+                        lines,
+                        braceEnd);
+                    var token = GetTclBracedWordToken(
+                        lines,
+                        lineIndex,
+                        column,
+                        braceEnd);
+                    var isConcatenatedScriptArgument = !isSwitchTable
+                        && IsTclConcatenatedScriptArgument(
+                            frame,
+                            wordIndex,
+                            token);
+                    var isExpressionArgument = !isSwitchTable
+                        && IsTclExpressionArgument(frame, wordIndex);
+                    var isScriptArgument = !isSwitchTable
+                        && (isConcatenatedScriptArgument
+                        || scriptBodyOpenings.Contains(positionKey)
+                        || IsTclScriptArgument(
+                            frame,
+                            wordIndex,
+                            lines,
+                            braceEnd));
+                    UpdateTclFirstArgument(frame, wordIndex, token);
+                    UpdateTclDictArgumentState(frame, wordIndex, token);
+                    UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
+                    UpdateTclTryArgumentState(
+                        frame,
+                        wordIndex,
+                        string.Empty,
+                        isScriptArgument);
+                    if (isSwitchTable)
+                    {
+                        buffer[column] = ' ';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.SwitchTable, '}'));
+                    }
+                    else if (isScriptArgument)
+                    {
+                        var scriptFrame = CreateTclScriptFrame(
+                            frame,
+                            '}',
+                            isConcatenatedScriptArgument);
+                        buffer[column] = !isConcatenatedScriptArgument || scriptFrame.CommandStart
+                            ? ';'
+                            : ' ';
+                        frames.Push(scriptFrame);
+                        suppressLeadingContinuedWord = false;
+                    }
+                    else if (isExpressionArgument)
+                    {
+                        buffer[column] = ' ';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.ExpressionWord, '}'));
+                    }
+                    else
+                    {
+                        buffer[column] = ' ';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.BracedWord, '}'));
+                    }
+                    frame.CommandStart = false;
+                    frame.WordStart = false;
+                    column++;
+                    continue;
+                }
+                if (ch == ';')
+                {
+                    frame.ResetCommand();
+                    suppressLeadingContinuedWord = false;
+                    column++;
+                    continue;
+                }
+                if (char.IsWhiteSpace(ch))
+                {
+                    frame.WordStart = true;
+                    column++;
+                    continue;
+                }
+
+                if (frame.WordStart)
+                {
+                    var wordIndex = frame.WordIndex++;
+                    var token = ReadTclBareWord(line, column);
+                    var isConcatenatedScriptArgument = token.Length > 0
+                        && IsTclConcatenatedScriptArgument(frame, wordIndex, token);
+                    var isScriptCommand = token.Length > 0
+                        && (isConcatenatedScriptArgument
+                            ? ProcessTclConcatenatedBareWord(frame, token)
+                            : IsTclBareScriptCommandArgument(
+                                frame,
+                                wordIndex,
+                                token,
+                                lines,
+                                new TclBraceEnd(lineIndex, column + token.Length - 1)));
+                    if (wordIndex == 0)
+                        frame.CommandName = token;
+                    else
+                    {
+                        UpdateTclFirstArgument(frame, wordIndex, token);
+                        UpdateTclDictArgumentState(frame, wordIndex, token);
+                        UpdateTclSwitchArgumentState(frame, wordIndex, token);
+                        UpdateTclTryArgumentState(
+                            frame,
+                            wordIndex,
+                            token,
+                            isScriptCommand);
+                    }
+                    if (token.Length > 0)
+                    {
+                        frame.LastBareWord = token;
+                        frame.LastBareWordIndex = wordIndex;
+                    }
+
+                    if (suppressLeadingContinuedWord)
+                    {
+                        FillWithSpaces(buffer, column, column + token.Length);
+                        suppressLeadingContinuedWord = false;
+                    }
+                    else if (isScriptCommand)
+                    {
+                        MarkTclBareScriptCommandBoundary(buffer, column);
+                    }
+                }
+
+                frame.CommandStart = false;
+                frame.WordStart = false;
+                column++;
+            }
+
+            result[lineIndex] = new string(buffer);
+            if (!lineContinued && frames.Peek().Kind == TclLexicalFrameKind.Script)
+                frames.Peek().ResetCommand();
+        }
+
+        return result;
+    }
+
+    private static bool HasTclEscapedNewline(string line)
+    {
+        var backslashCount = 0;
+        for (var column = line.Length - 1; column >= 0 && line[column] == '\\'; column--)
+            backslashCount++;
+        return backslashCount % 2 == 1;
+    }
+
+    private static int FindTclCommentStart(string line)
+    {
+        var commandStart = true;
+        for (var column = 0; column < line.Length; column++)
+        {
+            var ch = line[column];
+            if (ch is '\'' or '"')
+            {
+                column = SkipQuotedToken(line, column, ch) - 1;
+                commandStart = false;
+                continue;
+            }
+            if (ch == '\\')
+            {
+                column++;
+                commandStart = false;
+                continue;
+            }
+            if (ch == '#' && commandStart)
+                return column;
+            if (ch is ';' or '[')
+            {
+                commandStart = true;
+                continue;
+            }
+            if (char.IsWhiteSpace(ch))
+                continue;
+            commandStart = false;
+        }
+
+        return -1;
+    }
+
+    private static string ReadTclBareWord(string line, int startColumn)
+    {
+        var endColumn = startColumn;
+        while (endColumn < line.Length
+            && (char.IsLetterOrDigit(line[endColumn])
+                || line[endColumn] is '_' or ':' or '.' or '-' or '#'))
+        {
+            endColumn++;
+        }
+
+        return endColumn == startColumn
+            ? string.Empty
+            : line[startColumn..endColumn];
+    }
+
+    private static bool IsTclScriptArgument(
+        TclLexicalFrame frame,
+        int wordIndex,
+        IReadOnlyList<string> lines,
+        TclBraceEnd? braceEnd)
+    {
+        var isLastCommandWord = braceEnd is { } end
+            && IsTclLastCommandWord(lines, end);
+        return frame.CommandName switch
+        {
+            "if" => wordIndex == 2
+                || (frame.LastBareWord == "then"
+                    && wordIndex == frame.LastBareWordIndex + 1)
+                || (frame.LastBareWord == "elseif"
+                    && wordIndex == frame.LastBareWordIndex + 2)
+                || (frame.LastBareWord == "else"
+                    && wordIndex == frame.LastBareWordIndex + 1),
+            "foreach" or "lmap" => wordIndex >= 3
+                && wordIndex % 2 == 1
+                && isLastCommandWord,
+            "while" => wordIndex == 2,
+            "catch" => wordIndex == 1,
+            "for" => wordIndex is 1 or 3 or 4,
+            "proc" => wordIndex == 3,
+            "try" => wordIndex == frame.TryScriptWordIndex,
+            "dict" => wordIndex == frame.DictScriptWordIndex,
+            "switch" => frame.SwitchStringWordIndex >= 0
+                && wordIndex - frame.SwitchStringWordIndex >= 2
+                && (wordIndex - frame.SwitchStringWordIndex) % 2 == 0,
+            _ => false,
+        };
+    }
+
+    private static bool IsTclExpressionArgument(TclLexicalFrame frame, int wordIndex) =>
+        frame.CommandName switch
+        {
+            "if" => wordIndex == 1
+                || (frame.LastBareWord == "elseif"
+                    && wordIndex == frame.LastBareWordIndex + 1),
+            "while" => wordIndex == 1,
+            "for" => wordIndex == 2,
+            "expr" => wordIndex >= 1,
+            _ => false,
+        };
+
+    private static bool IsTclBareScriptCommandArgument(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string token,
+        IReadOnlyList<string> lines,
+        TclBraceEnd wordEnd)
+    {
+        if (frame.CommandName == "if" && token == "then")
+            return false;
+
+        return IsTclScriptArgument(
+            frame,
+            wordIndex,
+            lines,
+            wordEnd);
+    }
+
+    private static bool IsTclConcatenatedScriptArgument(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string? token)
+    {
+        if (frame.CommandName == "eval")
+            return wordIndex >= 1;
+        if (frame.CommandName == "after")
+        {
+            return wordIndex >= 2
+                && frame.FirstArgument is not null
+                && frame.FirstArgument is not ("cancel" or "info");
+        }
+        if (frame.CommandName == "namespace")
+            return wordIndex >= 3 && frame.FirstArgument == "eval";
+        if (frame.CommandName != "uplevel")
+            return false;
+        if (frame.UplevelScriptWordIndex >= 0)
+            return wordIndex >= frame.UplevelScriptWordIndex;
+        if (wordIndex < 1)
+            return false;
+
+        if (wordIndex == 1 && IsTclUplevelLevelToken(token))
+        {
+            frame.UplevelScriptWordIndex = 2;
+            return false;
+        }
+
+        frame.UplevelScriptWordIndex = wordIndex;
+        return true;
+    }
+
+    private static bool IsTclUplevelLevelToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+
+        var span = token.AsSpan().Trim();
+        if (span.Length > 1 && span[0] == '#')
+            span = span[1..];
+        if (span.IsEmpty)
+            return false;
+
+        var start = span[0] is '+' or '-' ? 1 : 0;
+        if (start == span.Length)
+            return false;
+        for (var index = start; index < span.Length; index++)
+        {
+            if (!char.IsDigit(span[index]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static TclLexicalFrame CreateTclScriptFrame(
+        TclLexicalFrame owner,
+        char terminator,
+        bool concatenateArguments)
+    {
+        var frame = new TclLexicalFrame(
+            TclLexicalFrameKind.Script,
+            terminator,
+            concatenateArguments ? owner : null);
+        if (!concatenateArguments)
+            return frame;
+
+        if (owner.ConcatenatedScriptState != null)
+            frame.CopyCommandStateFrom(owner.ConcatenatedScriptState);
+        // Tcl inserts a separating space while concatenating eval/uplevel arguments.
+        // eval/uplevel の引数連結では引数間に空白が入るため、次は word boundary。
+        frame.WordStart = true;
+        return frame;
+    }
+
+    private static void PersistTclConcatenatedScriptState(TclLexicalFrame frame)
+    {
+        if (frame.ConcatenationOwner is not { } owner)
+            return;
+
+        owner.ConcatenatedScriptState ??= new TclLexicalFrame(TclLexicalFrameKind.Script);
+        owner.ConcatenatedScriptState.CopyCommandStateFrom(frame);
+        owner.ConcatenatedScriptState.WordStart = true;
+    }
+
+    private static bool ProcessTclConcatenatedBareWord(
+        TclLexicalFrame owner,
+        string token)
+    {
+        owner.ConcatenatedScriptState ??= new TclLexicalFrame(TclLexicalFrameKind.Script);
+        var state = owner.ConcatenatedScriptState;
+        var isCommand = state.CommandStart;
+        var wordIndex = state.WordIndex++;
+        if (wordIndex == 0)
+        {
+            state.CommandName = token;
+        }
+        else
+        {
+            UpdateTclFirstArgument(state, wordIndex, token);
+            UpdateTclDictArgumentState(state, wordIndex, token);
+            UpdateTclSwitchArgumentState(state, wordIndex, token);
+            UpdateTclTryArgumentState(
+                state,
+                wordIndex,
+                token,
+                isScriptArgument: false);
+        }
+
+        state.LastBareWord = token;
+        state.LastBareWordIndex = wordIndex;
+        state.CommandStart = false;
+        state.WordStart = false;
+        return isCommand;
+    }
+
+    private static string? GetTclBracedWordToken(
+        IReadOnlyList<string> lines,
+        int startLine,
+        int startColumn,
+        TclBraceEnd? braceEnd)
+    {
+        if (braceEnd is not { } end || end.Line != startLine)
+            return null;
+        var length = end.Column - startColumn - 1;
+        return length < 0 ? null : lines[startLine].Substring(startColumn + 1, length);
+    }
+
+    private static string? GetTclQuotedWordToken(string line, int startColumn)
+    {
+        var endColumn = SkipQuotedToken(line, startColumn, '"');
+        return endColumn <= startColumn + 1
+            || endColumn > line.Length
+            || line[endColumn - 1] != '"'
+                ? null
+                : line.Substring(startColumn + 1, endColumn - startColumn - 2);
+    }
+
+    private static string NormalizeTclQualifiedName(string name)
+    {
+        while (name.StartsWith("::", StringComparison.Ordinal))
+            name = name[2..];
+        return name;
+    }
+
+    private static void UpdateTclFirstArgument(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string? token)
+    {
+        if (wordIndex == 1 && token != null)
+            frame.FirstArgument = token;
+    }
+
+    private static void UpdateTclDictArgumentState(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string? token)
+    {
+        if (frame.CommandName == "dict"
+            && wordIndex == 1
+            && token == "for")
+        {
+            frame.DictScriptWordIndex = wordIndex + 3;
+        }
+    }
+
+    private static void MarkTclBareScriptCommandBoundary(char[] buffer, int commandColumn)
+    {
+        var boundaryColumn = commandColumn - 1;
+        if (boundaryColumn >= 0 && char.IsWhiteSpace(buffer[boundaryColumn]))
+            buffer[boundaryColumn] = ';';
+    }
+
+    private static bool IsTclSwitchTableArgument(
+        TclLexicalFrame frame,
+        int wordIndex,
+        IReadOnlyList<string> lines,
+        TclBraceEnd? braceEnd)
+    {
+        return frame.CommandName == "switch"
+            && frame.SwitchStringWordIndex >= 0
+            && wordIndex == frame.SwitchStringWordIndex + 1
+            && braceEnd is { } end
+            && IsTclLastCommandWord(lines, end);
+    }
+
+    private static void UpdateTclSwitchArgumentState(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string token)
+    {
+        if (frame.CommandName != "switch"
+            || wordIndex == 0
+            || frame.SwitchStringWordIndex >= 0)
+        {
+            return;
+        }
+
+        if (frame.SwitchOptionValuePending)
+        {
+            frame.SwitchOptionValuePending = false;
+            return;
+        }
+
+        if (!frame.SwitchOptionsEnded && token.StartsWith("-", StringComparison.Ordinal))
+        {
+            if (token == "--")
+                frame.SwitchOptionsEnded = true;
+            else if (token is "-matchvar" or "-indexvar")
+                frame.SwitchOptionValuePending = true;
+            return;
+        }
+
+        frame.SwitchStringWordIndex = wordIndex;
+    }
+
+    private static void UpdateTclTryArgumentState(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string token,
+        bool isScriptArgument)
+    {
+        if (frame.CommandName != "try")
+            return;
+
+        if (isScriptArgument)
+        {
+            frame.TryClauseWordIndex = wordIndex + 1;
+            frame.TryScriptWordIndex = -1;
+            return;
+        }
+
+        if (wordIndex != frame.TryClauseWordIndex)
+            return;
+
+        frame.TryScriptWordIndex = token switch
+        {
+            "on" or "trap" => wordIndex + 3,
+            "finally" => wordIndex + 1,
+            _ => -1,
+        };
+    }
+
+    private static bool IsTclLastCommandWord(
+        IReadOnlyList<string> lines,
+        TclBraceEnd braceEnd)
+    {
+        var line = lines[braceEnd.Line];
+        for (var column = braceEnd.Column + 1; column < line.Length; column++)
+        {
+            if (char.IsWhiteSpace(line[column]))
+                continue;
+            return line[column] is ';' or ']' or '}';
+        }
+
+        return true;
+    }
+
+    private static long GetTclPositionKey(int line, int column) =>
+        ((long)line << 32) | (uint)column;
+
+    private static IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>> BuildPrologGoalCalls(
+        IReadOnlyList<string> lines,
+        IReadOnlyDictionary<int, SymbolRecord> containersByLine,
+        IReadOnlySet<string> callableNames)
+    {
+        var result = new Dictionary<int, IReadOnlyList<PrologGoalCall>>();
+        var frames = new Stack<PrologLexicalFrame>();
+        var expectGoal = true;
+        SymbolRecord? activeContainer = null;
+        var scanningMultilineHead = false;
+        var multilineHeadParenthesisDepth = 0;
+        var multilineHeadParenthesesClosed = false;
+        var scanningDirective = false;
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var lineNumber = lineIndex + 1;
+            if (!containersByLine.TryGetValue(lineNumber, out var container))
+            {
+                activeContainer = null;
+                scanningMultilineHead = false;
+                multilineHeadParenthesisDepth = 0;
+                multilineHeadParenthesesClosed = false;
+                if (!scanningDirective
+                    && !StartsWithPrologGoalDirective(lines[lineIndex]))
+                {
+                    frames.Clear();
+                    expectGoal = true;
+                    continue;
+                }
+
+                if (!scanningDirective)
+                {
+                    frames.Clear();
+                    expectGoal = true;
+                    scanningDirective = true;
+                }
+
+                var directiveCalls = new List<PrologGoalCall>();
+                ScanPrologGoalLine(
+                    lines,
+                    lineIndex,
+                    lines[lineIndex],
+                    callableNames,
+                    frames,
+                    ref expectGoal,
+                    directiveCalls);
+                if (directiveCalls.Count > 0)
+                {
+                    result[lineNumber] = directiveCalls
+                        .Select(static call => call with { IsTopLevelDirective = true })
+                        .ToList();
+                }
+                if (ContainsPrologClauseTerminator(lines[lineIndex]))
+                {
+                    frames.Clear();
+                    expectGoal = true;
+                    scanningDirective = false;
+                }
+                continue;
+            }
+
+            scanningDirective = false;
+            if (activeContainer == null
+                || activeContainer.StartLine != container.StartLine
+                || !string.Equals(activeContainer.Name, container.Name, StringComparison.Ordinal))
+            {
+                frames.Clear();
+                activeContainer = container;
+                expectGoal = true;
+                multilineHeadParenthesisDepth = 0;
+                multilineHeadParenthesesClosed = false;
+                scanningMultilineHead = TryInitializePrologMultilineHeadScan(
+                    lines,
+                    container,
+                    lineIndex,
+                    ref multilineHeadParenthesisDepth,
+                    ref multilineHeadParenthesesClosed);
+            }
+
+            string callScanLine;
+            if (scanningMultilineHead)
+            {
+                var multilineHeadLine = lineNumber == container.StartLine
+                    ? MaskLineBeforeColumn(lines[lineIndex], container.StartColumn ?? 0)
+                    : lines[lineIndex];
+                callScanLine = PreparePrologMultilineHeadScanLine(
+                    multilineHeadLine,
+                    ref multilineHeadParenthesisDepth,
+                    ref multilineHeadParenthesesClosed,
+                    out var headEnded);
+                scanningMultilineHead = !headEnded;
+            }
+            else
+            {
+                callScanLine = PreparePrologCallScanLine(
+                    "prolog",
+                    lines[lineIndex],
+                    container.StartLine < lineNumber);
+            }
+            var lineCalls = new List<PrologGoalCall>();
+            ScanPrologGoalLine(
+                lines,
+                lineIndex,
+                callScanLine,
+                callableNames,
+                frames,
+                ref expectGoal,
+                lineCalls);
+            if (lineCalls.Count > 0)
+            {
+                result[lineNumber] = lineCalls
+                    .Select(call => IsTopLevelPrologDirectiveGoal(lines[lineIndex], call.Column)
+                        ? call with { IsTopLevelDirective = true }
+                        : call)
+                    .ToList();
+            }
+
+            if (ContainsPrologClauseTerminator(callScanLine))
+            {
+                frames.Clear();
+                activeContainer = null;
+                expectGoal = true;
+            }
+        }
+
+        return result;
+    }
+
+    private static bool StartsWithPrologGoalDirective(string line)
+    {
+        var column = 0;
+        while (column < line.Length && char.IsWhiteSpace(line[column]))
+            column++;
+        return line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlySet<int> BuildPrologDirectiveLines(
+        IReadOnlyList<string> lines)
+    {
+        var directiveLines = new HashSet<int>();
+        var scanningDirective = false;
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            if (!scanningDirective && !StartsWithPrologGoalDirective(lines[lineIndex]))
+                continue;
+
+            scanningDirective = true;
+            directiveLines.Add(lineIndex + 1);
+            if (ContainsPrologClauseTerminator(lines[lineIndex]))
+                scanningDirective = false;
+        }
+
+        return directiveLines;
+    }
+
+    private static bool IsTopLevelPrologDirectiveGoal(string line, int goalColumn)
+    {
+        var segmentStartColumn = 0;
+        for (var column = 0; column < goalColumn; column++)
+        {
+            if (IsPrologClauseTerminator(line, column))
+                segmentStartColumn = column + 1;
+        }
+
+        segmentStartColumn = SkipWhitespace(line, segmentStartColumn);
+        return segmentStartColumn + 2 <= goalColumn
+            && line.AsSpan(segmentStartColumn).StartsWith(":-", StringComparison.Ordinal);
+    }
+
+    private static bool TryInitializePrologMultilineHeadScan(
+        IReadOnlyList<string> lines,
+        SymbolRecord container,
+        int currentLineIndex,
+        ref int parenthesisDepth,
+        ref bool parenthesesClosed)
+    {
+        var startLineIndex = container.StartLine - 1;
+        if (startLineIndex < 0 || startLineIndex >= lines.Count || startLineIndex > currentLineIndex)
+            return false;
+
+        var startColumn = Math.Clamp(
+            container.StartColumn ?? 0,
+            0,
+            lines[startLineIndex].Length);
+        var headLine = lines[startLineIndex][startColumn..];
+        var multilineHeadMatch = PrologMultilineHeadRegex.Match(headLine);
+        if (PrologHeadRegex.IsMatch(headLine) || !multilineHeadMatch.Success)
+            return false;
+        parenthesesClosed = !multilineHeadMatch.Groups["open"].Success;
+
+        for (var lineIndex = startLineIndex; lineIndex < currentLineIndex; lineIndex++)
+        {
+            var line = lineIndex == startLineIndex
+                ? MaskLineBeforeColumn(lines[lineIndex], startColumn)
+                : lines[lineIndex];
+            _ = PreparePrologMultilineHeadScanLine(
+                line,
+                ref parenthesisDepth,
+                ref parenthesesClosed,
+                out var headEnded);
+            if (headEnded)
+                return false;
+        }
+
+        return true;
+    }
+
+    private static string MaskLineBeforeColumn(string line, int startColumn)
+    {
+        startColumn = Math.Clamp(startColumn, 0, line.Length);
+        if (startColumn == 0)
+            return line;
+
+        var masked = line.ToCharArray();
+        FillWithSpaces(masked, 0, startColumn);
+        return new string(masked);
+    }
+
+    private static string PreparePrologMultilineHeadScanLine(
+        string line,
+        ref int parenthesisDepth,
+        ref bool parenthesesClosed,
+        out bool headEnded)
+    {
+        headEnded = false;
+        for (var column = 0; column < line.Length; column++)
+        {
+            var ch = line[column];
+            if (ch is '\'' or '"')
+            {
+                column = SkipQuotedToken(line, column, ch) - 1;
+                continue;
+            }
+
+            if (!parenthesesClosed)
+            {
+                if (ch == '(')
+                {
+                    parenthesisDepth++;
+                }
+                else if (ch == ')' && parenthesisDepth > 0)
+                {
+                    parenthesisDepth--;
+                    parenthesesClosed = parenthesisDepth == 0;
+                }
+                continue;
+            }
+
+            if (line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal))
+            {
+                var masked = line.ToCharArray();
+                FillWithSpaces(masked, 0, column + 3);
+                headEnded = true;
+                return new string(masked);
+            }
+            if (line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal))
+            {
+                var masked = line.ToCharArray();
+                FillWithSpaces(masked, 0, column + 2);
+                headEnded = true;
+                return new string(masked);
+            }
+            if (IsPrologClauseTerminator(line, column))
+            {
+                headEnded = true;
+                return new string(' ', line.Length);
+            }
+        }
+
+        return new string(' ', line.Length);
+    }
+
+    private static void ScanPrologGoalLine(
+        IReadOnlyList<string> lines,
+        int lineIndex,
+        string line,
+        IReadOnlySet<string> callableNames,
+        Stack<PrologLexicalFrame> frames,
+        ref bool expectGoal,
+        List<PrologGoalCall> calls)
+    {
+        for (var column = 0; column < line.Length;)
+        {
+            var ch = line[column];
+            if (char.IsWhiteSpace(ch))
+            {
+                column++;
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                column = SkipQuotedToken(line, column, ch);
+                if (expectGoal)
+                    expectGoal = false;
+                continue;
+            }
+            if (IsPrologClauseTerminator(line, column))
+            {
+                frames.Clear();
+                expectGoal = true;
+                column++;
+                continue;
+            }
+
+            if (expectGoal)
+            {
+                if (line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal))
+                {
+                    column += 3;
+                    continue;
+                }
+                if (line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal)
+                    || line.AsSpan(column).StartsWith(@"\+", StringComparison.Ordinal))
+                {
+                    column += 2;
+                    continue;
+                }
+                if (ch is ',' or ';')
+                {
+                    column++;
+                    continue;
+                }
+                if (line.AsSpan(column).StartsWith("->", StringComparison.Ordinal))
+                {
+                    column += 2;
+                    continue;
+                }
+                if (ch == '(')
+                {
+                    frames.Push(new PrologLexicalFrame(PrologLexicalFrameKind.GoalGroup));
+                    column++;
+                    continue;
+                }
+                if (ch == '{')
+                {
+                    frames.Push(new PrologLexicalFrame(
+                        PrologLexicalFrameKind.GoalGroup,
+                        terminator: '}'));
+                    column++;
+                    continue;
+                }
+                if (ch == '[')
+                {
+                    frames.Push(new PrologLexicalFrame(
+                        PrologLexicalFrameKind.TermGroup,
+                        terminator: ']'));
+                    expectGoal = false;
+                    column++;
+                    continue;
+                }
+                if (ch == '!')
+                {
+                    expectGoal = false;
+                    column++;
+                    continue;
+                }
+                if (char.IsLower(ch))
+                {
+                    var nameStart = column;
+                    column++;
+                    while (column < line.Length
+                        && (char.IsLetterOrDigit(line[column]) || line[column] == '_'))
+                    {
+                        column++;
+                    }
+
+                    var name = line[nameStart..column];
+                    var nextColumn = column;
+                    while (nextColumn < line.Length && char.IsWhiteSpace(line[nextColumn]))
+                        nextColumn++;
+                    if (nextColumn < line.Length
+                        && line[nextColumn] == ':'
+                        && (nextColumn + 1 >= line.Length || line[nextColumn + 1] != '-'))
+                    {
+                        column = nextColumn + 1;
+                        expectGoal = true;
+                        continue;
+                    }
+                    if (callableNames.Contains(name)
+                        && !IsPrologTermBeforeInfixOperator(
+                            lines,
+                            lineIndex,
+                            column,
+                            nextColumn))
+                    {
+                        calls.Add(new PrologGoalCall(name, nameStart));
+                    }
+
+                    if (nextColumn < line.Length && line[nextColumn] == '(')
+                    {
+                        if (PrologMetaGoalArguments.TryGetValue(name, out var goalArgumentIndices))
+                        {
+                            var metaFrame = new PrologLexicalFrame(
+                                PrologLexicalFrameKind.MetaArguments,
+                                goalArgumentIndices);
+                            frames.Push(metaFrame);
+                            expectGoal = metaFrame.CurrentArgumentIsGoal;
+                        }
+                        else
+                        {
+                            frames.Push(new PrologLexicalFrame(
+                                PrologLexicalFrameKind.PredicateArguments));
+                            expectGoal = false;
+                        }
+
+                        column = nextColumn + 1;
+                    }
+                    else
+                    {
+                        expectGoal = false;
+                    }
+
+                    continue;
+                }
+
+                expectGoal = false;
+                column++;
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                frames.Push(new PrologLexicalFrame(PrologLexicalFrameKind.PredicateArguments));
+                column++;
+                continue;
+            }
+            if (ch is '[' or '{')
+            {
+                frames.Push(new PrologLexicalFrame(
+                    PrologLexicalFrameKind.TermGroup,
+                    terminator: ch == '[' ? ']' : '}'));
+                column++;
+                continue;
+            }
+            if (ch is ')' or ']' or '}')
+            {
+                if (frames.TryPeek(out var closingFrame)
+                    && closingFrame.Terminator == ch)
+                {
+                    frames.Pop();
+                }
+                expectGoal = false;
+                column++;
+                continue;
+            }
+            if (ch == ',')
+            {
+                if (frames.TryPeek(out var frame)
+                    && frame.Kind == PrologLexicalFrameKind.MetaArguments)
+                {
+                    frame.ArgumentIndex++;
+                    expectGoal = frame.CurrentArgumentIsGoal;
+                }
+                else if (CanStartNextPrologGoal(frames))
+                {
+                    expectGoal = true;
+                }
+
+                column++;
+                continue;
+            }
+            if (ch == ';'
+                || line.AsSpan(column).StartsWith("->", StringComparison.Ordinal))
+            {
+                if (CanStartNextPrologGoal(frames))
+                    expectGoal = true;
+                column += ch == ';' ? 1 : 2;
+                continue;
+            }
+
+            column++;
+        }
+    }
+
+    private static bool IsPrologTermBeforeInfixOperator(
+        IReadOnlyList<string> lines,
+        int lineIndex,
+        int nameEndColumn,
+        int nextColumn)
+    {
+        const int lookaheadLineLimit = 256;
+        var line = lines[lineIndex];
+        var afterTermLine = lineIndex;
+        var afterTermColumn = nextColumn;
+        if (nextColumn < line.Length && line[nextColumn] == '(')
+        {
+            var depth = 0;
+            var termClosed = false;
+            var endLineExclusive = Math.Min(lines.Count, lineIndex + lookaheadLineLimit);
+            for (var scanLineIndex = lineIndex;
+                scanLineIndex < endLineExclusive && !termClosed;
+                scanLineIndex++)
+            {
+                var scanLine = lines[scanLineIndex];
+                var startColumn = scanLineIndex == lineIndex ? nextColumn : 0;
+                for (var column = startColumn; column < scanLine.Length; column++)
+                {
+                    var ch = scanLine[column];
+                    if (ch is '\'' or '"')
+                    {
+                        column = SkipQuotedToken(scanLine, column, ch) - 1;
+                        continue;
+                    }
+
+                    if (ch == '(')
+                    {
+                        depth++;
+                    }
+                    else if (ch == ')' && --depth == 0)
+                    {
+                        afterTermLine = scanLineIndex;
+                        afterTermColumn = column + 1;
+                        termClosed = true;
+                        break;
+                    }
+                }
+            }
+
+            // An unterminated compound term is not authoritative evidence of a call.
+            // 未終端の compound term は call と判断できる根拠にならない。
+            if (!termClosed)
+                return true;
+        }
+        else
+        {
+            afterTermColumn = nameEndColumn;
+        }
+
+        if (!TryFindNextPrologToken(
+                lines,
+                afterTermLine,
+                afterTermColumn,
+                lookaheadLineLimit,
+                out var operatorLine,
+                out var operatorColumn))
+        {
+            return false;
+        }
+
+        var operatorSourceLine = lines[operatorLine];
+        var remaining = operatorSourceLine.AsSpan(operatorColumn);
+        if (remaining.StartsWith("->", StringComparison.Ordinal)
+            || remaining.StartsWith("*->", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (operatorSourceLine[operatorColumn] is '=' or '\\' or '<' or '>' or '@' or '#'
+            or ':' or '+' or '-' or '*' or '/' or '^')
+        {
+            return true;
+        }
+
+        foreach (var operatorName in PrologInfixOperatorNames)
+        {
+            if (!remaining.StartsWith(operatorName, StringComparison.Ordinal))
+                continue;
+            var operatorEnd = operatorColumn + operatorName.Length;
+            if (operatorEnd >= operatorSourceLine.Length
+                || !char.IsLetterOrDigit(operatorSourceLine[operatorEnd])
+                    && operatorSourceLine[operatorEnd] != '_')
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFindNextPrologToken(
+        IReadOnlyList<string> lines,
+        int startLine,
+        int startColumn,
+        int lookaheadLineLimit,
+        out int tokenLine,
+        out int tokenColumn)
+    {
+        var endLineExclusive = Math.Min(lines.Count, startLine + lookaheadLineLimit);
+        for (var lineIndex = startLine; lineIndex < endLineExclusive; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var column = lineIndex == startLine ? startColumn : 0;
+            while (column < line.Length && char.IsWhiteSpace(line[column]))
+                column++;
+            if (column < line.Length)
+            {
+                tokenLine = lineIndex;
+                tokenColumn = column;
+                return true;
+            }
+        }
+
+        tokenLine = -1;
+        tokenColumn = -1;
+        return false;
+    }
+
+    private static readonly string[] PrologInfixOperatorNames =
+        ["is", "mod", "rem", "xor", "div", "rdiv"];
+
+    private static bool CanStartNextPrologGoal(
+        IEnumerable<PrologLexicalFrame> frames)
+    {
+        foreach (var frame in frames)
+        {
+            if (frame.Kind == PrologLexicalFrameKind.PredicateArguments)
+                return false;
+            if (frame.Kind == PrologLexicalFrameKind.TermGroup)
+                return false;
+            if (frame.Kind == PrologLexicalFrameKind.MetaArguments)
+                return frame.CurrentArgumentIsGoal;
+        }
+
+        return true;
+    }
+
+    private static bool ContainsPrologClauseTerminator(string line)
+    {
+        for (var column = 0; column < line.Length; column++)
+        {
+            if (IsPrologClauseTerminator(line, column))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void AddPrologContainers(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        Dictionary<int, SymbolRecord> containersByLine,
+        Dictionary<int, List<SymbolRecord>> declarationsByLine)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || symbol.StartLine < 1 || symbol.StartLine > lines.Count)
+                continue;
+
+            var startLineIndex = symbol.StartLine - 1;
+            var startColumn = Math.Clamp(
+                symbol.StartColumn ?? 0,
+                0,
+                lines[startLineIndex].Length);
+            var headLine = lines[startLineIndex][startColumn..];
+            var headMatch = PrologHeadRegex.Match(headLine);
+            if (!headMatch.Success)
+                headMatch = PrologMultilineHeadRegex.Match(headLine);
+            if (!headMatch.Success
+                || !string.Equals(headMatch.Groups["name"].Value, symbol.Name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!declarationsByLine.TryGetValue(symbol.StartLine, out var declarations))
+            {
+                declarations = [];
+                declarationsByLine[symbol.StartLine] = declarations;
+            }
+            declarations.Add(symbol);
+
+            var endLineIndex = FindPrologClauseEnd(lines, startLineIndex, startColumn);
+            for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+                containersByLine.TryAdd(lineIndex + 1, symbol);
+        }
+
+        foreach (var declarations in declarationsByLine.Values)
+        {
+            declarations.Sort(static (left, right) =>
+                (left.StartColumn ?? 0).CompareTo(right.StartColumn ?? 0));
+        }
+    }
+
+    private static int FindPrologClauseEnd(
+        IReadOnlyList<string> lines,
+        int startLineIndex,
+        int startColumn)
+    {
+        for (var lineIndex = startLineIndex; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var firstColumn = lineIndex == startLineIndex ? startColumn : 0;
+            for (var column = firstColumn; column < line.Length; column++)
+            {
+                if (IsPrologClauseTerminator(line, column))
+                    return lineIndex;
+            }
+        }
+
+        return startLineIndex;
+    }
+}

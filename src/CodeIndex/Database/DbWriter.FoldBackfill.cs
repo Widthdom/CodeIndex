@@ -237,6 +237,22 @@ public partial class DbWriter
         return stored == current;
     }
 
+    private bool ExtractorContractsMatchCurrentForReuse(string? lang)
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return true;
+        if (!SymbolExtractorVersionMatchesCurrent(lang))
+            return false;
+        if (!SymbolExtractor.RequiresExplicitReferenceGraphContractStamp(lang))
+            return true;
+
+        var storedGraphContract = GetMetaString(
+            DbContext.GetDynamicReferenceGraphContractVersionMetaKey(lang));
+        var currentGraphContract = SymbolExtractor.GetReferenceGraphContractVersion(lang).ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        return storedGraphContract == currentGraphContract;
+    }
+
     /// <summary>
     /// Recompute persisted folded-name keys from existing symbol / reference rows without
     /// reparsing source files. This is used to upgrade legacy DBs (NULL folded columns) and

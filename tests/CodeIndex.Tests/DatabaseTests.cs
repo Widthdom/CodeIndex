@@ -5465,6 +5465,203 @@ public class DatabaseTests : IDisposable
         Assert.Null(id);
     }
 
+    [Theory]
+    [InlineData("crystal", 2)]
+    [InlineData("groovy", 2)]
+    [InlineData("tcl", 2)]
+    [InlineData("prolog", 1)]
+    [InlineData("ambiguous_pl", 1)]
+    public void GetUnchangedFileId_InvalidatesPreGraphLanguageContracts_Issue4746(
+        string language,
+        int previousContractVersion)
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = $"src/legacy-{language}.txt",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            previousContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        _writer.SetMeta(
+            DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language),
+            previousContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.True(SymbolExtractor.GetContractVersion(language) > previousContractVersion);
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
+    [Theory]
+    [InlineData("crystal", 7)]
+    [InlineData("groovy", 7)]
+    [InlineData("tcl", 7)]
+    [InlineData("prolog", 6)]
+    [InlineData("ambiguous_pl", 6)]
+    public void GetUnchangedFileId_InvalidatesPriorDynamicGraphContracts_Issue4746(
+        string language,
+        int previousContractVersion)
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = $"src/prior-graph-{language}.txt",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+        _writer.SetMeta(
+            DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language),
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+
+        Assert.True(SymbolExtractor.GetContractVersion(language) > previousContractVersion);
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
+    [Theory]
+    [InlineData("crystal")]
+    [InlineData("groovy")]
+    [InlineData("tcl")]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void GetUnchangedFileId_InvalidatesMissingGraphLanguageContracts_Issue4746(
+        string language)
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = $"src/missing-contract-{language}.txt",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            SymbolExtractor.GetContractVersion(language).ToString(CultureInfo.InvariantCulture));
+
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
+    [Theory]
+    [InlineData("crystal", 2)]
+    [InlineData("groovy", 2)]
+    [InlineData("tcl", 2)]
+    [InlineData("prolog", 1)]
+    [InlineData("ambiguous_pl", 1)]
+    public void GetStatus_DegradesPreGraphLanguageContractsUntilRefresh_Issue4746(
+        string language,
+        int previousContractVersion)
+    {
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/legacy-status-{language}.txt",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var versionKey = DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language);
+        _writer.SetMeta(
+            versionKey,
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+
+        var staleReader = new DbReader(_db.Connection);
+        var staleStatus = staleReader.GetStatus();
+        var staleWorkspaceHealth = staleReader.GetWorkspaceIndexHealth();
+
+        Assert.False(staleStatus.ReferenceGraphComplete);
+        Assert.False(staleStatus.GraphDataCurrent);
+        Assert.False(staleWorkspaceHealth.ReferenceGraphComplete);
+        Assert.False(staleWorkspaceHealth.GraphDataCurrent);
+        Assert.Contains(
+            DbReader.DynamicReferenceGraphContractStaleReason,
+            staleStatus.ReferenceGraphIncompleteReasons ?? []);
+
+        _writer.SetMeta(
+            versionKey,
+            SymbolExtractor.GetContractVersion(language).ToString(CultureInfo.InvariantCulture));
+
+        var refreshedReader = new DbReader(_db.Connection);
+        var refreshedStatus = refreshedReader.GetStatus();
+        var refreshedWorkspaceHealth = refreshedReader.GetWorkspaceIndexHealth();
+
+        Assert.DoesNotContain(
+            DbReader.DynamicReferenceGraphContractStaleReason,
+            refreshedStatus.ReferenceGraphIncompleteReasons ?? []);
+        Assert.Equal(
+            refreshedStatus.ReferenceGraphComplete,
+            refreshedWorkspaceHealth.ReferenceGraphComplete);
+        Assert.Equal(
+            refreshedStatus.GraphDataCurrent,
+            refreshedWorkspaceHealth.GraphDataCurrent);
+    }
+
+    [Fact]
+    public void MarkFoldReady_DoesNotCertifyStaleDynamicReferenceGraph_Issue4746()
+    {
+        const string language = "crystal";
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fold-only.cr",
+            Lang = language,
+            Size = 20,
+            Lines = 2,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "helper",
+                StartLine = 1,
+                EndLine = 2,
+            },
+        ]);
+        var graphVersionKey = DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language);
+        _writer.SetMeta(graphVersionKey, "2");
+
+        Assert.True(_writer.MarkFoldReady());
+
+        using var metadataCommand = _db.Connection.CreateCommand();
+        metadataCommand.CommandText = """
+            SELECT key, value
+            FROM codeindex_meta
+            WHERE key IN (
+                'symbol_extractor_version_crystal',
+                'dynamic_reference_graph_contract_version_crystal')
+            """;
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        using (var metadataReader = metadataCommand.ExecuteReader())
+        {
+            while (metadataReader.Read())
+                metadata[metadataReader.GetString(0)] = metadataReader.GetString(1);
+        }
+        Assert.Equal(
+            SymbolExtractor.GetContractVersion(language).ToString(CultureInfo.InvariantCulture),
+            metadata[DbContext.GetSymbolExtractorVersionMetaKey(language)]);
+        Assert.Equal("2", metadata[graphVersionKey]);
+        Assert.True(_writer.SymbolExtractorVersionsMatchCurrent());
+        var status = new DbReader(_db.Connection).GetStatus();
+        Assert.True(status.FoldReady);
+        Assert.False(status.ReferenceGraphComplete);
+        Assert.Contains(
+            DbReader.DynamicReferenceGraphContractStaleReason,
+            status.ReferenceGraphIncompleteReasons ?? []);
+    }
+
     [Fact]
     public void GetUnchangedFileId_MatchesByChecksumWhenTimestampDiffers()
     {

@@ -189,6 +189,17 @@ public static partial class SymbolExtractor
         var structuralLines = StructuralLineMasker.MaskLines(structuralMaskLanguage, lines);
         if (lang is "d" or "julia" or "matlab" or "nim")
             structuralLines = ScientificNativeCommentMasker.MaskBlockComments(lang, structuralLines);
+        structuralLines = DynamicDeclarativeReferenceExtractor.MaskNonCodeLines(
+            lang,
+            structuralLines);
+        if (lang == "tcl")
+        {
+            structuralLines = DynamicDeclarativeReferenceExtractor.MaskTclContinuedCommentLines(
+                lines,
+                structuralLines);
+            structuralLines = DynamicDeclarativeReferenceExtractor.MaskTclNonScriptLines(
+                structuralLines);
+        }
         var scientificBodyScannerLines = lang is "julia" or "matlab"
             ? PrepareScientificBodyScannerLines(structuralLines, lang)
             : null;
@@ -207,6 +218,15 @@ public static partial class SymbolExtractor
         var shellScannerLines = lang == "shell"
             ? MaskShellHeredocLines(lines)
             : null;
+        bool[]? prologClauseContinuationLines = null;
+        Dictionary<int, PrologMultilineHead>? prologMultilineHeads = null;
+        if (lang is "prolog" or "ambiguous_pl")
+        {
+            prologMultilineHeads = [];
+            prologClauseContinuationLines = BuildPrologClauseContinuationLines(
+                structuralLines,
+                prologMultilineHeads);
+        }
         var powershellEnumBodyLines = lang == "powershell"
             ? FindPowerShellEnumBodyLines(structuralLines)
             : null;
@@ -443,6 +463,16 @@ public static partial class SymbolExtractor
                         matchLine.Length,
                         line.Length));
             }
+            var prologContinuationResumeOffset = -1;
+            if (prologClauseContinuationLines?[i] == true)
+            {
+                var clauseTerminatorColumn = FindFirstTopLevelPrologClauseTerminator(matchLine);
+                if (clauseTerminatorColumn >= 0)
+                {
+                    prologContinuationResumeOffset = clauseTerminatorColumn + 1;
+                    patternStartOffset = Math.Max(patternStartOffset, prologContinuationResumeOffset);
+                }
+            }
             while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
             {
                 var stopAfterFirstPatternMatch = false;
@@ -450,6 +480,10 @@ public static partial class SymbolExtractor
                 CSharpPropertyMatchCandidate? csharpPropertyCandidateForLine = null;
                 foreach (var pattern in patterns)
                 {
+                    if (prologClauseContinuationLines?[i] == true
+                        && prologContinuationResumeOffset < 0
+                        && pattern.Kind == "function")
+                        continue;
                     if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
                         continue;
                     if (lang == "powershell"
@@ -1753,6 +1787,16 @@ public static partial class SymbolExtractor
                             restartPatternScanOffset = nextJavaSiblingOffset;
                             break;
                         }
+                        if (lang is "prolog" or "ambiguous_pl"
+                            && pattern.Kind == "function"
+                            && TryGetNextPrologClauseOffset(
+                                patternMatchLine,
+                                absoluteStartColumn,
+                                out var nextPrologClauseOffset))
+                        {
+                            restartPatternScanOffset = nextPrologClauseOffset;
+                            break;
+                        }
 
                         CollectRecordPrimaryComponentSymbols(
                             fileId,
@@ -2191,6 +2235,23 @@ public static partial class SymbolExtractor
             ExtractSectionHeadingSymbols(fileId, lang, lines, symbols);
         if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
             ExtractRazorDirectiveSymbols(fileId, lines, symbols);
+        if (prologMultilineHeads is { Count: > 0 })
+        {
+            AddPrologMultilineHeadSymbols(
+                fileId,
+                lines,
+                symbols,
+                extractionState,
+                prologMultilineHeads);
+        }
+        if (lang == "tcl")
+        {
+            DynamicDeclarativeReferenceExtractor.AddTclInlineProcSymbols(
+                fileId,
+                lines,
+                structuralLines,
+                symbols);
+        }
         AssignContainers(symbols, lines, getCSharpLineStartStates);
         if (lang is "shell" or "powershell")
             AddScriptScopeSymbol(fileId, lines, symbols);
@@ -2215,6 +2276,343 @@ public static partial class SymbolExtractor
                 symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
         }
         return symbols;
+    }
+
+    private static readonly Regex PrologOpenClauseRegex = new(
+        @"^\s*(?:(?:[a-z][A-Za-z0-9_]*\s*(?:\([^\r\n]*\))?\s*(?::-|-->))|:-)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PrologMultilineHeadStartRegex = new(
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?<open>\()",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PrologBareMultilineHeadStartRegex = new(
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const int PrologMultilineHeadLookaheadLineLimit = 256;
+    private readonly record struct PrologMultilineHead(string Name, int StartColumn);
+    private readonly record struct PrologSourcePosition(int LineIndex, int Column);
+
+    private static bool TryGetNextPrologClauseOffset(
+        string line,
+        int currentClauseOffset,
+        out int nextClauseOffset)
+    {
+        for (var column = Math.Max(0, currentClauseOffset); column < line.Length; column++)
+        {
+            if (!DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column))
+                continue;
+
+            for (var candidate = column + 1; candidate < line.Length; candidate++)
+            {
+                if (char.IsWhiteSpace(line[candidate]))
+                    continue;
+
+                if (char.IsLower(line[candidate]))
+                {
+                    nextClauseOffset = candidate;
+                    return true;
+                }
+                break;
+            }
+        }
+
+        nextClauseOffset = -1;
+        return false;
+    }
+
+    private static bool[] BuildPrologClauseContinuationLines(
+        IReadOnlyList<string> structuralLines,
+        Dictionary<int, PrologMultilineHead> multilineHeads)
+    {
+        var continuationLines = new bool[structuralLines.Count];
+        var matchingParentheses = BuildPrologMatchingParentheses(structuralLines);
+        var clauseOpen = false;
+        for (var lineIndex = 0; lineIndex < structuralLines.Count; lineIndex++)
+        {
+            continuationLines[lineIndex] = clauseOpen;
+            var line = structuralLines[lineIndex];
+            var lastTerminatorColumn = FindLastTopLevelPrologClauseTerminator(line);
+
+            if (clauseOpen && lastTerminatorColumn < 0)
+                continue;
+
+            clauseOpen = false;
+            var clauseCandidateOffset = lastTerminatorColumn + 1;
+            var clauseCandidate = line[clauseCandidateOffset..];
+            if (PrologOpenClauseRegex.IsMatch(clauseCandidate))
+            {
+                clauseOpen = true;
+                continue;
+            }
+
+            var multilineHead = PrologMultilineHeadStartRegex.Match(clauseCandidate);
+            if (multilineHead.Success
+                && IsValidatedMultilinePrologHead(
+                     structuralLines,
+                     lineIndex,
+                     clauseCandidateOffset + multilineHead.Groups["open"].Index,
+                     matchingParentheses))
+            {
+                multilineHeads[lineIndex] = new PrologMultilineHead(
+                    multilineHead.Groups["name"].Value,
+                    clauseCandidateOffset + multilineHead.Groups["name"].Index);
+                clauseOpen = true;
+                continue;
+            }
+
+            var bareMultilineHead = PrologBareMultilineHeadStartRegex.Match(clauseCandidate);
+            if (bareMultilineHead.Success
+                && IsValidatedBareMultilinePrologHead(structuralLines, lineIndex))
+            {
+                multilineHeads[lineIndex] = new PrologMultilineHead(
+                    bareMultilineHead.Groups["name"].Value,
+                    clauseCandidateOffset + bareMultilineHead.Groups["name"].Index);
+                clauseOpen = true;
+            }
+        }
+
+        return continuationLines;
+    }
+
+    private static IReadOnlyDictionary<PrologSourcePosition, PrologSourcePosition>
+        BuildPrologMatchingParentheses(IReadOnlyList<string> structuralLines)
+    {
+        var openParentheses = new Stack<PrologSourcePosition>();
+        var matchingParentheses = new Dictionary<PrologSourcePosition, PrologSourcePosition>();
+        for (var lineIndex = 0; lineIndex < structuralLines.Count; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            for (var column = 0; column < line.Length; column++)
+            {
+                var ch = line[column];
+                if (ch is '\'' or '"')
+                {
+                    column = SkipPrologQuotedTerm(line, column, ch) - 1;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    openParentheses.Push(new PrologSourcePosition(lineIndex, column));
+                }
+                else if (ch == ')' && openParentheses.TryPop(out var openingParenthesis))
+                {
+                    matchingParentheses[openingParenthesis] = new PrologSourcePosition(lineIndex, column);
+                }
+            }
+        }
+
+        return matchingParentheses;
+    }
+
+    private static int FindLastTopLevelPrologClauseTerminator(string line)
+        => FindTopLevelPrologClauseTerminator(line, findLast: true);
+
+    private static int FindFirstTopLevelPrologClauseTerminator(string line)
+        => FindTopLevelPrologClauseTerminator(line, findLast: false);
+
+    private static int FindTopLevelPrologClauseTerminator(string line, bool findLast)
+    {
+        var terminatorColumn = -1;
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var column = 0; column < line.Length; column++)
+        {
+            var ch = line[column];
+            if (ch is '\'' or '"')
+            {
+                column = SkipPrologQuotedTerm(line, column, ch) - 1;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '(':
+                    parenthesisDepth++;
+                    continue;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    continue;
+            }
+
+            if (ch != '.'
+                || parenthesisDepth != 0
+                || bracketDepth != 0
+                || braceDepth != 0)
+            {
+                continue;
+            }
+
+            var previous = column > 0 ? line[column - 1] : '\0';
+            var next = column + 1 < line.Length ? line[column + 1] : '\0';
+            if (previous != '.'
+                && next != '.'
+                && !(char.IsDigit(previous) && char.IsDigit(next))
+                && (next == '\0' || char.IsWhiteSpace(next)))
+            {
+                terminatorColumn = column;
+                if (!findLast)
+                    break;
+            }
+        }
+
+        return terminatorColumn;
+    }
+
+    private static bool IsValidatedBareMultilinePrologHead(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex)
+    {
+        var endLineExclusive = Math.Min(
+            structuralLines.Count,
+            startLineIndex + PrologMultilineHeadLookaheadLineLimit);
+        for (var lineIndex = startLineIndex + 1; lineIndex < endLineExclusive; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            for (var column = 0; column < line.Length; column++)
+            {
+                if (char.IsWhiteSpace(line[column]))
+                    continue;
+                return line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal)
+                    || line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal)
+                    || DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column);
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsValidatedMultilinePrologHead(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int openingParenthesisColumn,
+        IReadOnlyDictionary<PrologSourcePosition, PrologSourcePosition> matchingParentheses)
+    {
+        var endLineExclusive = Math.Min(
+            structuralLines.Count,
+            startLineIndex + PrologMultilineHeadLookaheadLineLimit);
+        if (!matchingParentheses.TryGetValue(
+                new PrologSourcePosition(startLineIndex, openingParenthesisColumn),
+                out var closingParenthesis)
+            || closingParenthesis.LineIndex >= endLineExclusive)
+        {
+            return false;
+        }
+
+        for (var lineIndex = closingParenthesis.LineIndex; lineIndex < endLineExclusive; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var startColumn = lineIndex == closingParenthesis.LineIndex
+                ? closingParenthesis.Column + 1
+                : 0;
+            for (var column = startColumn; column < line.Length; column++)
+            {
+                var ch = line[column];
+                if (ch is '\'' or '"')
+                {
+                    column = SkipPrologQuotedTerm(line, column, ch) - 1;
+                    continue;
+                }
+
+                if (char.IsWhiteSpace(ch))
+                    continue;
+                if (line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal)
+                    || line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal)
+                    || DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AddPrologMultilineHeadSymbols(
+        long fileId,
+        IReadOnlyList<string> lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState,
+        IReadOnlyDictionary<int, PrologMultilineHead> multilineHeads)
+    {
+        foreach (var (lineIndex, multilineHead) in multilineHeads)
+        {
+            var lineNumber = lineIndex + 1;
+            var line = lines[lineIndex];
+            AddSymbolRecord(
+                symbols,
+                extractionState,
+                cssSeenSymbols: null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = multilineHead.Name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = multilineHead.StartColumn,
+                    EndLine = lineNumber,
+                    Signature = line[multilineHead.StartColumn..].Trim(),
+                },
+                line);
+        }
+    }
+
+    private static bool HasPrologClauseTerminator(string line)
+    {
+        for (var column = 0; column < line.Length; column++)
+        {
+            if (line[column] is '\'' or '"')
+            {
+                column = SkipPrologQuotedTerm(line, column, line[column]) - 1;
+                continue;
+            }
+
+            if (DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int SkipPrologQuotedTerm(string line, int startColumn, char delimiter)
+    {
+        for (var column = startColumn + 1; column < line.Length; column++)
+        {
+            if (line[column] == '\\')
+            {
+                column++;
+                continue;
+            }
+
+            if (line[column] != delimiter)
+                continue;
+
+            if (column + 1 < line.Length && line[column + 1] == delimiter)
+            {
+                column++;
+                continue;
+            }
+
+            return column + 1;
+        }
+
+        return line.Length;
     }
 
     private const int CSharpFieldInitializerSignatureLimit = 1024;

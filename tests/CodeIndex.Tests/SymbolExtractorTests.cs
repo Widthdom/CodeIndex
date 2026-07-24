@@ -58,13 +58,82 @@ public partial class SymbolExtractorTests
             :- use_module(library(lists)).
             parent(alice, bob).
             ancestor(X, Y) :- parent(X, Y).
+            multiline_parent(
+                X,
+                Y
+            ) :-
+                parent(X, Y).
             """;
 
         var symbols = SymbolExtractor.Extract(1, "prolog", content);
 
         AssertSymbolsContain(symbols, "namespace", "family");
         AssertSymbolsContain(symbols, "import", "library(lists)");
-        AssertSymbolsContain(symbols, "function", "parent", "ancestor");
+        AssertSymbolsContain(symbols, "function", "parent", "ancestor", "multiline_parent");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_PreservesPerlAndPrologStructure_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            use Shared::Tools;
+            sub perl_helper { return 1; }
+            :- module(hybrid, [prolog_helper/0]).
+            :- use_module(library(lists)).
+            prolog_helper :- perl_helper().
+            concat_candidate(1) . other(2);
+            =pod
+            package PodFake;
+            sub pod_fake { return 1; }
+            pod_predicate.
+            =cut
+            /*
+            package BlockFake;
+            sub block_fake { return 1; }
+            block_predicate.
+            */
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ambiguous_pl", content);
+
+        AssertSymbolsContain(symbols, "namespace", "Hybrid", "hybrid");
+        AssertSymbolsContain(symbols, "import", "Shared::Tools", "library(lists)");
+        AssertSymbolsContain(symbols, "function", "perl_helper", "prolog_helper");
+        Assert.DoesNotContain(symbols, symbol =>
+            symbol.Name is "PodFake" or "pod_fake" or "pod_predicate"
+                or "BlockFake" or "block_fake" or "block_predicate"
+                or "concat_candidate" or "other");
+    }
+
+    [Fact]
+    public void Extract_Prolog_ManyMalformedMultilineHeadsUsesBoundedLookahead_Issue4746()
+    {
+        var content = string.Concat(Enumerable.Repeat("malformed(\n", 20_000));
+        var stopwatch = Stopwatch.StartNew();
+
+        var symbols = SymbolExtractor.Extract(1, "prolog", content);
+
+        stopwatch.Stop();
+        Assert.Empty(symbols);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(3),
+            $"Expected bounded multiline-head validation, elapsed={stopwatch.Elapsed}.");
+    }
+
+    [Fact]
+    public void Extract_Prolog_ManySameLineTerminatorsUsesLinearScan_Issue4746()
+    {
+        var content = string.Concat(Enumerable.Repeat(". ", 30_000));
+        var stopwatch = Stopwatch.StartNew();
+
+        var symbols = SymbolExtractor.Extract(1, "prolog", content);
+
+        stopwatch.Stop();
+        Assert.Empty(symbols);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(3),
+            $"Expected linear terminator scanning, elapsed={stopwatch.Elapsed}.");
     }
 
     [Fact]
@@ -1301,6 +1370,7 @@ public partial class SymbolExtractorTests
         var samples = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["ada"] = "with Ada.Text_IO;\npackage Demo is\nprocedure Run;\nend Demo;\n",
+            ["ambiguous_pl"] = "package Demo;\nsub run { return 1; }\nrun(Result) :- Result is 1.\n",
             ["assembly"] = "Start:\n    call Target\nTarget:\n    ret\n",
             ["batch"] = ":run\necho ok\n",
             ["c"] = "int answer(void) { return 42; }\n",
@@ -12522,6 +12592,13 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.XmlContractVersion, SymbolExtractor.GetContractVersion("xml"));
         Assert.True(SymbolExtractor.XmlContractVersion > SymbolExtractor.StyleAndXamlContractVersion);
+        Assert.Equal(SymbolExtractor.DynamicReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("crystal"));
+        Assert.Equal(SymbolExtractor.DynamicReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("groovy"));
+        Assert.Equal(SymbolExtractor.DynamicReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("tcl"));
+        Assert.True(SymbolExtractor.DynamicReferenceGraphContractVersion > SymbolExtractor.DynamicLanguageContractVersion);
+        Assert.Equal(SymbolExtractor.PrologReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("prolog"));
+        Assert.Equal(SymbolExtractor.PrologReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("ambiguous_pl"));
+        Assert.True(SymbolExtractor.PrologReferenceGraphContractVersion > SymbolExtractor.DefaultContractVersion);
         foreach (var language in new[] { "ada", "ambiguous_m", "cython", "d", "julia", "matlab", "nim", "objc" })
         {
             Assert.Equal(

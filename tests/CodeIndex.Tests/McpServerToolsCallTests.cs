@@ -70,6 +70,38 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_ReferenceGraphCommandsExposeStaleDynamicContract_Issue4746()
+    {
+        var writer = new DbWriter(_db.Connection);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/stale.cr",
+            Lang = "crystal",
+            Size = 20,
+            Lines = 3,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("crystal"), "2");
+
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4746,"method":"tools/call","params":{"name":"callers","arguments":{"query":"MissingSymbol","countOnly":true}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.False(structured["reference_graph_complete"]!.GetValue<bool>());
+        Assert.True(structured["degraded"]!.GetValue<bool>());
+        Assert.Equal(
+            0L,
+            structured["reference_extraction_cap_hits"]!["hit_count"]!.GetValue<long>());
+        Assert.Contains(
+            DbReader.DynamicReferenceGraphContractStaleReason,
+            structured["reference_graph_incomplete_reasons"]!
+                .AsArray()
+                .Select(reason => reason!.GetValue<string>()));
+    }
+
+    [Fact]
     public void ToolsCall_LanguagesPublishesReferenceExtractionLimits_Issue4620()
     {
         var request = JsonNode.Parse(
@@ -11668,6 +11700,68 @@ public partial class McpServerTests
         }
         finally
         {
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_StampsSuppressedDynamicGraphLanguage_Issue4746()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_suppressed_dynamic_4746_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_suppressed_dynamic_4746");
+        using var env = EnvironmentVariableScope.Capture(
+            IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, "*.cr");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "generated.cr"),
+                """
+                def helper
+                  1
+                end
+                """);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir,
+                        ["rebuild"] = true
+                    }
+                }
+            };
+
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.True(structured["reference_graph_complete"]!.GetValue<bool>());
+
+            SqliteConnection.ClearAllPools();
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText =
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetDynamicReferenceGraphContractVersionMetaKey("crystal")}'";
+            Assert.Equal(
+                SymbolExtractor.DynamicReferenceGraphContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }

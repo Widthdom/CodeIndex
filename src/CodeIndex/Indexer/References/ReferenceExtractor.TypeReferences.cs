@@ -2713,6 +2713,7 @@ public static partial class ReferenceExtractor
         bool UseCSharpTriggerFastPath,
         bool MaskRustLifetimes,
         bool MaskStringLiterals,
+        bool PreserveStringLiteralWidth,
         bool MaskNimRawStrings,
         bool IncludeBacktickStringDelimiter,
         bool PreserveStringLiteralLength,
@@ -2733,6 +2734,7 @@ public static partial class ReferenceExtractor
             UseCSharpTriggerFastPath: lang == "csharp",
             MaskRustLifetimes: lang == "rust",
             MaskStringLiterals: lang != "cobol",
+            PreserveStringLiteralWidth: lang is "crystal" or "groovy" or "prolog" or "ambiguous_pl",
             MaskNimRawStrings: lang == "nim",
             IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
             PreserveStringLiteralLength: ScientificNativeReferenceExtractor.Supports(lang),
@@ -2779,7 +2781,9 @@ public static partial class ReferenceExtractor
                 var stringLiteralRegex = !options.IncludeBacktickStringDelimiter
                     ? NonBacktickStringLiteralRegex
                     : StringLiteralRegex;
-                result = stringLiteralRegex.Replace(result, "\"\"");
+                result = options.PreserveStringLiteralWidth
+                    ? stringLiteralRegex.Replace(result, static match => new string(' ', match.Length))
+                    : stringLiteralRegex.Replace(result, "\"\"");
             }
         }
         if (result.Contains("/*", StringComparison.Ordinal))
@@ -4826,7 +4830,8 @@ public static partial class ReferenceExtractor
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby" and not "r" and not "haskell"
             and not "makefile" and not "terraform" and not "dockerfile"
-            and not "css" and not "fortran" and not "nim" and not "matlab"
+            and not "css" and not "fortran" and not "crystal" and not "tcl"
+            and not "prolog" and not "ambiguous_pl" and not "nim" and not "matlab"
             and not "julia" and not "cython" and not "ada";
 
     private static bool UsesDashDashComments(string lang) =>

@@ -1329,7 +1329,11 @@ public partial class McpServer
             AddMcpIndexDiagnostics(structured, failures, mcpIndexDiagnostics);
             var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(
                 issuesStateAvailable: (priorReadiness & DbContext.IssuesReadyFlag) != 0);
-            AddReferenceGraphCompletenessSignal(structured, referenceExtractionCapHits);
+            using var referenceSignalReader = new DbReader(writer.Connection, isReadOnly: true);
+            AddReferenceGraphCompletenessSignal(
+                structured,
+                referenceSignalReader,
+                referenceExtractionCapHits);
             if (!sqlGraphContractReady)
             {
                 AddSqlGraphContractSignal(
@@ -1637,6 +1641,8 @@ public partial class McpServer
                     if (!useFullRunBatchMarker)
                         writer.ClearBatchInProgress();
                     txn.Commit();
+                    if (!string.IsNullOrWhiteSpace(record.Lang))
+                        indexedSymbolExtractorLanguages.Add(record.Lang);
                     CountFreshInsertedRows(chunkCount: chunks.Count);
                     ftsMutated = true;
                     processed++;
@@ -2098,6 +2104,12 @@ public partial class McpServer
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);
+            // A successful refresh can stamp the languages it regenerated even when the
+            // independent fold-key contract remains stale.
+            // 成功した refresh で再生成した言語は、独立した fold-key 契約が stale の
+            // ままでも extractor version を stamp できる。
+            writer.StampSymbolExtractorVersions(indexedSymbolExtractorLanguages);
+            writer.StampDynamicReferenceGraphContracts(indexedSymbolExtractorLanguages);
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
             // unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows keep NULL
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers

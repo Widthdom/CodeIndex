@@ -26,6 +26,7 @@ public static class DegradationReasonCodes
     public const string IndexIncomplete = "index_complete=false";
     public const string ReferenceGraphIncomplete = "reference_graph_complete=false";
     public const string ReferenceExtractionCapStateUnavailable = "reference_extraction_cap_state_unavailable";
+    public const string DynamicReferenceGraphContractStale = "dynamic_reference_graph_contract_stale";
     public const string IssuesTableMissing = "issues_table_available=false";
     public const string FileIssuesDataStale = "file_issues_data_current=false";
     public const string CSharpSymbolNameNotReady = "csharp_symbol_name_ready=false";
@@ -55,6 +56,7 @@ public static class DegradationReasonCodes
         IndexIncomplete,
         ReferenceGraphIncomplete,
         ReferenceExtractionCapStateUnavailable,
+        DynamicReferenceGraphContractStale,
         IssuesTableMissing,
         FileIssuesDataStale,
         CSharpSymbolNameNotReady,
@@ -193,6 +195,11 @@ public static class DegradationReasonCodes
                 "Reference-extraction cap state is unavailable for this legacy or stale issue generation, so graph completeness cannot be established.",
                 "Run `cdidx index <projectPath>` to populate current per-file issue state before trusting missing callers, callees, dependencies, or impact edges.",
                 "Run `cdidx index <projectPath> --rebuild` only if a normal index refresh cannot restore current issue state."),
+            DynamicReferenceGraphContractStale => new(
+                code,
+                "Crystal, Groovy, Tcl, Prolog, or ambiguous .pl graph rows may predate the current extractor contract.",
+                "Run `cdidx index <projectPath>` to refresh graph rows and their extractor-version stamps.",
+                "Run `cdidx index <projectPath> --rebuild` only if a normal index refresh cannot restore current graph readiness."),
             IssuesTableMissing => new(
                 code,
                 "Validate output is degraded to empty because the file_issues table is missing.",
