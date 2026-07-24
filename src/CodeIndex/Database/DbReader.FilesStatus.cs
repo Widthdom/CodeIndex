@@ -1876,6 +1876,19 @@ public partial class DbReader
         };
     }
 
+    internal (string Identity, string? StableAt) GetPaginationGeneration()
+    {
+        var freshness = GetFreshnessHint();
+        var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
+        var indexedHeadTimestamp = TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey);
+        var indexedAt = freshness.IndexedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var stableAt = indexedHeadTimestamp ?? indexedAt;
+        var identity = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{indexedHeadSha ?? "no-indexed-head"}\n{indexedHeadTimestamp ?? "no-indexed-head-timestamp"}\n{indexedAt ?? "no-indexed-at"}\n{freshness.FileCount}");
+        return (identity, stableAt);
+    }
+
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()
     {
         return (

@@ -629,6 +629,10 @@ downstream audit tooling. Count-only JSON includes `returned_bucket_counts` and
 `summary.by_bucket` / `summary.by_confidence`, matching the full JSON summary.
 Use `--compact` for audit summaries that keep counts, confidence buckets,
 taxonomy, and filter context without returning the full `symbols` array.
+When `unused` returns `next_cursor`, pass that opaque value back unchanged.
+The cursor is bound to the effective audit scope, filters, ordering, and index
+generation. Changing those inputs or refreshing the index requires restarting
+without `--cursor`; JSON pages also expose `result_stable_at`.
 Public APIs, framework entrypoints, DTOs, serialization contracts, generated
 hooks, test-only hooks, Markdown headings and fenced-code language markers,
 reflection, and configuration-based usage can be false positives and are
@@ -1588,13 +1592,13 @@ By default, `callers` and `callees` return only executable call, construction, a
 cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
-cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor "$NEXT_CURSOR" --limit 20 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 ```
 
 Shows all symbols in a single file ordered deterministically by line, start column when available, kind, and name, with signature, visibility, and container nesting. Lets AI agents understand file structure in one call instead of reading the whole file or chaining `symbols` + `definition`.
 
-For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, `--cursor <outline:offset>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. Controlled JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, and `has_more`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata, or select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
+For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, opaque `--cursor <next_cursor>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. Controlled JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, `has_more`, and `result_stable_at`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. The cursor is bound to the file path, filters, ordering, and index generation, so changing them or refreshing the index requires restarting without `--cursor`. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata, or select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
 
 ### Reconstruct a file excerpt
 
@@ -3826,8 +3830,11 @@ preset です。JSON 出力には `query_context` も含まれるため、audit 
 bucket と confidence filter を直接確認できます。count-only JSON には
 `returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含まれ、
 full JSON summary と同じ bucket totals を返します。count、confidence bucket、taxonomy、
-filter context だけが必要な場合は `--compact` を使ってください。Public API、framework entrypoint、DTO、
-serialization contract、generated hook、test-only hook、Markdown heading と fenced-code の
+filter context だけが必要な場合は `--compact` を使ってください。
+`unused` が `next_cursor` を返した場合は、その opaque 値を変更せず次の呼び出しへ渡してください。
+cursor は有効な audit scope、filter、ordering、index generation に束縛されます。条件を変更した場合や
+index を更新した場合は `--cursor` なしで再開する必要があり、JSON page は `result_stable_at` も返します。
+Public API、framework entrypoint、DTO、serialization contract、generated hook、test-only hook、Markdown heading と fenced-code の
 language marker、reflection、config 経由の使用は false positive になりうるため、
 低 confidence bucket に寄せられます。
 C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
@@ -4784,13 +4791,13 @@ cdidx callees AddToGitExclude --exclude-tests
 cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
-cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor "$NEXT_CURSOR" --limit 20 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 ```
 
 1ファイル内の全シンボルを行、利用可能な場合は開始列、種別、名前の決定的な順序で、シグネチャ・可視性・コンテナ深さに応じたネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
 
-大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、`--cursor <outline:offset>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
+大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、opaque な `--cursor <next_cursor>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more`、`result_stable_at` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。cursor は file path、filter、ordering、index generation に束縛されるため、それらを変更した場合や index を更新した場合は `--cursor` なしで再開してください。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
 
 ### ファイル抜粋を再構成する
 

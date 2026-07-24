@@ -389,7 +389,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <response:v1:offset:fingerprint>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
         Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name] [--group-partials]", output);
         Assert.Contains("cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--max-json-bytes <n>] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]", output);
-        Assert.Contains("cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <outline:offset>] [--sort <source|kind|references|size|complexity|path|name>] [--kind <kind[,kind]>] [--outline-fields <csv>]", output);
+        Assert.Contains("cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <next_cursor>] [--sort <source|kind|references|size|complexity|path|name>] [--kind <kind[,kind]>] [--outline-fields <csv>]", output);
         Assert.Contains("--snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)", output);
         Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
         Assert.Contains("--max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
@@ -432,7 +432,7 @@ public class ConsoleUiTests
         Assert.Contains("Note: if a query itself starts with '-', pass it with --query <query> or -- <query>", output);
         Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--compact]", output);
-        Assert.Contains("[--cursor <unused:offset>] [--audit-scope <source|all>]", output);
+        Assert.Contains("[--cursor <next_cursor>] [--audit-scope <source|all>]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--format <text|json|count|compact>] [--compact] [--fields <csv>] [--cursor <response:v1:offset:fingerprint>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]", output);
         Assert.Contains("--json                     Output as JSON (search/symbols/files stream", output);
         Assert.Contains("search/symbols/files/validate accept --json=array for one", output);
@@ -550,7 +550,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx files [query|<glob>|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact>] [--summary-only] [--max-json-bytes <n>] [--allow-partial] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--format <text|json|count|compact>] [--compact] [--fields <csv>] [--cursor <response:v1:offset:fingerprint>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx unused", output);
-        Assert.Contains("[--cursor <unused:offset>] [--audit-scope <source|all>]", output);
+        Assert.Contains("[--cursor <next_cursor>] [--audit-scope <source|all>]", output);
         Assert.Contains("cdidx license", output);
         Assert.Contains("cdidx completions <shell>", output);
         Assert.Contains("cdidx --completions <shell>", output);

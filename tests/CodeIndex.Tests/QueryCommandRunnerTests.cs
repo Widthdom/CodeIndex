@@ -4982,7 +4982,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, outlineExitCode);
             Assert.Contains("outline --cursor must use an outline pagination cursor", outlineStderr, StringComparison.Ordinal);
             Assert.Equal(CommandExitCodes.UsageError, unusedExitCode);
-            Assert.Contains("cursor for unused must use the `unused:<offset>` cursor", unusedStderr, StringComparison.Ordinal);
+            Assert.Contains("cursor for unused must use the opaque cursor returned by a previous unused response", unusedStderr, StringComparison.Ordinal);
         }
         finally
         {
