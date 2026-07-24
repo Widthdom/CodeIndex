@@ -17,6 +17,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             HashSet<DeclarationPosition> declarationPositions,
             IReadOnlyDictionary<int, SymbolRecord> containersByLine,
             IReadOnlyList<TclContainerScope> tclContainerScopes,
+            IReadOnlyDictionary<string, TclCallableTarget> tclQualifiedCallableTargets,
             IReadOnlyDictionary<int, List<SymbolRecord>> prologContainersByLine,
             IReadOnlyList<string>? tclCallLines,
             IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine,
@@ -26,6 +27,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             DeclarationPositions = declarationPositions;
             ContainersByLine = containersByLine;
             TclContainerScopes = tclContainerScopes;
+            TclQualifiedCallableTargets = tclQualifiedCallableTargets;
             PrologContainersByLine = prologContainersByLine;
             TclCallLines = tclCallLines;
             PrologGoalCallsByLine = prologGoalCallsByLine;
@@ -36,6 +38,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         private HashSet<DeclarationPosition> DeclarationPositions { get; }
         public IReadOnlyDictionary<int, SymbolRecord> ContainersByLine { get; }
         private IReadOnlyList<TclContainerScope> TclContainerScopes { get; }
+        private IReadOnlyDictionary<string, TclCallableTarget> TclQualifiedCallableTargets { get; }
         private IReadOnlyDictionary<int, List<SymbolRecord>> PrologContainersByLine { get; }
         private IReadOnlyList<string>? TclCallLines { get; }
         private IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? PrologGoalCallsByLine { get; }
@@ -78,6 +81,38 @@ internal static class DynamicDeclarativeReferenceExtractor
             var isClauseContinuation = ContainersByLine.TryGetValue(lineNumber, out var container)
                 && container.StartLine < lineNumber;
             return PreparePrologCallScanLine(language, preparedLine, isClauseContinuation);
+        }
+
+        public bool TryResolveTclCallable(
+            string callName,
+            out string referenceName,
+            out string? targetQualifier,
+            out int referenceNameOffset)
+        {
+            referenceName = callName;
+            targetQualifier = null;
+            referenceNameOffset = 0;
+            if (CallableNames.Contains(callName))
+                return true;
+
+            var normalizedCallName = NormalizeTclQualifiedName(callName);
+            if (TclQualifiedCallableTargets.TryGetValue(normalizedCallName, out var target))
+            {
+                referenceName = target.Name;
+                targetQualifier = target.Qualifier;
+                referenceNameOffset = callName.LastIndexOf("::", StringComparison.Ordinal) + 2;
+                return true;
+            }
+
+            if (!normalizedCallName.Contains("::", StringComparison.Ordinal)
+                && CallableNames.Contains(normalizedCallName))
+            {
+                referenceName = normalizedCallName;
+                referenceNameOffset = callName.Length - normalizedCallName.Length;
+                return true;
+            }
+
+            return false;
         }
 
         public IReadOnlyList<PrologGoalCall> GetPrologGoalCalls(int lineNumber)
@@ -182,6 +217,10 @@ internal static class DynamicDeclarativeReferenceExtractor
         int Line,
         int Column);
 
+    internal readonly record struct TclCallableTarget(
+        string Name,
+        string Qualifier);
+
     private enum TclLexicalFrameKind
     {
         Script,
@@ -266,6 +305,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         public bool WordStart { get; set; } = true;
         public int WordIndex { get; set; }
         public string? CommandName { get; set; }
+        public string? FirstArgument { get; set; }
         public string? LastBareWord { get; set; }
         public int LastBareWordIndex { get; set; } = -1;
         public int SwitchStringWordIndex { get; set; } = -1;
@@ -282,6 +322,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             WordStart = source.WordStart;
             WordIndex = source.WordIndex;
             CommandName = source.CommandName;
+            FirstArgument = source.FirstArgument;
             LastBareWord = source.LastBareWord;
             LastBareWordIndex = source.LastBareWordIndex;
             SwitchStringWordIndex = source.SwitchStringWordIndex;
@@ -299,6 +340,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             WordStart = true;
             WordIndex = 0;
             CommandName = null;
+            FirstArgument = null;
             LastBareWord = null;
             LastBareWordIndex = -1;
             SwitchStringWordIndex = -1;
@@ -847,12 +889,32 @@ internal static class DynamicDeclarativeReferenceExtractor
 
         var containersByLine = new Dictionary<int, SymbolRecord>();
         var tclContainerScopes = new List<TclContainerScope>();
+        var tclQualifiedCallableTargets =
+            new Dictionary<string, TclCallableTarget>(StringComparer.Ordinal);
         var prologContainersByLine = new Dictionary<int, List<SymbolRecord>>();
         string[]? tclCallLines = null;
         IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine = null;
         IReadOnlySet<int> prologDirectiveLines = new HashSet<int>();
         if (language == "tcl")
         {
+            foreach (var symbol in symbols)
+            {
+                if (symbol.Kind is not ("function" or "lambda" or "operator")
+                    || string.IsNullOrWhiteSpace(symbol.ContainerName))
+                {
+                    continue;
+                }
+
+                var normalizedContainer = NormalizeTclQualifiedName(symbol.ContainerName);
+                var normalizedName = NormalizeTclQualifiedName(symbol.Name);
+                if (normalizedContainer.Length == 0 || normalizedName.Length == 0)
+                    continue;
+
+                tclQualifiedCallableTargets[
+                    $"{normalizedContainer}::{normalizedName}"] =
+                    new TclCallableTarget(symbol.Name, symbol.ContainerName);
+            }
+
             var tclScriptBodyOpenings = new HashSet<long>();
             var tclBraceEnds = BuildTclBraceEndPositions(structuralLines);
             AddTclContainers(
@@ -885,6 +947,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             declarationPositions,
             containersByLine,
             tclContainerScopes,
+            tclQualifiedCallableTargets,
             prologContainersByLine,
             tclCallLines,
             prologGoalCallsByLine,
@@ -1003,6 +1066,41 @@ internal static class DynamicDeclarativeReferenceExtractor
         foreach (Match match in BoundedRegex.EnumerateMatches(callRegex, preparedLine))
         {
             var nameGroup = match.Groups["name"];
+            if (language == "tcl")
+            {
+                if (!state.TryResolveTclCallable(
+                        nameGroup.Value,
+                        out var referenceName,
+                        out var targetQualifier,
+                        out var referenceNameOffset))
+                {
+                    continue;
+                }
+
+                if (targetQualifier != null
+                    || !string.Equals(referenceName, nameGroup.Value, StringComparison.Ordinal))
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        referenceName,
+                        nameGroup.Index + referenceNameOffset,
+                        "call",
+                        context,
+                        lineNumber,
+                        resolveContainerForCall(nameGroup.Index),
+                        language,
+                        targetQualifier);
+                }
+                else
+                {
+                    addCallLikeReference(nameGroup.Value, nameGroup.Index);
+                }
+
+                continue;
+            }
+
             if (!state.CallableNames.Contains(nameGroup.Value))
                 continue;
             if (language == "groovy"
@@ -2384,16 +2482,18 @@ internal static class DynamicDeclarativeReferenceExtractor
                     if (frame.WordStart)
                     {
                         var wordIndex = frame.WordIndex++;
+                        var token = GetTclQuotedWordToken(line, column);
                         isConcatenatedScriptArgument = IsTclConcatenatedScriptArgument(
                             frame,
                             wordIndex,
-                            GetTclQuotedWordToken(line, column));
+                            token);
                         isScriptArgument = isConcatenatedScriptArgument
                             || IsTclScriptArgument(
                                 frame,
                                 wordIndex,
                                 lines,
                                 braceEnd: null);
+                        UpdateTclFirstArgument(frame, wordIndex, token);
                         UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
                         UpdateTclTryArgumentState(frame, wordIndex, string.Empty, isScriptArgument);
                     }
@@ -2443,11 +2543,16 @@ internal static class DynamicDeclarativeReferenceExtractor
                         wordIndex,
                         lines,
                         braceEnd);
+                    var token = GetTclBracedWordToken(
+                        lines,
+                        lineIndex,
+                        column,
+                        braceEnd);
                     var isConcatenatedScriptArgument = !isSwitchTable
                         && IsTclConcatenatedScriptArgument(
                             frame,
                             wordIndex,
-                            GetTclBracedWordToken(lines, lineIndex, column, braceEnd));
+                            token);
                     var isExpressionArgument = !isSwitchTable
                         && IsTclExpressionArgument(frame, wordIndex);
                     var isScriptArgument = !isSwitchTable
@@ -2458,6 +2563,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                             wordIndex,
                             lines,
                             braceEnd));
+                    UpdateTclFirstArgument(frame, wordIndex, token);
                     UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
                     UpdateTclTryArgumentState(
                         frame,
@@ -2529,6 +2635,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                         frame.CommandName = token;
                     else
                     {
+                        UpdateTclFirstArgument(frame, wordIndex, token);
                         UpdateTclSwitchArgumentState(frame, wordIndex, token);
                         UpdateTclTryArgumentState(
                             frame,
@@ -2646,9 +2753,12 @@ internal static class DynamicDeclarativeReferenceExtractor
             "catch" => wordIndex == 1,
             "for" => wordIndex is 1 or 3 or 4,
             "proc" => wordIndex == 3,
-            "after" => wordIndex == 2,
+            "after" => wordIndex == 2
+                && frame.FirstArgument is not null
+                && frame.FirstArgument is not ("cancel" or "info"),
             "try" => wordIndex == frame.TryScriptWordIndex,
-            "namespace" => wordIndex == 3,
+            "namespace" => wordIndex == 3
+                && frame.FirstArgument == "eval",
             "dict" => frame.LastBareWord == "for"
                 && wordIndex == frame.LastBareWordIndex + 3,
             "switch" => frame.SwitchStringWordIndex >= 0
@@ -2778,6 +2888,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
         else
         {
+            UpdateTclFirstArgument(state, wordIndex, token);
             UpdateTclSwitchArgumentState(state, wordIndex, token);
             UpdateTclTryArgumentState(
                 state,
@@ -2813,6 +2924,22 @@ internal static class DynamicDeclarativeReferenceExtractor
             || line[endColumn - 1] != '"'
                 ? null
                 : line.Substring(startColumn + 1, endColumn - startColumn - 2);
+    }
+
+    private static string NormalizeTclQualifiedName(string name)
+    {
+        while (name.StartsWith("::", StringComparison.Ordinal))
+            name = name[2..];
+        return name;
+    }
+
+    private static void UpdateTclFirstArgument(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string? token)
+    {
+        if (wordIndex == 1 && token != null)
+            frame.FirstArgument = token;
     }
 
     private static void MarkTclBareScriptCommandBoundary(char[] buffer, int commandColumn)

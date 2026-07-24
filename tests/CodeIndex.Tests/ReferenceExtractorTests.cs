@@ -1262,6 +1262,63 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Tcl_OnlyIndexesScriptsForSelectedSubcommands_Issue4746()
+    {
+        const string content = """
+            proc helper {} { return 1 }
+            proc run {} {
+                after idle helper
+                namespace eval ::tmp { helper }
+                after cancel helper
+                after info helper
+                namespace export alpha helper
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper"));
+    }
+
+    [Fact]
+    public void Extract_Tcl_ResolvesNamespaceQualifiedProcCalls_Issue4746()
+    {
+        const string content = """
+            namespace eval ::alpha { proc worker {} { return 1 } }
+            namespace eval ::beta { proc worker {} { return 2 } }
+            proc driver {} {
+                alpha::worker
+                ::beta::worker
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+        var calls = references
+            .Where(reference =>
+                reference.ReferenceKind == "call"
+                && reference.ContainerName == "driver"
+                && reference.SymbolName == "worker")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+
+        Assert.Collection(
+            calls,
+            reference =>
+            {
+                Assert.Equal("::alpha", reference.TargetQualifier);
+                Assert.Equal(12, reference.Column);
+            },
+            reference =>
+            {
+                Assert.Equal("::beta", reference.TargetQualifier);
+                Assert.Equal(13, reference.Column);
+            });
+    }
+
+    [Fact]
     public void Extract_Tcl_IndexesPackagesAndProcCommandCallsWithCaller_Issue4746()
     {
         const string content = """

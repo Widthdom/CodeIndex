@@ -23,7 +23,7 @@ public static partial class SymbolExtractor
     public const int XmlContractVersion = 3;
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
-    public const int DynamicReferenceGraphContractVersion = 6;
+    public const int DynamicReferenceGraphContractVersion = 7;
     public const int PrologReferenceGraphContractVersion = 6;
     public const int SystemsLanguageContractVersion = 2;
     private static readonly string[] ExplicitReferenceGraphContractLanguages =
