@@ -1063,6 +1063,8 @@ public partial class ReferenceExtractorTests
             def run(value)
               helper value
               helper(value)
+              text = "123456789"; helper(value)
+              helper = 1
             end
             """;
 
@@ -1071,6 +1073,20 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
         AssertReferencesContain(references, "type_reference", null, "support");
         AssertReferencesContain(references, "call", "run", "helper");
+        Assert.Equal(3, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper"));
+        var stringCallLine = Array.FindIndex(
+            content.Split('\n'),
+            line => line.Contains("text =", StringComparison.Ordinal)) + 1;
+        var stringCall = Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"
+            && reference.Line == stringCallLine);
+        Assert.Equal(
+            content.Split('\n')[stringCallLine - 1].IndexOf("helper", StringComparison.Ordinal) + 1,
+            stringCall.Column);
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName is "require" or "def");
@@ -1083,6 +1099,10 @@ public partial class ReferenceExtractorTests
             import demo.Support
 
             class Runner {
+                Runner() {
+                    super(1)
+                }
+
                 static def helper(value) {
                     value
                 }
@@ -1090,6 +1110,9 @@ public partial class ReferenceExtractorTests
                 def run(value) {
                     helper value
                     helper(value)
+                    def text = "123456789"; helper(value)
+                    helper = 1
+                    synchronized(value) {}
                 }
             }
             """;
@@ -1099,9 +1122,23 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
         AssertReferencesContain(references, "type_reference", null, "Support");
         AssertReferencesContain(references, "call", "run", "helper");
+        Assert.Equal(3, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper"));
+        var stringCallLine = Array.FindIndex(
+            content.Split('\n'),
+            line => line.Contains("text =", StringComparison.Ordinal)) + 1;
+        var stringCall = Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"
+            && reference.Line == stringCallLine);
+        Assert.Equal(
+            content.Split('\n')[stringCallLine - 1].IndexOf("helper", StringComparison.Ordinal) + 1,
+            stringCall.Column);
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "import" or "def");
+            && reference.SymbolName is "import" or "def" or "Runner" or "super" or "synchronized");
     }
 
     [Fact]
@@ -1290,6 +1327,15 @@ public partial class ReferenceExtractorTests
                 catch {
                     helper
                 }
+                switch $value {
+                    one { helper }
+                    default {
+                        helper
+                    }
+                }
+                switch -exact -- $value one {
+                    helper
+                } default { helper }
                 puts \
                     helper
                 set callback helper()
@@ -1309,7 +1355,7 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(references, "call", "multiline", "helper");
         AssertReferencesContain(references, "call", "split", "helper");
         AssertReferencesContain(references, "call", "sameLine", "helper");
-        Assert.Equal(11, references.Count(reference =>
+        Assert.Equal(15, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
         Assert.Single(references, reference =>
@@ -1330,6 +1376,19 @@ public partial class ReferenceExtractorTests
                 helper.
             bar(_).
             nested(bar(X)).
+            process(_).
+            data_only(X) :-
+                X = bar(value),
+                process(bar(X)).
+            list_data(X) :-
+                X = [bar(value), bar(other)],
+                process(X).
+            operator_data :-
+                bar(value) = bar(other),
+                bar = value,
+                process(value).
+            meta :-
+                call(helper).
             build(Term) :-
                 Term =.. [node,
                           value],
@@ -1347,10 +1406,14 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "build");
         Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
         AssertReferencesContain(references, "type_reference", null, "support");
+        Assert.Equal(4, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName is "threshold" or "quoted" or "meta" or "build"
+            && reference.SymbolName == "helper"));
         Assert.Equal(3, references.Count(reference =>
             reference.ReferenceKind == "call"
-            && reference.ContainerName is "threshold" or "quoted" or "build"
-            && reference.SymbolName == "helper"));
+            && (reference.ContainerName is "data_only" or "list_data" or "operator_data")
+            && reference.SymbolName == "process"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName is "threshold" or "bar");

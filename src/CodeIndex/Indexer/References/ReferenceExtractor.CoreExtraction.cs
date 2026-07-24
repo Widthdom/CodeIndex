@@ -2542,7 +2542,7 @@ public static partial class ReferenceExtractor
             }
             else
             {
-                if (language != "tcl")
+                if (language is not ("tcl" or "prolog"))
                 {
                     foreach (Match match in CallRegex.Matches(callScanLine))
                     {
@@ -2557,6 +2557,16 @@ public static partial class ReferenceExtractor
                         if (sqlWindowFunctionCallSiteSuppressions != null
                             && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
                             continue;
+                        if (DynamicDeclarativeReferenceExtractor.ShouldSuppressGenericCall(
+                                language,
+                                callScanLine,
+                                name,
+                                callIndex,
+                                lineNumber,
+                                dynamicDeclarativeState))
+                        {
+                            continue;
+                        }
                         GetMatchedCallIndices().Add(callIndex);
                         if (TryAddCallLikeReference(name, callIndex))
                         {

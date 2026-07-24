@@ -290,8 +290,8 @@ public static partial class ReferenceExtractor
         {
             "apply", "as", "assert", "break", "case", "catch", "class", "continue", "def", "do",
             "else", "enum", "extends", "finally", "for", "if", "implements", "import", "in",
-            "instanceof", "interface", "new", "package", "return", "switch", "this", "throw",
-            "throws", "trait", "try", "while",
+            "instanceof", "interface", "new", "package", "return", "super", "switch", "synchronized",
+            "this", "throw", "throws", "trait", "try", "while",
         },
         ["tcl"] = new HashSet<string>(StringComparer.Ordinal)
         {

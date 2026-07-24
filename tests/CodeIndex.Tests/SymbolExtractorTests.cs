@@ -77,6 +77,7 @@ public partial class SymbolExtractorTests
             :- module(hybrid, [prolog_helper/0]).
             :- use_module(library(lists)).
             prolog_helper :- perl_helper().
+            concat_candidate(1) . other(2);
             =pod
             package PodFake;
             sub pod_fake { return 1; }
@@ -96,7 +97,8 @@ public partial class SymbolExtractorTests
         AssertSymbolsContain(symbols, "function", "perl_helper", "prolog_helper");
         Assert.DoesNotContain(symbols, symbol =>
             symbol.Name is "PodFake" or "pod_fake" or "pod_predicate"
-                or "BlockFake" or "block_fake" or "block_predicate");
+                or "BlockFake" or "block_fake" or "block_predicate"
+                or "concat_candidate" or "other");
     }
 
     [Fact]

@@ -2713,6 +2713,7 @@ public static partial class ReferenceExtractor
         bool UseCSharpTriggerFastPath,
         bool MaskRustLifetimes,
         bool MaskStringLiterals,
+        bool PreserveStringLiteralWidth,
         bool IncludeBacktickStringDelimiter,
         bool UsesHashComments,
         bool UsesRHashComments,
@@ -2727,6 +2728,7 @@ public static partial class ReferenceExtractor
             UseCSharpTriggerFastPath: lang == "csharp",
             MaskRustLifetimes: lang == "rust",
             MaskStringLiterals: lang != "cobol",
+            PreserveStringLiteralWidth: lang is "crystal" or "groovy" or "prolog" or "ambiguous_pl",
             IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
             UsesHashComments: UsesHashComments(lang),
             UsesRHashComments: lang == "r",
@@ -2755,7 +2757,9 @@ public static partial class ReferenceExtractor
             var stringLiteralRegex = !options.IncludeBacktickStringDelimiter
                 ? NonBacktickStringLiteralRegex
                 : StringLiteralRegex;
-            result = stringLiteralRegex.Replace(result, "\"\"");
+            result = options.PreserveStringLiteralWidth
+                ? stringLiteralRegex.Replace(result, static match => new string(' ', match.Length))
+                : stringLiteralRegex.Replace(result, "\"\"");
         }
         if (result.Contains("/*", StringComparison.Ordinal))
             result = InlineBlockCommentRegex.Replace(result, " ");
