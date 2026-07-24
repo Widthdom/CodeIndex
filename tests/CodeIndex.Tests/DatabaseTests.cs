@@ -968,6 +968,78 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraph_JuliaQualifierSelectsContainerWithinSharedModuleFile_Issue4738()
+    {
+        const string targetContent = """
+            module A
+            function foo()
+            end
+            macro trace(value)
+                value
+            end
+            end
+            module B
+            function foo()
+            end
+            macro trace(value)
+                value
+            end
+            end
+            """;
+        const string callerContent = """
+            function run()
+                A.foo()
+                A.@trace 1
+            end
+            """;
+        var targetId = UpsertTestFileWithLanguage(
+            "src/modules.jl",
+            "julia",
+            "qualified-julia-shared-module-target");
+        var callerId = UpsertTestFileWithLanguage(
+            "src/caller.jl",
+            "julia",
+            "qualified-julia-shared-module-caller");
+        var targetSymbols = SymbolExtractor.Extract(targetId, "julia", targetContent);
+        var callerSymbols = SymbolExtractor.Extract(callerId, "julia", callerContent);
+        _writer.InsertSymbols([.. targetSymbols, .. callerSymbols]);
+        var callerReferences = ReferenceExtractor.Extract(
+            callerId,
+            "julia",
+            callerContent,
+            callerSymbols);
+        _writer.InsertReferences(callerReferences, refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        foreach (var name in new[] { "foo", "trace" })
+        {
+            var reference = Assert.Single(callerReferences, candidate =>
+                candidate.SymbolName == name && candidate.ReferenceKind == "call");
+            Assert.Equal("A", reference.TargetQualifier);
+            var expectedTargetId = ExecuteScalarLong($"""
+                SELECT id
+                FROM symbols
+                WHERE file_id = {targetId.ToString(CultureInfo.InvariantCulture)}
+                  AND name = '{name}'
+                  AND container_name = 'A'
+                """);
+            Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+                SELECT target_symbol_id
+                FROM symbol_references
+                WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+                  AND symbol_name = '{name}'
+                """));
+            Assert.Equal("resolved", ExecuteScalarString($"""
+                SELECT resolution_state
+                FROM symbol_references
+                WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+                  AND symbol_name = '{name}'
+                """));
+        }
+    }
+
+    [Fact]
     public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
     {
         var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");

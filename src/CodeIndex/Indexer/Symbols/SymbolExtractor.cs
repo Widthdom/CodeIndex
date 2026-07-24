@@ -58,6 +58,9 @@ public static partial class SymbolExtractor
 
     private const int SymbolListInitialCapacityLineThreshold = 128;
     private const int SymbolListInitialCapacityMax = 1024;
+    private const string JuliaIdentifierPattern = @"[\p{L}_]\w*";
+    private const string JuliaQualifiedCallableIdentifierPattern =
+        JuliaIdentifierPattern + @"(?:\." + JuliaIdentifierPattern + @")*!?";
 
     private static string[] SplitContentLines(string content) =>
         content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
@@ -1649,9 +1652,9 @@ public static partial class SymbolExtractor
             new("namespace", new Regex(@"^\s*(?:baremodule|module)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
             new("struct",   new Regex(@"^\s*(?:mutable\s+)?struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
             new("type",     new Regex(@"^\s*(?:abstract|primitive)\s+type\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("function", new Regex(@"^\s*function\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("function", new Regex(@"^\s*function\s+(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
             new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("function", new Regex(@"^\s*(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\([^)\r\n]*\)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.JuliaShortFunction),
+            new("function", new Regex(@"^\s*(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*\([^)\r\n]*\)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.JuliaShortFunction),
             new("property", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:using|import)\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],

@@ -936,13 +936,13 @@ public partial class DbReader
     /// SQL 側で要求された LIMIT/OFFSET を適用し、呼び出し側が要求以上の中間ページを
     /// materialize しないようにする。
     /// </summary>
-    private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
-        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId: null);
+    private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool includeAmbiguousMSource = false)
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId: null, includeAmbiguousMSource);
 
-    private List<CallerResult> GetCallersExactForTarget(string symbolName, long targetSymbolId, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
-        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId);
+    private List<CallerResult> GetCallersExactForTarget(string symbolName, long targetSymbolId, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool includeAmbiguousMSource = false)
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId, includeAmbiguousMSource);
 
-    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, long? targetSymbolId)
+    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, long? targetSymbolId, bool includeAmbiguousMSource)
     {
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -1014,7 +1014,11 @@ public partial class DbReader
                   AND {supportedLangFilter}
                   {targetCondition}";
         if (lang != null)
-            sql += " AND f.lang = @lang";
+        {
+            sql += includeAmbiguousMSource
+                ? " AND (f.lang = @lang OR f.lang = 'ambiguous_m')"
+                : " AND f.lang = @lang";
+        }
         sql += BuildCSharpBareMemberGraphReferenceFilter(symbolName, lang, exact: true, contextSql, "f", "r");
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += @"
@@ -1142,6 +1146,14 @@ public partial class DbReader
                                     && rootDefinitions[0].Lang == "csharp"
             ? rootDefinitions[0].SymbolId
             : null;
+        var ambiguousMRootSymbolId = hasResolvedIdentityGraph
+                                     && rootDefinitions.Count == 1
+                                     && lang is "matlab" or "objc"
+                                     && string.Equals(rootDefinitions[0].Lang, lang, StringComparison.Ordinal)
+            ? rootDefinitions[0].SymbolId
+            : null;
+        var identityRootSymbolId = qualifiedRootSymbolId ?? ambiguousMRootSymbolId;
+        var includeAmbiguousMSource = ambiguousMRootSymbolId != null;
 
         var results = new List<ImpactResult>();
         resultOffset = Math.Max(0, resultOffset);
@@ -1204,9 +1216,9 @@ public partial class DbReader
             while (discoveredResultCount < resultWindowEnd && fetchIterations < maxFetchIterations && !graphStateBudgetHit && !boundaryProbeBudgetHit)
             {
                 fetchIterations++;
-                var page = depth == 0 && qualifiedRootSymbolId is long targetSymbolId
-                    ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests)
-                    : GetCallersExact(currentSymbol, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests);
+                var page = depth == 0 && identityRootSymbolId is long targetSymbolId
+                    ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource)
+                    : GetCallersExact(currentSymbol, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource);
 
                 if (page.Count == 0)
                     break; // No more callers for this symbol / このシンボルの caller は尽きた
@@ -1353,7 +1365,8 @@ public partial class DbReader
                             lang,
                             pathPatterns,
                             excludePathPatterns,
-                            excludeTests);
+                            excludeTests,
+                            includeAmbiguousMSource);
                         maxDepthReached |= boundaryInspection.HasUnvisitedCaller;
                         if (boundaryInspection.ProbeBudgetHit)
                         {
@@ -1452,7 +1465,8 @@ public partial class DbReader
         string? lang,
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
-        bool excludeTests)
+        bool excludeTests,
+        bool includeAmbiguousMSource)
     {
         var offset = 0;
         var probes = 0;
@@ -1462,7 +1476,7 @@ public partial class DbReader
                 return new ImpactBoundaryInspection(HasUnvisitedCaller: true, ProbeBudgetHit: true);
 
             var pageSize = Math.Min(ImpactBoundaryCallerProbePageSize, ImpactBoundaryCallerProbeBudget - probes);
-            var page = GetCallersExact(symbolName, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
+            var page = GetCallersExact(symbolName, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource);
             if (page.Count == 0)
                 return new ImpactBoundaryInspection(HasUnvisitedCaller: false, ProbeBudgetHit: false);
             probes += page.Count;

@@ -1578,6 +1578,35 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JuliaBangCallablesAndQualifiedMacrosPreserveGraphIdentity_Issue4738()
+    {
+        const string content = """
+            function mutate!(value)
+                value
+            end
+            push!(values, value) = values
+            function run(values)
+                A.mutate!(values)
+                A.push!.(values)
+                A.@trace values
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "mutate!");
+        Assert.Contains(symbols, symbol => symbol.Name == "push!");
+        foreach (var name in new[] { "mutate!", "push!", "trace" })
+        {
+            var reference = Assert.Single(references, candidate =>
+                candidate.SymbolName == name && candidate.ReferenceKind == "call");
+            Assert.Equal("A", reference.TargetQualifier);
+            Assert.Equal("run", reference.ContainerName);
+        }
+    }
+
+    [Fact]
     public void Extract_MatlabContinuationTailDoesNotEmitCalls_Issue4738()
     {
         const string content = """

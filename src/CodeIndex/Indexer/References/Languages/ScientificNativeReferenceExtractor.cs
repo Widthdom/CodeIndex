@@ -6,6 +6,9 @@ namespace CodeIndex.Indexer;
 
 internal static class ScientificNativeReferenceExtractor
 {
+    private const string JuliaIdentifierPattern = @"[\p{L}_]\w*";
+    private const string JuliaCallableIdentifierPattern = JuliaIdentifierPattern + @"!?";
+
     internal readonly record struct DTemplateArgumentCallSpan(int Start, int EndExclusive);
     private readonly record struct DTemplateInvocation(
         string Name,
@@ -43,10 +46,13 @@ internal static class ScientificNativeReferenceExtractor
         @"(?:<:|::)\s*(?<name>[A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_]\w*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex JuliaMacroCallRegex = new(
-        @"(?<![\w@])@(?<name>[A-Za-z_]\w*)",
+        $@"(?<![\w@])@(?<name>{JuliaIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex JuliaBangCallRegex = new(
+        $@"(?<![\w$])(?<name>{JuliaIdentifierPattern}!)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex JuliaBroadcastCallRegex = new(
-        @"(?<![\w$])(?<name>[A-Za-z_]\w*)\s*\.\s*\(",
+        $@"(?<![\w$])(?<name>{JuliaCallableIdentifierPattern})\s*\.\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex DImportListRegex = new(
@@ -96,6 +102,12 @@ internal static class ScientificNativeReferenceExtractor
         var separatorIndex = callIndex - 1;
         while (separatorIndex >= 0 && char.IsWhiteSpace(preparedLine[separatorIndex]))
             separatorIndex--;
+        if (separatorIndex >= 0 && preparedLine[separatorIndex] == '@')
+        {
+            separatorIndex--;
+            while (separatorIndex >= 0 && char.IsWhiteSpace(preparedLine[separatorIndex]))
+                separatorIndex--;
+        }
         if (separatorIndex < 0 || preparedLine[separatorIndex] != '.')
             return null;
 
@@ -182,6 +194,11 @@ internal static class ScientificNativeReferenceExtractor
                     stripLeadingRelativePrefix: true);
                 EmitMatches(JuliaTypeRegex, "type_reference", normalizeQualifiedTypeName: true);
                 foreach (Match match in JuliaMacroCallRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["name"];
+                    addCallLikeReference(group.Value, group.Index);
+                }
+                foreach (Match match in JuliaBangCallRegex.Matches(preparedLine))
                 {
                     var group = match.Groups["name"];
                     addCallLikeReference(group.Value, group.Index);

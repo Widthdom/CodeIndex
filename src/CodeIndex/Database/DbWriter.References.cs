@@ -164,6 +164,8 @@ public partial class DbWriter
                       'nim',
                       'objc'
                   )
+                  AND COALESCE(s.container_name, '') = ''
+                  AND COALESCE(s.container_qualified_name, '') = ''
                   AND EXISTS (
                       SELECT 1
                       FROM symbols AS target_scope
