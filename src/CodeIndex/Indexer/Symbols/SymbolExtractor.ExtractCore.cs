@@ -2184,6 +2184,14 @@ public static partial class SymbolExtractor
                 extractionState,
                 prologMultilineHeads);
         }
+        if (lang == "tcl")
+        {
+            DynamicDeclarativeReferenceExtractor.AddTclInlineProcSymbols(
+                fileId,
+                lines,
+                structuralLines,
+                symbols);
+        }
         AssignContainers(symbols, lines, getCSharpLineStartStates);
         if (lang is "shell" or "powershell")
             AddScriptScopeSymbol(fileId, lines, symbols);

@@ -1149,6 +1149,10 @@ public partial class ReferenceExtractorTests
                 def run(value) {
                     helper value
                     helper(value)
+                    if (value) helper value
+                    while (value) helper value
+                    for (item in [value]) helper item
+                    if (nested(value)) helper value
                     def text = "123456789"; helper(value)
                     [1].each { helper it }
                     annotated(value)
@@ -1170,7 +1174,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "genericConvert");
         AssertReferencesContain(references, "type_reference", null, "Support");
         AssertReferencesContain(references, "call", "run", "helper");
-        Assert.Equal(4, references.Count(reference =>
+        Assert.Equal(8, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper"));
@@ -1233,6 +1237,28 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "arg");
+    }
+
+    [Fact]
+    public void Extract_Tcl_IndexesInlineScriptProcWithCaller_Issue4746()
+    {
+        const string content = """
+            proc helper {} { return 1 }
+            namespace eval ::demo { proc run {} { helper } }
+            set literal { proc fake {} { helper } }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        var run = Assert.Single(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "run");
+        Assert.Equal("::demo", run.ContainerName);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "fake");
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
     }
 
     [Fact]
@@ -1340,6 +1366,28 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName is "module" or "use_module" or "ancestor");
+    }
+
+    [Theory]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void Extract_Prolog_IndexesTopLevelDirectiveGoals_Issue4746(string language)
+    {
+        const string content = """
+            helper.
+            :- helper.
+            :- initialization(helper).
+            :- initialization(
+                helper
+            ).
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences(language, content);
+
+        Assert.Equal(3, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == null
+            && reference.SymbolName == "helper"));
     }
 
     [Theory]
@@ -1454,6 +1502,33 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "Shared::Tools"
             && reference.ReferenceKind == "reference");
         AssertReferencesContain(references, "call", "prolog_helper", "perl_helper");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_MasksPerlQuoteLikeRegexBodies_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            :- module(hybrid, [helper/0]).
+            sub helper { return 1; }
+            my $regex = qr/helper()/;
+            my $match = m{helper()};
+            my $subst = s/helper()/replacement/;
+            my $paired = s{helper()}{replacement};
+            my $translated = tr/helper()/replacement/;
+            my $quoted = q(helper());
+            my $multiline = qr{
+                helper()
+            };
+            prolog_run :- helper.
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "prolog_run"
+            && reference.SymbolName == "helper");
     }
 
     [Fact]
