@@ -193,7 +193,7 @@ public class ConsoleCaptureTests
     }
 
     [Fact]
-    public async Task CaptureAsync_TimeoutRestoresOnlyAfterCallbackObservesCancellation_Issue4749()
+    public async Task CaptureAsync_TimeoutRestoresOnlyAfterCallbackObservesCancellation_Issues4749And4808()
     {
         TextWriter originalOut;
         TextWriter originalError;
