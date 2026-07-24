@@ -203,6 +203,7 @@ public sealed class QueryCommandOptions
     public SearchCursor? SearchCursor { get; init; }
     public int? UnusedCursorOffset { get; init; }
     public int? OutlineCursorOffset { get; init; }
+    public string? CursorValue { get; init; }
     public DependencyCycleCursor? DependencyCycleCursor { get; init; }
     public List<SearchNamedQuery> NamedSearchQueries { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
