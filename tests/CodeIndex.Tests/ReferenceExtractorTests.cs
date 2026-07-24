@@ -1540,6 +1540,11 @@ public partial class ReferenceExtractorTests
             my %cache = (answer => helper());
             my $fallback = undef // helper();
             clp_entry(X) :- X #= 1, helper.
+            prolog_comment :-
+                %TODO
+                helper.
+            inline_comment :- helper. %comment
+            after_inline :- helper.
             # helper();
             % helper().
             %helper().
@@ -1550,11 +1555,14 @@ public partial class ReferenceExtractorTests
 
         var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
 
-        Assert.Equal(4, references.Count(reference =>
+        Assert.Equal(7, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
         AssertReferencesContain(references, "call", "prolog_entry", "helper");
         AssertReferencesContain(references, "call", "clp_entry", "helper");
+        AssertReferencesContain(references, "call", "prolog_comment", "helper");
+        AssertReferencesContain(references, "call", "inline_comment", "helper");
+        AssertReferencesContain(references, "call", "after_inline", "helper");
     }
 
     [Fact]

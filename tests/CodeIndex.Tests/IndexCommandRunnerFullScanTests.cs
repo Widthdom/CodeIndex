@@ -4029,8 +4029,7 @@ public partial class IndexCommandRunnerTests
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = $"""
-                    UPDATE codeindex_meta
-                    SET value = '2'
+                    DELETE FROM codeindex_meta
                     WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("tcl")}';
                     UPDATE codeindex_meta
                     SET value = '0'

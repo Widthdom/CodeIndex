@@ -2187,6 +2187,7 @@ public static partial class SymbolExtractor
     private static readonly Regex PrologMultilineHeadStartRegex = new(
         @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?<open>\()",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const int PrologMultilineHeadLookaheadLineLimit = 256;
 
     private static bool[] BuildPrologClauseContinuationLines(
         IReadOnlyList<string> structuralLines,
@@ -2234,7 +2235,10 @@ public static partial class SymbolExtractor
     {
         var parenthesisDepth = 0;
         var headClosed = false;
-        for (var lineIndex = startLineIndex; lineIndex < structuralLines.Count; lineIndex++)
+        var endLineExclusive = Math.Min(
+            structuralLines.Count,
+            startLineIndex + PrologMultilineHeadLookaheadLineLimit);
+        for (var lineIndex = startLineIndex; lineIndex < endLineExclusive; lineIndex++)
         {
             var line = structuralLines[lineIndex];
             var startColumn = lineIndex == startLineIndex ? openingParenthesisColumn : 0;

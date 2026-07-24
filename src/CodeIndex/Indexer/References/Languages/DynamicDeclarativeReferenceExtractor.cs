@@ -885,8 +885,6 @@ internal static class DynamicDeclarativeReferenceExtractor
         var previousColumn = column - 1;
         while (previousColumn >= 0 && char.IsWhiteSpace(line[previousColumn]))
             previousColumn--;
-        if (previousColumn >= 0)
-            return true;
 
         var tokenEnd = column + 1;
         if (line[tokenEnd] == '{')
@@ -899,7 +897,46 @@ internal static class DynamicDeclarativeReferenceExtractor
         while (tokenEnd < line.Length && char.IsWhiteSpace(line[tokenEnd]))
             tokenEnd++;
 
-        return tokenEnd >= line.Length || line[tokenEnd] is '=' or ';' or '{' or '[' or ',';
+        if (previousColumn < 0)
+            return tokenEnd < line.Length && line[tokenEnd] is '=' or '{' or '[';
+
+        var prefix = line.AsSpan(0, previousColumn + 1);
+        if (prefix.Contains(":-", StringComparison.Ordinal)
+            || prefix.Contains("-->", StringComparison.Ordinal)
+            || line[previousColumn] == '.')
+        {
+            return false;
+        }
+
+        if (line[previousColumn] is '=' or '(' or '[' or '{' or ',' or '\\')
+            return true;
+        if (line[previousColumn] == '>'
+            && previousColumn > 0
+            && line[previousColumn - 1] == '=')
+        {
+            return true;
+        }
+
+        var previousTokenStart = previousColumn;
+        while (previousTokenStart >= 0
+            && (char.IsLetterOrDigit(line[previousTokenStart])
+                || line[previousTokenStart] == '_'))
+        {
+            previousTokenStart--;
+        }
+        var previousToken = line.AsSpan(previousTokenStart + 1, previousColumn - previousTokenStart);
+        return previousToken.Equals("my", StringComparison.Ordinal)
+            || previousToken.Equals("our", StringComparison.Ordinal)
+            || previousToken.Equals("state", StringComparison.Ordinal)
+            || previousToken.Equals("local", StringComparison.Ordinal)
+            || previousToken.Equals("return", StringComparison.Ordinal)
+            || previousToken.Equals("keys", StringComparison.Ordinal)
+            || previousToken.Equals("values", StringComparison.Ordinal)
+            || previousToken.Equals("each", StringComparison.Ordinal)
+            || previousToken.Equals("delete", StringComparison.Ordinal)
+            || previousToken.Equals("exists", StringComparison.Ordinal)
+            || previousToken.Equals("defined", StringComparison.Ordinal)
+            || previousToken.Equals("scalar", StringComparison.Ordinal);
     }
 
     private static bool IsLikelySlashyLiteralStart(string line, int column)

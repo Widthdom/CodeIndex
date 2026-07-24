@@ -90,6 +90,9 @@ public static partial class SymbolExtractor
         };
     }
 
+    internal static bool RequiresExplicitReferenceGraphContractStamp(string? lang) =>
+        lang is "crystal" or "groovy" or "tcl" or "prolog" or "ambiguous_pl";
+
     private static IReadOnlyList<SymbolRecord> BuildEnumDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols, long? fileId = null)
     {
         List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;

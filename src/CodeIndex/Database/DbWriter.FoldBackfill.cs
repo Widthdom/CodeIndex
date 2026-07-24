@@ -216,7 +216,7 @@ public partial class DbWriter
 
         var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
         if (stored == null)
-            return true;
+            return !SymbolExtractor.RequiresExplicitReferenceGraphContractStamp(lang);
 
         var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
         return stored == current;

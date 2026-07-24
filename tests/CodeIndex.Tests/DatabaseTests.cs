@@ -4721,6 +4721,29 @@ public class DatabaseTests : IDisposable
     }
 
     [Theory]
+    [InlineData("crystal")]
+    [InlineData("groovy")]
+    [InlineData("tcl")]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void GetUnchangedFileId_InvalidatesMissingGraphLanguageContracts_Issue4746(
+        string language)
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = $"src/missing-contract-{language}.txt",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
+    [Theory]
     [InlineData("crystal", 2)]
     [InlineData("groovy", 2)]
     [InlineData("tcl", 2)]
