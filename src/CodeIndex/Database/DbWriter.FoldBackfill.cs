@@ -219,7 +219,16 @@ public partial class DbWriter
             return !SymbolExtractor.RequiresExplicitReferenceGraphContractStamp(lang);
 
         var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return stored == current;
+        if (stored != current)
+            return false;
+        if (!SymbolExtractor.RequiresExplicitReferenceGraphContractStamp(lang))
+            return true;
+
+        var storedGraphContract = GetMetaString(
+            DbContext.GetDynamicReferenceGraphContractVersionMetaKey(lang));
+        var currentGraphContract = SymbolExtractor.GetReferenceGraphContractVersion(lang).ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        return storedGraphContract == currentGraphContract;
     }
 
     /// <summary>

@@ -2102,6 +2102,7 @@ public partial class McpServer
             // 成功した refresh で再生成した言語は、独立した fold-key 契約が stale の
             // ままでも extractor version を stamp できる。
             writer.StampSymbolExtractorVersions(indexedSymbolExtractorLanguages);
+            writer.StampDynamicReferenceGraphContracts(indexedSymbolExtractorLanguages);
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
             // unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows keep NULL
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers

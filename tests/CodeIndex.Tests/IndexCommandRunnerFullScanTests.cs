@@ -4030,7 +4030,7 @@ public partial class IndexCommandRunnerTests
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = $"""
                     DELETE FROM codeindex_meta
-                    WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("tcl")}';
+                    WHERE key = '{DbContext.GetDynamicReferenceGraphContractVersionMetaKey("tcl")}';
                     UPDATE codeindex_meta
                     SET value = '0'
                     WHERE key = 'fold_key_version';
@@ -4048,7 +4048,7 @@ public partial class IndexCommandRunnerTests
             verify.Open();
             using var versionCmd = verify.CreateCommand();
             versionCmd.CommandText =
-                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("tcl")}'";
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetDynamicReferenceGraphContractVersionMetaKey("tcl")}'";
             Assert.Equal(
                 SymbolExtractor.DynamicReferenceGraphContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
@@ -4100,7 +4100,7 @@ public partial class IndexCommandRunnerTests
             verify.Open();
             using var versionCmd = verify.CreateCommand();
             versionCmd.CommandText =
-                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("crystal")}'";
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetDynamicReferenceGraphContractVersionMetaKey("crystal")}'";
             Assert.Equal(
                 SymbolExtractor.DynamicReferenceGraphContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),

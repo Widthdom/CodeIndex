@@ -11722,7 +11722,7 @@ public partial class McpServerTests
             verify.Open();
             using var versionCmd = verify.CreateCommand();
             versionCmd.CommandText =
-                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("crystal")}'";
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetDynamicReferenceGraphContractVersionMetaKey("crystal")}'";
             Assert.Equal(
                 SymbolExtractor.DynamicReferenceGraphContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),

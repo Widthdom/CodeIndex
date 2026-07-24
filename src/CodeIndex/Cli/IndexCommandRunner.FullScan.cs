@@ -3524,6 +3524,7 @@ public static partial class IndexCommandRunner
             // extractor version は今回再生成した row の契約であり、独立した fold-key
             // 契約を restamp できるかどうかに依存させない。
             writer.StampSymbolExtractorVersions(indexedSymbolExtractorLanguages);
+            writer.StampDynamicReferenceGraphContracts(indexedSymbolExtractorLanguages);
             // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
             // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
             // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip

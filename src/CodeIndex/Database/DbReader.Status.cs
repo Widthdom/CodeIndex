@@ -274,8 +274,8 @@ public partial class DbReader
                 continue;
 
             var storedVersion = TryGetMetaStringInternal(
-                DbContext.GetSymbolExtractorVersionMetaKey(language));
-            var currentVersion = SymbolExtractor.GetContractVersion(language).ToString(
+                DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language));
+            var currentVersion = SymbolExtractor.GetReferenceGraphContractVersion(language).ToString(
                 System.Globalization.CultureInfo.InvariantCulture);
             if (!string.Equals(storedVersion, currentVersion, StringComparison.Ordinal))
                 return false;

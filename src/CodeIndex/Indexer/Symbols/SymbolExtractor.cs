@@ -93,6 +93,9 @@ public static partial class SymbolExtractor
     internal static bool RequiresExplicitReferenceGraphContractStamp(string? lang) =>
         lang is "crystal" or "groovy" or "tcl" or "prolog" or "ambiguous_pl";
 
+    internal static int GetReferenceGraphContractVersion(string lang) =>
+        GetContractVersion(lang);
+
     private static IReadOnlyList<SymbolRecord> BuildEnumDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols, long? fileId = null)
     {
         List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
@@ -1633,7 +1636,7 @@ public static partial class SymbolExtractor
             new("interface", new Regex(@"^\s*(?:(?:public|private|protected|static|abstract)\s+)*(?:interface|trait)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             new("enum",     new Regex(@"^\s*(?:(?:public|private|protected|static)\s+)*enum\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:(?:public|private|protected|static|abstract|final)\s+)*class\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?!(?:if|for|while|switch|catch|return|throw|new)\b)(?:(?:public|private|protected|static|final|abstract|synchronized|native|strictfp)\s+)*(?<returnType>def|void|boolean|byte|char|short|int|long|float|double|BigDecimal|BigInteger|String|[A-Za-z_$][\w.$]*(?:\s*<[^(){}\r\n]+>)?(?:\s*\[\])*)\s+(?<name>[A-Za-z_]\w*)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function", new Regex(@"^\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?!(?:if|for|while|switch|catch|return|throw|new)\b)(?:(?:public|private|protected|static|final|abstract|synchronized|native|strictfp)\s+)*(?:<[^(){}\r\n]+>\s+)?(?<returnType>def|void|boolean|byte|char|short|int|long|float|double|BigDecimal|BigInteger|String|[A-Za-z_$][\w.$]*(?:\s*<[^(){}\r\n]+>)?(?:\s*\[\])*)\s+(?<name>[A-Za-z_]\w*)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             new("lambda",   new Regex(@"^\s*(?:def\s+)?(?<name>[A-Za-z_]\w*)\s*=\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*import\s+(?:static\s+)?(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\.\*)?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],

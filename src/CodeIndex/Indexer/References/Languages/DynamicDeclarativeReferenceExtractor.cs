@@ -126,10 +126,13 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"(?:^|[;{])\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?:(?:public|protected|private)\s+)*(?<name>[A-Z]\w*)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GroovyMethodDeclarationRegex = new(
-        @"(?:^|[;{])\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?:(?:public|private|protected|static|final|abstract|synchronized|native|strictfp)\s+)*(?:def|void|boolean|byte|char|short|int|long|float|double|BigDecimal|BigInteger|String|[A-Za-z_$][\w.$]*(?:\s*<[^(){}\r\n]+>)?(?:\s*\[\])*)\s+(?<name>[A-Za-z_]\w*)\s*\(",
+        @"(?:^|[;{])\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?:(?:public|private|protected|static|final|abstract|synchronized|native|strictfp)\s+)*(?:<[^(){}\r\n]+>\s+)?(?:def|void|boolean|byte|char|short|int|long|float|double|BigDecimal|BigInteger|String|[A-Za-z_$][\w.$]*(?:\s*<[^(){}\r\n]+>)?(?:\s*\[\])*)\s+(?<name>[A-Za-z_]\w*)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CrystalMethodDeclarationRegex = new(
         @"(?:^|;)\s*(?:(?:private|protected|abstract)\s+)*def\s+(?:self\.)?(?<name>[A-Za-z_]\w*[?!]?)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalFunDeclarationRegex = new(
+        @"(?:^|;)\s*fun\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*[?!]?)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TclCommandRegex = new(
         @"(?:^|[;\[])\s*(?<name>[A-Za-z_:][\w:.-]*)",
@@ -220,10 +223,12 @@ internal static class DynamicDeclarativeReferenceExtractor
 
     private sealed class TclLexicalFrame(
         TclLexicalFrameKind kind,
-        char terminator = '\0')
+        char terminator = '\0',
+        TclLexicalFrame? concatenationOwner = null)
     {
         public TclLexicalFrameKind Kind { get; } = kind;
         public char Terminator { get; } = terminator;
+        public TclLexicalFrame? ConcatenationOwner { get; } = concatenationOwner;
         public bool CommandStart { get; set; } = true;
         public bool WordStart { get; set; } = true;
         public int WordIndex { get; set; }
@@ -235,6 +240,25 @@ internal static class DynamicDeclarativeReferenceExtractor
         public bool SwitchOptionValuePending { get; set; }
         public int TryClauseWordIndex { get; set; } = 2;
         public int TryScriptWordIndex { get; set; } = 1;
+        public int UplevelScriptWordIndex { get; set; } = -1;
+        public TclLexicalFrame? ConcatenatedScriptState { get; set; }
+
+        public void CopyCommandStateFrom(TclLexicalFrame source)
+        {
+            CommandStart = source.CommandStart;
+            WordStart = source.WordStart;
+            WordIndex = source.WordIndex;
+            CommandName = source.CommandName;
+            LastBareWord = source.LastBareWord;
+            LastBareWordIndex = source.LastBareWordIndex;
+            SwitchStringWordIndex = source.SwitchStringWordIndex;
+            SwitchOptionsEnded = source.SwitchOptionsEnded;
+            SwitchOptionValuePending = source.SwitchOptionValuePending;
+            TryClauseWordIndex = source.TryClauseWordIndex;
+            TryScriptWordIndex = source.TryScriptWordIndex;
+            UplevelScriptWordIndex = source.UplevelScriptWordIndex;
+            ConcatenatedScriptState = source.ConcatenatedScriptState;
+        }
 
         public void ResetCommand()
         {
@@ -249,6 +273,8 @@ internal static class DynamicDeclarativeReferenceExtractor
             SwitchOptionValuePending = false;
             TryClauseWordIndex = 2;
             TryScriptWordIndex = 1;
+            UplevelScriptWordIndex = -1;
+            ConcatenatedScriptState = null;
         }
     }
 
@@ -793,7 +819,10 @@ internal static class DynamicDeclarativeReferenceExtractor
         if (state?.IsDeclarationAt(lineNumber, callIndex, name) == true)
             return true;
         if (language == "crystal")
-            return MatchesDeclarationAt(CrystalMethodDeclarationRegex, preparedLine, name, callIndex);
+        {
+            return MatchesDeclarationAt(CrystalMethodDeclarationRegex, preparedLine, name, callIndex)
+                || MatchesDeclarationAt(CrystalFunDeclarationRegex, preparedLine, name, callIndex);
+        }
         if (language != "groovy")
             return false;
         if (name is "super" or "synchronized" or "this")
@@ -1754,6 +1783,7 @@ internal static class DynamicDeclarativeReferenceExtractor
 
                 if (frame.Terminator != '\0' && ch == frame.Terminator)
                 {
+                    PersistTclConcatenatedScriptState(frame);
                     frames.Pop();
                     buffer[column] = frame.Terminator == '}' ? ' ' : ch;
                     column++;
@@ -1788,21 +1818,31 @@ internal static class DynamicDeclarativeReferenceExtractor
                 if (ch == '"')
                 {
                     var isScriptArgument = false;
+                    var isConcatenatedScriptArgument = false;
                     if (frame.WordStart)
                     {
                         var wordIndex = frame.WordIndex++;
-                        isScriptArgument = IsTclScriptArgument(
+                        isConcatenatedScriptArgument = IsTclConcatenatedScriptArgument(
                             frame,
                             wordIndex,
-                            lines,
-                            braceEnd: null);
+                            GetTclQuotedWordToken(line, column));
+                        isScriptArgument = isConcatenatedScriptArgument
+                            || IsTclScriptArgument(
+                                frame,
+                                wordIndex,
+                                lines,
+                                braceEnd: null);
                         UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
                         UpdateTclTryArgumentState(frame, wordIndex, string.Empty, isScriptArgument);
                     }
-                    buffer[column] = isScriptArgument ? ';' : ' ';
-                    frames.Push(new TclLexicalFrame(
-                        isScriptArgument ? TclLexicalFrameKind.Script : TclLexicalFrameKind.Quote,
-                        '"'));
+                    var quotedFrame = isScriptArgument
+                        ? CreateTclScriptFrame(frame, '"', isConcatenatedScriptArgument)
+                        : new TclLexicalFrame(TclLexicalFrameKind.Quote, '"');
+                    buffer[column] = isScriptArgument
+                        && (!isConcatenatedScriptArgument || quotedFrame.CommandStart)
+                            ? ';'
+                            : ' ';
+                    frames.Push(quotedFrame);
                     frame.CommandStart = false;
                     frame.WordStart = false;
                     if (isScriptArgument)
@@ -1841,8 +1881,14 @@ internal static class DynamicDeclarativeReferenceExtractor
                         wordIndex,
                         lines,
                         braceEnd);
+                    var isConcatenatedScriptArgument = !isSwitchTable
+                        && IsTclConcatenatedScriptArgument(
+                            frame,
+                            wordIndex,
+                            GetTclBracedWordToken(lines, lineIndex, column, braceEnd));
                     var isScriptArgument = !isSwitchTable
-                        && (scriptBodyOpenings.Contains(positionKey)
+                        && (isConcatenatedScriptArgument
+                        || scriptBodyOpenings.Contains(positionKey)
                         || IsTclScriptArgument(
                             frame,
                             wordIndex,
@@ -1861,8 +1907,14 @@ internal static class DynamicDeclarativeReferenceExtractor
                     }
                     else if (isScriptArgument)
                     {
-                        buffer[column] = ';';
-                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, '}'));
+                        var scriptFrame = CreateTclScriptFrame(
+                            frame,
+                            '}',
+                            isConcatenatedScriptArgument);
+                        buffer[column] = !isConcatenatedScriptArgument || scriptFrame.CommandStart
+                            ? ';'
+                            : ' ';
+                        frames.Push(scriptFrame);
                         suppressLeadingContinuedWord = false;
                     }
                     else
@@ -1893,8 +1945,16 @@ internal static class DynamicDeclarativeReferenceExtractor
                 {
                     var wordIndex = frame.WordIndex++;
                     var token = ReadTclBareWord(line, column);
+                    var isConcatenatedScriptArgument = token.Length > 0
+                        && IsTclConcatenatedScriptArgument(frame, wordIndex, token);
                     var isScriptCommand = token.Length > 0
-                        && IsTclBareScriptCommandArgument(frame, wordIndex);
+                        && (isConcatenatedScriptArgument
+                            ? ProcessTclConcatenatedBareWord(frame, token)
+                            : IsTclBareScriptCommandArgument(
+                                frame,
+                                wordIndex,
+                                lines,
+                                new TclBraceEnd(lineIndex, column + token.Length - 1)));
                     if (wordIndex == 0)
                         frame.CommandName = token;
                     else
@@ -1982,7 +2042,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         var endColumn = startColumn;
         while (endColumn < line.Length
             && (char.IsLetterOrDigit(line[endColumn])
-                || line[endColumn] is '_' or ':' or '.' or '-'))
+                || line[endColumn] is '_' or ':' or '.' or '-' or '#'))
         {
             endColumn++;
         }
@@ -2016,9 +2076,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             "catch" => wordIndex == 1,
             "for" => wordIndex is 1 or 3 or 4,
             "proc" => wordIndex == 3,
-            "eval" => wordIndex >= 1,
             "after" => wordIndex == 2,
-            "uplevel" => wordIndex is 1 or 2,
             "try" => wordIndex == frame.TryScriptWordIndex,
             "namespace" => wordIndex == 3,
             "dict" => frame.LastBareWord == "for"
@@ -2032,18 +2090,143 @@ internal static class DynamicDeclarativeReferenceExtractor
 
     private static bool IsTclBareScriptCommandArgument(
         TclLexicalFrame frame,
-        int wordIndex)
+        int wordIndex,
+        IReadOnlyList<string> lines,
+        TclBraceEnd wordEnd)
     {
-        if (frame.CommandName == "eval")
-            return wordIndex == 1;
-        if (frame.CommandName == "uplevel")
-            return wordIndex is 1 or 2;
-
         return IsTclScriptArgument(
             frame,
             wordIndex,
-            Array.Empty<string>(),
-            braceEnd: null);
+            lines,
+            wordEnd);
+    }
+
+    private static bool IsTclConcatenatedScriptArgument(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string? token)
+    {
+        if (frame.CommandName == "eval")
+            return wordIndex >= 1;
+        if (frame.CommandName != "uplevel")
+            return false;
+        if (frame.UplevelScriptWordIndex >= 0)
+            return wordIndex >= frame.UplevelScriptWordIndex;
+        if (wordIndex < 1)
+            return false;
+
+        if (wordIndex == 1 && IsTclUplevelLevelToken(token))
+        {
+            frame.UplevelScriptWordIndex = 2;
+            return false;
+        }
+
+        frame.UplevelScriptWordIndex = wordIndex;
+        return true;
+    }
+
+    private static bool IsTclUplevelLevelToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+
+        var span = token.AsSpan().Trim();
+        if (span.Length > 1 && span[0] == '#')
+            span = span[1..];
+        if (span.IsEmpty)
+            return false;
+
+        var start = span[0] is '+' or '-' ? 1 : 0;
+        if (start == span.Length)
+            return false;
+        for (var index = start; index < span.Length; index++)
+        {
+            if (!char.IsDigit(span[index]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static TclLexicalFrame CreateTclScriptFrame(
+        TclLexicalFrame owner,
+        char terminator,
+        bool concatenateArguments)
+    {
+        var frame = new TclLexicalFrame(
+            TclLexicalFrameKind.Script,
+            terminator,
+            concatenateArguments ? owner : null);
+        if (!concatenateArguments)
+            return frame;
+
+        if (owner.ConcatenatedScriptState != null)
+            frame.CopyCommandStateFrom(owner.ConcatenatedScriptState);
+        // Tcl inserts a separating space while concatenating eval/uplevel arguments.
+        // eval/uplevel の引数連結では引数間に空白が入るため、次は word boundary。
+        frame.WordStart = true;
+        return frame;
+    }
+
+    private static void PersistTclConcatenatedScriptState(TclLexicalFrame frame)
+    {
+        if (frame.ConcatenationOwner is not { } owner)
+            return;
+
+        owner.ConcatenatedScriptState ??= new TclLexicalFrame(TclLexicalFrameKind.Script);
+        owner.ConcatenatedScriptState.CopyCommandStateFrom(frame);
+        owner.ConcatenatedScriptState.WordStart = true;
+    }
+
+    private static bool ProcessTclConcatenatedBareWord(
+        TclLexicalFrame owner,
+        string token)
+    {
+        owner.ConcatenatedScriptState ??= new TclLexicalFrame(TclLexicalFrameKind.Script);
+        var state = owner.ConcatenatedScriptState;
+        var isCommand = state.CommandStart;
+        var wordIndex = state.WordIndex++;
+        if (wordIndex == 0)
+        {
+            state.CommandName = token;
+        }
+        else
+        {
+            UpdateTclSwitchArgumentState(state, wordIndex, token);
+            UpdateTclTryArgumentState(
+                state,
+                wordIndex,
+                token,
+                isScriptArgument: false);
+        }
+
+        state.LastBareWord = token;
+        state.LastBareWordIndex = wordIndex;
+        state.CommandStart = false;
+        state.WordStart = false;
+        return isCommand;
+    }
+
+    private static string? GetTclBracedWordToken(
+        IReadOnlyList<string> lines,
+        int startLine,
+        int startColumn,
+        TclBraceEnd? braceEnd)
+    {
+        if (braceEnd is not { } end || end.Line != startLine)
+            return null;
+        var length = end.Column - startColumn - 1;
+        return length < 0 ? null : lines[startLine].Substring(startColumn + 1, length);
+    }
+
+    private static string? GetTclQuotedWordToken(string line, int startColumn)
+    {
+        var endColumn = SkipQuotedToken(line, startColumn, '"');
+        return endColumn <= startColumn + 1
+            || endColumn > line.Length
+            || line[endColumn - 1] != '"'
+                ? null
+                : line.Substring(startColumn + 1, endColumn - startColumn - 2);
     }
 
     private static void MarkTclBareScriptCommandBoundary(char[] buffer, int commandColumn)

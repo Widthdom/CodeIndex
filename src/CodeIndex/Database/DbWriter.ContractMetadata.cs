@@ -24,6 +24,30 @@ public partial class DbWriter
     }
 
     /// <summary>
+    /// Stamp reference-graph contracts only for languages whose graph rows were regenerated.
+    /// This is intentionally separate from symbol-extractor versions because fold-only
+    /// maintenance may restamp symbol metadata without reparsing references.
+    /// reference graph を再生成した言語だけに専用 contract を stamp する。fold-only
+    /// maintenance が symbol metadata を更新しても、旧 graph を current と誤認しない。
+    /// </summary>
+    public void StampDynamicReferenceGraphContracts(IReadOnlyCollection<string> languagesToStamp)
+    {
+        var values = new List<(string Key, string? Value)>(languagesToStamp.Count);
+        foreach (var lang in languagesToStamp)
+        {
+            if (!SymbolExtractor.RequiresExplicitReferenceGraphContractStamp(lang))
+                continue;
+
+            values.Add((
+                DbContext.GetDynamicReferenceGraphContractVersionMetaKey(lang),
+                SymbolExtractor.GetReferenceGraphContractVersion(lang).ToString(
+                    System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        SetMetaValues(values.ToArray());
+    }
+
+    /// <summary>
     /// Stamp the current C# symbol-name contract version. Readers and indexers use this to
     /// detect canonical-name upgrades such as operator/conversion/indexer renames.
     /// C# canonical symbol name 契約の current version を stamp する。

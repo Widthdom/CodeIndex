@@ -1076,6 +1076,10 @@ public partial class ReferenceExtractorTests
             abstract class Base
               abstract def declared(value)
             end
+
+            lib LibC
+              fun puts(value : UInt8*) : Int32
+            end
             """;
 
         var (symbols, references) = ExtractSymbolsAndReferences("crystal", content);
@@ -1100,7 +1104,7 @@ public partial class ReferenceExtractorTests
             stringCall.Column);
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "require" or "def" or "inline_helper" or "declared");
+            && reference.SymbolName is "require" or "def" or "inline_helper" or "declared" or "puts");
     }
 
     [Fact]
@@ -1128,6 +1132,10 @@ public partial class ReferenceExtractorTests
                     [:]
                 }
 
+                public <T> T genericConvert(T value) {
+                    value
+                }
+
                 def run(value) {
                     helper value
                     helper(value)
@@ -1135,6 +1143,7 @@ public partial class ReferenceExtractorTests
                     [1].each { helper it }
                     annotated(value)
                     convert("value")
+                    genericConvert(value)
                     helper = 1
                     synchronized(value) {}
                 }
@@ -1148,6 +1157,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "annotated");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "convert");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "genericConvert");
         AssertReferencesContain(references, "type_reference", null, "Support");
         AssertReferencesContain(references, "call", "run", "helper");
         Assert.Equal(4, references.Count(reference =>
@@ -1162,6 +1172,10 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "convert");
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "genericConvert");
         var stringCallLine = Array.FindIndex(
             content.Split('\n'),
             line => line.Contains("text =", StringComparison.Ordinal)) + 1;
@@ -1176,6 +1190,39 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "call"
             && reference.SymbolName is "import" or "def" or "Runner" or "InlineRunner"
                 or "inlineHelper" or "super" or "synchronized");
+    }
+
+    [Fact]
+    public void Extract_Tcl_PreservesConcatenatedScriptStateAndBareLoopBodies_Issue4746()
+    {
+        const string content = """
+            proc helper {value} { return $value }
+            proc arg {} { return 2 }
+            proc extra {} { return 3 }
+            proc run {} {
+                eval {helper} {arg}
+                eval {helper} {; extra}
+                uplevel helper arg
+                uplevel #0 helper arg
+                foreach value {1 2} helper
+                lmap value {1 2} helper
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Equal(6, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper"));
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "extra");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "arg");
     }
 
     [Fact]

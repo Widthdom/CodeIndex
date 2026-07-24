@@ -4715,6 +4715,9 @@ public class DatabaseTests : IDisposable
         _writer.SetMeta(
             DbContext.GetSymbolExtractorVersionMetaKey(language),
             previousContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        _writer.SetMeta(
+            DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language),
+            previousContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         Assert.True(SymbolExtractor.GetContractVersion(language) > previousContractVersion);
         Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
@@ -4739,6 +4742,9 @@ public class DatabaseTests : IDisposable
             Modified = modified,
         };
         _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            SymbolExtractor.GetContractVersion(language).ToString(CultureInfo.InvariantCulture));
 
         Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
     }
@@ -4761,7 +4767,7 @@ public class DatabaseTests : IDisposable
             Lines = 5,
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         });
-        var versionKey = DbContext.GetSymbolExtractorVersionMetaKey(language);
+        var versionKey = DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language);
         _writer.SetMeta(
             versionKey,
             previousContractVersion.ToString(CultureInfo.InvariantCulture));
@@ -4795,6 +4801,59 @@ public class DatabaseTests : IDisposable
         Assert.Equal(
             refreshedStatus.GraphDataCurrent,
             refreshedWorkspaceHealth.GraphDataCurrent);
+    }
+
+    [Fact]
+    public void MarkFoldReady_DoesNotCertifyStaleDynamicReferenceGraph_Issue4746()
+    {
+        const string language = "crystal";
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fold-only.cr",
+            Lang = language,
+            Size = 20,
+            Lines = 2,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "helper",
+                StartLine = 1,
+                EndLine = 2,
+            },
+        ]);
+        var graphVersionKey = DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language);
+        _writer.SetMeta(graphVersionKey, "2");
+
+        Assert.True(_writer.MarkFoldReady());
+
+        using var metadataCommand = _db.Connection.CreateCommand();
+        metadataCommand.CommandText = """
+            SELECT key, value
+            FROM codeindex_meta
+            WHERE key IN (
+                'symbol_extractor_version_crystal',
+                'dynamic_reference_graph_contract_version_crystal')
+            """;
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        using (var metadataReader = metadataCommand.ExecuteReader())
+        {
+            while (metadataReader.Read())
+                metadata[metadataReader.GetString(0)] = metadataReader.GetString(1);
+        }
+        Assert.Equal(
+            SymbolExtractor.GetContractVersion(language).ToString(CultureInfo.InvariantCulture),
+            metadata[DbContext.GetSymbolExtractorVersionMetaKey(language)]);
+        Assert.Equal("2", metadata[graphVersionKey]);
+        var status = new DbReader(_db.Connection).GetStatus();
+        Assert.False(status.ReferenceGraphComplete);
+        Assert.Contains(
+            DbReader.DynamicReferenceGraphContractStaleReason,
+            status.ReferenceGraphIncompleteReasons ?? []);
     }
 
     [Fact]
