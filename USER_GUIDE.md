@@ -1318,6 +1318,17 @@ names, aggregate counts, per-query counts, and query freshness. Recipe count
 aggregations support `--count-by path|file|symbol|origin|return-type|subsystem`,
 `--group-by file|symbol|origin|return-type|subsystem --count`, and
 `--unique path|file|symbol|origin|return-type|subsystem`.
+Row-producing recipe modes (text, aggregate JSON, compact JSON, NDJSON, and
+issue drafts) apply `--first-per-file` and deterministic `--sample <n>` before
+the effective per-query `--limit` / cross-query `--total-limit`. Aggregate JSON
+and compact query objects report `selection_reason` and
+`selection_omitted_count` when selection removes rows; NDJSON reports the same
+fields on its terminal record. Selection-only omission contributes to matched
+and omitted counts but does not set `truncated`, `has_more`, or `next_cursor`;
+those fields remain reserved for limit-based continuation. Count, aggregation,
+and summary-only compact recipe output reject row-selection controls because
+they cannot represent selected rows, and recipe execution rejects
+`--per-file-limit` because it does not produce grouped search output.
 Recipe SARIF emits one bounded finding per returned recipe result. Its rule IDs
 use `recipe/query`, result fingerprints are stable for the recipe/query/source
 location, and result/run properties preserve severity, confidence, scope,
@@ -4518,6 +4529,15 @@ child query 全体の emitted row 数を制限でき、NDJSON では `--max-json
 recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
 aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin|return-type|subsystem`、
 `--group-by file|symbol|origin|return-type|subsystem --count`、`--unique path|file|symbol|origin|return-type|subsystem` に対応します。
+row を返す recipe mode（text、aggregate JSON、compact JSON、NDJSON、issue draft）は、
+`--first-per-file` と決定的な `--sample <n>` を、有効な query ごとの `--limit` /
+query 全体の `--total-limit` より先に適用します。aggregate JSON / compact の query object は
+selection で row が省略された場合に `selection_reason` と `selection_omitted_count` を返し、
+NDJSON は同じ field を terminal record に返します。selection だけによる省略は matched /
+omitted count に含まれますが、`truncated`、`has_more`、`next_cursor` は設定せず、これらの
+field は limit による継続にのみ使います。count、aggregation、summary-only compact の
+recipe output は選択済み row を表現できないため row-selection control を拒否し、recipe
+execution は grouped search output を生成しないため `--per-file-limit` を拒否します。
 recipe SARIF は返却された recipe result ごとに上限付き finding を1件出力します。rule ID は
 `recipe/query` を使い、result fingerprint は recipe / query / source location に対して安定し、
 result / run properties は severity、confidence、scope、適用済み result limit、

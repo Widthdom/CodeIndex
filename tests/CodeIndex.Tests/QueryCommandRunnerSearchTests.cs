@@ -7131,7 +7131,7 @@ public partial class QueryCommandRunnerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/overlap.cs", "csharp", "Console.WriteLine(ex.Message);\n");
-            ReplaceChunks(
+            ReplaceIndexedChunks(
                 dbPath,
                 "src/overlap.cs",
                 new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 20, Content = "Console.WriteLine(ex.Message);\n" },
@@ -7168,19 +7168,131 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
 
-        static void ReplaceChunks(string dbPath, string path, params ChunkRecord[] chunks)
+    [Fact]
+    public void RunSearch_RecipeRowSelectionAppliesToJsonCompactAndNdjson_Issue4759()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_selection");
+        try
         {
-            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
-            using var cmd = db.Connection.CreateCommand();
-            cmd.CommandText = "SELECT id FROM files WHERE path = @path";
-            cmd.Parameters.AddWithValue("@path", path);
-            var fileId = (long)(cmd.ExecuteScalar() ?? throw new InvalidOperationException($"Missing indexed file {path}."));
-            var writer = new DbWriter(db.Connection);
-            writer.DeleteFileData(fileId);
-            foreach (var chunk in chunks)
-                chunk.FileId = fileId;
-            writer.InsertChunks(chunks);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/selection-a.cs", "csharp", "Console.WriteLine(ex.Message);\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/selection-b.cs", "csharp", "Console.WriteLine(ex.Message);\n");
+            ReplaceIndexedChunks(
+                dbPath,
+                "src/selection-a.cs",
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "Console.WriteLine(ex.Message); // a1\n" },
+                new ChunkRecord { ChunkIndex = 1, StartLine = 10, EndLine = 15, Content = "Console.WriteLine(ex.Message); // a2\n" },
+                new ChunkRecord { ChunkIndex = 2, StartLine = 20, EndLine = 25, Content = "Console.WriteLine(ex.Message); // a3\n" });
+            ReplaceIndexedChunks(
+                dbPath,
+                "src/selection-b.cs",
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "Console.WriteLine(ex.Message); // b1\n" },
+                new ChunkRecord { ChunkIndex = 1, StartLine = 10, EndLine = 15, Content = "Console.WriteLine(ex.Message); // b2\n" });
+
+            var (sampleExitCode, sampleStdout, sampleStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--json", "--sample", "1", "--limit", "20"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, sampleExitCode);
+            Assert.Equal(string.Empty, sampleStderr);
+            using var sampleDocument = ParseJsonOutput(sampleStdout);
+            Assert.Equal(1, sampleDocument.RootElement.GetProperty("result_count").GetInt32());
+            var sampleSummary = sampleDocument.RootElement.GetProperty("summary");
+            Assert.Equal(1, sampleSummary.GetProperty("emitted_result_count").GetInt32());
+            Assert.Equal(0, sampleSummary.GetProperty("truncated_query_count").GetInt32());
+            Assert.Equal(4, sampleSummary.GetProperty("minimum_omitted_result_count").GetInt32());
+            Assert.False(sampleSummary.GetProperty("cursoring_available").GetBoolean());
+            var sampleQuery = Assert.Single(sampleDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal(1, sampleQuery.GetProperty("count").GetInt32());
+            Assert.Equal(1, sampleQuery.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(5, sampleQuery.GetProperty("minimum_matched_count").GetInt32());
+            Assert.Equal(4, sampleQuery.GetProperty("omitted_count").GetInt32());
+            Assert.Equal("sample", sampleQuery.GetProperty("selection_reason").GetString());
+            Assert.Equal(4, sampleQuery.GetProperty("selection_omitted_count").GetInt32());
+            Assert.False(sampleQuery.GetProperty("truncated").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, sampleQuery.GetProperty("next_cursor").ValueKind);
+            Assert.Single(sampleQuery.GetProperty("results").EnumerateArray());
+
+            var (firstPerFileExitCode, firstPerFileStdout, firstPerFileStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--json", "--first-per-file", "--limit", "20"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, firstPerFileExitCode);
+            Assert.Equal(string.Empty, firstPerFileStderr);
+            using var firstPerFileDocument = ParseJsonOutput(firstPerFileStdout);
+            var firstPerFileQuery = Assert.Single(firstPerFileDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal(2, firstPerFileQuery.GetProperty("count").GetInt32());
+            Assert.Equal(5, firstPerFileQuery.GetProperty("minimum_matched_count").GetInt32());
+            Assert.Equal(3, firstPerFileQuery.GetProperty("omitted_count").GetInt32());
+            Assert.Equal("first_per_file", firstPerFileQuery.GetProperty("selection_reason").GetString());
+            Assert.Equal(3, firstPerFileQuery.GetProperty("selection_omitted_count").GetInt32());
+            Assert.False(firstPerFileQuery.GetProperty("truncated").GetBoolean());
+            Assert.Equal(
+                2,
+                firstPerFileQuery.GetProperty("results")
+                    .EnumerateArray()
+                    .Select(result => result.GetProperty("path").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--sample", "1", "--limit", "20"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            var compactQuery = Assert.Single(compactDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal(1, compactQuery.GetProperty("count").GetInt32());
+            Assert.Equal(5, compactQuery.GetProperty("minimum_matched_count").GetInt32());
+            Assert.Equal("sample", compactQuery.GetProperty("selection_reason").GetString());
+            Assert.Equal(4, compactQuery.GetProperty("selection_omitted_count").GetInt32());
+            Assert.False(compactQuery.GetProperty("truncated").GetBoolean());
+
+            var (ndjsonExitCode, ndjsonStdout, ndjsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--json=ndjson", "--sample", "1", "--limit", "20"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, ndjsonExitCode);
+            Assert.Equal(string.Empty, ndjsonStderr);
+            var ndjsonLines = ndjsonStdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Equal(2, ndjsonLines.Length);
+            using var ndjsonRow = JsonDocument.Parse(ndjsonLines[0]);
+            using var ndjsonTerminal = JsonDocument.Parse(ndjsonLines[1]);
+            Assert.Equal("src/selection-a.cs", ndjsonRow.RootElement.GetProperty("path").GetString());
+            Assert.Equal(1, ndjsonTerminal.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(5, ndjsonTerminal.RootElement.GetProperty("total_count_lower_bound").GetInt32());
+            Assert.Equal("sample", ndjsonTerminal.RootElement.GetProperty("selection_reason").GetString());
+            Assert.Equal(4, ndjsonTerminal.RootElement.GetProperty("selection_omitted_count").GetInt32());
+            Assert.False(ndjsonTerminal.RootElement.GetProperty("truncated").GetBoolean());
+            Assert.False(ndjsonTerminal.RootElement.GetProperty("has_more").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeRejectsRowSelectionForNonRowOutputs_Issue4759()
+    {
+        var cases = new[]
+        {
+            (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--format", "count", "--sample", "1" }, Expected: "recipe row-selection controls"),
+            (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--count-by", "path", "--first-per-file" }, Expected: "recipe row-selection controls"),
+            (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--format", "compact", "--summary-only", "--sample", "1" }, Expected: "recipe row-selection controls"),
+            (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--per-file-limit", "1" }, Expected: "--per-file-limit is not supported with --recipe"),
+        };
+
+        foreach (var testCase in cases)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(testCase.Args, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(testCase.Expected, stderr);
         }
     }
 
@@ -12616,6 +12728,20 @@ jobs:
     {
         return string.Join('\n', Enumerable.Range(startLine, (endLine - startLine) + 1)
             .Select(line => line == 75 ? targetLine : $"// filler {line}"));
+    }
+
+    private static void ReplaceIndexedChunks(string dbPath, string path, params ChunkRecord[] chunks)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT id FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", path);
+        var fileId = (long)(cmd.ExecuteScalar() ?? throw new InvalidOperationException($"Missing indexed file {path}."));
+        var writer = new DbWriter(db.Connection);
+        writer.DeleteFileData(fileId);
+        foreach (var chunk in chunks)
+            chunk.FileId = fileId;
+        writer.InsertChunks(chunks);
     }
 
     private sealed class IssueDraftRepositoryLabelsHandler : HttpMessageHandler

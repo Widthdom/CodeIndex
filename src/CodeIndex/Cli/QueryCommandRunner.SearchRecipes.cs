@@ -515,7 +515,6 @@ public static partial class QueryCommandRunner
                     recipe.Name,
                     rowQueryResults,
                     rowMinimumMatchedTotal,
-                    rowQueryResults.Any(query => query.Truncated),
                     options,
                     GetCompactJsonOptions(jsonOptions));
                 ndjsonTerminalLine = stream.TerminalLine;
@@ -1069,7 +1068,6 @@ public static partial class QueryCommandRunner
         string recipeName,
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         int totalCount,
-        bool limitTruncated,
         QueryCommandOptions options,
         JsonSerializerOptions ndjsonOptions)
     {
@@ -1086,6 +1084,13 @@ public static partial class QueryCommandRunner
             }
         }
 
+        var limitTruncated = queryResults.Any(query => query.Truncated);
+        var selectionReason = queryResults
+            .Select(query => query.SelectionReason)
+            .FirstOrDefault(reason => reason != null);
+        var selectionOmittedCount = queryResults
+            .Where(query => query.SelectionOmittedCount.HasValue)
+            .Sum(query => query.SelectionOmittedCount!.Value);
         return WriteNdjsonStream(
             records,
             totalCount,
@@ -1096,7 +1101,9 @@ public static partial class QueryCommandRunner
             limitTruncated,
             "Increase --limit or --total-limit, select one recipe query, or narrow the recipe scope.",
             totalCountAuthoritative: false,
-            truncationReason: limitTruncated ? "limit" : null);
+            truncationReason: limitTruncated ? "limit" : null,
+            selectionReason: selectionReason,
+            selectionOmittedCount: selectionReason != null ? selectionOmittedCount : null);
     }
 
     private static JsonObject BuildRecipeSearchResultRow(
@@ -1324,6 +1331,8 @@ public static partial class QueryCommandRunner
                 rows.Count,
                 rows.Count,
                 0,
+                null,
+                null,
                 options.Limit,
                 0,
                 BuildSearchRecipeTopFiles(rows),
@@ -1400,12 +1409,13 @@ public static partial class QueryCommandRunner
                 resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
-            var availableCount = rows.Count;
-            var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
+            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit);
+            rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
-            var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
+            var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
+            var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
-            minimumMatchedTotal += rows.Count + minimumOmitted;
+            minimumMatchedTotal += outputSelection.OriginalCount;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
                 recipeQuery.Query,
@@ -1428,13 +1438,15 @@ public static partial class QueryCommandRunner
                 BuildSearchRecipeClassifierCounts(rows),
                 rows.Count,
                 rows.Count,
-                rows.Count + minimumOmitted,
+                outputSelection.OriginalCount,
                 minimumOmitted,
+                selectionReason,
+                selectionReason != null ? outputSelection.SelectionOmittedCount : null,
                 resultLimit,
                 minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
-                truncated,
-                truncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
+                outputSelection.LimitTruncated,
+                outputSelection.LimitTruncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
                 rows.Select(row => row.Compact).ToList()));
         }
 
@@ -1478,10 +1490,11 @@ public static partial class QueryCommandRunner
                 resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
-            var availableCount = rows.Count;
-            var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
+            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit);
+            rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
-            var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
+            var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
+            var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
             queryResults.Add(new SearchRecipeCompactQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1501,13 +1514,15 @@ public static partial class QueryCommandRunner
                 BuildSearchRecipeClassifierCounts(rows),
                 rows.Count,
                 rows.Count,
-                rows.Count + minimumOmitted,
+                outputSelection.OriginalCount,
                 minimumOmitted,
+                selectionReason,
+                selectionReason != null ? outputSelection.SelectionOmittedCount : null,
                 resultLimit,
                 minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
-                truncated,
-                truncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
+                outputSelection.LimitTruncated,
+                outputSelection.LimitTruncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
                 rows.Select(row => new SearchRecipeCompactResultJsonResult(
                     row.Result.Path,
                     row.Result.Lang,
@@ -1522,6 +1537,12 @@ public static partial class QueryCommandRunner
 
         return queryResults;
     }
+
+    private static string? GetSearchRecipeSelectionReason(SearchOutputSelection selection)
+        => selection.SelectionOmittedCount > 0
+            && selection.TruncationReason is "first_per_file" or "sample"
+                ? selection.TruncationReason
+                : null;
 
     private static List<SearchRecipeCountQueryJsonResult> CountSearchRecipeQueryResults(
         DbReader reader,

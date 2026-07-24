@@ -4390,6 +4390,12 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("emitted_count")] int EmittedCount,
     [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,
     [property: JsonPropertyName("omitted_count")] int OmittedCount,
+    [property: JsonPropertyName("selection_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? SelectionReason,
+    [property: JsonPropertyName("selection_omitted_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SelectionOmittedCount,
     [property: JsonPropertyName("result_limit")] int ResultLimit,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
@@ -4511,6 +4517,12 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("emitted_count")] int EmittedCount,
     [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,
     [property: JsonPropertyName("omitted_count")] int OmittedCount,
+    [property: JsonPropertyName("selection_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? SelectionReason,
+    [property: JsonPropertyName("selection_omitted_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SelectionOmittedCount,
     [property: JsonPropertyName("result_limit")] int ResultLimit,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,

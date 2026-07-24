@@ -369,6 +369,12 @@ public static partial class QueryCommandRunner
         => NormalizeSearchAggregationKey(value) is "file" or "symbol" or "origin" or "return_type" or "subsystem";
 
     private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
+        => ApplySearchOutputSelection(rows, options, options.Limit);
+
+    private static SearchOutputSelection ApplySearchOutputSelection(
+        List<SearchDisplayRow> rows,
+        QueryCommandOptions options,
+        int limit)
     {
         var originalCount = rows.Count;
         var firstPerFileTruncated = false;
@@ -390,9 +396,9 @@ public static partial class QueryCommandRunner
         }
 
         var postSelectionCount = rows.Count;
-        var limitTruncated = rows.Count > options.Limit;
+        var limitTruncated = rows.Count > limit;
         if (limitTruncated)
-            rows = rows.Take(options.Limit).ToList();
+            rows = rows.Take(limit).ToList();
 
         var truncationReason = firstPerFileTruncated
             ? "first_per_file"
