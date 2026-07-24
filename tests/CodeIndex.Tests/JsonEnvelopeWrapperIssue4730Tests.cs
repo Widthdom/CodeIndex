@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -63,6 +64,86 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
             Assert.StartsWith("response:v2:", arrayMetadata.GetProperty("next_cursor").GetString(), StringComparison.Ordinal);
             Assert.Single(arrayDocument.RootElement.GetProperty("results").EnumerateArray());
             Assert.True(arrayDocument.RootElement.GetProperty("results")[0].TryGetProperty("snippet", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Search_DataDirCursorUsesEffectiveDatabaseGeneration_Issue4730()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("discovery_data_dir_cursor_4730");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/One.txt", "text", "DataDirNeedle one\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Two.txt", "text", "DataDirNeedle two\n");
+            var dataDir = Path.GetDirectoryName(dbPath)!;
+            var args = new[]
+            {
+                "search", "DataDirNeedle", "--data-dir", dataDir,
+                "--format", "compact", "--limit", "1",
+            };
+
+            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, firstExitCode);
+            Assert.Equal(string.Empty, firstStderr);
+            using var firstDocument = JsonDocument.Parse(firstStdout);
+            Assert.Equal(
+                Path.GetFullPath(dbPath),
+                firstDocument.RootElement.GetProperty("metadata").GetProperty("db_path").GetString());
+            var cursor = Assert.IsType<string>(firstDocument.RootElement.GetProperty("next_cursor").GetString());
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, "2026-07-24T13:45:00.0000000+00:00");
+            }
+
+            var (staleExitCode, staleStdout, staleStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(args.Concat(["--cursor", cursor]).ToArray(), _jsonOptions, "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
+            Assert.Equal(string.Empty, staleStdout);
+            Assert.Contains("index generation changed", staleStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Search_PostSelectorsPageTheGloballySelectedSequence_Issue4730()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("discovery_search_selection_cursor_4730");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a.cs", "csharp", "SelectorNeedle one\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "SelectorNeedle three\n");
+            ReplaceChunks(
+                dbPath,
+                "src/a.cs",
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "SelectorNeedle one\n" },
+                new ChunkRecord { ChunkIndex = 1, StartLine = 2, EndLine = 2, Content = "SelectorNeedle two\n" });
+
+            AssertPagedSearchSelection(
+                [
+                    "search", "SelectorNeedle", "--db", dbPath, "--exact-substring",
+                    "--first-per-file", "--format", "compact",
+                ],
+                expectedTotal: 2);
+            AssertPagedSearchSelection(
+                [
+                    "search", "SelectorNeedle", "--db", dbPath, "--exact-substring",
+                    "--sample", "2", "--format", "compact",
+                ],
+                expectedTotal: 2);
         }
         finally
         {
@@ -306,6 +387,57 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
         Assert.Equal(1, second.GetProperty("cursor_offset").GetInt32());
         Assert.NotEqual(firstPath, second.GetProperty(collectionName)[0].GetProperty("path").GetString());
         return cursor;
+    }
+
+    private void AssertPagedSearchSelection(string[] baseArgs, int expectedTotal)
+    {
+        var (allExitCode, allStdout, allStderr) = CaptureConsole(() =>
+            ProgramRunner.Run(baseArgs.Concat(["--limit", "10"]).ToArray(), _jsonOptions, "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.Success, allExitCode);
+        Assert.Equal(string.Empty, allStderr);
+        using var allDocument = JsonDocument.Parse(allStdout);
+        var expectedFiles = allDocument.RootElement.GetProperty("results")
+            .EnumerateArray()
+            .Select(result => result.GetProperty("file").GetString())
+            .ToArray();
+        Assert.Equal(expectedTotal, expectedFiles.Length);
+
+        var pageArgs = baseArgs.Concat(["--limit", "1"]).ToArray();
+        var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() =>
+            ProgramRunner.Run(pageArgs, _jsonOptions, "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.Success, firstExitCode);
+        Assert.Equal(string.Empty, firstStderr);
+        using var firstDocument = JsonDocument.Parse(firstStdout);
+        Assert.Equal(expectedTotal, firstDocument.RootElement.GetProperty("total_count").GetInt32());
+        Assert.Equal(expectedFiles[0], firstDocument.RootElement.GetProperty("results")[0].GetProperty("file").GetString());
+        var cursor = Assert.IsType<string>(firstDocument.RootElement.GetProperty("next_cursor").GetString());
+
+        var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() =>
+            ProgramRunner.Run(pageArgs.Concat(["--cursor", cursor]).ToArray(), _jsonOptions, "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.Success, secondExitCode);
+        Assert.Equal(string.Empty, secondStderr);
+        using var secondDocument = JsonDocument.Parse(secondStdout);
+        Assert.Equal(expectedFiles[1], secondDocument.RootElement.GetProperty("results")[0].GetProperty("file").GetString());
+        Assert.False(secondDocument.RootElement.GetProperty("has_more").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, secondDocument.RootElement.GetProperty("next_cursor").ValueKind);
+    }
+
+    private static void ReplaceChunks(string dbPath, string path, params ChunkRecord[] chunks)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        using var command = db.Connection.CreateCommand();
+        command.CommandText = "SELECT id FROM files WHERE path = @path";
+        command.Parameters.AddWithValue("@path", path);
+        var fileId = (long)(command.ExecuteScalar()
+            ?? throw new InvalidOperationException($"Missing indexed file {path}."));
+        var writer = new DbWriter(db.Connection);
+        writer.DeleteFileData(fileId);
+        foreach (var chunk in chunks)
+            chunk.FileId = fileId;
+        writer.InsertChunks(chunks);
     }
 
     private static JsonElement[] ParseNdjson(string stdout)

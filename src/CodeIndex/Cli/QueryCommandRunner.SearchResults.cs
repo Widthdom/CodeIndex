@@ -371,24 +371,11 @@ public static partial class QueryCommandRunner
     private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {
         var originalCount = rows.Count;
-        var firstPerFileTruncated = false;
-        if (options.FirstPerFile)
-        {
-            var beforeFirstPerFile = rows.Count;
-            rows = rows
-                .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
-                .Select(group => group.First())
-                .ToList();
-            firstPerFileTruncated = rows.Count < beforeFirstPerFile;
-        }
-
-        var sampleTruncated = false;
-        if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
-        {
-            sampleTruncated = true;
-            rows = SampleSearchRows(rows, options.SampleSize.Value);
-        }
-
+        rows = ApplySearchPostSelectors(
+            rows,
+            options,
+            out var firstPerFileTruncated,
+            out var sampleTruncated);
         var postSelectionCount = rows.Count;
         var limitTruncated = rows.Count > options.Limit;
         if (limitTruncated)
@@ -408,6 +395,32 @@ public static partial class QueryCommandRunner
             limitTruncated,
             truncationReason,
             Math.Max(0, originalCount - postSelectionCount));
+    }
+
+    private static List<SearchDisplayRow> ApplySearchPostSelectors(
+        List<SearchDisplayRow> rows,
+        QueryCommandOptions options,
+        out bool firstPerFileTruncated,
+        out bool sampleTruncated)
+    {
+        firstPerFileTruncated = false;
+        if (options.FirstPerFile)
+        {
+            var beforeFirstPerFile = rows.Count;
+            rows = rows
+                .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+            firstPerFileTruncated = rows.Count < beforeFirstPerFile;
+        }
+
+        sampleTruncated = false;
+        if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
+        {
+            sampleTruncated = true;
+            rows = SampleSearchRows(rows, options.SampleSize.Value);
+        }
+        return rows;
     }
 
     private static List<SearchDisplayRow> SampleSearchRows(List<SearchDisplayRow> rows, int sampleSize)
@@ -1066,6 +1079,50 @@ public static partial class QueryCommandRunner
     private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
     {
         var responseOffset = JsonEnvelopeWrapper.GetBoundedResponseOffset("search");
+        var boundedPageLimit = JsonEnvelopeWrapper.GetBoundedResponseLimit("search");
+        if (boundedPageLimit.HasValue
+            && (options.FirstPerFile || options.SampleSize.HasValue))
+        {
+            List<SearchDisplayRow> boundedRows;
+            if (!HasSearchOriginFilters(options))
+            {
+                boundedRows = BuildSearchDisplayRows(
+                    ReadSearchResults(
+                        reader,
+                        options,
+                        exact,
+                        SearchOriginFilterMaxCandidates,
+                        guardRequestedLimit: options.Limit),
+                    options,
+                    exact);
+            }
+            else
+            {
+                boundedRows = ReadOriginFilteredSearchDisplayRows(
+                    reader,
+                    options,
+                    exact,
+                    SearchOriginFilterMaxCandidates);
+            }
+
+            var rawWindowComplete = boundedRows.Count < SearchOriginFilterMaxCandidates;
+            var selectedRows = ApplySearchPostSelectors(
+                boundedRows,
+                options,
+                out _,
+                out _);
+            JsonEnvelopeWrapper.ReportBoundedResponseTotal(
+                "search",
+                selectedRows.Count,
+                rawWindowComplete);
+            return selectedRows
+                .Skip(responseOffset)
+                .Take(boundedPageLimit.Value == int.MaxValue
+                    ? int.MaxValue
+                    : boundedPageLimit.Value + 1)
+                .ToList();
+        }
+
         var requestedLimit = GetSearchDisplayCandidateLimit(options);
         var requestedThroughOffset = responseOffset > int.MaxValue - requestedLimit
             ? int.MaxValue

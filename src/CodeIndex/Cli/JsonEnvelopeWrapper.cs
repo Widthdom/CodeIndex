@@ -101,10 +101,7 @@ internal static partial class JsonEnvelopeWrapper
 
         var innerArgs = PrepareInnerArgs(args);
         var queryNormalized = ExtractQueryArg(args);
-        var dbPathExplicit = TryExtractDbPath(args, out var explicitDbPath);
-        var resolvedDbPath = string.IsNullOrWhiteSpace(explicitDbPath)
-            ? Path.Combine(".cdidx", "codeindex.db")
-            : explicitDbPath!;
+        var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
 
         using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
         var stopwatch = Stopwatch.StartNew();
@@ -474,7 +471,7 @@ internal static partial class JsonEnvelopeWrapper
     // positional 引数（= query）と取り違えないようにする。
     private static readonly HashSet<string> ValueConsumingOptions = new(StringComparer.Ordinal)
     {
-        "--db", "--limit", "--top", "--lang", "--kind", "--since",
+        "--db", "--data-dir", "--limit", "--top", "--lang", "--kind", "--since",
         "--start", "--end", "--before", "--after", "--name",
         "--snippet-lines", "--snippet-focus", "--path", "--exclude-path", "--max-hops", "--depth",
         "--focus-line", "--focus-column", "--focus-length",
@@ -508,23 +505,40 @@ internal static partial class JsonEnvelopeWrapper
     }
 
     private static bool TryExtractDbPath(string[] args, out string? dbPath)
+        => TryExtractOptionValue(args, "--db", out dbPath);
+
+    private static bool TryExtractDataDir(string[] args, out string? dataDir)
+        => TryExtractOptionValue(args, "--data-dir", out dataDir);
+
+    private static bool TryExtractOptionValue(string[] args, string option, out string? value)
     {
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
-            if (string.Equals(arg, "--db", StringComparison.Ordinal) && i + 1 < args.Length)
+            if (string.Equals(arg, option, StringComparison.Ordinal) && i + 1 < args.Length)
             {
-                dbPath = args[i + 1];
+                value = args[i + 1];
                 return true;
             }
-            if (arg.StartsWith("--db=", StringComparison.Ordinal))
+            if (arg.StartsWith(option + "=", StringComparison.Ordinal))
             {
-                dbPath = arg["--db=".Length..];
+                value = arg[(option.Length + 1)..];
                 return true;
             }
         }
-        dbPath = null;
+        value = null;
         return false;
+    }
+
+    private static (string DbPath, bool DbPathExplicit) ResolveQueryDbPath(string[] args)
+    {
+        var dbPathExplicit = TryExtractDbPath(args, out var explicitDbPath);
+        TryExtractDataDir(args, out var explicitDataDir);
+        var resolution = DbPathResolver.ResolveForQuery(
+            Environment.CurrentDirectory,
+            explicitDbPath,
+            explicitDataDir);
+        return (resolution.DbPath, dbPathExplicit);
     }
 
     private sealed class BoundedStringWriter(int maxChars) : StringWriter

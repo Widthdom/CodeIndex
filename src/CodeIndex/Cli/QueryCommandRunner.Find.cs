@@ -689,25 +689,25 @@ public static partial class QueryCommandRunner
         => scan.NextPath is not null && scan.NextLine.HasValue
             ? "resume_with_next_cursor"
             : scan.TruncationReason switch
-        {
-            "line_scan_limit" => "increase_line_scan_limit_or_narrow_scope",
-            "candidate_file_limit" => "narrow_scope_with_path",
-            _ when scan.Truncated => "narrow_scope_with_path",
-            _ when resultLimitReached => "increase_result_limit_or_narrow_scope",
-            _ => null,
-        };
+            {
+                "line_scan_limit" => "increase_line_scan_limit_or_narrow_scope",
+                "candidate_file_limit" => "narrow_scope_with_path",
+                _ when scan.Truncated => "narrow_scope_with_path",
+                _ when resultLimitReached => "increase_result_limit_or_narrow_scope",
+                _ => null,
+            };
 
     private static string? FindScanRecoveryGuidance(FindScanSummary scan, bool resultLimitReached)
         => scan.NextPath is not null && scan.NextLine.HasValue
             ? "Pass next_cursor back with --cursor to resume after the scan cap without rescanning completed lines; --line-scan-limit may be increased for the next page."
             : scan.TruncationReason switch
-        {
-            "line_scan_limit" => $"Increase --line-scan-limit up to {MaxFindLineScanLimit}, or replace --all with one or more --path filters. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
-            "candidate_file_limit" => "Replace --all with one or more --path filters to scan fewer candidate files. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
-            _ when scan.Truncated => "Replace --all with one or more --path filters and rerun. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
-            _ when resultLimitReached => "Increase --limit or narrow the find query to retrieve additional matching rows.",
-            _ => null,
-        };
+            {
+                "line_scan_limit" => $"Increase --line-scan-limit up to {MaxFindLineScanLimit}, or replace --all with one or more --path filters. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
+                "candidate_file_limit" => "Replace --all with one or more --path filters to scan fewer candidate files. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
+                _ when scan.Truncated => "Replace --all with one or more --path filters and rerun. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
+                _ when resultLimitReached => "Increase --limit or narrow the find query to retrieve additional matching rows.",
+                _ => null,
+            };
 
     private static void WriteFindScanSummary(
         FindScanSummary scan,

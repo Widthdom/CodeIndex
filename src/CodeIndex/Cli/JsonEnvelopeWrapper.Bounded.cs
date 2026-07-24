@@ -141,10 +141,7 @@ internal static partial class JsonEnvelopeWrapper
             return WriteBoundedResponseUsageError(mapProjectionError, "Remove the conflicting map filter, or select a collection enabled by --sections.");
 
         var queryNormalized = ExtractQueryArg(args);
-        var dbPathExplicit = TryExtractDbPath(args, out var explicitDbPath);
-        var resolvedDbPath = string.IsNullOrWhiteSpace(explicitDbPath)
-            ? Path.Combine(".cdidx", "codeindex.db")
-            : explicitDbPath!;
+        var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
         var queryFingerprint = BuildResponseFingerprint(command, args);
         var snapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
         if (controls.CursorQueryFingerprint is not null
@@ -173,10 +170,11 @@ internal static partial class JsonEnvelopeWrapper
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int exitCode;
         JsonEnvelopeCaptureLimitExceededException? captureLimitExceeded = null;
+        BoundedExecutionContext? executionContext = null;
         try
         {
             using var outputScope = ScopedConsoleOutput.Redirect(captured);
-            using var executionScope = EnterBoundedExecution(
+            executionContext = new BoundedExecutionContext(
                 command,
                 controls.Offset,
                 controls.PageLimit,
@@ -184,6 +182,7 @@ internal static partial class JsonEnvelopeWrapper
                 controls.Compact,
                 controls.ResumePath,
                 controls.ResumeLine);
+            using var executionScope = EnterBoundedExecution(executionContext);
             exitCode = runInner(innerArgs);
         }
         catch (JsonEnvelopeCaptureLimitExceededException ex)
@@ -238,7 +237,11 @@ internal static partial class JsonEnvelopeWrapper
             .Select(item => ProjectResponseItem(item, controls.EffectiveFields(command, extraction.PrimaryCollection)))
             .ToList();
 
-        var count = ResolveTotalCount(command, args, runInner, extraction, availableItems.Count, controls.Offset, streamTerminal);
+        var count = executionContext?.ReportedTotalCount is { } reportedTotalCount
+            ? new ResponseCount(
+                reportedTotalCount,
+                executionContext.ReportedTotalCountAuthoritative)
+            : ResolveTotalCount(command, args, runInner, extraction, availableItems.Count, controls.Offset, streamTerminal);
         var totalCount = Math.Max(count.TotalCount, controls.Offset + pageItems.Count);
         var totalAuthoritative = count.Authoritative;
         var completedSnapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
@@ -1387,6 +1390,22 @@ internal static partial class JsonEnvelopeWrapper
             : null;
     }
 
+    internal static void ReportBoundedResponseTotal(
+        string command,
+        int totalCount,
+        bool authoritative)
+    {
+        var execution = BoundedExecution.Value;
+        if (execution is null
+            || !string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        execution.ReportedTotalCount = Math.Max(0, totalCount);
+        execution.ReportedTotalCountAuthoritative = authoritative;
+    }
+
     internal static string? GetBoundedMapCollection()
     {
         var execution = BoundedExecution.Value;
@@ -1420,24 +1439,10 @@ internal static partial class JsonEnvelopeWrapper
             : null;
     }
 
-    private static IDisposable EnterBoundedExecution(
-        string command,
-        int offset,
-        int limit,
-        IReadOnlyList<string>? fields,
-        bool compact,
-        string? resumePath,
-        int? resumeLine)
+    private static IDisposable EnterBoundedExecution(BoundedExecutionContext execution)
     {
         var previous = BoundedExecution.Value;
-        BoundedExecution.Value = new BoundedExecutionContext(
-            command,
-            offset,
-            limit,
-            fields,
-            compact,
-            resumePath,
-            resumeLine);
+        BoundedExecution.Value = execution;
         return new BoundedExecutionScope(previous);
     }
 
@@ -1448,7 +1453,11 @@ internal static partial class JsonEnvelopeWrapper
         IReadOnlyList<string>? Fields,
         bool Compact,
         string? ResumePath,
-        int? ResumeLine);
+        int? ResumeLine)
+    {
+        public int? ReportedTotalCount { get; set; }
+        public bool ReportedTotalCountAuthoritative { get; set; }
+    }
 
     private sealed class BoundedExecutionScope(BoundedExecutionContext? previous) : IDisposable
     {
