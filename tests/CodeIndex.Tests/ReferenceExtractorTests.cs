@@ -14537,6 +14537,163 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FunctionalLanguages_CapturesBoundedGraphRelationships_Issue4743()
+    {
+        const string clojure = """
+            (ns demo.core
+              (:require [demo.store :as store]))
+            (defprotocol Persist (save! [this value]))
+            (defrecord User [id] Persist)
+            (defn load-user [id]
+              "(fake-call id)"
+              ; (comment-call id)
+              (store/fetch id))
+            """;
+        const string erlang = """
+            -module(sample).
+            -behaviour(gen_server).
+            -import(lists, [map/2]).
+            run(Value) ->
+                "% fake_call()",
+                lists:map(fun normalize/1, Value),
+                normalize(Value).
+            normalize(Value) ->
+                Value.
+            count(0) ->
+                0;
+            count(Value) ->
+                count(Value - 1).
+            """;
+        const string ocaml = """
+            module Store = Demo.Store
+            open Core
+            type user = User.t
+            let load id =
+              "fake_call id";
+              Store.fetch id
+            let normalize value =
+              value
+            """;
+        const string raku = """
+            unit module Demo;
+            use Demo::Store :as Store;
+            role Persistable {}
+            class User does Persistable {}
+            sub load-user($id) {
+                "# fake-call()";
+                Store::fetch($id);
+            }
+            """;
+
+        var clojureReferences = Extract("clojure", clojure);
+        Assert.Contains(clojureReferences, reference => reference.SymbolName == "demo.store" && reference.ReferenceKind == "import");
+        Assert.Contains(clojureReferences, reference => reference.SymbolName == "demo.store" && reference.ReferenceKind == "alias");
+        Assert.Contains(clojureReferences, reference =>
+            reference.SymbolName == "Persist"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "User");
+        Assert.Contains(clojureReferences, reference =>
+            reference.SymbolName == "fetch"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "load-user");
+        Assert.DoesNotContain(clojureReferences, reference => reference.SymbolName is "fake-call" or "comment-call");
+
+        var erlangReferences = Extract("erlang", erlang);
+        Assert.Contains(erlangReferences, reference => reference.SymbolName == "gen_server" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(erlangReferences, reference => reference.SymbolName == "lists" && reference.ReferenceKind == "import");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "map"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "normalize"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "count"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "count"
+            && reference.IsSelfReference);
+        Assert.DoesNotContain(erlangReferences, reference => reference.SymbolName == "fake_call");
+
+        var ocamlReferences = Extract("ocaml", ocaml);
+        Assert.Contains(ocamlReferences, reference => reference.SymbolName == "Demo.Store" && reference.ReferenceKind == "alias");
+        Assert.Contains(ocamlReferences, reference => reference.SymbolName == "Core" && reference.ReferenceKind == "import");
+        Assert.Contains(ocamlReferences, reference =>
+            reference.SymbolName == "User.t"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "user");
+        Assert.Contains(ocamlReferences, reference =>
+            reference.SymbolName == "fetch"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "load");
+        Assert.DoesNotContain(ocamlReferences, reference => reference.SymbolName == "fake_call");
+
+        var rakuReferences = Extract("raku", raku);
+        Assert.Contains(rakuReferences, reference => reference.SymbolName == "Demo::Store" && reference.ReferenceKind == "import");
+        Assert.Contains(rakuReferences, reference => reference.SymbolName == "Demo::Store" && reference.ReferenceKind == "alias");
+        Assert.Contains(rakuReferences, reference =>
+            reference.SymbolName == "Persistable"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "User");
+        Assert.Contains(rakuReferences, reference =>
+            reference.SymbolName == "fetch"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "load-user");
+        Assert.DoesNotContain(rakuReferences, reference => reference.SymbolName == "fake-call");
+
+        var capped = ReferenceExtractor.Extract(
+            1,
+            "clojure",
+            clojure,
+            SymbolExtractor.Extract(1, "clojure", clojure),
+            maxReferenceCount: 2);
+        Assert.Equal(2, capped.Count);
+
+        static List<ReferenceRecord> Extract(string language, string content)
+        {
+            Assert.True(ReferenceExtractor.SupportsLanguage(language));
+            var symbols = SymbolExtractor.Extract(1, language, content);
+            return ReferenceExtractor.Extract(1, language, content, symbols);
+        }
+    }
+
+    [Fact]
+    public void Extract_FunctionalLanguageHighFanoutSymbols_ReportsLookupBudgetDiagnostics_Issue4743()
+    {
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        try
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = new ReferenceExtractionSafetyLimits
+            {
+                MaxLookupSymbols = 100,
+                MaxLookupLines = 2,
+                MaxNamesPerLine = 2,
+                MaxContainerCandidates = 100,
+            };
+            var symbols = new List<SymbolRecord>
+            {
+                new() { Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+                new() { Kind = "function", Name = "second", Line = 1, StartLine = 1, EndLine = 1 },
+                new() { Kind = "function", Name = "third", Line = 1, StartLine = 1, EndLine = 1 },
+                new() { Kind = "function", Name = "fourth", Line = 2, StartLine = 2, EndLine = 2 },
+                new() { Kind = "function", Name = "fifth", Line = 3, StartLine = 3, EndLine = 3 },
+            };
+
+            var result = ReferenceExtractor.ExtractDetailed(1, "clojure", "(target)\n", symbols);
+
+            Assert.Contains(result.Diagnostics, diagnostic =>
+                diagnostic.Kind == "reference_definition_lookup_line_budget_exceeded");
+            Assert.Contains(result.Diagnostics, diagnostic =>
+                diagnostic.Kind == "reference_definition_lookup_line_name_budget_exceeded");
+        }
+        finally
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+        }
+    }
+
+    [Fact]
     public void Extract_Perl_CapturesModuleInheritanceAndArrowCalls()
     {
         const string content = """

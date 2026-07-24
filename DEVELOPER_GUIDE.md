@@ -1261,6 +1261,7 @@ Supported symbol kinds by language:
 | Scala | `def`, `implicit` declarations, `given`, classes, objects, traits, enums | imports, type aliases, block calls, `for` generators, implicit conversion types, `given` / `using` evidence types | yes |
 | Elixir | `def`, `defp`, modules, protocols | `import`, `alias`, `use`, `require` | yes |
 | Common Lisp / Racket | packages/modules, functions/macros, classes, structs, variables | S-expression call heads, `#'name` function references, `make-instance` instantiation | yes |
+| Clojure / Erlang / OCaml / Raku | namespaces/modules, functions, records/types/classes, protocols/roles | bounded imports, aliases, calls, and type/protocol/behaviour relationships | yes |
 | SQL | procedures/functions/triggers, DDL objects, schemas, enum types, extensions | source/target dependencies, procedure calls, temp-object tracking | yes |
 | Shell | function declarations | command-style calls, sources, aliases | -- |
 | Terraform | variables, outputs, locals, resources, data sources, modules, dotted dependencies | same-file `var.*`, `local.*`, `module.*`, `data.*`, `TYPE.NAME` references | -- |
@@ -1282,7 +1283,7 @@ For JavaScript / TypeScript, reference extraction also captures tagged template 
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column. SQL graph extraction emits `reference` edges for named source/target forms such as `FROM`, `JOIN`, `INSERT INTO`, `UPDATE`, `TRUNCATE TABLE`, `DELETE FROM`, `DELETE ... USING`, and `MERGE ... USING`; procedure and table-valued-function calls stay on the `call` path.
 
-Additionally, 18 languages are detected and indexed as raw text without symbol extraction: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, yaml.
+Languages without a registered symbol extractor remain available for text search; use `languages --json` to inspect the current symbol, reference, and graph capability flags.
 
 VB.NET container patterns use `RegexOptions.IgnoreCase` plus `VisualBasicEnd`-based range tracking, so `Partial` spelling differences and multi-file type families still receive stable definition ranges and hotspot-family metadata.
 
@@ -4245,6 +4246,7 @@ SQL 固有の symbol extraction:
 | Scala | `def`、class、object、trait、enum | import、type alias、block call | yes |
 | Elixir | `def`、`defp`、module、protocol | `import`、`alias`、`use`、`require` | yes |
 | Common Lisp / Racket | package/module、function/macro、class、struct、variable | S 式の call head、`#'name` function reference、`make-instance` instantiation | yes |
+| Clojure / Erlang / OCaml / Raku | namespace/module、function、record/type/class、protocol/role | 上限付きの import、alias、call、type / protocol / behaviour 関係 | yes |
 | SQL | procedure/function/trigger、DDL object、schema、enum type、extension | source/target dependency、procedure call、temp-object tracking | yes |
 | Shell | function declaration | command-style call、source、alias | -- |
 | Terraform | variable、output、locals、resource、data、module、dotted dependency | same-file `var.*`, `local.*`, `module.*`, `data.*`, `TYPE.NAME` reference | -- |
@@ -4266,7 +4268,7 @@ JavaScript / TypeScript では、reference extraction が `` gql`...` ``、`` st
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力するが、上の要約表には namespace 専用列はない。SQL graph extraction は `FROM`、`JOIN`、`INSERT INTO`、`UPDATE`、`TRUNCATE TABLE`、`DELETE FROM`、`DELETE ... USING`、`MERGE ... USING` のような source/target 形を `reference` edge として出力し、procedure call と table-valued function 使用は `call` 経路に残す。
 
-他に18言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, yaml。
+登録済みのシンボル抽出器がない言語もテキスト検索には利用できます。現在の symbol / reference / graph capability flag は `languages --json` で確認してください。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 
