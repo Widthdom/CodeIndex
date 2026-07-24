@@ -26,7 +26,9 @@ public static partial class ReferenceExtractor
     private static readonly string[] BuiltInLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
-        "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
+        "java", "kotlin", "ruby", "perl", "c", "cpp",
+        "cuda", "glsl", "hlsl", "metal", "wgsl",
+        "php", "swift",
         "dart", "scala", "elixir", "lua", "commonlisp", "racket", "vb", "fsharp", "sql", "cobol", "batch",
         "assembly",
         "r", "powershell", "shell", "haskell", "solidity",

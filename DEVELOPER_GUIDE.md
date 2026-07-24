@@ -977,10 +977,26 @@ Reference extraction deduplicates only within the same indexed file and language
 | `razor_event_binding` | `subscribe` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
 | `subscribe`, `unsubscribe` | `subscribe` | Event wiring edges kept visible in default call-graph queries. |
 | `generic_type_argument`, `friend`, `capture`, `consumes_hook`, `project_reference` | raw label | Dependency/metadata edges excluded from default `callers` / `callees`; available through `references`, an explicit kind filter, and the applicable dependency/impact surfaces. |
+| `binding`, `resource_reference`, `import` | raw label | GPU/shader binding declarations, resource uses, and statically visible includes; excluded from invocation graphs and available through `references --kind <kind>` and raw reference exports/queries. |
 | `system_variable` | raw label | SQL execution-context variables such as T-SQL `@@ROWCOUNT` / `@@IDENTITY` and MySQL `@@session.sql_mode` / `@@global.max_connections`; intrinsic variables have no definition site. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
+
+### GPU and shader reference extraction
+
+CUDA, GLSL, HLSL, Metal, and WGSL use a request-scoped, stateless reference
+extractor. Ordinary helper and entry-point invocations, including CUDA
+`kernel<<<...>>>(...)` launches, emit `call` edges and therefore participate in
+default call graphs. Statically visible includes, bindings, resource uses, and
+user-defined type uses emit `import`, `binding`, `resource_reference`, and
+`type_reference` metadata rows. Included-file type declarations can be supplied
+through the bounded workspace-symbol snapshot. The extractor masks comments, suppresses
+attribute/binding syntax as phantom calls, caps tracked names and per-line
+scans, and intentionally does not perform macro expansion, binding validation,
+function-pointer resolution, or semantic data-flow analysis. Registration in
+the built-in extractor registry is the readiness contract exposed as
+`reference_extraction` and `graph_queries` by `languages --json`.
 
 ### Python symbol taxonomy
 
@@ -3967,10 +3983,25 @@ authoritative な判定と一貫した推論を区別し、複数言語の evide
 | `razor_event_binding` | `subscribe` | Razor の `@on...="Handler"` event binding から C# handler 名への edge。 |
 | `subscribe`, `unsubscribe` | `subscribe` | 既定の call-graph query で可視化するイベント配線エッジ。 |
 | `generic_type_argument`, `friend`, `capture`, `consumes_hook`, `project_reference` | raw label | 既定の `callers` / `callees` から除外する依存関係 / metadata edge。`references`、明示 kind filter、対応する dependency / impact surface では利用できる。 |
+| `binding`, `resource_reference`, `import` | raw label | GPU / shader の binding 宣言、resource 利用、静的に確認できる include。invocation graph から除外し、`references --kind <kind>` と raw reference の export / query で利用できる。 |
 | `system_variable` | raw label | T-SQL `@@ROWCOUNT` / `@@IDENTITY` や MySQL `@@session.sql_mode` / `@@global.max_connections` など、SQL 実行 context variable。intrinsic variable なので definition site は持たない。 |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
 
 TypeScript decorator は decorator 名を `annotation` 行として出力し、decorated declaration の型位置エッジを隠してはならない。たとえば `constructor(@Inject() svc: Service)` は `Inject` を `annotation`、`Service` を `type_reference` として記録し、`@Input() profile: UserProfile` も decorator と field type の両方を記録する。
+
+### GPU / shader の参照抽出
+
+CUDA、GLSL、HLSL、Metal、WGSL は request ごとの stateless な参照 extractor を使う。
+通常の helper / entry point 呼び出しと CUDA の `kernel<<<...>>>(...)` launch は `call`
+edge を出力し、既定の call graph に参加する。静的に確認できる include、binding、
+resource 利用、ユーザー定義型の利用はそれぞれ `import`、`binding`、
+`resource_reference`、`type_reference` metadata 行になる。include 先ファイルの型宣言は
+上限付き workspace symbol snapshot から供給できる。extractor は comment を
+mask し、attribute / binding 構文を phantom call として出さず、追跡名数と1行あたりの
+走査数に上限を設ける。macro expansion、binding validation、function pointer 解決、
+意味的 data-flow 解析は意図的に行わない。built-in extractor registry への登録が
+`languages --json` の `reference_extraction` と `graph_queries` に公開される readiness
+contract である。
 
 ### Python シンボル分類
 
