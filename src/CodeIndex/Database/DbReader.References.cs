@@ -8,6 +8,9 @@ public partial class DbReader
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
     private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName, bool IsSelfReference, bool IsMutualRecursion, long? TargetSymbolId, string? TargetSymbolKey, string? ResolutionState, int ResolutionCandidateCount);
+    private static bool IncludeAmbiguousMSourceForIdentityTarget(string? language, long? targetSymbolId) =>
+        targetSymbolId != null && language is "matlab" or "objc";
+
     internal sealed record ReferencePositionCandidate(SymbolResult Definition, bool Authoritative);
     internal sealed record ReferencePositionResolution(
         bool IdentityAvailable,
@@ -311,8 +314,8 @@ public partial class DbReader
                 var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 sql += referencesSuffixAlias != null
-                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
-                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && exact)
             {
@@ -343,12 +346,12 @@ public partial class DbReader
             }
             else if (exact && _foldReady)
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
+                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
                     : referencesCssScssVariableAlias != null
-                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryCssScssVariableAlias{referencesCssScssVariableAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
+                        ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryCssScssVariableAlias{referencesCssScssVariableAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
                         : allowSqlLeafFallback
-                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))"
-                        : " AND r.symbol_name_folded = @query";
+                        ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))"
+                        : $" AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}";
             else if (exact)
                 sql += referencesSuffixAlias != null
                     ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope})" : string.Empty)})"
@@ -379,7 +382,11 @@ public partial class DbReader
                 )";
         }
         if (lang != null)
-            sql += " AND f.lang = @lang";
+        {
+            sql += IncludeAmbiguousMSourceForIdentityTarget(lang, targetSymbolId)
+                ? " AND (f.lang = @lang OR f.lang = 'ambiguous_m')"
+                : " AND f.lang = @lang";
+        }
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
         {
@@ -401,10 +408,13 @@ public partial class DbReader
             if (!exact)
                 queryParam = $"%{EscapeLikeQuery(query)}%";
             else if (_foldReady)
-                queryParam = NameFold.Fold(query) ?? query;
+                queryParam = FoldNameForLanguage(query, lang);
             else
                 queryParam = query;
-            SqliteCommandPolicy.Add(cmd, "@query", queryParam);
+            if (exact && _foldReady)
+                AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
+            else
+                SqliteCommandPolicy.Add(cmd, "@query", queryParam);
             SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
             AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
             SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
@@ -715,8 +725,8 @@ public partial class DbReader
                 var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 innerSql += countSuffixAlias != null
-                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
-                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && exact)
             {
@@ -747,10 +757,10 @@ public partial class DbReader
             }
             else if (exact && _foldReady)
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope})" : string.Empty)})"
+                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope})" : string.Empty)})"
                     : allowSqlLeafFallback
-                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))"
-                        : " AND r.symbol_name_folded = @query";
+                        ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))"
+                        : $" AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}";
             else if (exact)
                 innerSql += countSuffixAlias != null
                     ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope})" : string.Empty)})"
@@ -777,9 +787,12 @@ public partial class DbReader
             var value = !exact
                 ? $"%{EscapeLikeQuery(query)}%"
                 : _foldReady
-                    ? NameFold.Fold(query) ?? query
+                    ? FoldNameForLanguage(query, lang)
                     : query;
-            SqliteCommandPolicy.Add(cmd, "@query", value);
+            if (exact && _foldReady)
+                AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
+            else
+                SqliteCommandPolicy.Add(cmd, "@query", value);
             SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
             AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
             SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
@@ -848,8 +861,8 @@ public partial class DbReader
                 var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
-                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && exact)
             {
@@ -880,12 +893,12 @@ public partial class DbReader
             }
             else if (exact && _foldReady)
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
+                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
                     : totalCssScssVariableAlias != null
-                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryCssScssVariableAlias{totalCssScssVariableAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
+                        ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryCssScssVariableAlias{totalCssScssVariableAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
                         : allowSqlLeafFallback
-                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))"
-                        : " AND r.symbol_name_folded = @query";
+                        ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))"
+                        : $" AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}";
             else if (exact)
                 innerSql += totalSuffixAlias != null
                     ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope})" : string.Empty)})"
@@ -916,9 +929,12 @@ public partial class DbReader
             var value = !exact
                 ? $"%{EscapeLikeQuery(query)}%"
                 : _foldReady
-                    ? NameFold.Fold(query) ?? query
+                      ? FoldNameForLanguage(query, lang)
                     : query;
-            SqliteCommandPolicy.Add(cmd, "@query", value);
+            if (exact && _foldReady)
+                AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
+            else
+                SqliteCommandPolicy.Add(cmd, "@query", value);
             SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
             AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
             SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));

@@ -80,7 +80,8 @@ public static partial class ReferenceExtractor
             ? MaskJavaTextBlocks(content)
             : content;
         var lines = SplitContentLines(maskedContent);
-        var structuralLines = StructuralLineMasker.MaskLines(language, lines, out var jsTaggedTemplateHits);
+        var structuralMaskLanguage = language == "cython" ? "python" : language;
+        var structuralLines = StructuralLineMasker.MaskLines(structuralMaskLanguage, lines, out var jsTaggedTemplateHits);
         var csharpLineState = language == "csharp" && MightContainCSharpXmlDocComment(content)
             ? BuildCSharpLineStateMasks(lines)
             : (MultilineStringContent: null, BlockComment: null);
@@ -99,7 +100,8 @@ public static partial class ReferenceExtractor
                 : UsesCStyleBlockComments(language)
                     ? MaskCStyleBlockCommentLines(language, structuralLines)
                     : structuralLines;
-        if (language == "python")
+        referenceStructuralLines = ScientificNativeCommentMasker.MaskBlockComments(language, referenceStructuralLines);
+        if (language is "python" or "cython")
             referenceStructuralLines = MaskPythonFStrings(referenceStructuralLines);
 
         var linePrepareOptions = CreateReferenceLinePrepareOptions(language);

@@ -400,6 +400,12 @@ public sealed class PostExtractionHookRunner : IDisposable
                 PostExtractionHookMutationMaterializer.ReplaceList(symbols, workingSymbols);
             }
         }
+
+        // Hooks can rename or add records but cannot set the internal persisted identity key.
+        // Re-derive it from the accepted public name after all mutations.
+        // hook は record の rename/add はできるが内部の永続化 identity key は設定できないため、
+        // 全 mutation 受理後の公開名から再導出する。
+        PostExtractionHookMutationMaterializer.RefreshLanguageIdentity(context.Language, symbols);
     }
 
     public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references, CancellationToken cancellationToken = default)
@@ -434,6 +440,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                 PostExtractionHookMutationMaterializer.ReplaceList(references, workingReferences);
             }
         }
+
+        PostExtractionHookMutationMaterializer.RefreshLanguageIdentity(context.Language, references);
     }
 
     private bool InvokeHookWithBudget(

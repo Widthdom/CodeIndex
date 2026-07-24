@@ -12522,6 +12522,14 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.XmlContractVersion, SymbolExtractor.GetContractVersion("xml"));
         Assert.True(SymbolExtractor.XmlContractVersion > SymbolExtractor.StyleAndXamlContractVersion);
+        foreach (var language in new[] { "ada", "ambiguous_m", "cython", "d", "julia", "matlab", "nim", "objc" })
+        {
+            Assert.Equal(
+                SymbolExtractor.ScientificNativeGraphContractVersion,
+                SymbolExtractor.GetContractVersion(language));
+        }
+        Assert.True(SymbolExtractor.ScientificNativeGraphContractVersion > SymbolExtractor.DynamicLanguageContractVersion);
+        Assert.True(SymbolExtractor.ScientificNativeGraphContractVersion > SymbolExtractor.SystemsLanguageContractVersion);
     }
 
     [Fact]

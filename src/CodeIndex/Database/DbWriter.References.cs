@@ -122,7 +122,27 @@ public partial class DbWriter
         FROM symbols AS s
         JOIN files AS target_file ON target_file.id = s.file_id
         WHERE s.name_folded IS NOT NULL
+          AND target_file.lang <> 'ambiguous_m'
         GROUP BY target_file.lang, s.name_folded
+        HAVING COUNT(DISTINCT target_file.path || char(31) ||
+                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                              COALESCE(s.name, '')) = 1;
+
+        -- An ambiguous .m caller can bind to either dialect, so uniqueness must hold
+        -- across the MATLAB/Objective-C union rather than within either language alone.
+        -- ambiguous .m の呼出し先は両方の方言になり得るため、一意性は各言語内ではなく
+        -- MATLAB/Objective-C の和集合全体で成立させる。
+        INSERT INTO temp.reference_unique_symbol_families(lang, name_folded, family_key)
+        SELECT 'ambiguous_m',
+               s.name_folded,
+               MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, '')) AS family_key
+        FROM symbols AS s
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE s.name_folded IS NOT NULL
+          AND target_file.lang IN ('matlab', 'objc')
+        GROUP BY s.name_folded
         HAVING COUNT(DISTINCT target_file.path || char(31) ||
                               COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
                               COALESCE(s.name, '')) = 1;
@@ -142,13 +162,46 @@ public partial class DbWriter
                    THEN r.symbol_name_folded || 'attribute' END
           )
         JOIN files AS target_file ON target_file.id = s.file_id
-        WHERE source_file.lang = target_file.lang
+        WHERE (
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
+              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
+          )
           AND r.target_qualifier IS NOT NULL
           AND r.target_qualifier NOT LIKE char(31) || 'receiver:%'
           AND (
               s.container_name = r.target_qualifier COLLATE NOCASE
               OR s.container_qualified_name = r.target_qualifier COLLATE NOCASE
               OR s.container_qualified_name LIKE '%.' || r.target_qualifier COLLATE NOCASE
+              OR (
+                  source_file.lang IN (
+                      'ada',
+                      'ambiguous_m',
+                      'cython',
+                      'd',
+                      'julia',
+                      'matlab',
+                      'nim',
+                      'objc'
+                  )
+                  AND COALESCE(s.container_name, '') = ''
+                  AND COALESCE(s.container_qualified_name, '') = ''
+                  AND EXISTS (
+                      SELECT 1
+                      FROM symbols AS target_scope
+                      WHERE target_scope.file_id = s.file_id
+                        AND target_scope.kind IN ('namespace', 'module', 'package')
+                        AND (
+                            target_scope.name = r.target_qualifier COLLATE NOCASE
+                            OR target_scope.container_qualified_name = r.target_qualifier COLLATE NOCASE
+                            OR substr(
+                                   target_scope.name,
+                                   1,
+                                   length(r.target_qualifier) + 1
+                               ) = (r.target_qualifier || '.') COLLATE NOCASE
+                        )
+                  )
+              )
           );
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
@@ -195,7 +248,11 @@ public partial class DbWriter
           )
         JOIN files AS target_file ON target_file.id = s.file_id
         JOIN symbols AS source ON source.id = r.source_symbol_id
-        WHERE source_file.lang = target_file.lang
+        WHERE (
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
+              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
+          )
           AND r.target_qualifier IS NULL
           AND s.file_id = r.file_id
           AND source.container_name IS NOT NULL
@@ -221,7 +278,11 @@ public partial class DbWriter
           )
         JOIN files AS target_file ON target_file.id = s.file_id
         JOIN symbols AS source ON source.id = r.source_symbol_id
-        WHERE source_file.lang = target_file.lang
+        WHERE (
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
+              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
+          )
           AND r.target_qualifier IS NULL
           AND source.container_qualified_name IS NOT NULL
           AND source.container_qualified_name <> ''
@@ -242,7 +303,11 @@ public partial class DbWriter
                    THEN r.symbol_name_folded || 'attribute' END
           )
         JOIN files AS target_file ON target_file.id = s.file_id
-        WHERE source_file.lang = target_file.lang
+        WHERE (
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
+              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
+          )
           AND r.target_qualifier IS NULL
           AND s.file_id = r.file_id
           AND NOT EXISTS (
@@ -262,7 +327,11 @@ public partial class DbWriter
           )
         JOIN files AS target_file ON target_file.id = s.file_id
         JOIN symbols AS source ON source.id = r.source_symbol_id
-        WHERE source_file.lang = target_file.lang
+        WHERE (
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
+              OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
+          )
           AND r.target_qualifier IS NULL
           AND source.container_name IS NOT NULL
           AND source.container_name <> ''
@@ -281,13 +350,34 @@ public partial class DbWriter
          AND unique_family.name_folded = r.symbol_name_folded
         JOIN symbols AS target ON target.name_folded = unique_family.name_folded
         JOIN files AS target_file
-          ON target_file.id = target.file_id
-         AND target_file.lang = unique_family.lang
+         ON target_file.id = target.file_id
+         AND (
+             (
+                 unique_family.lang <> 'ambiguous_m'
+                 AND target_file.lang = unique_family.lang
+             )
+             OR (
+                 unique_family.lang = 'ambiguous_m'
+                 AND target_file.lang IN ('matlab', 'objc')
+             )
+         )
          AND target_file.path || char(31) ||
              COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
              COALESCE(target.name, '') = unique_family.family_key
         WHERE source_file.lang <> 'csharp'
-          AND r.target_qualifier IS NULL
+          AND (
+              r.target_qualifier IS NULL
+              OR source_file.lang IN (
+                  'ada',
+                  'ambiguous_m',
+                  'cython',
+                  'd',
+                  'julia',
+                  'matlab',
+                  'nim',
+                  'objc'
+              )
+          )
           AND NOT EXISTS (
               SELECT 1 FROM symbol_reference_candidates AS existing
               WHERE existing.reference_id = r.id
@@ -746,8 +836,14 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
-                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
-                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(
+                    reference.SymbolName,
+                    reference.IdentitySymbolNameFolded,
+                    foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(
+                    reference.ContainerName,
+                    reference.IdentityContainerNameFolded,
+                    foldedNameCache);
                 cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
                 cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
                 cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
@@ -1120,6 +1216,9 @@ public partial class DbWriter
 
     private static string? ExtractTargetQualifier(ReferenceRecord reference)
     {
+        if (reference.SuppressInferredTargetQualifier)
+            return null;
+
         if (!string.IsNullOrWhiteSpace(reference.TargetQualifier))
         {
             var explicitQualifier = reference.TargetQualifier.Trim();

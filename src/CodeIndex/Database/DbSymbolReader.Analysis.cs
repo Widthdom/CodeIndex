@@ -612,8 +612,8 @@ public partial class DbReader
         var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedQuery);
         var nameCondition = _foldReady
             ? allowLeafFallback
-                ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
-                : "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
+                ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", "@queryFolded")} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
+                : $"({BuildPersistedFoldedNameMatchSql("s.name_folded", "@queryFolded")} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
             : allowLeafFallback
                 ? "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
                 : "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))";
@@ -635,7 +635,7 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         SqliteCommandPolicy.Add(cmd, "@queryRaw", query);
-        SqliteCommandPolicy.Add(cmd, "@queryFolded", NameFold.Fold(query) ?? query);
+        AddPersistedFoldedNameQueryParameters(cmd, "@queryFolded", query, lang);
         SqliteCommandPolicy.Add(cmd, "@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
         SqliteCommandPolicy.Add(cmd, "@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
         SqliteCommandPolicy.Add(cmd, "@queryLeaf", SqlNameResolver.GetLeafName(query));

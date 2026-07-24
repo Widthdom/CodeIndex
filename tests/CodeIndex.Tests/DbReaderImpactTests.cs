@@ -41,6 +41,52 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void AnalyzeImpact_DefinitiveMatlabTargetTraversesAmbiguousMCallers_Issue4738()
+    {
+        InsertIndexedFile(
+            "src/target.m",
+            "matlab",
+            """
+            function Target()
+            end
+            """);
+        InsertIndexedFile(
+            "src/caller.m",
+            "ambiguous_m",
+            """
+            function Bridge()
+              Target();
+            end
+            function Outer()
+              Bridge();
+            end
+            """);
+
+        var analysis = _reader.AnalyzeImpact(
+            "Target",
+            maxDepth: 2,
+            limit: 10,
+            lang: "matlab",
+            pathPatterns: ["src/*.m"]);
+
+        Assert.Equal("callers", analysis.ImpactMode);
+        Assert.Collection(
+            analysis.Callers.OrderBy(caller => caller.Depth),
+            caller =>
+            {
+                Assert.Equal("ambiguous_m", caller.Lang);
+                Assert.Equal("Bridge", caller.CallerName);
+                Assert.Equal(1, caller.Depth);
+            },
+            caller =>
+            {
+                Assert.Equal("ambiguous_m", caller.Lang);
+                Assert.Equal("Outer", caller.CallerName);
+                Assert.Equal(2, caller.Depth);
+            });
+    }
+
+    [Fact]
     public void AnalyzeImpact_CSharpVerbatimQueryKeepsOriginalInputOnMiss()
     {
         // issue #960: verbatim C# queries should normalize for lookup when a match

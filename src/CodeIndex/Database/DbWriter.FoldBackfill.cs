@@ -8,6 +8,7 @@ public partial class DbWriter
     private const string FoldBackfillPhaseMetaKey = "fold_backfill_phase";
     private const string FoldBackfillLastSymbolIdMetaKey = "fold_backfill_last_symbol_id";
     private const string FoldBackfillLastReferenceIdMetaKey = "fold_backfill_last_reference_id";
+    private const string FoldBackfillGraphRefreshPendingMetaKey = "fold_backfill_graph_refresh_pending";
 
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
@@ -94,14 +95,21 @@ public partial class DbWriter
     public bool AllFoldedColumnValuesMatchCurrentFold()
     {
         var symbols = RentCommand(
-            "SELECT name, name_folded FROM symbols WHERE name IS NOT NULL",
+            """
+            SELECT s.name, s.name_folded, f.lang
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE s.name IS NOT NULL
+            """,
             static _ => { });
         try
         {
             using var reader = symbols.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
-                var expected = NameFold.Fold(reader.GetString(0));
+                var expected = DbReader.FoldNameForLanguage(
+                    reader.GetString(0),
+                    reader.IsDBNull(2) ? null : reader.GetString(2));
                 var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
                 if (!string.Equals(actual, expected, StringComparison.Ordinal))
                     return false;
@@ -114,9 +122,12 @@ public partial class DbWriter
 
         var references = RentCommand(
             @"
-                SELECT symbol_name, symbol_name_folded, container_name, container_name_folded
-                FROM symbol_references
-                WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL",
+                SELECT r.symbol_name, r.symbol_name_folded,
+                       r.container_name, r.container_name_folded,
+                       f.lang
+                FROM symbol_references r
+                JOIN files f ON f.id = r.file_id
+                WHERE r.symbol_name IS NOT NULL OR r.container_name IS NOT NULL",
             static _ => { });
         try
         {
@@ -125,7 +136,9 @@ public partial class DbWriter
             {
                 if (!reader.IsDBNull(0))
                 {
-                    var expected = NameFold.Fold(reader.GetString(0));
+                    var expected = DbReader.FoldNameForLanguage(
+                        reader.GetString(0),
+                        reader.IsDBNull(4) ? null : reader.GetString(4));
                     var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
                     if (!string.Equals(actual, expected, StringComparison.Ordinal))
                         return false;
@@ -133,7 +146,9 @@ public partial class DbWriter
 
                 if (!reader.IsDBNull(2))
                 {
-                    var expected = NameFold.Fold(reader.GetString(2));
+                    var expected = DbReader.FoldNameForLanguage(
+                        reader.GetString(2),
+                        reader.IsDBNull(4) ? null : reader.GetString(4));
                     var actual = reader.IsDBNull(3) ? null : reader.GetString(3);
                     if (!string.Equals(actual, expected, StringComparison.Ordinal))
                         return false;
@@ -240,6 +255,21 @@ public partial class DbWriter
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var graphRefreshPending = string.Equals(
+            GetMetaString(FoldBackfillGraphRefreshPendingMetaKey),
+            "1",
+            StringComparison.Ordinal);
+        var pendingRows = CountBackfillFoldedColumns(rewriteAll);
+        if (!graphRefreshPending && (pendingRows.Symbols > 0 || pendingRows.SymbolReferences > 0))
+        {
+            // Persist this before the first row mutation so cancellation after the rewrite but
+            // before graph refresh cannot make a retry mistake the operation for a no-op.
+            // 最初の行を書き換える前に pending を永続化し、書換え後から graph refresh
+            // までの中断を retry が no-op と誤認しないようにする。
+            SetMeta(FoldBackfillGraphRefreshPendingMetaKey, "1");
+            graphRefreshPending = true;
+        }
+
         var foldBackfillPhase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
         var symbols = BackfillSymbolFoldedRows(rewriteAll, cancellationToken);
         if (rewriteAll && foldBackfillPhase != "references")
@@ -250,6 +280,15 @@ public partial class DbWriter
 
         var symbolReferences = BackfillReferenceFoldedRows(rewriteAll, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        if (graphRefreshPending)
+        {
+            // Candidate membership and resolved identities depend on the persisted folded keys.
+            // Refresh them before advertising the rewritten rows as current.
+            // candidate と解決済み identity は永続化 folded key に依存するため、
+            // 書換え後の key を current と公開する前に graph を再解決する。
+            RefreshMutualRecursionFlags(cancellationToken);
+            SetMeta(FoldBackfillGraphRefreshPendingMetaKey, null);
+        }
         if (rewriteAll)
             ClearFoldBackfillCheckpoint();
 
@@ -318,10 +357,21 @@ public partial class DbWriter
             return 0;
 
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
-        var rows = new List<(long Id, string Name)>();
+        var rows = new List<(long Id, string Name, string? Lang)>();
         var selectSql = rewriteAll
-            ? "SELECT id, name FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId ORDER BY id"
-            : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
+            ? """
+              SELECT s.id, s.name, f.lang
+              FROM symbols s
+              JOIN files f ON f.id = s.file_id
+              WHERE s.name IS NOT NULL AND s.id > @lastSymbolId
+              ORDER BY s.id
+              """
+            : """
+              SELECT s.id, s.name, f.lang
+              FROM symbols s
+              JOIN files f ON f.id = s.file_id
+              WHERE s.name IS NOT NULL AND s.name_folded IS NULL
+              """;
         var select = RentCommand(
             selectSql,
             rewriteAll
@@ -335,7 +385,10 @@ public partial class DbWriter
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                rows.Add((reader.GetInt64(0), reader.GetString(1)));
+                rows.Add((
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2)));
             }
         }
         finally
@@ -360,7 +413,7 @@ public partial class DbWriter
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
+                pFolded.Value = DbReader.FoldNameForLanguage(row.Name, row.Lang);
                 pId.Value = row.Id;
                 update.ExecuteNonQuery();
                 if (rewriteAll)
@@ -379,17 +432,23 @@ public partial class DbWriter
     private int BackfillReferenceFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
-        var rows = new List<(long Id, string? SymbolName, string? ContainerName)>();
+        var rows = new List<(long Id, string? SymbolName, string? ContainerName, string? Lang)>();
         var selectSql = rewriteAll
-            ? @"SELECT id, symbol_name, container_name
-                    FROM symbol_references
-                    WHERE id > @lastReferenceId
-                      AND (symbol_name IS NOT NULL OR container_name IS NOT NULL)
-                    ORDER BY id"
-            : @"SELECT id, symbol_name, container_name
-                    FROM symbol_references
-                    WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
-                       OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
+            ? """
+              SELECT r.id, r.symbol_name, r.container_name, f.lang
+              FROM symbol_references r
+              JOIN files f ON f.id = r.file_id
+              WHERE r.id > @lastReferenceId
+                AND (r.symbol_name IS NOT NULL OR r.container_name IS NOT NULL)
+              ORDER BY r.id
+              """
+            : """
+              SELECT r.id, r.symbol_name, r.container_name, f.lang
+              FROM symbol_references r
+              JOIN files f ON f.id = r.file_id
+              WHERE (r.symbol_name IS NOT NULL AND r.symbol_name_folded IS NULL)
+                 OR (r.container_name IS NOT NULL AND r.container_name_folded IS NULL)
+              """;
         var select = RentCommand(
             selectSql,
             rewriteAll
@@ -406,7 +465,8 @@ public partial class DbWriter
                 rows.Add((
                     reader.GetInt64(0),
                     reader.IsDBNull(1) ? null : reader.GetString(1),
-                    reader.IsDBNull(2) ? null : reader.GetString(2)));
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3)));
             }
         }
         finally
@@ -436,8 +496,12 @@ public partial class DbWriter
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                pSymbolNameFolded.Value = (object?)NameFold.Fold(row.SymbolName) ?? DBNull.Value;
-                pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
+                pSymbolNameFolded.Value = row.SymbolName == null
+                    ? DBNull.Value
+                    : DbReader.FoldNameForLanguage(row.SymbolName, row.Lang);
+                pContainerNameFolded.Value = row.ContainerName == null
+                    ? DBNull.Value
+                    : DbReader.FoldNameForLanguage(row.ContainerName, row.Lang);
                 pId.Value = row.Id;
                 update.ExecuteNonQuery();
                 if (rewriteAll)

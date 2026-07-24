@@ -105,6 +105,7 @@ public partial class QueryCommandRunnerTests
                 null,
                 null,
                 false,
+                false,
             ]);
             Assert.NotNull(inspection);
             var type = inspection!.GetType();
