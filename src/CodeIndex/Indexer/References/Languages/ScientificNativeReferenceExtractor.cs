@@ -40,12 +40,18 @@ internal static class ScientificNativeReferenceExtractor
     private static readonly Regex JuliaMacroCallRegex = new(
         @"(?<![\w@])@(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex JuliaBroadcastCallRegex = new(
+        @"(?<![\w$])(?<name>[A-Za-z_]\w*)\s*\.\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex DImportListRegex = new(
         @"^\s*(?:(?:public|static)\s+)*import\s+(?<names>[^;\r\n]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex DBaseTypeListRegex = new(
         @"^\s*(?:class|interface)\s+[A-Za-z_]\w*(?:\s*\([^)]*\))?\s*:\s*(?<names>[^{\r\n]+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex DTemplateInvocationRegex = new(
+        @"(?<![\w$])(?:(?:[A-Za-z_]\w*)\s*\.\s*)*(?<name>[A-Za-z_]\w*)\s*!\s*(?:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*|\([^()\r\n]*\))\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex CythonFromImportRegex = new(
@@ -73,6 +79,21 @@ internal static class ScientificNativeReferenceExtractor
 
     internal static bool Supports(string language) => SupportedLanguages.Contains(language);
 
+    internal static bool IsDTemplateArgumentCall(string line, int callIndex)
+    {
+        foreach (Match match in DTemplateInvocationRegex.Matches(line))
+        {
+            var name = match.Groups["name"];
+            if (callIndex >= name.Index + name.Length
+                && callIndex < match.Index + match.Length)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     internal static void EmitReferences(
         string language,
         string preparedLine,
@@ -88,7 +109,7 @@ internal static class ScientificNativeReferenceExtractor
         {
             case "nim":
                 EmitMatch(NimFromImportRegex, "import");
-                EmitNameList(NimImportListRegex, "import", ',');
+                EmitNimImportList();
                 EmitMatches(NimBaseTypeRegex, "type_reference");
                 EmitMatches(NimAnnotatedTypeRegex, "type_reference");
                 break;
@@ -97,9 +118,19 @@ internal static class ScientificNativeReferenceExtractor
                 EmitNameList(MatlabBaseTypeListRegex, "type_reference", '&');
                 break;
             case "julia":
-                EmitNameList(JuliaImportListRegex, "import", ',', stopAtColon: true);
+                EmitNameList(
+                    JuliaImportListRegex,
+                    "import",
+                    ',',
+                    stopAtColon: true,
+                    stripLeadingRelativePrefix: true);
                 EmitMatches(JuliaTypeRegex, "type_reference");
                 foreach (Match match in JuliaMacroCallRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["name"];
+                    addCallLikeReference(group.Value, group.Index);
+                }
+                foreach (Match match in JuliaBroadcastCallRegex.Matches(preparedLine))
                 {
                     var group = match.Groups["name"];
                     addCallLikeReference(group.Value, group.Index);
@@ -108,6 +139,11 @@ internal static class ScientificNativeReferenceExtractor
             case "d":
                 EmitNameList(DImportListRegex, "import", ',', stopAtColon: true, stripLeadingAlias: true);
                 EmitNameList(DBaseTypeListRegex, "type_reference", ',');
+                foreach (Match match in DTemplateInvocationRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["name"];
+                    addCallLikeReference(group.Value, group.Index);
+                }
                 break;
             case "cython":
                 EmitMatch(CythonFromImportRegex, "import");
@@ -121,7 +157,9 @@ internal static class ScientificNativeReferenceExtractor
                 if (bareCall.Success)
                 {
                     var group = bareCall.Groups["name"];
-                    addCallLikeReference(group.Value, group.Index);
+                    var separatorIndex = group.Value.LastIndexOf('.');
+                    var leafOffset = separatorIndex + 1;
+                    addCallLikeReference(group.Value[leafOffset..], group.Index + leafOffset);
                 }
                 break;
             case "objc":
@@ -148,7 +186,8 @@ internal static class ScientificNativeReferenceExtractor
             char separator,
             bool splitOnWhitespace = false,
             bool stopAtColon = false,
-            bool stripLeadingAlias = false)
+            bool stripLeadingAlias = false,
+            bool stripLeadingRelativePrefix = false)
         {
             var match = regex.Match(preparedLine);
             if (!match.Success)
@@ -183,7 +222,8 @@ internal static class ScientificNativeReferenceExtractor
                     index,
                     group.Index,
                     referenceKind,
-                    stripLeadingAlias))
+                    stripLeadingAlias,
+                    stripLeadingRelativePrefix))
                 {
                     dependencyCount++;
                 }
@@ -205,7 +245,8 @@ internal static class ScientificNativeReferenceExtractor
             int segmentEnd,
             int absoluteOffset,
             string referenceKind,
-            bool stripLeadingAlias)
+            bool stripLeadingAlias,
+            bool stripLeadingRelativePrefix)
         {
             while (segmentStart < segmentEnd && char.IsWhiteSpace(names[segmentStart]))
                 segmentStart++;
@@ -256,11 +297,126 @@ internal static class ScientificNativeReferenceExtractor
                 return false;
             }
 
+            var emittedNameStart = stripLeadingRelativePrefix
+                ? firstIdentifierIndex
+                : segmentStart;
             EmitName(
-                names[segmentStart..nameEnd],
+                names[emittedNameStart..nameEnd],
                 absoluteOffset + segmentStart,
                 referenceKind);
             return true;
+        }
+
+        void EmitNimImportList()
+        {
+            var match = NimImportListRegex.Match(preparedLine);
+            if (!match.Success)
+                return;
+
+            var group = match.Groups["names"];
+            if (!group.Success || group.Length == 0)
+                return;
+
+            var names = group.Value;
+            var dependencyCount = 0;
+            var segmentStart = 0;
+            var bracketDepth = 0;
+            for (var index = 0; index <= names.Length && dependencyCount < MaxDependenciesPerDeclaration; index++)
+            {
+                if (index < names.Length)
+                {
+                    if (names[index] == '[')
+                        bracketDepth++;
+                    else if (names[index] == ']' && bracketDepth > 0)
+                        bracketDepth--;
+                }
+
+                if (index < names.Length && (names[index] != ',' || bracketDepth != 0))
+                    continue;
+
+                dependencyCount += EmitNimImportSegment(
+                    names,
+                    segmentStart,
+                    index,
+                    group.Index,
+                    MaxDependenciesPerDeclaration - dependencyCount);
+                segmentStart = index + 1;
+            }
+        }
+
+        int EmitNimImportSegment(
+            string names,
+            int segmentStart,
+            int segmentEnd,
+            int absoluteOffset,
+            int remainingCapacity)
+        {
+            while (segmentStart < segmentEnd && char.IsWhiteSpace(names[segmentStart]))
+                segmentStart++;
+            while (segmentEnd > segmentStart && char.IsWhiteSpace(names[segmentEnd - 1]))
+                segmentEnd--;
+            if (segmentStart >= segmentEnd)
+                return 0;
+
+            var openingBracket = names.IndexOf('[', segmentStart, segmentEnd - segmentStart);
+            var closingBracket = openingBracket >= 0
+                ? names.IndexOf(']', openingBracket + 1, segmentEnd - openingBracket - 1)
+                : -1;
+            if (openingBracket < 0 || closingBracket < 0)
+            {
+                return TryEmitDependencySegment(
+                    names,
+                    segmentStart,
+                    segmentEnd,
+                    absoluteOffset,
+                    "import",
+                    stripLeadingAlias: false,
+                    stripLeadingRelativePrefix: false)
+                    ? 1
+                    : 0;
+            }
+
+            var prefixStart = segmentStart;
+            var prefixEnd = openingBracket;
+            while (prefixEnd > prefixStart && char.IsWhiteSpace(names[prefixEnd - 1]))
+                prefixEnd--;
+            if (prefixEnd <= prefixStart || names[prefixEnd - 1] != '/')
+                return 0;
+
+            var prefix = names[prefixStart..prefixEnd];
+            var emittedCount = 0;
+            var itemStart = openingBracket + 1;
+            for (var index = itemStart; index <= closingBracket && emittedCount < remainingCapacity; index++)
+            {
+                if (index < closingBracket && names[index] != ',')
+                    continue;
+
+                var itemEnd = index;
+                while (itemStart < itemEnd && char.IsWhiteSpace(names[itemStart]))
+                    itemStart++;
+                while (itemEnd > itemStart && char.IsWhiteSpace(names[itemEnd - 1]))
+                    itemEnd--;
+                if (itemStart < itemEnd)
+                {
+                    var nameEnd = itemStart;
+                    while (nameEnd < itemEnd && IsDependencyNameChar(names[nameEnd]))
+                        nameEnd++;
+                    while (nameEnd > itemStart && names[nameEnd - 1] is '.' or '/')
+                        nameEnd--;
+                    if (nameEnd > itemStart)
+                    {
+                        EmitName(
+                            prefix + names[itemStart..nameEnd],
+                            absoluteOffset + itemStart,
+                            "import");
+                        emittedCount++;
+                    }
+                }
+
+                itemStart = index + 1;
+            }
+
+            return emittedCount;
         }
 
         void EmitGroup(Group group, string referenceKind)

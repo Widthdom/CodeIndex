@@ -8,10 +8,17 @@ namespace CodeIndex.Indexer;
 /// </summary>
 internal static class AmbiguousMContentMasker
 {
-    internal static string MaskComments(string content)
+    internal static string MaskComments(
+        string content,
+        bool maskMatlabComments,
+        bool maskObjectiveCComments,
+        bool preserveObjectiveCModuloExpressions = false)
     {
-        if (content.IndexOfAny(['%', '/']) < 0)
+        if ((!maskMatlabComments || content.IndexOf('%') < 0)
+            && (!maskObjectiveCComments || content.IndexOf('/') < 0))
+        {
             return content;
+        }
 
         StringBuilder? masked = null;
         var inBlockComment = false;
@@ -62,7 +69,9 @@ internal static class AmbiguousMContentMasker
 
             if (quote != '\0')
             {
-                if (current == '\\' && index + 1 < content.Length)
+                if (preserveObjectiveCModuloExpressions
+                    && current == '\\'
+                    && index + 1 < content.Length)
                 {
                     index++;
                     continue;
@@ -81,14 +90,23 @@ internal static class AmbiguousMContentMasker
                 continue;
             }
 
-            if (current == '"' || (current == '\'' && IsSingleQuoteStart(content, index)))
+            if (current == '"'
+                || (current == '\''
+                    && (preserveObjectiveCModuloExpressions
+                        || IsMatlabSingleQuoteStart(content, index))))
             {
                 quote = current;
                 continue;
             }
 
-            if (current == '%')
+            if (maskMatlabComments && current == '%')
             {
+                if (preserveObjectiveCModuloExpressions
+                    && LooksLikeObjectiveCModuloOperator(content, index))
+                {
+                    continue;
+                }
+
                 MaskAt(index);
                 if (index + 1 < content.Length
                     && content[index + 1] == '{'
@@ -103,7 +121,7 @@ internal static class AmbiguousMContentMasker
                 continue;
             }
 
-            if (current != '/' || index + 1 >= content.Length)
+            if (!maskObjectiveCComments || current != '/' || index + 1 >= content.Length)
                 continue;
 
             var next = content[index + 1];
@@ -130,17 +148,12 @@ internal static class AmbiguousMContentMasker
         }
     }
 
-    private static bool IsSingleQuoteStart(string content, int quoteIndex)
+    private static bool IsMatlabSingleQuoteStart(string content, int quoteIndex)
     {
-        for (var index = quoteIndex - 1; index >= 0 && content[index] is not '\r' and not '\n'; index--)
-        {
-            if (char.IsWhiteSpace(content[index]))
-                continue;
-
-            return !IsTransposeOperandEnd(content[index]);
-        }
-
-        return true;
+        var previousIndex = quoteIndex - 1;
+        return previousIndex < 0
+            || content[previousIndex] is '\r' or '\n'
+            || !IsTransposeOperandEnd(content[previousIndex]);
     }
 
     private static bool IsStandaloneMatlabBlockDelimiter(string content, int percentIndex)
@@ -158,6 +171,37 @@ internal static class AmbiguousMContentMasker
         }
 
         return true;
+    }
+
+    private static bool LooksLikeObjectiveCModuloOperator(string content, int percentIndex)
+    {
+        var previousIndex = percentIndex - 1;
+        while (previousIndex >= 0
+            && content[previousIndex] is not '\r' and not '\n'
+            && char.IsWhiteSpace(content[previousIndex]))
+        {
+            previousIndex--;
+        }
+
+        if (previousIndex < 0
+            || content[previousIndex] is '\r' or '\n'
+            || !IsTransposeOperandEnd(content[previousIndex]))
+        {
+            return false;
+        }
+
+        var nextIndex = percentIndex + 1;
+        while (nextIndex < content.Length
+            && content[nextIndex] is not '\r' and not '\n'
+            && char.IsWhiteSpace(content[nextIndex]))
+        {
+            nextIndex++;
+        }
+
+        return nextIndex < content.Length
+            && content[nextIndex] is not '\r' and not '\n'
+            && (char.IsLetterOrDigit(content[nextIndex])
+                || content[nextIndex] is '_' or '(' or '\'' or '"');
     }
 
     private static bool IsTransposeOperandEnd(char value) =>

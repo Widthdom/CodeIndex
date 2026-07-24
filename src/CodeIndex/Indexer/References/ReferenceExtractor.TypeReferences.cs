@@ -2715,6 +2715,7 @@ public static partial class ReferenceExtractor
         bool MaskStringLiterals,
         bool IncludeBacktickStringDelimiter,
         bool PreservePostfixSingleQuotes,
+        bool UseMatlabStringRules,
         bool UsesHashComments,
         bool UsesRHashComments,
         bool UsesSlashComments,
@@ -2731,6 +2732,7 @@ public static partial class ReferenceExtractor
             MaskStringLiterals: lang != "cobol",
             IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
             PreservePostfixSingleQuotes: lang is "julia" or "matlab",
+            UseMatlabStringRules: lang == "matlab",
             UsesHashComments: UsesHashComments(lang),
             UsesRHashComments: lang == "r",
             UsesSlashComments: UsesSlashComments(lang),
@@ -2758,7 +2760,9 @@ public static partial class ReferenceExtractor
         {
             if (options.PreservePostfixSingleQuotes)
             {
-                result = ScientificNativeCommentMasker.MaskLineStringLiteralsPreservingPostfixSingleQuotes(result);
+                result = ScientificNativeCommentMasker.MaskLineStringLiteralsPreservingPostfixSingleQuotes(
+                    result,
+                    options.UseMatlabStringRules);
             }
             else
             {

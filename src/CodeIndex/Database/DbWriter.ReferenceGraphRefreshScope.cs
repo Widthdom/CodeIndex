@@ -197,7 +197,10 @@ public partial class DbWriter
         CROSS JOIN symbol_references AS r INDEXED BY idx_symbol_refs_symbol_name_folded
         JOIN files AS source_file ON source_file.id = r.file_id
         WHERE r.symbol_name_folded = dirty_name.name_folded
-          AND source_file.lang = dirty_name.lang;
+          AND (
+              source_file.lang = dirty_name.lang
+              OR (source_file.lang = 'ambiguous_m' AND dirty_name.lang IN ('matlab', 'objc'))
+          );
         """;
 
     private const string MaterializeReferenceGraphLookupNamesSql = $"""
@@ -207,6 +210,19 @@ public partial class DbWriter
         JOIN symbol_references AS r ON r.id = dirty.reference_id
         JOIN files AS source_file ON source_file.id = r.file_id
         WHERE source_file.lang IS NOT NULL
+          AND r.symbol_name_folded IS NOT NULL;
+
+        INSERT OR IGNORE INTO temp.{ReferenceGraphLookupNamesTable}(lang, name_folded)
+        SELECT target_lang.lang, r.symbol_name_folded
+        FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty
+        JOIN symbol_references AS r ON r.id = dirty.reference_id
+        JOIN files AS source_file ON source_file.id = r.file_id
+        CROSS JOIN (
+            SELECT 'matlab' AS lang
+            UNION ALL
+            SELECT 'objc'
+        ) AS target_lang
+        WHERE source_file.lang = 'ambiguous_m'
           AND r.symbol_name_folded IS NOT NULL;
 
         INSERT OR IGNORE INTO temp.{ReferenceGraphLookupNamesTable}(lang, name_folded)

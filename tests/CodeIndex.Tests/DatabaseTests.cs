@@ -638,6 +638,83 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraph_AmbiguousMResolvesAgainstDefinitiveDialects_Issue4738()
+    {
+        var callerId = UpsertTestFileWithLanguage("src/caller.m", "ambiguous_m", "ambiguous-caller");
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "MatlabTarget",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "MatlabTarget();",
+            },
+            new ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "ObjectiveCTarget",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 1,
+                Context = "ObjectiveCTarget();",
+            },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal(2, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND resolution_state = 'unresolved'
+            """));
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            var matlabTargetId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/matlab-target.m",
+                Lang = "matlab",
+                Size = 32,
+                Lines = 2,
+                Modified = new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "matlab-target",
+            });
+            var objectiveCTargetId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/objective-c-target.m",
+                Lang = "objc",
+                Size = 32,
+                Lines = 2,
+                Modified = new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "objective-c-target",
+            });
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = matlabTargetId, Kind = "function", Name = "MatlabTarget", Line = 1 },
+                new SymbolRecord { FileId = objectiveCTargetId, Kind = "function", Name = "ObjectiveCTarget", Line = 1 },
+            ]);
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        Assert.Equal(2, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND resolution_state = 'resolved'
+            """));
+
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal(2, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND resolution_state = 'resolved'
+            """));
+    }
+
+    [Fact]
     public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
     {
         var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");

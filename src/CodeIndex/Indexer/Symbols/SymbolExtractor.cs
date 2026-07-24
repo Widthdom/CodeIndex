@@ -4787,9 +4787,15 @@ public static partial class SymbolExtractor
 
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle) =>
-        ResolveRange(lines, startIndex, bodyStyle, null, 0);
+        ResolveRange(lines, startIndex, bodyStyle, null, 0, null);
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, string? lang = null, int startColumn = 0)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(
+        string[] lines,
+        int startIndex,
+        BodyStyle bodyStyle,
+        string? lang = null,
+        int startColumn = 0,
+        string[]? scientificBodyScannerLines = null)
     {
         return bodyStyle switch
         {
@@ -4802,7 +4808,10 @@ public static partial class SymbolExtractor
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.FortranEnd => FindFortranRange(lines, startIndex),
             BodyStyle.ElixirEnd => FindElixirRange(lines, startIndex),
-            BodyStyle.ScientificEnd when lang is "julia" or "matlab" => FindScientificEndRange(lines, startIndex, lang),
+            BodyStyle.ScientificEnd when lang is "julia" or "matlab" => FindScientificEndRange(
+                scientificBodyScannerLines ?? PrepareScientificBodyScannerLines(lines, lang),
+                startIndex,
+                lang),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
             BodyStyle.PascalEnd => FindPascalRange(lines, startIndex),
             BodyStyle.SmalltalkMethod => FindSmalltalkMethodRange(lines, startIndex),

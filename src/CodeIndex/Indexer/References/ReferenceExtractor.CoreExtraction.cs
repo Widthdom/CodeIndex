@@ -2557,6 +2557,11 @@ public static partial class ReferenceExtractor
                     var callIndex = match.Groups["name"].Index;
                     if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
                         continue;
+                    if (language == "d"
+                        && ScientificNativeReferenceExtractor.IsDTemplateArgumentCall(preparedLine, callIndex))
+                    {
+                        continue;
+                    }
                     if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
                         continue;
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
@@ -3446,11 +3451,19 @@ public static partial class ReferenceExtractor
             ? request.Content
             : FileIndexer.NormalizeContentForPrepass(request.Content);
         var originalLines = SplitContentLines(normalizedContent);
-        var maskedContent = AmbiguousMContentMasker.MaskComments(normalizedContent);
+        var matlabContent = AmbiguousMContentMasker.MaskComments(
+            normalizedContent,
+            maskMatlabComments: true,
+            maskObjectiveCComments: true);
+        var objectiveCContent = AmbiguousMContentMasker.MaskComments(
+            normalizedContent,
+            maskMatlabComments: true,
+            maskObjectiveCComments: true,
+            preserveObjectiveCModuloExpressions: true);
         var matlabReferences = ExtractCore(request with
         {
             Language = "matlab",
-            Content = maskedContent,
+            Content = matlabContent,
             RequestedLanguage = "ambiguous_m",
             ContentIsNormalized = true,
             HasOversizeLine = false,
@@ -3459,7 +3472,7 @@ public static partial class ReferenceExtractor
         var objectiveCReferences = ExtractCore(request with
         {
             Language = "objc",
-            Content = maskedContent,
+            Content = objectiveCContent,
             RequestedLanguage = "ambiguous_m",
             ContentIsNormalized = true,
             HasOversizeLine = false,

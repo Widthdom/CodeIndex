@@ -83,11 +83,19 @@ public static partial class SymbolExtractor
 
         if (lang == "ambiguous_m")
         {
-            var maskedContent = AmbiguousMContentMasker.MaskComments(content);
+            var matlabContent = AmbiguousMContentMasker.MaskComments(
+                content,
+                maskMatlabComments: true,
+                maskObjectiveCComments: true);
+            var objectiveCContent = AmbiguousMContentMasker.MaskComments(
+                content,
+                maskMatlabComments: true,
+                maskObjectiveCComments: true,
+                preserveObjectiveCModuloExpressions: true);
             var matlabSymbols = ExtractCore(
                 fileId,
                 "matlab",
-                maskedContent,
+                matlabContent,
                 contentIsNormalized: true,
                 hasOversizeLine: false,
                 conflictMarkerLine: 0,
@@ -98,7 +106,7 @@ public static partial class SymbolExtractor
             var objectiveCSymbols = ExtractCore(
                 fileId,
                 "objc",
-                maskedContent,
+                objectiveCContent,
                 contentIsNormalized: true,
                 hasOversizeLine: false,
                 conflictMarkerLine: 0,
@@ -173,6 +181,9 @@ public static partial class SymbolExtractor
             : null;
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var scientificBodyScannerLines = lang is "julia" or "matlab"
+            ? PrepareScientificBodyScannerLines(structuralLines, lang)
+            : null;
         string[]? javaScriptTypeScriptSanitizedLines = null;
         string[] GetJavaScriptTypeScriptSanitizedLines() =>
             javaScriptTypeScriptSanitizedLines ??= BuildJavaScriptTypeScriptSanitizedLines(lines);
@@ -877,7 +888,13 @@ public static partial class SymbolExtractor
                                                 i,
                                                 absoluteStartColumn,
                                                 csharpGateRawStartColumn)
-                                            : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                                            : ResolveRange(
+                                                rangeLines,
+                                                i,
+                                                pattern.BodyStyle,
+                                                lang,
+                                                absoluteStartColumn,
+                                                scientificBodyScannerLines);
                         if (fortranContinuationCandidate != null)
                             endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);
                         var startLine = i + 1;

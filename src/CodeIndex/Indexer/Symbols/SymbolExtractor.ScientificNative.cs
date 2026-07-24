@@ -13,11 +13,10 @@ public static partial class SymbolExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindScientificEndRange(
-        string[] lines,
+        string[] scannerLines,
         int startIndex,
         string language)
     {
-        var scannerLines = ScientificNativeCommentMasker.MaskBlockComments(language, lines);
         var tokenRegex = language == "julia"
             ? JuliaScientificBlockTokenRegex
             : MatlabScientificBlockTokenRegex;
@@ -26,7 +25,7 @@ public static partial class SymbolExtractor
 
         for (var lineIndex = startIndex + 1; lineIndex < scannerLines.Length; lineIndex++)
         {
-            var code = MaskScientificBodyScanLine(scannerLines[lineIndex], language);
+            var code = scannerLines[lineIndex];
             if (string.IsNullOrWhiteSpace(code))
                 continue;
 
@@ -51,12 +50,26 @@ public static partial class SymbolExtractor
 
         return bodyStartLine == null
             ? (startIndex + 1, null, null)
-            : (lines.Length, bodyStartLine, lines.Length);
+            : (scannerLines.Length, bodyStartLine, scannerLines.Length);
+    }
+
+    private static string[] PrepareScientificBodyScannerLines(
+        string[] lines,
+        string language)
+    {
+        var blockMaskedLines = ScientificNativeCommentMasker.MaskBlockComments(language, lines);
+        var scannerLines = new string[blockMaskedLines.Length];
+        for (var lineIndex = 0; lineIndex < blockMaskedLines.Length; lineIndex++)
+            scannerLines[lineIndex] = MaskScientificBodyScanLine(blockMaskedLines[lineIndex], language);
+
+        return scannerLines;
     }
 
     private static string MaskScientificBodyScanLine(string line, string language)
     {
-        var masked = ScientificNativeCommentMasker.MaskLineStringLiteralsPreservingPostfixSingleQuotes(line);
+        var masked = ScientificNativeCommentMasker.MaskLineStringLiteralsPreservingPostfixSingleQuotes(
+            line,
+            useMatlabStringRules: language == "matlab");
         var commentMarker = language == "julia" ? '#' : '%';
         var commentIndex = masked.IndexOf(commentMarker);
         return commentIndex >= 0 ? masked[..commentIndex] : masked;
@@ -76,7 +89,8 @@ public static partial class SymbolExtractor
             if (char.IsWhiteSpace(line[index]))
                 continue;
 
-            if (line[index] == ';')
+            if (line[index] == ';'
+                || (language == "matlab" && line[index] == ','))
                 return true;
 
             return language == "julia" && line[index] == '=';

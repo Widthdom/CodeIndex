@@ -176,6 +176,137 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "stringCall");
     }
 
+    [Fact]
+    public void Extract_MatlabAppliesCharacterVectorQuoteRules_Issue4738()
+    {
+        const string content = """
+            function run()
+              path = 'C:\'; helper();
+              items = [prefix 'fake()'];
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        var references = ReferenceExtractor.Extract(1, "matlab", content, symbols);
+
+        var helperReference = Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Equal("run", helperReference.ContainerName);
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+    }
+
+    [Fact]
+    public void Extract_NimExpandsGroupedImports_Issue4738()
+    {
+        const string content = """
+            import std/[strutils, sequtils], os
+            proc run() =
+              helper()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "nim", content);
+
+        var references = ReferenceExtractor.Extract(1, "nim", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "std/strutils" && reference.ReferenceKind == "import");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "std/sequtils" && reference.ReferenceKind == "import");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "os" && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "std" or "sequtils");
+    }
+
+    [Fact]
+    public void Extract_JuliaNormalizesRelativeImportsAndBroadcastCalls_Issue4738()
+    {
+        const string content = """
+            module Main
+            using .Utils, ..Parent
+            function run(xs)
+                helper.(xs)
+            end
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Utils" && reference.ReferenceKind == "import");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Parent" && reference.ReferenceKind == "import");
+        var helperReference = Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Equal("run", helperReference.ContainerName);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is ".Utils" or "..Parent");
+    }
+
+    [Fact]
+    public void Extract_DTemplateInvocationsEmitCalleeCalls_Issue4738()
+    {
+        const string content = """
+            void run() {
+                helper!int();
+                other!(string, int)(42);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "d", content);
+
+        var references = ReferenceExtractor.Extract(1, "d", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "other" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "int" or "string" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_AdaQualifiedBareCallUsesResolvableLeafName_Issue4738()
+    {
+        const string content = """
+            package body Demo is
+              procedure Run is
+              begin
+                Helpers.Flush;
+              end Run;
+            end Demo;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "ada", content);
+
+        var references = ReferenceExtractor.Extract(1, "ada", content, symbols);
+
+        var flushReference = Assert.Single(references, reference =>
+            reference.SymbolName == "Flush" && reference.ReferenceKind == "call");
+        Assert.Equal("Run", flushReference.ContainerName);
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Helpers.Flush");
+    }
+
+    [Fact]
+    public void Extract_MatlabCommaSeparatedEndKeepsFollowingCallTopLevel_Issue4738()
+    {
+        const string content = """
+            function first()
+              if true, helper(), end
+            end
+            toplevel();
+            function second()
+              other();
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        var references = ReferenceExtractor.Extract(1, "matlab", content, symbols);
+
+        var first = Assert.Single(symbols, symbol => symbol.Name == "first");
+        Assert.Equal(3, first.EndLine);
+        var topLevelReference = Assert.Single(references, reference =>
+            reference.SymbolName == "toplevel" && reference.ReferenceKind == "call");
+        Assert.Null(topLevelReference.ContainerName);
+    }
+
     public static TheoryData<string, string> ScientificNativeMultilineLiteralCases => new()
     {
         {
@@ -300,6 +431,22 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "helper" && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "ignoredObjectiveCCall");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousMPreservesObjectiveCModuloExpressions_Issue4738()
+    {
+        const string content = """
+            void run(void) {
+                int value = left % helper();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ambiguous_m", content, "unknown.m");
+        var references = ReferenceExtractor.Extract(1, "ambiguous_m", content, symbols, "unknown.m");
+
+        Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
     }
 
     [Fact]

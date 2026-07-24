@@ -21,7 +21,9 @@ internal static class ScientificNativeCommentMasker
             _ => lines,
         };
 
-    internal static string MaskLineStringLiteralsPreservingPostfixSingleQuotes(string line)
+    internal static string MaskLineStringLiteralsPreservingPostfixSingleQuotes(
+        string line,
+        bool useMatlabStringRules)
     {
         char[]? chars = null;
 
@@ -34,7 +36,11 @@ internal static class ScientificNativeCommentMasker
             if (quote is not ('"' or '\'' or '`'))
                 continue;
 
-            if (quote == '\'' && IsPostfixSingleQuote(line, cursor))
+            if (quote == '\''
+                && IsPostfixSingleQuote(
+                    line,
+                    cursor,
+                    skipWhitespace: !useMatlabStringRules))
                 continue;
 
             MaskAt(cursor);
@@ -43,7 +49,9 @@ internal static class ScientificNativeCommentMasker
             {
                 var current = line[cursor];
                 MaskAt(cursor);
-                if (current == '\\' && cursor + 1 < line.Length)
+                if (!useMatlabStringRules
+                    && current == '\\'
+                    && cursor + 1 < line.Length)
                 {
                     MaskAt(++cursor);
                     cursor++;
@@ -375,11 +383,14 @@ internal static class ScientificNativeCommentMasker
         return result;
     }
 
-    private static bool IsPostfixSingleQuote(string line, int quoteIndex)
+    private static bool IsPostfixSingleQuote(
+        string line,
+        int quoteIndex,
+        bool skipWhitespace = true)
     {
         for (var index = quoteIndex - 1; index >= 0; index--)
         {
-            if (char.IsWhiteSpace(line[index]))
+            if (skipWhitespace && char.IsWhiteSpace(line[index]))
                 continue;
 
             return char.IsLetterOrDigit(line[index]) || line[index] is '_' or ')' or ']' or '}';

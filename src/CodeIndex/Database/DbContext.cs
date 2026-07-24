@@ -2054,7 +2054,7 @@ public class DbContext : IDisposable
     public const string CSharpStaticInterfaceSourceEvidenceMetaKey = "csharp_static_interface_source_evidence";
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
-    public const int ReferenceIdentityContractVersion = 1;
+    public const int ReferenceIdentityContractVersion = 2;
     public const string ReferenceIdentityContractVersionMetaKey = "reference_identity_contract_version";
     public const string SymbolsOnlyGraphOmittedMetaKey = "symbols_only_graph_omitted";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
