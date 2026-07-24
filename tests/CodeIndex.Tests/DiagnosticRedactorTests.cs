@@ -41,6 +41,39 @@ public class DiagnosticRedactorTests
     }
 
     [Theory]
+    [InlineData("RedactSuggestionText_DoesNotBorrowEntropySignalsFromLaterText_Issue4403")]
+    [InlineData("PersistSuggestionsAtomicallyIssue4751")]
+    [InlineData("redact_suggestion_text_preserves_long_xunit_identifier_issue_4751")]
+    [InlineData("_RedactSuggestionText_PreservesLongIdentifier_Issue4751")]
+    [InlineData("Persist_Long_Test_Result_By_Id_Issue4751")]
+    [InlineData("ParseNet8Target_WithLongIdentifier_Issue4751")]
+    [InlineData("LoadOAuth2Token_FromLongRunningContext_Issue4751")]
+    [InlineData("risky-code/EnvironmentSecretSourceIssue4751")]
+    public void RedactSuggestionText_PreservesStructuredIdentifiers_Issue4751(string identifier)
+    {
+        var redacted = DiagnosticRedactor.RedactSuggestionText(identifier, out var redactedTypes);
+
+        Assert.Equal(identifier, redacted);
+        Assert.Empty(redactedTypes);
+    }
+
+    [Theory]
+    [InlineData("aaBB11ccDD22eeFF33ggHH44iiJJ55kk")]
+    [InlineData("AbCdEfGhIjKlMnOpQrStUvWxYz123456")]
+    [InlineData("AbcDefGhiJklMnoPqrStuVwxYz123456")]
+    [InlineData("github_" + "pat_11AA22bb33CC44dd55EE66ff77GG88hh")]
+    [InlineData("glpat" + "-AbcdefGhijklMnopqrstUvwx123456")]
+    [InlineData("sk_" + "live_AbcdefGhijklMnopqr123456")]
+    [InlineData("xoxb" + "-123456789012-123456789012-AbcDefGhiJklMnoPqrStuVwxYz")]
+    public void RedactSuggestionText_RedactsOpaqueSecrets_Issue4751(string secret)
+    {
+        var redacted = DiagnosticRedactor.RedactSuggestionText(secret, out var redactedTypes);
+
+        Assert.Equal(DiagnosticRedactor.SuggestionRedactedHighEntropyToken, redacted);
+        Assert.Equal(["high_entropy_token"], redactedTypes);
+    }
+
+    [Theory]
     [InlineData("--github-token")]
     [InlineData("github_token")]
     [InlineData("bearer")]
