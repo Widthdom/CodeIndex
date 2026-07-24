@@ -82,6 +82,7 @@ public static partial class QueryCommandRunner
                     || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
                     || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
                     || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var confirmedCount = analysis.Callers.Count;
             var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
             var hintCount = analysis.FileImpacts.Count;
@@ -92,6 +93,7 @@ public static partial class QueryCommandRunner
             var depthZeroResolved = maxDepth == 0 && analysis.DefinitionCount > 0;
 
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
+            WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
 
             if (confirmedCount == 0 && !hasHeuristicHints)
             {
@@ -130,7 +132,7 @@ public static partial class QueryCommandRunner
                                 AddImpactFailureJsonFields(zeroPayload, analysis, jsonOptions);
                                 if (analysis.Suggestion != null)
                                     zeroPayload["suggestion"] = analysis.Suggestion;
-                                AddGraphContractJsonFields(zeroPayload, reader, jsonOptions, sqlGraphSignal);
+                                AddGraphContractJsonFields(zeroPayload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                                 AddImpactOptionWarnings(zeroPayload, options);
                             });
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
@@ -185,7 +187,7 @@ public static partial class QueryCommandRunner
                             payload["suggestion"] = analysis.Suggestion;
                         if (!analysis.GraphTableAvailable)
                             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
-                        AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal);
+                        AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                         AddImpactOptionWarnings(payload, options);
                         AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
@@ -238,7 +240,7 @@ public static partial class QueryCommandRunner
                             AddImpactFailureJsonFields(zeroPayload, analysis, jsonOptions);
                             if (analysis.Suggestion != null)
                                 zeroPayload["suggestion"] = analysis.Suggestion;
-                            AddGraphContractJsonFields(zeroPayload, reader, jsonOptions, sqlGraphSignal);
+                            AddGraphContractJsonFields(zeroPayload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                             AddImpactOptionWarnings(zeroPayload, options);
                         });
                     if (!analysis.GraphTableAvailable)
@@ -285,7 +287,7 @@ public static partial class QueryCommandRunner
                     AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                     if (analysis.TruncatedReason != null)
                         payload["truncated_reason"] = analysis.TruncatedReason;
-                    AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal);
+                    AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                     AddImpactOptionWarnings(payload, options);
                     AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                     AddActiveSqliteDiagnostics(payload);
@@ -326,7 +328,7 @@ public static partial class QueryCommandRunner
                 if (analysis.Suggestion != null)
                     payload["suggestion"] = analysis.Suggestion;
                 AddImpactFailureJsonFields(payload, analysis, jsonOptions);
-                AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal);
+                AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                 AddImpactOptionWarnings(payload, options);
                 var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                     payload,
@@ -573,6 +575,8 @@ public static partial class QueryCommandRunner
             }
             WriteGraphLiveness("deps", "shape_output", options, depsFormat, rows: results.Count, machineReadable: machineReadable);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            WriteHdlGraphContractWarningIfNeeded(emitsJson, hdlGraphSignal);
             if (results.Count == 0)
             {
                 var zeroSqlGraphSignal = baseSqlGraphSignal;
@@ -1482,7 +1486,16 @@ public static partial class QueryCommandRunner
     {
         payload["api_version"] = JsonOutputContract.ApiVersion;
         payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
-        AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal);
+        AddGraphContractJsonFields(
+            payload,
+            reader,
+            jsonOptions,
+            sqlGraphSignal,
+            reader.GetHdlGraphContractSignal(
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests));
         AddDependencySymbolFilterJsonFields(payload, symbolFilter, jsonOptions);
     }
 

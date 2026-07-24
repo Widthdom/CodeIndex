@@ -89,7 +89,13 @@ public partial class McpServer
                 };
                 AddImpactFailureFields(countOnlyPayload, analysis);
                 AddSqlGraphContractSignal(countOnlyPayload, sqlGraphSignal);
-                AddReferenceGraphCompletenessSignal(countOnlyPayload, reader);
+                AddReferenceGraphCompletenessSignal(
+                    countOnlyPayload,
+                    reader,
+                    lang,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests);
                 adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(count, "impact result")}.", countOnlyPayload);
             }
@@ -129,7 +135,13 @@ public partial class McpServer
             if (analysis.Cycles is { Count: > 0 })
                 payload["cycles"] = ToJsonArray(analysis.Cycles);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            AddReferenceGraphCompletenessSignal(payload, reader);
+            AddReferenceGraphCompletenessSignal(
+                payload,
+                reader,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests);
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
             AddImpactFailureFields(payload, analysis);

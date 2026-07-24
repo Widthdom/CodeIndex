@@ -824,6 +824,7 @@ public static partial class IndexCommandRunner
         string? priorCSharpSymbolNameContractVersion,
         string? priorMetadataTargetCsharp,
         string? priorSqlGraphContractVersion,
+        string? priorHdlGraphContractVersion,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentHotspotFamilyMarkerFingerprints,
@@ -858,6 +859,8 @@ public static partial class IndexCommandRunner
         var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var currentHdlGraphContractVersion = DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var hdlGraphContractMatchesCurrent = priorHdlGraphContractVersion == currentHdlGraphContractVersion;
         var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
@@ -1745,6 +1748,7 @@ public static partial class IndexCommandRunner
                 && (language != "csharp" || csharpSymbolNameContractMatchesCurrent)
                 && (language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                 && (language != "sql" || sqlGraphContractMatchesCurrent)
+                && (language is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent)
                 && AllowReuseWithCurrentHotspotFamilyTrust(language, hotspotFamilyTrustMatchesCurrent);
             var existingFile = !allowReuse
                 ? null
@@ -2936,6 +2940,7 @@ public static partial class IndexCommandRunner
                                     && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                     && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                                     && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
+                                    && (record.Lang is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent)
                                     && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                         }
                         if (existingId != null)
@@ -3464,6 +3469,7 @@ public static partial class IndexCommandRunner
             if (!options.SymbolsOnly)
             {
                 writer.MarkGraphReady();
+                writer.MarkHdlGraphContractReady();
             }
             writer.MarkIndexReaderContractsReady(options.SymbolsOnly);
             if (!options.SymbolsOnly

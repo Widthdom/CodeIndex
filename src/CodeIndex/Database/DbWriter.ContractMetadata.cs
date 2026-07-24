@@ -48,6 +48,18 @@ public partial class DbWriter
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    /// <summary>
+    /// Stamp the HDL graph extraction contract after every indexed Verilog, SystemVerilog,
+    /// and VHDL file has been refreshed by a successful full scan.
+    /// HDL graph 抽出契約を、対象ファイルの full-scan 更新完了後に stamp する。
+    /// </summary>
+    public void MarkHdlGraphContractReady()
+    {
+        SetMeta(
+            DbContext.HdlGraphContractVersionMetaKey,
+            DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     public void MarkIndexReaderContractsReady(bool symbolsOnlyGraphOmitted)
     {
         var csharpVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);

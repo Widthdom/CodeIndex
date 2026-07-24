@@ -36,7 +36,8 @@ public static partial class ReferenceExtractor
         "gradle", "terraform", "protobuf", "dockerfile", "makefile", "cmake", "justfile", "msbuild",
         "solution", "dependency_manifest", "dependency_lock", "json",
         "zig", "css", "sass", "stylus", "xml", "yaml", "graphql", "html", "markdown", "fortran", "pascal", "objc", "smalltalk",
-        "ada", "cython", "d", "julia", "matlab", "nim", "ambiguous_m"
+        "ada", "cython", "d", "julia", "matlab", "nim", "ambiguous_m",
+        "verilog", "systemverilog", "vhdl",
     ];
 
     private static readonly IReadOnlyDictionary<string, IReferenceExtractor> Extractors =
