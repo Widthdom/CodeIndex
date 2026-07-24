@@ -618,8 +618,9 @@ downstream audit tooling. Count-only JSON includes `returned_bucket_counts` and
 Use `--compact` for audit summaries that keep counts, confidence buckets,
 taxonomy, and filter context without returning the full `symbols` array.
 Public APIs, framework entrypoints, DTOs, serialization contracts, generated
-hooks, test-only hooks, Markdown headings, reflection, and configuration-based
-usage can be false positives and are routed into lower-confidence buckets. C#
+hooks, test-only hooks, Markdown headings and fenced-code language markers,
+reflection, and configuration-based usage can be false positives and are
+routed into lower-confidence buckets. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
 `GetMethod("Foo")` are indexed, but dynamically constructed names still require
 manual review.
@@ -3788,8 +3789,9 @@ bucket と confidence filter を直接確認できます。count-only JSON に�
 `returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含まれ、
 full JSON summary と同じ bucket totals を返します。count、confidence bucket、taxonomy、
 filter context だけが必要な場合は `--compact` を使ってください。Public API、framework entrypoint、DTO、
-serialization contract、generated hook、test-only hook、Markdown heading、reflection、
-config 経由の使用は false positive になりうるため、低 confidence bucket に寄せられます。
+serialization contract、generated hook、test-only hook、Markdown heading と fenced-code の
+language marker、reflection、config 経由の使用は false positive になりうるため、
+低 confidence bucket に寄せられます。
 C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。
