@@ -350,6 +350,21 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintCommandUsage_ExcerptDocumentsLineOnlyFocus_Issue4747()
+    {
+        var (_, stdout, stderr) = ConsoleCapture.Capture(() =>
+        {
+            ConsoleUi.PrintCommandUsage("excerpt");
+            return 0;
+        });
+
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("--focus-line may be used alone", stdout);
+        Assert.Contains("without --focus-column, clamping keeps the leading window", stdout);
+        Assert.Contains("--focus-length still requires --focus-column", stdout);
+    }
+
+    [Fact]
     public void PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
@@ -406,7 +421,8 @@ public class ConsoleUiTests
         Assert.Contains("--ascii                    Use ASCII spinner/progress glyphs", output);
         Assert.Contains("cdidx excerpt <path[:line|:start-end]> [--line <line>|--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--no-semantic-tokens] [--max-json-bytes <n>] [--verbose]", output);
         Assert.Contains("--focus-column <n>         find/excerpt: focus a specific 1-based column", output);
-        Assert.Contains("--focus-line <line>        find/excerpt: focus a specific line", output);
+        Assert.Contains("--focus-line <line>        find/excerpt: focus a line", output);
+        Assert.Contains("excerpt keeps the leading window when no column is supplied", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--format <text|json|compact|issue-drafts>] [--pretty] [--compact] [--fields <csv>] [--cursor <response:v1:offset:fingerprint>] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <summary,tree,languages,hotspots,metrics|list>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>] [--max-json-bytes <n>]", output);
         Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=ndjson|array]] [--compact] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--max-json-bytes <n>] [--allow-partial] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--group-partials] [--since <datetime>]", output);
         Assert.Contains("--sort <mode>              Symbols/outline: order audit output by a ranking", output);

@@ -294,6 +294,13 @@ sections below show examples and option details for the most common workflows.
 | MCP | `mcp` | Start the MCP server for AI tools | server transport |
 | Legal | `license` | Show the license and commercial-use summary; add `--json` for the stable `license`, `commercial_use`, `trademark`, and controlling `documents` fields | -- |
 
+For `files` and `map`, `--exclude-tests` without an explicit `--path` applies the
+same production-source preset (`src/**` plus the built-in non-source exclusions).
+With an explicit `--path`, both commands keep that selected path scope and remove
+test paths from it. As a result, `files --exclude-tests --count` and the
+`file_count` reported by `map --exclude-tests --sections summary --json` describe
+the same filtered file set.
+
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
 Run `cdidx --help` for the full syntax line for every command. For focused help,
@@ -1489,6 +1496,10 @@ Use `--exact-name` when you already have a precise candidate list (e.g. names re
 For audit passes, add `--sort hotspot|references|size|complexity|path`.
 `--json` rows include `sort_mode`, `reference_count`, `hotspot_score`,
 `size_lines`, and `complexity_score` whenever an audit sort is active.
+Audit sorting combines case-insensitive reference-name variants before ordering
+and limiting, so each physical `symbol_id` appears at most once. Internal offset
+pagination is applied after that deduplication, and stable tie-breakers keep
+adjacent pages deterministic without repeating a symbol.
 Use `--format compact` when discovery output must stay small: it emits one JSON
 object with `count`, `file_count`, `emitted_count`, `omitted_count`,
 `truncated`, `omitted_by`, `query_context`, and freshness metadata. Compact
@@ -1875,7 +1886,7 @@ same source location.
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`; max: 10000000) |
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match (max: 1000) |
 | `--after <n>` | `excerpt`, `find` | Include extra context lines after the requested excerpt or match (max: 1000) |
-| `--focus-line <line>` | `excerpt` | Line inside the requested excerpt whose focused column should stay visible when `--max-line-width` clamps long single-line content; requires `--focus-column` (max: 10000000) |
+| `--focus-line <line>` | `excerpt` | Line inside the requested excerpt to focus when `--max-line-width` clamps long single-line content. It can be used without `--focus-column`; in that case, clamping keeps the leading window of the line (max: 10000000). |
 | `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content; must be within that line's length (max: 100000) |
 | `--focus-length <n>` | `excerpt` | Width of the focused span when `--max-line-width` clamps long single-line content (default: 1, max: 100000; requires `--focus-column`) |
 | `--no-semantic-tokens` | `excerpt` | Omit the `semantic_tokens` array from `excerpt --json` while keeping line spans and content metadata. Useful for compact excerpts and token-budgeted clients. |
@@ -3499,6 +3510,13 @@ cdidx index . --quiet
 | MCP | `mcp` | AI tools 向け MCP server を起動 | server transport |
 | Legal | `license` | license と commercial-use summary を表示。`--json` を付けると、安定した `license`、`commercial_use`、`trademark`、controlling `documents` field を出力 | -- |
 
+`files` と `map` では、明示的な `--path` なしで `--exclude-tests` を指定すると、
+同じ本番ソース preset（`src/**` と組み込みの非ソース除外）が適用されます。
+明示的な `--path` がある場合は、両コマンドとも選択した path scope を維持し、
+そこから test path を除外します。このため、`files --exclude-tests --count` と
+`map --exclude-tests --sections summary --json` が返す `file_count` は、同じ
+filter 済み file 集合を表します。
+
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
 を参照してください。個別の help は `cdidx help <command> [subcommand]` を使え、既存の
@@ -4668,6 +4686,10 @@ cdidx symbols Run --format lsp                       # LSP locations。qf / sari
 audit では `--sort hotspot|references|size|complexity|path` を追加できます。
 audit sort が有効な `--json` row には `sort_mode`、`reference_count`、
 `hotspot_score`、`size_lines`、`complexity_score` が含まれます。
+audit sort は大文字小文字だけが異なる参照名を ordering / limit 適用前に統合するため、
+各物理 `symbol_id` は最大1回だけ返ります。内部 offset pagination もこの重複排除後に
+適用され、安定した tie-breaker により隣接ページ間で同じ symbol を繰り返さず
+決定的な順序を維持します。
 discovery 出力を小さく保つ必要がある場合は `--format compact` を使います。
 これは `count`、`file_count`、`emitted_count`、`omitted_count`、
 `truncated`、`omitted_by`、`query_context`、freshness metadata を含む 1 つの
@@ -5037,7 +5059,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ、最大: 10000000） |
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数（最大: 1000） |
 | `--after <n>` | `excerpt`, `find` | 指定範囲または一致箇所の後に追加する文脈行数（最大: 1000） |
-| `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、注目列を表示に残したい抜粋内の行。`--focus-column` 必須（最大: 10000000） |
+| `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に注目する抜粋内の行。`--focus-column` なしでも使用でき、その場合は対象行の先頭側の window を表示に残します（最大: 10000000）。 |
 | `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列。対象行の長さ以内である必要があります（最大: 100000） |
 | `--focus-length <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際の注目範囲の幅（デフォルト: 1、最大: 100000、`--focus-column` 必須） |
 | `--no-semantic-tokens` | `excerpt` | `excerpt --json` から `semantic_tokens` 配列を省略し、line span と content metadata は維持する。compact な excerpt や token budget が厳しい client 向け。 |

@@ -51,6 +51,7 @@ public static partial class QueryCommandRunner
                 CommandExitCodes.UsageError,
                 "Use `cdidx map --compact --max-json-bytes <n>`, `cdidx map --json --sections <tree,languages,hotspots,metrics> --max-json-bytes <n>`, or remove --max-json-bytes.",
                 ConsoleUi.GetUsageLine("map"));
+        var filesScope = BuildDiscoveryFileScopeFilters(options);
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -60,9 +61,9 @@ public static partial class QueryCommandRunner
             var map = reader.GetRepoMap(
                 mapLimit,
                 options.Lang,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
+                filesScope.PathPatterns,
+                filesScope.ExcludePaths,
+                filesScope.ExcludeTests,
                 options.MinEntrypointConfidence,
                 moduleDepth: options.ContextAfterExplicit ? options.ContextAfter : null,
                 oversizedLineThreshold: evaluateIssueDraftCandidates ? MapIssueDraftLineThreshold : null,
@@ -76,9 +77,9 @@ public static partial class QueryCommandRunner
                     ? (int?)null
                 : reader.CountListFiles(
                     lang: options.Lang,
-                    pathPatterns: options.PathPatterns,
-                    excludePathPatterns: options.ExcludePaths,
-                    excludeTests: options.ExcludeTests,
+                    pathPatterns: filesScope.PathPatterns,
+                    excludePathPatterns: filesScope.ExcludePaths,
+                    excludeTests: filesScope.ExcludeTests,
                     generatedOnly: true).Count;
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
             var compactTruncation = options.Compact ? ApplyRepoMapCompactCaps(map, compactLimit, options) : null;

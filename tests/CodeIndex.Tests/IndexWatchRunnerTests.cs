@@ -15,6 +15,7 @@ namespace CodeIndex.Tests;
 [Collection("Console sensitive")]
 public class IndexWatchRunnerTests
 {
+    private static readonly TimeSpan TopLevelWatchTimeout = TimeSpan.FromSeconds(30);
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -1106,49 +1107,48 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
-    public void IndexCommandRun_WatchIdle_PropagatesTopLevelCancellation_Issue4591()
+    public async Task IndexCommandRun_WatchIdle_PropagatesTopLevelCancellation_Issue4591()
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         using var cts = new CancellationTokenSource();
-        using var ready = new ManualResetEventSlim();
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int>? runTask = null;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "idle.py"), "print('idle')\n");
             IndexWatchRunner.WatchReadyForTesting = _ =>
             {
-                ready.Set();
+                ready.TrySetResult();
                 cts.Cancel();
             };
 
-            var runTask = Task.Run(() => IndexCommandRunner.Run(
+            runTask = StartTopLevelWatch(
                 [projectRoot, "--watch", "--quiet", "--db", dbPath],
-                _jsonOptions,
-                cts));
+                cts);
 
-            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "The top-level watch run did not become ready.");
-#pragma warning disable xUnit1031 // Bounded synchronous wait keeps the static test hook scoped.
-            var exitCode = runTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
-#pragma warning restore xUnit1031
+            await WaitForWatchSignalAsync(ready.Task, runTask, "top-level watch readiness");
+            var exitCode = await runTask.WaitAsync(TopLevelWatchTimeout);
             Assert.Equal(CommandExitCodes.Success, exitCode);
         }
         finally
         {
             cts.Cancel();
             IndexWatchRunner.WatchReadyForTesting = null;
+            await WaitForTopLevelWatchCleanupAsync(runTask);
             DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
-    public void IndexCommandRun_WatchActiveUpdate_PropagatesTopLevelCancellation_Issue4591()
+    public async Task IndexCommandRun_WatchActiveUpdate_PropagatesTopLevelCancellation_Issue4591()
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         var sourcePath = Path.Combine(projectRoot, "active.py");
         using var cts = new CancellationTokenSource();
-        using var ready = new ManualResetEventSlim();
-        using var extractionStarted = new ManualResetEventSlim();
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extractionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<int>? runTask = null;
         try
         {
@@ -1157,37 +1157,62 @@ public class IndexWatchRunnerTests
             {
                 File.WriteAllText(sourcePath, "print('after')\n");
                 enqueue(sourcePath);
-                ready.Set();
+                ready.TrySetResult();
             };
             IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () =>
             {
-                extractionStarted.Set();
+                extractionStarted.TrySetResult();
                 cts.Token.WaitHandle.WaitOne();
                 cts.Token.ThrowIfCancellationRequested();
             };
 
-            runTask = Task.Run(() => IndexCommandRunner.Run(
+            runTask = StartTopLevelWatch(
                 [projectRoot, "--watch", "--quiet", "--debounce", "50", "--db", dbPath],
-                _jsonOptions,
-                cts));
+                cts);
 
-            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "The top-level watch run did not become ready.");
-            Assert.True(extractionStarted.Wait(TimeSpan.FromSeconds(10)), "The watch update did not start extraction work.");
+            await WaitForWatchSignalAsync(ready.Task, runTask, "top-level watch readiness");
+            await WaitForWatchSignalAsync(extractionStarted.Task, runTask, "watch update extraction start");
             cts.Cancel();
-#pragma warning disable xUnit1031 // Bounded synchronous wait keeps the static test hooks scoped.
-            var exitCode = runTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
-#pragma warning restore xUnit1031
+            var exitCode = await runTask.WaitAsync(TopLevelWatchTimeout);
             Assert.Equal(CommandExitCodes.Interrupted, exitCode);
         }
         finally
         {
             cts.Cancel();
-            if (runTask is { IsCompleted: false })
-                SpinWait.SpinUntil(() => runTask.IsCompleted, TimeSpan.FromSeconds(10));
             IndexWatchRunner.WatchReadyForTesting = null;
             IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
+            await WaitForTopLevelWatchCleanupAsync(runTask);
             DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public async Task WaitForWatchSignalAsync_DistinguishesEarlyExitAndObservationTimeout_Issue4752()
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var earlyExit = Task.FromResult(42);
+
+        var exitFailure = await Assert.ThrowsAnyAsync<Xunit.Sdk.XunitException>(() =>
+            WaitForWatchSignalAsync(
+                signal.Task,
+                earlyExit,
+                "test readiness",
+                TimeSpan.FromSeconds(1)));
+
+        Assert.Contains("exited before test readiness", exitFailure.Message, StringComparison.Ordinal);
+        Assert.Contains("Exit code: 42", exitFailure.Message, StringComparison.Ordinal);
+
+        var pendingRun = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeoutFailure = await Assert.ThrowsAnyAsync<Xunit.Sdk.XunitException>(() =>
+            WaitForWatchSignalAsync(
+                signal.Task,
+                pendingRun.Task,
+                "test readiness",
+                TimeSpan.FromMilliseconds(10)));
+
+        Assert.Contains("Timed out waiting for test readiness", timeoutFailure.Message, StringComparison.Ordinal);
+        Assert.Contains("the watch run is still", timeoutFailure.Message, StringComparison.Ordinal);
+        pendingRun.TrySetResult(CommandExitCodes.Success);
     }
 
     [Fact]
@@ -1553,6 +1578,67 @@ public class IndexWatchRunnerTests
         cts.Cancel();
         if (loopTask is { IsCompleted: false })
             SpinWait.SpinUntil(() => loopTask.IsCompleted, TimeSpan.FromSeconds(10));
+    }
+
+    private Task<int> StartTopLevelWatch(string[] args, CancellationTokenSource cts)
+        => Task.Factory.StartNew(
+            () => IndexCommandRunner.Run(args, _jsonOptions, cts),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+            TaskScheduler.Default);
+
+    private static async Task WaitForWatchSignalAsync(
+        Task signalTask,
+        Task<int> runTask,
+        string signalDescription,
+        TimeSpan? timeout = null)
+    {
+        var timeoutTask = Task.Delay(timeout ?? TopLevelWatchTimeout);
+        await Task.WhenAny(signalTask, runTask, timeoutTask);
+
+        if (signalTask.IsCompleted)
+        {
+            await signalTask;
+            return;
+        }
+
+        if (runTask.IsCompleted)
+        {
+            if (runTask.IsFaulted)
+            {
+                var failure = runTask.Exception?.GetBaseException();
+                Assert.Fail(
+                    $"The watch run failed before {signalDescription}. "
+                    + $"Failure: {failure?.GetType().Name ?? "unknown"}.");
+            }
+
+            if (runTask.IsCanceled)
+                Assert.Fail($"The watch run was canceled before {signalDescription}.");
+
+            Assert.Fail(
+                $"The watch run exited before {signalDescription}. "
+                + $"Exit code: {runTask.Result}.");
+        }
+
+        Assert.Fail(
+            $"Timed out waiting for {signalDescription}; "
+            + $"the watch run is still {runTask.Status} and the signal is {signalTask.Status}.");
+    }
+
+    private static async Task WaitForTopLevelWatchCleanupAsync(Task<int>? runTask)
+    {
+        if (runTask is null)
+            return;
+
+        await Task.WhenAny(runTask, Task.Delay(TopLevelWatchTimeout));
+        if (!runTask.IsCompleted)
+        {
+            Assert.Fail(
+                $"Timed out stopping the top-level watch run during cleanup. "
+                + $"Task status: {runTask.Status}.");
+        }
+
+        _ = runTask.Exception;
     }
 
     private string RunIndexAndCapture(string[] args, out int exitCode)
