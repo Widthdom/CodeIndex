@@ -364,18 +364,6 @@ internal static class ConsoleCompletionRenderer
             lines.Add($"complete -c cdidx -n '__fish_use_subcommand' -l {name}{shortName}{requiresArg}{argSpec} -d '{description}'");
         }
 
-        // Resolve every command through the shared completion API before grouping flags into fish
-        // predicates. This keeps fish on the same command-scoping path as bash, zsh, and PowerShell
-        // instead of maintaining a renderer-specific projection of the schema (#4732).
-        // fish も bash / zsh / PowerShell と同じ command-scoped API を通してから flag ごとに
-        // grouping し、renderer 固有の schema 射影を持たない (#4732)。
-        var completionFlagNamesByCommand = ShellCommandNames.ToDictionary(
-            command => command,
-            command => CliFlagSchema.GetCompletionFlagsForCommand(command)
-                .Select(flag => flag.Name)
-                .ToHashSet(StringComparer.Ordinal),
-            StringComparer.Ordinal);
-
         // Emit one `complete` line per schema flag, joining the applicable command list into the
         // fish `__fish_seen_subcommand_from` predicate. Hotspots' `--group-by-name` description is
         // shortened to match the legacy "Collapse same-name rows across files" tooltip that the
@@ -384,21 +372,18 @@ internal static class ConsoleCompletionRenderer
         // という対応で生成する。`--group-by-name` のみ既存テストが期待する短い tooltip を維持。
         foreach (var flag in CliFlagSchema.All)
         {
-            var applicableCommands = ShellCommandNames
-                .Where(command => completionFlagNamesByCommand[command].Contains(flag.Name))
-                .ToArray();
-            if (applicableCommands.Length == 0)
+            if (flag.PrimaryCommands.Count == 0)
                 continue;
             if (flag.Name == "--format")
             {
-                foreach (var command in applicableCommands)
+                foreach (var command in flag.PrimaryCommands.OrderBy(c => Array.IndexOf(ShellCommandNames, c)))
                 {
                     var values = GetFormatValues(command) ?? [];
                     lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {command}' -l format -r -a '{string.Join(' ', values)}' -d '{flag.Description.Replace("'", "\\'")}'");
                 }
                 continue;
             }
-            var commands = string.Join(' ', applicableCommands);
+            var commands = string.Join(' ', flag.PrimaryCommands.OrderBy(c => Array.IndexOf(ShellCommandNames, c)));
             var name = flag.Name.TrimStart('-');
             // Token order is `-l name (-r)? (-a 'values')? -d 'description'` - matches the
             // pre-refactor hand-written script so the ConsoleUiTests fish-extractor regex
