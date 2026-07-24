@@ -6,14 +6,21 @@ namespace CodeIndex.Tests;
 public class ConsoleCaptureTests
 {
     [Fact]
-    public void ImportCancellationFixture_UsesConsoleSensitiveCollection_Issue4650()
+    public void ConsoleSensitiveCollection_AssignsImportCancellationAndDisablesParallelization_Issues4650_4798()
     {
         var attribute = Assert.Single(
             typeof(ExportImportCommandRunnerCancellationTests).CustomAttributes,
             static candidate => candidate.AttributeType == typeof(CollectionAttribute));
         var collectionName = Assert.Single(attribute.ConstructorArguments);
+        var definition = Assert.Single(
+            typeof(ConsoleSensitiveCollection).CustomAttributes,
+            static candidate => candidate.AttributeType == typeof(CollectionDefinitionAttribute));
+        var disableParallelization = Assert.Single(
+            definition.NamedArguments,
+            static candidate => candidate.MemberName == nameof(CollectionDefinitionAttribute.DisableParallelization));
 
         Assert.Equal("Console sensitive", collectionName.Value);
+        Assert.True(Assert.IsType<bool>(disableParallelization.TypedValue.Value));
     }
 
     [Fact]

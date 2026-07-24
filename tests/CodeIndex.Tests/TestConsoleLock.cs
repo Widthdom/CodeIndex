@@ -3,7 +3,7 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
-[CollectionDefinition("Console sensitive")]
+[CollectionDefinition("Console sensitive", DisableParallelization = true)]
 public sealed class ConsoleSensitiveCollection
 {
 }
