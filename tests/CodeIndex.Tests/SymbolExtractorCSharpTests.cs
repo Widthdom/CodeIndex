@@ -1900,6 +1900,47 @@ public partial class SymbolExtractorTests
             $"Dense C# primary-constructor extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_CSharp_LargeSwitchExpression_CompletesWithinPracticalBudget()
+    {
+        // Regression for #4729 adversarial review: switch arms also use `=>`, but they are
+        // not member declarations. Walking from every arm to the method's final semicolon
+        // makes extraction quadratic, so keep a dense switch expression as a runaway guard.
+        // #4729 adversarial review の回帰: switch arm も `=>` を使うが member 宣言ではない。
+        // arm ごとにメソッド末尾のセミコロンまで走査すると二乗時間になるため、密な
+        // switch 式を runaway guard として維持する。
+        const int armCount = 10_000;
+        var arms = string.Join('\n', Enumerable.Range(0, armCount).Select(i => $"            {i} => {i},"));
+        var content = $$"""
+            public class SwitchHost
+            {
+                public int Map(int value) =>
+                    value switch
+                    {
+            {{arms}}
+                        _ => -1,
+                    };
+            }
+            """;
+        _ = SymbolExtractor.Extract(0, "csharp", "public class Warmup { public int P => 1; }");
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SwitchHost");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Map");
+        Assert.DoesNotContain(symbols, s => s.Name == "value");
+        var runawayBudget = TimeSpan.FromSeconds(8);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Dense C# switch-expression extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
     [Fact]
     public void Extract_CSharp_GenericConstraintNewCall_IsNotPrimaryConstructorParameter()
     {
