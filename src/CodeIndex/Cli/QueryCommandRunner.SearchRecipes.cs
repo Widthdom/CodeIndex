@@ -515,7 +515,6 @@ public static partial class QueryCommandRunner
                     recipe.Name,
                     rowQueryResults,
                     rowMinimumMatchedTotal,
-                    rowQueryResults.Any(query => query.Truncated),
                     options,
                     GetCompactJsonOptions(jsonOptions));
                 ndjsonTerminalLine = stream.TerminalLine;
@@ -975,6 +974,7 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--result-kind", kind);
         if (options.TotalLimit.HasValue)
             AddReplayValueOption(args, "--total-limit", options.TotalLimit.Value.ToString(CultureInfo.InvariantCulture));
+        AddSearchRecipeRowSelectionReplayOptions(args, options);
         if (options.MaxJsonBytes.HasValue)
             AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
         if (options.ShowExcluded)
@@ -1069,7 +1069,6 @@ public static partial class QueryCommandRunner
         string recipeName,
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         int totalCount,
-        bool limitTruncated,
         QueryCommandOptions options,
         JsonSerializerOptions ndjsonOptions)
     {
@@ -1086,6 +1085,13 @@ public static partial class QueryCommandRunner
             }
         }
 
+        var limitTruncated = queryResults.Any(query => query.Truncated);
+        var selectionReason = queryResults
+            .Select(query => query.SelectionReason)
+            .FirstOrDefault(reason => reason != null);
+        var selectionOmittedCount = queryResults
+            .Where(query => query.SelectionOmittedCount.HasValue)
+            .Sum(query => query.SelectionOmittedCount!.Value);
         return WriteNdjsonStream(
             records,
             totalCount,
@@ -1096,7 +1102,9 @@ public static partial class QueryCommandRunner
             limitTruncated,
             "Increase --limit or --total-limit, select one recipe query, or narrow the recipe scope.",
             totalCountAuthoritative: false,
-            truncationReason: limitTruncated ? "limit" : null);
+            truncationReason: limitTruncated ? "limit" : null,
+            selectionReason: selectionReason,
+            selectionOmittedCount: selectionReason != null ? selectionOmittedCount : null);
     }
 
     private static JsonObject BuildRecipeSearchResultRow(
@@ -1324,6 +1332,8 @@ public static partial class QueryCommandRunner
                 rows.Count,
                 rows.Count,
                 0,
+                null,
+                null,
                 options.Limit,
                 0,
                 BuildSearchRecipeTopFiles(rows),
@@ -1381,7 +1391,7 @@ public static partial class QueryCommandRunner
             var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
-                FetchLimitForSearchEnvelope(resultLimit),
+                GetSearchRecipeFetchLimit(options, resultLimit),
                 options.Lang,
                 false,
                 queryScope.PathPatterns,
@@ -1400,12 +1410,13 @@ public static partial class QueryCommandRunner
                 resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
-            var availableCount = rows.Count;
-            var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
+            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit);
+            rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
-            var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
+            var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
+            var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
-            minimumMatchedTotal += rows.Count + minimumOmitted;
+            minimumMatchedTotal += outputSelection.OriginalCount;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
                 recipeQuery.Query,
@@ -1428,13 +1439,20 @@ public static partial class QueryCommandRunner
                 BuildSearchRecipeClassifierCounts(rows),
                 rows.Count,
                 rows.Count,
-                rows.Count + minimumOmitted,
+                outputSelection.OriginalCount,
                 minimumOmitted,
+                selectionReason,
+                selectionReason != null ? outputSelection.SelectionOmittedCount : null,
                 resultLimit,
                 minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
-                truncated,
-                truncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
+                outputSelection.LimitTruncated,
+                outputSelection.LimitTruncated
+                    && !options.FirstPerFile
+                    && !options.SampleSize.HasValue
+                    && rows.Count > 0
+                        ? FormatSearchCursor(rows[^1].Result)
+                        : null,
                 rows.Select(row => row.Compact).ToList()));
         }
 
@@ -1459,7 +1477,7 @@ public static partial class QueryCommandRunner
             var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
-                FetchLimitForSearchEnvelope(resultLimit),
+                GetSearchRecipeFetchLimit(options, resultLimit),
                 options.Lang,
                 false,
                 queryScope.PathPatterns,
@@ -1478,10 +1496,11 @@ public static partial class QueryCommandRunner
                 resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
-            var availableCount = rows.Count;
-            var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
+            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit);
+            rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
-            var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
+            var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
+            var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
             queryResults.Add(new SearchRecipeCompactQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1501,13 +1520,20 @@ public static partial class QueryCommandRunner
                 BuildSearchRecipeClassifierCounts(rows),
                 rows.Count,
                 rows.Count,
-                rows.Count + minimumOmitted,
+                outputSelection.OriginalCount,
                 minimumOmitted,
+                selectionReason,
+                selectionReason != null ? outputSelection.SelectionOmittedCount : null,
                 resultLimit,
                 minimumOmitted,
                 BuildSearchRecipeTopFiles(rows),
-                truncated,
-                truncated && rows.Count > 0 ? FormatSearchCursor(rows[^1].Result) : null,
+                outputSelection.LimitTruncated,
+                outputSelection.LimitTruncated
+                    && !options.FirstPerFile
+                    && !options.SampleSize.HasValue
+                    && rows.Count > 0
+                        ? FormatSearchCursor(rows[^1].Result)
+                        : null,
                 rows.Select(row => new SearchRecipeCompactResultJsonResult(
                     row.Result.Path,
                     row.Result.Lang,
@@ -1521,6 +1547,20 @@ public static partial class QueryCommandRunner
         }
 
         return queryResults;
+    }
+
+    private static string? GetSearchRecipeSelectionReason(SearchOutputSelection selection)
+        => selection.SelectionOmittedCount > 0
+            && selection.TruncationReason is "first_per_file" or "sample"
+                ? selection.TruncationReason
+                : null;
+
+    private static int GetSearchRecipeFetchLimit(QueryCommandOptions options, int resultLimit)
+    {
+        var selectionTarget = resultLimit > 0 && options.SampleSize.HasValue
+            ? Math.Max(resultLimit, options.SampleSize.Value)
+            : resultLimit;
+        return FetchLimitForSearchEnvelope(selectionTarget);
     }
 
     private static List<SearchRecipeCountQueryJsonResult> CountSearchRecipeQueryResults(
@@ -1893,7 +1933,9 @@ public static partial class QueryCommandRunner
             queryResults.Sum(query => query.MinimumOmittedResultCount),
             BuildSearchRecipeQueryFreshness(queryResults),
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
-            "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
+            BuildSearchRecipeCursoringHint(
+                queryResults.Any(query => query.Truncated),
+                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor))));
 
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
         IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults,
@@ -1908,7 +1950,16 @@ public static partial class QueryCommandRunner
             queryResults.Sum(query => query.MinimumOmittedResultCount),
             BuildSearchRecipeQueryFreshness(queryResults),
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
-            "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
+            BuildSearchRecipeCursoringHint(
+                queryResults.Any(query => query.Truncated),
+                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor))));
+
+    private static string BuildSearchRecipeCursoringHint(bool hasTruncatedQuery, bool cursoringAvailable)
+        => cursoringAvailable
+            ? "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set."
+            : hasTruncatedQuery
+                ? "Continuation cursors are unavailable for the selected rows; increase --limit or --total-limit and rerun."
+                : "No query is truncated, so no continuation cursor is needed.";
 
     private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults)
         => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
@@ -2274,6 +2325,8 @@ public static partial class QueryCommandRunner
                 queryResult.Count,
                 queryResult.ResultLimit,
                 queryResult.OmittedCount,
+                queryResult.SelectionReason,
+                queryResult.SelectionOmittedCount,
                 queryResult.MinimumOmittedResultCount,
                 queryResult.Truncated,
                 queryResult.NextCursor),
@@ -2329,6 +2382,8 @@ public static partial class QueryCommandRunner
                 queryResult.Count,
                 queryResult.ResultLimit,
                 queryResult.OmittedCount,
+                null,
+                null,
                 queryResult.MinimumOmittedResultCount,
                 queryResult.Truncated,
                 queryResult.NextCursor),
@@ -2561,6 +2616,11 @@ public static partial class QueryCommandRunner
         sb.AppendLine($"- result_count: `{queryResult.Count}`");
         sb.AppendLine($"- result_limit: `{queryResult.ResultLimit}`");
         sb.AppendLine($"- omitted_count: `{queryResult.OmittedCount}`");
+        if (!string.IsNullOrWhiteSpace(queryResult.SelectionReason))
+        {
+            sb.AppendLine($"- selection_reason: `{queryResult.SelectionReason}`");
+            sb.AppendLine($"- selection_omitted_count: `{queryResult.SelectionOmittedCount.GetValueOrDefault()}`");
+        }
         sb.AppendLine($"- minimum_omitted_result_count: `{queryResult.MinimumOmittedResultCount}`");
         sb.AppendLine($"- exact_substring: `{queryResult.ExactSubstring.ToString().ToLowerInvariant()}`");
         return sb.ToString().TrimEnd();
@@ -2674,6 +2734,7 @@ public static partial class QueryCommandRunner
             args.Add("--exact-substring");
         if (options.TokenBoundary)
             args.Add("--token-boundary");
+        AddSearchRecipeRowSelectionReplayOptions(args, options);
         foreach (var guardFilter in options.GuardFilters)
             AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
         if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
@@ -2707,6 +2768,14 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--issue-label", label);
 
         return string.Join(" ", args.Select(QuoteReplayShellArg));
+    }
+
+    private static void AddSearchRecipeRowSelectionReplayOptions(List<string> args, QueryCommandOptions options)
+    {
+        if (options.FirstPerFile)
+            args.Add("--first-per-file");
+        if (options.SampleSize.HasValue)
+            AddReplayValueOption(args, "--sample", options.SampleSize.Value.ToString(CultureInfo.InvariantCulture));
     }
 
     private static void AddReplayValueOption(List<string> args, string optionName, string? value)

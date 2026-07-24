@@ -253,7 +253,7 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintCommandUsage_AuditAndRecipesExposeLowOutputControls_Issues4064_4118()
+    public void PrintCommandUsage_AuditAndRecipesExposeLowOutputControls_Issues4064_4118_4759()
     {
         var (_, auditOutput, _) = ConsoleCapture.Capture(() =>
         {
@@ -270,7 +270,8 @@ public class ConsoleUiTests
         {
             "--results-only",
             "--search-fields",
-            "--per-file-limit",
+            "--first-per-file",
+            "--sample",
             "--total-limit",
             "--summary-only",
             "--max-json-bytes",
