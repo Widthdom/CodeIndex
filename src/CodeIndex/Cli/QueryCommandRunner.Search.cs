@@ -122,6 +122,14 @@ public static partial class QueryCommandRunner
                 "`outline:<offset>` cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
+        if (options.DependencyCycleCursor.HasValue)
+        {
+            WriteUsageError(
+                "--cursor for search must be a search pagination cursor returned by recipe search.",
+                GetUsageLineOrThrow("search"),
+                "Dependency-cycle cursors are for `cdidx deps --cycles`.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.AuditScopeExplicit && options.RecipeName == null && options.ListRecipes)
         {
             WriteUsageError(

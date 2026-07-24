@@ -218,9 +218,9 @@ ownership boundaries so behavior changes remain reviewable and testable.
 
 ### Workspaces
 
-`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths. In JSON mode, invalid manifest schema or safety failures are returned as a structured `workspace_manifest_invalid` error instead of falling through to the top-level crash handler.
+`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths. `workspace status` also reports each member's database existence, probe status and reason, schema compatibility, exact workspace freshness, timestamps, index completeness, and graph readiness. It probes at most 64 distinct existing member databases per invocation, reuses a probe when members share a database under the `single` strategy, and marks later members as `not_checked` with a top-level truncation summary. In JSON mode, invalid manifest schema or safety failures are returned as a structured `workspace_manifest_invalid` error instead of falling through to the top-level crash handler.
 
-`cdidx workspace use <name>` writes an existing manifest member or `default` workspace to the per-user config directory, rejects missing manifest members, and rejects ambiguous member directory names. `cdidx workspace clear` (also available as `workspace deactivate`) removes that persisted selection instead of rebinding `default` to the current directory. When `CDIDX_ACTIVE_WORKSPACE` is set, clear reports that the environment override must be unset because it takes precedence over persisted state. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
+`cdidx workspace use <name-or-relative-path>` writes an existing manifest member or `default` workspace to the per-user config directory and rejects missing manifest members. A directory name remains a shorthand when it identifies exactly one member; repeated directory names remain ambiguous. A manifest-relative path selects the exact normalized member, accepts either slash spelling, and stores the canonical forward-slash relative path in active workspace state. Manifest-member selections also persist `manifest_member: true`, so members named `default` or `env` remain distinguishable from the reserved non-manifest states. Active workspace names share the manifest member path's 4096-character bound. `cdidx workspace clear` (also available as `workspace deactivate`) removes that persisted selection instead of rebinding `default` to the current directory. When `CDIDX_ACTIVE_WORKSPACE` is set, clear reports that the environment override must be unset because it takes precedence over persisted state. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
 
 ### Observability
 
@@ -955,7 +955,12 @@ bundle. Candidate selectors expose the persisted symbol ID plus qualified/contai
 signature, language, kind, path, and line. Identity-scoped reference/caller/callee queries
 join `symbol_reference_candidates` or `source_symbol_id`; with multiple candidates,
 top-level graph arrays are labeled `primary_candidate` and mirror only the first prioritized
-bundle, never an unlabeled aggregate across definitions.
+bundle, never an unlabeled aggregate across definitions. When neither a language filter nor
+a definition supplies the graph language, `analyze_symbol` infers it only from one consistent
+language across reference/caller/callee evidence. `graph_language_source`,
+`graph_language_confidence`, `graph_language_candidates`, and `graph_language_conflict`
+distinguish authoritative filter/definition decisions from consistent inference and keep
+mixed-language evidence unresolved.
 
 ### Reference taxonomy
 
@@ -1605,6 +1610,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **Ambiguous source extensions stay explicit** — `.m` and `.pl` are not assigned to Objective-C and Perl by default. `FileIndexer` checks an authoritative recognized shebang, then a 64 KiB bounded prefix for strong mutually exclusive Objective-C/MATLAB or Perl/Prolog markers, then at most 256 entries per ancestor directory for conservative project markers. Conflicting or weak evidence is indexed as `ambiguous_m` / `ambiguous_pl`; MATLAB and Prolog have conservative symbol patterns but deliberately advertise no reference/graph support (#4612).
 - **Hotspot marker fingerprints share one bounded tree traversal** — full/update CLI and MCP indexing compute C#, VB, F#, and MSBuild marker fingerprints together instead of walking the directory tree once per language. Each distinct marker glob retains the platform filesystem's matching behavior and is enumerated once per visited directory, while child directories are enumerated once; marker sets, budgets, truncation sentinels, and warning order remain isolated per language. The single-language API delegates to the same engine, preserving ignore rules, nested-repository/submodule boundaries, and MCP authorized-read failures.
 - **Lock-file dependency graphs model package relationships** — `packages.lock.json`, `package-lock.json`, and `npm-shrinkwrap.json` keep package declarations as symbols, but emit `dependency` references only for explicit parent-package to child-package entries. The parent package is stored as the reference container, so `callers` can identify which package requires a child and `deps` does not infer lock-file-to-lock-file similarity merely because two files contain the same resolved package set (#4409).
+- **Dependency-cycle audits separate analysis from display** — CLI `deps --cycles` and MCP `deps` with `cycles=true` analyze a deterministic, path-ordered edge set up to the independent `--graph-budget` / `graphBudget` before computing and stably ranking strongly connected components. `--limit` / `limit` only paginates that ranked SCC set, and opaque cursors are bound to the filters, graph budget, and indexed graph that produced them. Machine-readable responses expose `analysis_complete`, graph edge count/budget, stable ranking mode, authoritative total-cycle status, and continuation metadata; exhausting the graph budget is reported as an explicitly incomplete analysis rather than a complete cycle audit (#4731).
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
 - **Partial batch failures** — `DbWriter` keeps the fast multi-row `INSERT` path for normal chunk and symbol batches. If SQLite rejects a batch, the writer rolls that batch back, retries rows under per-row `SAVEPOINT`s, commits the valid rows, skips only the failing rows, increments `BatchRowsSkipped`, and emits a warning containing the row identifier and SQLite error. This keeps one corrupt extracted row from discarding the rest of a large indexing batch (#1754).
@@ -3139,10 +3145,22 @@ manifest directory 配下に残る member path、
 invalid な `members` entries は件数を制限した diagnostics で拒否され、有効な entry は DB path を
 作る前に workspace path casing policy で正規化・重複排除されます。
 `cdidx workspace list` と `cdidx workspace status` は member DB path を報告します。
+`workspace status` はさらに、member ごとの database 存在有無、probe status / reason、
+schema compatibility、workspace との厳密な freshness、timestamp、index completeness、
+graph readiness を報告します。1 回の実行で probe する既存の異なる member database は最大 64 個で、
+`single` strategy で database が共有される場合は probe 結果を再利用し、それ以降の member は
+`not_checked` として top-level の truncation summary に反映します。
 JSON mode では、manifest schema または safety validation の失敗は top-level crash handler へ
 落とさず、構造化された `workspace_manifest_invalid` error として返します。
 
-`cdidx workspace use <name>` は active workspace を per-user config directory に保存します。
+`cdidx workspace use <name-or-relative-path>` は既存の manifest member または `default` を
+active workspace として per-user config directory に保存し、存在しない member は拒否します。
+directory name は member を一意に識別できる場合の省略形として引き続き使えますが、同名 directory
+が複数ある場合は曖昧として拒否します。manifest-relative path は正規化後の member を厳密に選択し、
+slash / backslash のどちらも受け付け、active workspace state には canonical な forward-slash
+relative path を保存します。manifest member の選択では `manifest_member: true` も保存するため、
+`default` または `env` という member も予約された非 manifest state と区別できます。
+active workspace name の上限は manifest member path と同じ 4096 文字です。
 `cdidx workspace clear`（alias は `workspace deactivate`）は `default` を current directory に
 再設定せず、保存済みの選択を削除します。`CDIDX_ACTIVE_WORKSPACE` が設定されている場合は
 persisted state より環境変数が優先されるため、先に環境変数を解除するよう報告します。
@@ -3928,7 +3946,11 @@ signature、language、kind、path、line を公開します。identity-scoped �
 reference/caller/callee query は `symbol_reference_candidates` または
 `source_symbol_id` を join します。複数 candidate の top-level graph 配列は
 `primary_candidate` と明示して優先順位1位の bundle だけを反映し、複数定義を
-未ラベルで集約しません。
+未ラベルで集約しません。言語フィルタと定義のどちらからも graph language が得られない場合、
+`analyze_symbol` は reference/caller/callee evidence が一貫して1言語だけを示すときに限って
+言語を推論します。`graph_language_source`、`graph_language_confidence`、
+`graph_language_candidates`、`graph_language_conflict` により、filter/definition による
+authoritative な判定と一貫した推論を区別し、複数言語の evidence は未確定のままにします。
 
 ### 参照 taxonomy
 
@@ -4585,6 +4607,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **曖昧な source extension は曖昧なまま明示** — `.m` と `.pl` を既定で Objective-C / Perl に割り当てません。`FileIndexer` は authoritative な認識済み shebang、64 KiB 上限 prefix 内の相互排他的で強い Objective-C/MATLAB または Perl/Prolog marker、各 ancestor directory 最大 256 entry の保守的な project marker の順に確認します。競合または弱い証拠は `ambiguous_m` / `ambiguous_pl` として index し、MATLAB / Prolog は保守的な symbol pattern を持つ一方、reference / graph 対応を意図的に広告しません（#4612）。
 - **hotspot marker fingerprint は上限付きtree traversalを1回共有** — full/update CLIとMCP indexingは、directory treeを言語ごとに歩かず、C#、VB、F#、MSBuildのmarker fingerprintをまとめて計算します。各directoryでは固有marker globごとにplatform filesystemのmatching挙動を保って1回ずつ列挙し、child directoryも1回だけ列挙する一方、marker集合、budget、truncation sentinel、warning順は言語別に分離します。single-language APIも同じengineへ委譲し、ignore rule、nested repository/submodule境界、MCP authorized read failureを維持します。
 - **lock file の依存グラフは package 間の関係をモデル化** — `packages.lock.json`、`package-lock.json`、`npm-shrinkwrap.json` は package 宣言を symbol として保持しますが、`dependency` reference は明示された親 package → 子 package の項目だけに出力します。親 package を reference container に保存するため、`callers` はどの package が子 package を必要としているかを特定でき、`deps` は同じ resolved package 集合を持つだけの lock file 同士を類似関係として推論しません（#4409）。
+- **依存サイクル監査では解析と表示を分離** — CLI の `deps --cycles` と MCP `deps` の `cycles=true` は、独立した `--graph-budget` / `graphBudget` まで path 順で決定的な edge 集合を解析してから、強連結成分を安定順位付けします。`--limit` / `limit` はその SCC 順位集合をページ分割するだけで、不透明 cursor は生成時の filter、graph budget、indexed graph に結び付けます。machine-readable 応答は `analysis_complete`、graph edge 件数/予算、安定 ranking mode、authoritative な総 cycle 件数かどうか、continuation metadata を公開し、graph budget 枯渇時は完全な cycle 監査を装わず明示的な未完了解析として報告します（#4731）。
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
 - **部分的なバッチ失敗** — `DbWriter` は通常の chunk / symbol batch では高速な multi-row `INSERT` 経路を保ちます。SQLite が batch を拒否した場合、その batch を rollback し、各 row を per-row `SAVEPOINT` の下で再試行し、有効な row だけを commit し、失敗 row だけを skip して `BatchRowsSkipped` を増やし、row identifier と SQLite error を含む warning を出します。これにより、抽出された 1 行の破損で大きな indexing batch 全体が捨てられることを防ぎます（#1754）。

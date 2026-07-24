@@ -144,7 +144,7 @@ internal static class CliFlagSchema
     [
         "definition", "find", "status", "hotspots", "references", "callers", "callees", "impact", "map",
     ];
-    private static readonly string[] CursorCommands = ["search", "outline", "unused", .. BoundedProjectionCommands];
+    private static readonly string[] CursorCommands = ["search", "outline", "unused", "deps", .. BoundedProjectionCommands];
     private static readonly string[] AllResultCommands = ["goto", "find", "unused"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
@@ -306,7 +306,8 @@ internal static class CliFlagSchema
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", PrimaryCommands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<summary,tree,languages,hotspots,metrics|list>", Description = "Map: comma-separated response sections to include, or list to discover sections", PrimaryCommands = Set(MapSectionCommands) },
             new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Files/Symbols/Deps/Hotspots/Languages: return only aggregate summary fields where supported", PrimaryCommands = Set(SummaryOnlyCommands) },
-            new() { Name = "--cycles", Description = "Deps: return dependency cycles from a bounded approximate candidate-edge scan", PrimaryCommands = Set(DependencyCycleCommands) },
+            new() { Name = "--cycles", Description = "Deps: return deterministically ranked dependency SCCs with stable pagination", PrimaryCommands = Set(DependencyCycleCommands) },
+            new() { Name = "--graph-budget", ValuePlaceholder = "<n>", Description = $"Deps cycles: maximum graph edges analyzed for SCC completeness (default: {QueryCommandRunner.DefaultDependencyCycleGraphBudget})", PrimaryCommands = Set(DependencyCycleCommands) },
             new() { Name = "--suppress-noise", Description = "Deps: suppress generic framework/noise symbols in edge symbol samples", PrimaryCommands = Set("deps") },
             new() { Name = "--symbol", ValuePlaceholder = "<name>", Description = "Deps: keep only edges with an exact sampled symbol name", PrimaryCommands = Set("deps") },
             new() { Name = "--symbol-family", ValuePlaceholder = "<prefix>", Description = "Deps: keep only edges with a sampled symbol prefix/family", PrimaryCommands = Set("deps") },

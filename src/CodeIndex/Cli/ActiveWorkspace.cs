@@ -1,16 +1,22 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
-internal sealed record ActiveWorkspaceState(string Name, string Root, string DbPath);
+internal sealed record ActiveWorkspaceState(
+    string Name,
+    string Root,
+    string DbPath,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    bool ManifestMember = false);
 
 internal static class ActiveWorkspace
 {
     internal const string EnvironmentVariable = "CDIDX_ACTIVE_WORKSPACE";
     internal const int MaxEnvironmentPathChars = 4096;
-    internal const int MaxWorkspaceNameChars = 128;
+    internal const int MaxWorkspaceNameChars = WorkspaceManifestLoader.MaxManifestMemberPathChars;
     private const int MaxStateBytes = 64 * 1024;
     internal const int MaxStateJsonDepth = 16;
     internal static string StatePath
@@ -52,7 +58,8 @@ internal static class ActiveWorkspace
             var name = ReadString(root, "name") ?? "default";
             var workspaceRoot = ReadString(root, "root");
             var dbPath = ReadString(root, "db_path");
-            if (!TryNormalizeState(name, workspaceRoot, dbPath, out var state, out var stateReason))
+            var manifestMember = ReadBoolean(root, "manifest_member") ?? false;
+            if (!TryNormalizeState(name, workspaceRoot, dbPath, manifestMember, out var state, out var stateReason))
             {
                 WriteLoadWarning("state file", stateReason);
                 return null;
@@ -71,7 +78,13 @@ internal static class ActiveWorkspace
     {
         if (!TryGetStatePath(out var statePath, out var statePathReason))
             throw new InvalidOperationException($"Active workspace state path is invalid: {statePathReason}.");
-        if (!TryNormalizeState(state.Name, state.Root, state.DbPath, out var payload, out var stateReason))
+        if (!TryNormalizeState(
+                state.Name,
+                state.Root,
+                state.DbPath,
+                state.ManifestMember,
+                out var payload,
+                out var stateReason))
             throw new InvalidOperationException($"Active workspace state is invalid: {stateReason}.");
 
         DataDirectorySecurity.CreateSensitiveDirectory(Path.GetDirectoryName(statePath)!);
@@ -93,6 +106,16 @@ internal static class ActiveWorkspace
 
     private static string? ReadString(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private static bool? ReadBoolean(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value)
+            ? value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => null,
+            }
+            : null;
 
     private static ActiveWorkspaceState? LoadFromEnvironment(string envPath)
     {
@@ -118,7 +141,13 @@ internal static class ActiveWorkspace
                 return null;
             }
 
-            if (!TryNormalizeState("env", root, fullPath, out var state, out var stateReason))
+            if (!TryNormalizeState(
+                    "env",
+                    root,
+                    fullPath,
+                    manifestMember: false,
+                    out var state,
+                    out var stateReason))
             {
                 WriteLoadWarning($"environment variable {EnvironmentVariable}", stateReason);
                 return null;
@@ -183,6 +212,7 @@ internal static class ActiveWorkspace
         string? name,
         string? root,
         string? dbPath,
+        bool manifestMember,
         out ActiveWorkspaceState? state,
         out string reason)
     {
@@ -238,7 +268,11 @@ internal static class ActiveWorkspace
                 return false;
             }
 
-            state = new ActiveWorkspaceState(normalizedName, normalizedRoot, normalizedDbPath);
+            state = new ActiveWorkspaceState(
+                normalizedName,
+                normalizedRoot,
+                normalizedDbPath,
+                manifestMember);
             return true;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)

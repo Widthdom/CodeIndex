@@ -282,7 +282,15 @@ public static partial class QueryCommandRunner
         if (options.RawKinds)
             query["raw_kinds"] = true;
         if (options.DependencyCycles)
+        {
             query["cycles"] = true;
+            query["graph_budget"] = options.DependencyCycleGraphBudget;
+            if (options.DependencyCycleCursor.HasValue)
+            {
+                query["cursor"] = FormatDependencyCycleCursor(options.DependencyCycleCursor.Value);
+                query["offset"] = options.DependencyCycleCursor.Value.Offset;
+            }
+        }
         if (options.DependencySuppressNoise)
             query["suppress_noise"] = true;
         if (options.DependencySymbols.Count > 0)

@@ -966,11 +966,13 @@ public partial class DbReader
             suppressDependencyNoise,
             "cycleDependency");
         sql += @"
+                ORDER BY source_path, target_path
                 LIMIT @limit
             ),
             candidate_symbols AS (
                 SELECT candidate_edges.source_path,
                        candidate_edges.target_path,
+                       r.id AS reference_id,
                        r.symbol_name
                 FROM candidate_edges
                 JOIN files src ON src.path = candidate_edges.source_path
@@ -990,6 +992,13 @@ public partial class DbReader
             "cycleAggregate");
         sql += @"
             ),
+            edge_reference_totals AS (
+                SELECT source_path,
+                       target_path,
+                       COUNT(DISTINCT reference_id) AS reference_count
+                FROM candidate_symbols
+                GROUP BY source_path, target_path
+            ),
             distinct_edge_symbols AS (
                 SELECT DISTINCT source_path,
                                 target_path,
@@ -1003,13 +1012,18 @@ public partial class DbReader
                        ROW_NUMBER() OVER (PARTITION BY source_path, target_path ORDER BY symbol_name) AS symbol_rank
                 FROM distinct_edge_symbols
             )
-            SELECT source_path,
-                   target_path,
-                   COUNT(*) AS reference_count,
+            SELECT edge_reference_totals.source_path,
+                   edge_reference_totals.target_path,
+                   edge_reference_totals.reference_count,
                    COALESCE(GROUP_CONCAT(CASE WHEN symbol_rank <= @symbolSampleLimit THEN symbol_name END), '') AS symbols
-            FROM ranked_edge_symbols
-            GROUP BY source_path, target_path
-            ORDER BY source_path, target_path";
+            FROM edge_reference_totals
+            LEFT JOIN ranked_edge_symbols
+              ON ranked_edge_symbols.source_path = edge_reference_totals.source_path
+             AND ranked_edge_symbols.target_path = edge_reference_totals.target_path
+            GROUP BY edge_reference_totals.source_path,
+                     edge_reference_totals.target_path,
+                     edge_reference_totals.reference_count
+            ORDER BY edge_reference_totals.source_path, edge_reference_totals.target_path";
 
         cmd.CommandText = sql;
         if (lang != null)
