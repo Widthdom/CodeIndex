@@ -2196,13 +2196,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            if (line[column] != '.')
-                continue;
-
-            var previousIsDigit = column > 0 && char.IsDigit(line[column - 1]);
-            var nextIsIdentifier = column + 1 < line.Length
-                && (char.IsLetterOrDigit(line[column + 1]) || line[column + 1] == '_');
-            if (!previousIsDigit && !nextIsIdentifier)
+            if (DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column))
                 return true;
         }
 

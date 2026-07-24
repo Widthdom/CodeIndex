@@ -2376,7 +2376,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
 - Functional symbol-only languages: Clojure, Erlang, OCaml, and Raku expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
 - Dynamic symbol-only languages: Julia exposes conservative declarations as symbols. References and graph queries are not advertised for Julia yet.
-- Dynamic/declarative graph languages: Crystal, Groovy, Tcl, and Prolog expose conservative declarations, imports, and call relationships. Parenthesized calls use the shared extractor; command-style calls are limited to callables declared in the same file, and Tcl proc / Prolog predicate bodies preserve caller containers.
+- Dynamic/declarative graph languages: Crystal, Groovy, Tcl, and Prolog expose conservative declarations, imports, and call relationships. Crystal, Groovy, and Prolog parenthesized calls use the shared extractor; command-style calls are limited to callables declared in the same file. Tcl recognizes command substitutions and common control-command script arguments without treating ordinary `name()` words as calls, while Tcl proc / Prolog predicate bodies preserve caller containers.
   An index created before this graph contract reports `reference_graph_complete=false` and `graph_data_current=false` with `dynamic_reference_graph_contract_stale`; rerun `cdidx index <projectPath>` to refresh affected rows before treating absent edges as authoritative.
 - Systems symbol-only languages: Ada, D, and Nim expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
 - Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
@@ -5524,7 +5524,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
 - 関数型言語のシンボル専用対応: Clojure、Erlang、OCaml、Raku は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
 - 動的言語のシンボル専用対応: Julia は保守的な宣言をシンボルとして公開します。Julia の references と graph queries はまだ対応として広告しません。
-- 動的・宣言型言語の graph 対応: Crystal、Groovy、Tcl、Prolog は保守的な宣言、import、call relationship を公開します。括弧付き call は共通 extractor を使い、command-style call は同一ファイルで宣言済みの callable に限定し、Tcl proc / Prolog predicate の本体では caller container を保持します。
+- 動的・宣言型言語の graph 対応: Crystal、Groovy、Tcl、Prolog は保守的な宣言、import、call relationship を公開します。Crystal、Groovy、Prolog の括弧付き call は共通 extractor を使い、command-style call は同一ファイルで宣言済みの callable に限定します。Tcl は通常の `name()` word を call とみなさず、command substitution と主要な制御 command の script 引数を認識し、Tcl proc / Prolog predicate の本体では caller container を保持します。
   この graph contract より前に作成された index は `dynamic_reference_graph_contract_stale` とともに `reference_graph_complete=false`、`graph_data_current=false` を報告します。欠落 edge を authoritative とみなす前に `cdidx index <projectPath>` を再実行して対象 row を更新してください。
 - システム系言語のシンボル専用対応: Ada、D、Nim は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
 - Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。

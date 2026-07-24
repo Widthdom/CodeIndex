@@ -2538,49 +2538,51 @@ public static partial class ReferenceExtractor
             }
             else if (language is "assembly")
             {
-                // Assembly references are operand-driven, not `name(...)` call syntax. Running the
-                // shared CallRegex would misread addressing forms such as `foo(%rip)` as calls.
+                // Assembly references are operand-driven, not `name(...)` call syntax.
             }
             else
             {
-                foreach (Match match in CallRegex.Matches(callScanLine))
+                if (language != "tcl")
                 {
-                    var name = match.Groups["name"].Value;
-                    var callIndex = match.Groups["name"].Index;
-                    if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
-                        continue;
-                    if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
-                        continue;
-                    if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
-                        continue;
-                    if (sqlWindowFunctionCallSiteSuppressions != null
-                        && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
-                        continue;
-                    GetMatchedCallIndices().Add(callIndex);
-                    if (TryAddCallLikeReference(name, callIndex))
+                    foreach (Match match in CallRegex.Matches(callScanLine))
                     {
-                        EmitGenericInvocationTypeArgumentReferences(
-                            language,
-                            preparedLine,
-                            callIndex,
-                            references,
-                            seen,
-                            fileId,
-                            context,
-                            lineNumber,
-                            ResolveContainerForCall(callIndex));
+                        var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
+                        if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
+                            continue;
+                        if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
+                            continue;
+                        if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                            continue;
+                        if (sqlWindowFunctionCallSiteSuppressions != null
+                            && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
+                            continue;
+                        GetMatchedCallIndices().Add(callIndex);
+                        if (TryAddCallLikeReference(name, callIndex))
+                        {
+                            EmitGenericInvocationTypeArgumentReferences(
+                                language,
+                                preparedLine,
+                                callIndex,
+                                references,
+                                seen,
+                                fileId,
+                                context,
+                                lineNumber,
+                                ResolveContainerForCall(callIndex));
+                        }
+                        if (language == "ruby")
+                            RubyReferenceExtractor.EmitCommandTargetReferences(
+                                name,
+                                callIndex,
+                                originalLine,
+                                references,
+                                seen,
+                                fileId,
+                                context,
+                                lineNumber,
+                                ResolveContainerForCall);
                     }
-                    if (language == "ruby")
-                        RubyReferenceExtractor.EmitCommandTargetReferences(
-                            name,
-                            callIndex,
-                            originalLine,
-                            references,
-                            seen,
-                            fileId,
-                            context,
-                            lineNumber,
-                            ResolveContainerForCall);
                 }
 
                 if (language == "ruby")

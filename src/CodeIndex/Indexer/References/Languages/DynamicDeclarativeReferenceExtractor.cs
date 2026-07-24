@@ -130,6 +130,20 @@ internal static class DynamicDeclarativeReferenceExtractor
         public char Terminator { get; } = terminator;
         public bool CommandStart { get; set; } = true;
         public bool WordStart { get; set; } = true;
+        public int WordIndex { get; set; }
+        public string? CommandName { get; set; }
+        public string? LastBareWord { get; set; }
+        public int LastBareWordIndex { get; set; } = -1;
+
+        public void ResetCommand()
+        {
+            CommandStart = true;
+            WordStart = true;
+            WordIndex = 0;
+            CommandName = null;
+            LastBareWord = null;
+            LastBareWordIndex = -1;
+        }
     }
 
     public static string[] MaskNonCodeLines(string language, IReadOnlyList<string> lines)
@@ -144,6 +158,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         var insideAmbiguousPerlPod = false;
         var insideSlashyLiteral = false;
         var insideGroovyDollarSlashyLiteral = false;
+        char crystalMultilineQuote = '\0';
         char crystalPercentOpeningDelimiter = '\0';
         char crystalPercentClosingDelimiter = '\0';
         var crystalPercentDelimiterDepth = 0;
@@ -183,6 +198,26 @@ internal static class DynamicDeclarativeReferenceExtractor
             var buffer = line.ToCharArray();
             for (var column = 0; column < line.Length;)
             {
+                if (crystalMultilineQuote != '\0')
+                {
+                    buffer[column] = ' ';
+                    if (line[column] == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (line[column] == crystalMultilineQuote)
+                    {
+                        crystalMultilineQuote = '\0';
+                        column++;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
                 if (insideBlockComment)
                 {
                     buffer[column] = ' ';
@@ -300,6 +335,15 @@ internal static class DynamicDeclarativeReferenceExtractor
 
                 if (ch is '\'' or '"' or '`')
                 {
+                    if (language == "crystal"
+                        && ch is '"' or '`'
+                        && !HasClosingQuotedDelimiter(line, column, ch))
+                    {
+                        crystalMultilineQuote = ch;
+                        column = line.Length;
+                        continue;
+                    }
+
                     column = SkipQuotedToken(line, column, ch);
                     continue;
                 }
@@ -441,12 +485,17 @@ internal static class DynamicDeclarativeReferenceExtractor
         if (language == "tcl")
         {
             var tclScriptBodyOpenings = new HashSet<long>();
+            var tclBraceEnds = BuildTclBraceEndPositions(structuralLines);
             AddTclContainers(
                 structuralLines,
                 symbols,
+                tclBraceEnds,
                 tclContainerScopes,
                 tclScriptBodyOpenings);
-            tclCallLines = BuildTclCallLines(structuralLines, tclScriptBodyOpenings);
+            tclCallLines = BuildTclCallLines(
+                structuralLines,
+                tclBraceEnds,
+                tclScriptBodyOpenings);
         }
         else if (language is "prolog" or "ambiguous_pl")
             AddPrologContainers(preparedLines, symbols, containersByLine);
@@ -554,6 +603,26 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
 
         return line.Length;
+    }
+
+    private static bool HasClosingQuotedDelimiter(
+        string line,
+        int startColumn,
+        char delimiter)
+    {
+        for (var column = startColumn + 1; column < line.Length; column++)
+        {
+            if (line[column] == '\\')
+            {
+                column++;
+                continue;
+            }
+
+            if (line[column] == delimiter)
+                return true;
+        }
+
+        return false;
     }
 
     private static void FillWithSpaces(char[] buffer, int startColumn)
@@ -730,7 +799,8 @@ internal static class DynamicDeclarativeReferenceExtractor
                 return new string(masked);
             }
 
-            if (ch == '.' && IsOnlyWhitespaceAfter(line, column + 1))
+            if (IsPrologClauseTerminator(line, column)
+                && IsOnlyWhitespaceAfter(line, column + 1))
                 return new string(' ', line.Length);
         }
 
@@ -745,6 +815,20 @@ internal static class DynamicDeclarativeReferenceExtractor
                 return false;
         }
         return true;
+    }
+
+    internal static bool IsPrologClauseTerminator(string line, int column)
+    {
+        if (column < 0 || column >= line.Length || line[column] != '.')
+            return false;
+
+        var previous = column > 0 ? line[column - 1] : '\0';
+        var next = column + 1 < line.Length ? line[column + 1] : '\0';
+        if (previous == '.' || next == '.')
+            return false;
+        if (char.IsDigit(previous) && char.IsDigit(next))
+            return false;
+        return IsOnlyWhitespaceAfter(line, column + 1);
     }
 
     private static void EmitImportReference(
@@ -804,10 +888,10 @@ internal static class DynamicDeclarativeReferenceExtractor
     private static void AddTclContainers(
         IReadOnlyList<string> lines,
         IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyDictionary<long, TclBraceEnd> braceEnds,
         List<TclContainerScope> scopes,
         HashSet<long> scriptBodyOpenings)
     {
-        var braceEnds = BuildTclBraceEndPositions(lines);
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "function" || symbol.StartLine < 1 || symbol.StartLine > lines.Count)
@@ -1061,6 +1145,7 @@ internal static class DynamicDeclarativeReferenceExtractor
 
     private static string[] BuildTclCallLines(
         IReadOnlyList<string> lines,
+        IReadOnlyDictionary<long, TclBraceEnd> braceEnds,
         IReadOnlySet<long> scriptBodyOpenings)
     {
         var result = new string[lines.Count];
@@ -1071,6 +1156,9 @@ internal static class DynamicDeclarativeReferenceExtractor
         {
             var line = lines[lineIndex];
             var buffer = line.ToCharArray();
+            var lineContinued = false;
+            var suppressLeadingContinuedWord = frames.Peek().Kind != TclLexicalFrameKind.Script
+                || !frames.Peek().CommandStart;
             for (var column = 0; column < line.Length;)
             {
                 var frame = frames.Peek();
@@ -1117,6 +1205,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                     {
                         buffer[column] = '[';
                         frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
+                        suppressLeadingContinuedWord = false;
                         column++;
                     }
                     else
@@ -1135,6 +1224,9 @@ internal static class DynamicDeclarativeReferenceExtractor
                 }
                 if (ch == '\\')
                 {
+                    if (frame.WordStart)
+                        frame.WordIndex++;
+                    lineContinued = column + 1 >= line.Length;
                     column += Math.Min(2, line.Length - column);
                     frame.CommandStart = false;
                     frame.WordStart = false;
@@ -1147,6 +1239,8 @@ internal static class DynamicDeclarativeReferenceExtractor
                 }
                 if (ch == '"')
                 {
+                    if (frame.WordStart)
+                        frame.WordIndex++;
                     buffer[column] = ' ';
                     frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Quote, '"'));
                     frame.CommandStart = false;
@@ -1156,18 +1250,33 @@ internal static class DynamicDeclarativeReferenceExtractor
                 }
                 if (ch == '[')
                 {
+                    if (frame.WordStart)
+                        frame.WordIndex++;
                     frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
                     frame.CommandStart = false;
                     frame.WordStart = false;
+                    suppressLeadingContinuedWord = false;
                     column++;
                     continue;
                 }
                 if (ch == '{' && frame.WordStart)
                 {
-                    if (scriptBodyOpenings.Contains(GetTclPositionKey(lineIndex, column)))
+                    var wordIndex = frame.WordIndex++;
+                    var positionKey = GetTclPositionKey(lineIndex, column);
+                    var isScriptArgument =
+                        scriptBodyOpenings.Contains(positionKey)
+                        || IsTclScriptArgument(
+                            frame,
+                            wordIndex,
+                            lines,
+                            braceEnds.TryGetValue(positionKey, out var braceEnd)
+                                ? braceEnd
+                                : null);
+                    if (isScriptArgument)
                     {
                         buffer[column] = ';';
                         frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, '}'));
+                        suppressLeadingContinuedWord = false;
                     }
                     else
                     {
@@ -1181,8 +1290,8 @@ internal static class DynamicDeclarativeReferenceExtractor
                 }
                 if (ch == ';')
                 {
-                    frame.CommandStart = true;
-                    frame.WordStart = true;
+                    frame.ResetCommand();
+                    suppressLeadingContinuedWord = false;
                     column++;
                     continue;
                 }
@@ -1193,20 +1302,99 @@ internal static class DynamicDeclarativeReferenceExtractor
                     continue;
                 }
 
+                if (frame.WordStart)
+                {
+                    var wordIndex = frame.WordIndex++;
+                    var token = ReadTclBareWord(line, column);
+                    if (wordIndex == 0)
+                        frame.CommandName = token;
+                    if (token.Length > 0)
+                    {
+                        frame.LastBareWord = token;
+                        frame.LastBareWordIndex = wordIndex;
+                    }
+
+                    if (suppressLeadingContinuedWord)
+                    {
+                        FillWithSpaces(buffer, column, column + token.Length);
+                        suppressLeadingContinuedWord = false;
+                    }
+                }
+
                 frame.CommandStart = false;
                 frame.WordStart = false;
                 column++;
             }
 
             result[lineIndex] = new string(buffer);
-            if (frames.Peek().Kind == TclLexicalFrameKind.Script)
-            {
-                frames.Peek().CommandStart = true;
-                frames.Peek().WordStart = true;
-            }
+            if (!lineContinued && frames.Peek().Kind == TclLexicalFrameKind.Script)
+                frames.Peek().ResetCommand();
         }
 
         return result;
+    }
+
+    private static string ReadTclBareWord(string line, int startColumn)
+    {
+        var endColumn = startColumn;
+        while (endColumn < line.Length
+            && (char.IsLetterOrDigit(line[endColumn])
+                || line[endColumn] is '_' or ':' or '.' or '-'))
+        {
+            endColumn++;
+        }
+
+        return endColumn == startColumn
+            ? string.Empty
+            : line[startColumn..endColumn];
+    }
+
+    private static bool IsTclScriptArgument(
+        TclLexicalFrame frame,
+        int wordIndex,
+        IReadOnlyList<string> lines,
+        TclBraceEnd? braceEnd)
+    {
+        var isLastCommandWord = braceEnd is { } end
+            && IsTclLastCommandWord(lines, end);
+        return frame.CommandName switch
+        {
+            "if" => wordIndex == 2
+                || (frame.LastBareWord == "then"
+                    && wordIndex == frame.LastBareWordIndex + 1)
+                || (frame.LastBareWord == "elseif"
+                    && wordIndex == frame.LastBareWordIndex + 2)
+                || (frame.LastBareWord == "else"
+                    && wordIndex == frame.LastBareWordIndex + 1),
+            "foreach" or "lmap" => wordIndex >= 3
+                && wordIndex % 2 == 1
+                && isLastCommandWord,
+            "while" => wordIndex == 2,
+            "catch" => wordIndex == 1,
+            "for" => wordIndex is 1 or 3 or 4,
+            "eval" => wordIndex >= 1,
+            "after" => wordIndex == 2,
+            "try" => wordIndex == 1,
+            "namespace" => wordIndex == 3,
+            "dict" => frame.LastBareWord == "for"
+                && wordIndex == frame.LastBareWordIndex + 3,
+            _ => false,
+        };
+    }
+
+    private static bool IsTclLastCommandWord(
+        IReadOnlyList<string> lines,
+        TclBraceEnd braceEnd)
+    {
+        var line = lines[braceEnd.Line];
+        for (var column = braceEnd.Column + 1; column < line.Length; column++)
+        {
+            if (char.IsWhiteSpace(line[column]))
+                continue;
+            return line[column] is ';' or ']' or '}';
+        }
+
+        return true;
     }
 
     private static long GetTclPositionKey(int line, int column) =>
@@ -1243,13 +1431,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             var line = lines[lineIndex];
             for (var column = 0; column < line.Length; column++)
             {
-                if (line[column] != '.')
-                    continue;
-
-                var previousIsDigit = column > 0 && char.IsDigit(line[column - 1]);
-                var nextIsIdentifier = column + 1 < line.Length
-                    && (char.IsLetterOrDigit(line[column + 1]) || line[column + 1] == '_');
-                if (!previousIsDigit && !nextIsIdentifier)
+                if (IsPrologClauseTerminator(line, column))
                     return lineIndex;
             }
         }

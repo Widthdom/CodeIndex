@@ -232,6 +232,11 @@ last successful run in `reference_extraction_cap_hits`. In that state
 `reference_graph_complete=false`; CLI/MCP callers, callees, deps, and impact
 responses carry the same stable reasons, and a zero result is not an
 authoritative absence.
+Indexed Crystal, Groovy, Tcl, Prolog, or `ambiguous_pl` files with a missing or
+older extractor stamp similarly report
+`dynamic_reference_graph_contract_stale` and keep
+`reference_graph_complete=false` / `graph_data_current=false` until
+`cdidx index <projectPath>` refreshes their graph rows.
 
 Database Unix-mode hardening defaults to `database_permission_policy=best_effort`.
 If a filesystem permits SQLite I/O but rejects mode reads or changes, cdidx continues,
@@ -624,6 +629,10 @@ CLI の `languages --json` / `status --json` と対応する MCP response は
 `reference_extraction_cap_hits` に集約します。この状態では
 `reference_graph_complete=false` となり、CLI/MCP の callers / callees / deps / impact response にも
 同じ stable reason が伝播するため、0件という結果は authoritative な不在を意味しません。
+index 済みの Crystal、Groovy、Tcl、Prolog、`ambiguous_pl` file で extractor
+stamp が欠落または古い場合も `dynamic_reference_graph_contract_stale` を報告し、
+`cdidx index <projectPath>` が graph row を更新するまで
+`reference_graph_complete=false` / `graph_data_current=false` を維持します。
 
 database の Unix mode hardening は既定で
 `database_permission_policy=best_effort` です。SQLite I/O は可能でも mode の
