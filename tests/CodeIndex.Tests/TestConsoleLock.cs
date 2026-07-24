@@ -111,18 +111,47 @@ internal sealed class ConsoleCapture : IDisposable
         => new(captureOut, captureError, inputReader: input);
 
     internal static Task CaptureAsync(
-        Func<Task> action,
+        Func<CancellationToken, Task> action,
         TextWriter? output = null,
         TextWriter? error = null,
-        TextReader? input = null)
+        TextReader? input = null,
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(action);
         return Task.Run(() =>
         {
+            var effectiveTimeout = timeout ?? TestDeterminism.DefaultTimeout;
+            using var timeoutCancellation = new CancellationTokenSource(effectiveTimeout);
+            using var captureCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeoutCancellation.Token);
+
             // Monitor ownership must enter and exit on this worker thread. Pump captured
             // continuations here so awaited code can re-enter console ownership safely.
+            // Timeout only requests cooperative cancellation; this task does not return
+            // until the callback exits and the capture has restored the global writers.
             using var capture = Start(output, error, input);
-            SingleThreadAsyncPump.Run(action);
+            try
+            {
+                SingleThreadAsyncPump.Run(() => action(captureCancellation.Token));
+            }
+            catch (Exception ex) when (
+                timeoutCancellation.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Console capture callback did not complete within {effectiveTimeout}.",
+                    ex);
+            }
+
+            var timedOut = timeoutCancellation.IsCancellationRequested;
+            timeoutCancellation.CancelAfter(Timeout.InfiniteTimeSpan);
+            if (timedOut && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Console capture callback did not complete within {effectiveTimeout}.");
+            }
         });
     }
 

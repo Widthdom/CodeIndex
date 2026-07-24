@@ -137,13 +137,13 @@ public partial class McpServerTests : IDisposable
 
         try
         {
-            await ConsoleCapture.CaptureAsync(async () =>
+            await ConsoleCapture.CaptureAsync(async cancellationToken =>
             {
                 var drain = _server.DrainInFlightTasksAsync(
                     tasks,
                     TimeSpan.Zero,
                     TimeSpan.Zero);
-                await drain.WaitAsync(TimeSpan.FromSeconds(5));
+                await drain.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
             }, error: stderr);
 
             Assert.Contains(
@@ -4429,7 +4429,7 @@ public sealed class Caller
         using var writer = new StringWriter();
         using var error = new StringWriter();
         await ConsoleCapture.CaptureAsync(
-            () => server.ProcessLineAsync(
+            _ => server.ProcessLineAsync(
                 "not json",
                 new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
             error: error);
@@ -4445,7 +4445,7 @@ public sealed class Caller
         using var writer = new StringWriter();
         using var error = new StringWriter();
         await ConsoleCapture.CaptureAsync(
-            () => server.ProcessLineAsync(
+            _ => server.ProcessLineAsync(
                 new string('x', 1_000_001),
                 new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
             error: error);
@@ -4461,7 +4461,7 @@ public sealed class Caller
         using var writer = new StringWriter();
         using var error = new StringWriter();
         await ConsoleCapture.CaptureAsync(
-            () => server.ProcessLineAsync(
+            _ => server.ProcessLineAsync(
                 """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}""",
                 new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
             error: error);
@@ -4489,7 +4489,7 @@ public sealed class Caller
             },
         };
         await ConsoleCapture.CaptureAsync(
-            () => server.ProcessLineAsync(
+            _ => server.ProcessLineAsync(
                 request.ToJsonString(),
                 new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
             error: error);
@@ -4509,7 +4509,7 @@ public sealed class Caller
         using var writer = new StringWriter();
         using var error = new StringWriter();
         await ConsoleCapture.CaptureAsync(
-            () => server.ProcessLineAsync(
+            _ => server.ProcessLineAsync(
                 """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
                 new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
             error: error);
@@ -4525,7 +4525,7 @@ public sealed class Caller
         using var server = new McpServer(_dbPath, "test");
         using var error = new StringWriter();
         await ConsoleCapture.CaptureAsync(
-            () => server.RunAsync(transport, CancellationToken.None),
+            cancellationToken => server.RunAsync(transport, cancellationToken),
             error: error);
 
         var log = error.ToString();
@@ -5459,7 +5459,7 @@ public sealed class Caller
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         using var error = new StringWriter();
         await ConsoleCapture.CaptureAsync(
-            () => server.RunAsync(transport, CancellationToken.None),
+            cancellationToken => server.RunAsync(transport, cancellationToken),
             error: error);
 
         var raw = Encoding.UTF8.GetString(output.ToArray());

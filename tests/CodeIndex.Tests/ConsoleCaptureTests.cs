@@ -176,17 +176,53 @@ public class ConsoleCaptureTests
         using var stderr = new StringWriter();
 
         await ConsoleCapture.CaptureAsync(
-            async () =>
+            async cancellationToken =>
             {
                 await Task.Yield();
+                cancellationToken.ThrowIfCancellationRequested();
                 ConsoleUi.EnsureConsoleWritersSynchronized();
                 Console.Write("out");
                 Console.Error.Write("err");
             },
             stdout,
-            stderr).WaitAsync(TimeSpan.FromSeconds(5));
+            stderr,
+            timeout: TimeSpan.FromSeconds(5));
 
         Assert.Equal("out", stdout.ToString());
         Assert.Equal("err", stderr.ToString());
+    }
+
+    [Fact]
+    public async Task CaptureAsync_TimeoutRestoresOnlyAfterCallbackObservesCancellation_Issue4749()
+    {
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var callbackExited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            ConsoleCapture.CaptureAsync(
+                async cancellationToken =>
+                {
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
+                    finally
+                    {
+                        callbackExited.SetResult();
+                    }
+                },
+                stdout,
+                stderr,
+                timeout: TimeSpan.FromMilliseconds(250)));
+
+        Assert.Contains("within", exception.Message, StringComparison.Ordinal);
+        Assert.True(callbackExited.Task.IsCompletedSuccessfully);
+        Assert.Same(originalOut, Console.Out);
+        Assert.Same(originalError, Console.Error);
+        Assert.Null(Record.Exception(() => Console.Out.Flush()));
+        Assert.Null(Record.Exception(() => Console.Error.Flush()));
     }
 }
