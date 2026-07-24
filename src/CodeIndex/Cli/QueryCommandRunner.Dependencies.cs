@@ -1342,7 +1342,7 @@ public static partial class QueryCommandRunner
         {
             var written = Encoding.UTF8.GetBytes(value.AsSpan(), buffer);
             hash.AppendData(buffer[..written]);
-            Span<byte> separator = stackalloc byte[1];
+            Span<byte> separator = stackalloc byte[1] { 0 };
             hash.AppendData(separator);
         }
         finally

@@ -4829,8 +4829,8 @@ public partial class QueryCommandRunnerTests
             InsertFileWithReferences(dbPath, "src/HighCaller.cs", Enumerable.Repeat("HighTarget", 5).ToArray());
             InsertFileWithSymbolsAndReferences(dbPath, "src/CycleA.cs", ["CycleA"], ["CycleB"]);
             InsertFileWithSymbolsAndReferences(dbPath, "src/CycleB.cs", ["CycleB"], ["CycleA"]);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleC.cs", ["CycleC"], ["CycleD"]);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleD.cs", ["CycleD"], ["CycleC"]);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleC.cs", ["CycleC"], Enumerable.Repeat("CycleD", 5).ToArray());
+            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleD.cs", ["CycleD"], Enumerable.Repeat("CycleC", 5).ToArray());
             MarkDependencyGraphReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
@@ -4846,8 +4846,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(["src/CycleA.cs", "src/CycleB.cs"], nodes);
+            Assert.Equal(["src/CycleC.cs", "src/CycleD.cs"], nodes);
             Assert.Equal(1, cycle.GetProperty("rank").GetInt32());
+            Assert.Equal(10, cycle.GetProperty("reference_count").GetInt64());
             Assert.True(json.GetProperty("analysis_complete").GetBoolean());
             Assert.True(json.GetProperty("total_cycle_count_authoritative").GetBoolean());
             Assert.Equal(2, json.GetProperty("total_cycle_count").GetInt32());
@@ -4865,7 +4866,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, nextExitCode);
             Assert.Equal(string.Empty, nextStderr);
-            Assert.Equal(["src/CycleC.cs", "src/CycleD.cs"], nextNodes);
+            Assert.Equal(["src/CycleA.cs", "src/CycleB.cs"], nextNodes);
             Assert.Equal(2, nextCycle.GetProperty("rank").GetInt32());
             Assert.False(nextJson.GetProperty("has_more").GetBoolean());
 
@@ -4890,6 +4891,23 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, mismatchExitCode);
             Assert.Equal(string.Empty, mismatchStdout);
             Assert.Contains("does not match the current dependency-cycle filters, graph budget, or indexed graph", mismatchStderr, StringComparison.Ordinal);
+
+            var (searchExitCode, _, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Cycle", "--cursor", cursor!],
+                _jsonOptions));
+            var (outlineExitCode, _, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/CycleA.cs", "--cursor", cursor!],
+                _jsonOptions));
+            var (unusedExitCode, _, unusedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--cursor", cursor!],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, searchExitCode);
+            Assert.Contains("cursor for search must be a search pagination cursor", searchStderr, StringComparison.Ordinal);
+            Assert.Equal(CommandExitCodes.UsageError, outlineExitCode);
+            Assert.Contains("outline --cursor must use an outline pagination cursor", outlineStderr, StringComparison.Ordinal);
+            Assert.Equal(CommandExitCodes.UsageError, unusedExitCode);
+            Assert.Contains("cursor for unused must use the `unused:<offset>` cursor", unusedStderr, StringComparison.Ordinal);
         }
         finally
         {

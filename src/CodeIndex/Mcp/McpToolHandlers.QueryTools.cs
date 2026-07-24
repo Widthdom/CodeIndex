@@ -2836,7 +2836,8 @@ public partial class McpServer
                     pathPatterns,
                     excludePaths,
                     excludeTests,
-                    reverse)
+                    reverse,
+                    reader.Cancellation)
                 : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
             var cycleCandidates = cyclesOnly ? results.Take(graphBudget).ToList() : results;
             var cursorFingerprint = QueryCommandRunner.BuildDependencyCycleGraphFingerprint(
@@ -2855,7 +2856,7 @@ public partial class McpServer
                     limit,
                     pageOffset,
                     cursorFingerprint,
-                    CancellationToken.None)
+                    reader.Cancellation)
                 : null;
             if (cursor.HasValue && cycleAnalysis != null && pageOffset >= cycleAnalysis.TotalCycleCount)
                 return CreateToolErrorResponse(id, "'cursor' points beyond the available dependency-cycle result set.");
