@@ -1493,6 +1493,8 @@ public class LspServerTests
     public async Task RunAsync_ServerBusyBackpressureRetainsEveryRejectedResponse_Issue4721()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_busy_response_backpressure");
+        using var requestEntered = new ManualResetEventSlim();
+        using var requestRelease = new ManualResetEventSlim();
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1501,8 +1503,8 @@ public class LspServerTests
             {
                 BeforeSymbolRequestForTesting = cancellationToken =>
                 {
-                    cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
-                    cancellationToken.ThrowIfCancellationRequested();
+                    requestEntered.Set();
+                    requestRelease.Wait(cancellationToken);
                 },
             };
             var frames = new StringBuilder();
@@ -1520,16 +1522,21 @@ public class LspServerTests
                     @params = new { },
                 })));
             }
-            frames.Append(Frame(
+            const string cancel =
                 """
                 {"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"active-backpressure-4721"}}
-                """));
-            using var input = new MemoryStream(Encoding.UTF8.GetBytes(frames.ToString()));
+                """;
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(frames.ToString()),
+                Encoding.UTF8.GetBytes(Frame(cancel)));
             using var output = new FirstWriteGateMemoryStream();
 
             var runTask = server.RunAsync(input, output);
 
+            Assert.True(requestEntered.Wait(TimeSpan.FromSeconds(5)));
             await output.WaitForBlockedWriteAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(runTask.IsCompleted);
+            input.ReleaseSuffix();
             output.ReleaseWrites();
             Assert.Equal(CommandExitCodes.Success, await runTask.WaitAsync(TimeSpan.FromSeconds(5)));
 
@@ -1551,6 +1558,7 @@ public class LspServerTests
         }
         finally
         {
+            requestRelease.Set();
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
