@@ -1470,14 +1470,14 @@ public partial class QueryCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_unsupported_extractor");
         try
         {
-            File.WriteAllText(Path.Combine(projectRoot, "settings.toml"), "enabled = true\n");
+            File.WriteAllText(Path.Combine(projectRoot, "settings.m"), "enabled = true\n");
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["enabled", "--db", dbPath, "--lang", "toml"],
+                ["enabled", "--db", dbPath, "--lang", "ambiguous_m"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -1485,7 +1485,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("symbol extraction is not available", stderr);
-            Assert.Contains("cdidx search <query> --lang toml", stderr);
+            Assert.Contains("cdidx search <query> --lang ambiguous_m", stderr);
             Assert.Contains("missing-symbols", stderr);
         }
         finally
@@ -2642,7 +2642,7 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.TryGetProperty("unused", out _));
 
             var (unsupportedExitCode, unsupportedStdout, unsupportedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "toml"],
+                ["--db", dbPath, "--json", "--lang", "text"],
                 _jsonOptions));
 
             using var unsupportedDocument = ParseJsonOutput(unsupportedStdout);

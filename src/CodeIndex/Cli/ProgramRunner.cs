@@ -1420,14 +1420,15 @@ internal static partial class ProgramRunner
                 kept.Add(arg);
                 continue;
             }
+            if (arg is "--quiet" or "-q" or "--silent"
+                && GetQueryCommandTokenRole(args, i) != QueryCommandTokenRole.CommandOptionValue)
+            {
+                quiet = true;
+                continue;
+            }
             if (ShouldPreserveQueryCommandToken(args, i))
             {
                 kept.Add(arg);
-                continue;
-            }
-            if (arg is "--quiet" or "-q" or "--silent")
-            {
-                quiet = true;
                 continue;
             }
 

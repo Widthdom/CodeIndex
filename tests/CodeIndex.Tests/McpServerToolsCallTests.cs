@@ -1429,10 +1429,10 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_AnalyzeSymbol_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"toml"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"text"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("toml", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.Equal("text", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
         Assert.Contains("Use search, definition, excerpt, or files instead.", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
@@ -1775,10 +1775,10 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_References_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"toml"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"text"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("toml", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.Equal("text", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
@@ -1976,10 +1976,10 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_Callers_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run","lang":"toml"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run","lang":"text"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("toml", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.Equal("text", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
@@ -2065,10 +2065,10 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_Callees_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Run","lang":"toml"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Run","lang":"text"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("toml", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.Equal("text", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
@@ -3107,12 +3107,12 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_UnsupportedGraphLanguage_SkipsGraphDegradedSignal()
     {
-        InsertIndexedFile("docs/guide.toml", "toml", "title = \"Heading\"\nrun = \"Run\"\n");
+        InsertIndexedFile("docs/guide.txt", "text", "title = \"Heading\"\nrun = \"Run\"\n");
         ForceLegacyExactFallbackMode();
         DropGraphExactFallbackIndexes();
         using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"toml","exact":true}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"text","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
@@ -3126,7 +3126,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_PathOnlyUnsupportedSlice_SkipsGraphDegradedSignal()
     {
-        InsertIndexedFile("docs/guide.toml", "toml", "title = \"Heading\"\nrun = \"Run\"\n");
+        InsertIndexedFile("docs/guide.txt", "text", "title = \"Heading\"\nrun = \"Run\"\n");
         ForceLegacyExactFallbackMode();
         DropGraphExactFallbackIndexes();
         using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
@@ -4378,15 +4378,27 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_FocusLineWithoutFocusColumnReturnsError()
+    public void ToolsCall_Excerpt_LineOnlyFocusAndFocusLengthDependencyReuseFixture_Issue4747()
     {
         InsertIndexedFile("dist/data-focus-error.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-error.txt","startLine":1,"endLine":1,"maxLineWidth":96,"focusLine":1}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var content = structured["content"]!.GetValue<string>();
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("focusLine and focusLength require focusColumn", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.True(structured["contentTruncated"]!.GetValue<bool>());
+        Assert.Equal(1, structured["focusLine"]!.GetValue<int>());
+        Assert.Null(structured["focusColumn"]);
+        Assert.StartsWith("a", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("TARGET", content, StringComparison.Ordinal);
+        Assert.True(content.Length <= 96);
+
+        var focusLengthRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-error.txt","startLine":1,"endLine":1,"focusLength":6}}}""")!;
+        var focusLengthResponse = _server.HandleMessage(focusLengthRequest)!;
+
+        Assert.True(focusLengthResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusLength requires focusColumn", focusLengthResponse["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -6123,6 +6135,25 @@ public partial class McpServerTests
         Assert.True(dependencyLock["graph_queries"]!.GetValue<bool>());
         Assert.DoesNotContain("missing-symbols", dependencyLock["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.Contains("packages.lock.json", dependencyLock["exact_filenames"]!.AsArray().Select(e => e!.GetValue<string>()));
+
+        foreach (var repositoryMetadata in new[]
+                 {
+                     "toml",
+                     "jsonl",
+                     "gitignore",
+                     "gitattributes",
+                     "editorconfig",
+                     "dockerignore",
+                     "config",
+                     "app_manifest",
+                 })
+        {
+            var entry = languages.Single(language => language!["lang"]!.GetValue<string>() == repositoryMetadata)!;
+            Assert.True(entry["symbol_extraction"]!.GetValue<bool>());
+            Assert.True(entry["reference_extraction"]!.GetValue<bool>());
+            Assert.True(entry["graph_queries"]!.GetValue<bool>());
+            Assert.Empty(entry["capability_gaps"]!.AsArray());
+        }
     }
 
     [Fact]

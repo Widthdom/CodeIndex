@@ -650,8 +650,8 @@ public partial class IndexCommandRunnerTests
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
                 {
-                    Path = "docs/readme.toml",
-                    Lang = "toml",
+                    Path = "docs/stale.txt",
+                    Lang = "text",
                     Size = 12,
                     Lines = 1,
                     Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -971,8 +971,8 @@ public partial class IndexCommandRunnerTests
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
                 {
-                    Path = "docs/readme.toml",
-                    Lang = "toml",
+                    Path = "docs/stale.txt",
+                    Lang = "text",
                     Size = 12,
                     Lines = 1,
                     Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),

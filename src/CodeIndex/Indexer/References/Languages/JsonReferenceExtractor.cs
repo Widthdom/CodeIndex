@@ -89,6 +89,50 @@ internal static class JsonReferenceExtractor
         return references;
     }
 
+    internal static List<ReferenceRecord> ExtractJsonLines(
+        long fileId,
+        string[] lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        int? maxReferenceCount)
+    {
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount, Math.Min(lines.Length, 64));
+        var recordContainers = BuildJsonLinesRecordContainerMap(symbols);
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var record = lines[lineIndex];
+            if (string.IsNullOrWhiteSpace(record))
+                continue;
+
+            var recordReferences = Extract(fileId, record, [record], maxReferenceCount);
+            recordContainers.TryGetValue(lineIndex + 1, out var container);
+            foreach (var reference in recordReferences)
+            {
+                reference.Line = lineIndex + 1;
+                reference.Context = record;
+                reference.ContainerKind = container?.Kind;
+                reference.ContainerName = container?.Name;
+                if (!ReferenceExtractor.TryAddReference(references, reference))
+                    return references;
+            }
+        }
+
+        return references;
+    }
+
+    private static Dictionary<int, SymbolRecord> BuildJsonLinesRecordContainerMap(
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var containers = new Dictionary<int, SymbolRecord>(Math.Min(symbols.Count, 4096));
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (symbol.Line > 0 && symbol.Kind == "record")
+                containers[symbol.Line] = symbol;
+        }
+
+        return containers;
+    }
+
     private static int MapDecodedIndexToSourceCharacterOffset(ReadOnlySpan<byte> rawValue, int decodedIndex)
     {
         var rawByteIndex = 0;

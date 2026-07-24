@@ -4618,7 +4618,7 @@ public partial class ReferenceExtractorTests
     {
         const string content = "hello = world";
 
-        var references = ReferenceExtractor.Extract(1, "toml", content, []);
+        var references = ReferenceExtractor.Extract(1, "text", content, []);
 
         Assert.Empty(references);
     }

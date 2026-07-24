@@ -56,6 +56,11 @@ public static partial class SymbolExtractor
             return ExtractJsonLinesSymbols(fileId, content, SplitContentLines(content));
         }
 
+        if (lang is "toml" or "gitignore" or "gitattributes" or "editorconfig" or "dockerignore" or "config")
+        {
+            return ExtractRepositoryMetadataSymbols(fileId, lang, SplitContentLines(content));
+        }
+
         if (lang == "yaml")
         {
             return ExtractYamlSymbols(fileId, SplitContentLines(content));

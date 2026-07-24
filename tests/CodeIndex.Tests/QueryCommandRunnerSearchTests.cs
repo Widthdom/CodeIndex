@@ -9441,7 +9441,7 @@ jobs:
     }
 
     [Fact]
-    public void RunExcerpt_LocationAndFocusValidationReuseOneFixture_Issue3916()
+    public void RunExcerpt_LocationAndFocusValidationReuseOneFixture_Issues3916_4747()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_dep");
         try
@@ -9450,12 +9450,21 @@ jobs:
             TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
             TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three\n");
 
-            var (focusDependencyExitCode, _, focusDependencyStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (lineOnlyFocusExitCode, lineOnlyFocusStdout, lineOnlyFocusStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-line", "1"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, focusDependencyExitCode);
-            Assert.Contains("--focus-line requires --focus-column", focusDependencyStderr);
+            Assert.Equal(CommandExitCodes.Success, lineOnlyFocusExitCode);
+            Assert.Equal(string.Empty, lineOnlyFocusStderr);
+            using (var lineOnlyFocusDocument = ParseJsonOutput(lineOnlyFocusStdout))
+            {
+                var root = lineOnlyFocusDocument.RootElement;
+                var content = root.GetProperty("content").GetString()!;
+                Assert.True(root.GetProperty("content_truncated").GetBoolean());
+                Assert.StartsWith("a", content, StringComparison.Ordinal);
+                Assert.DoesNotContain("TARGET", content, StringComparison.Ordinal);
+                Assert.True(content.Length <= 96);
+            }
 
             var (focusLengthExitCode, _, focusLengthStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["dist/data.txt", "--start", "1", "--focus-length", "6"],

@@ -1667,10 +1667,10 @@ public partial class DbReader : IDisposable
         var languageExtensions = FileIndexer.GetLanguageExtensions();
         var aliases = new Dictionary<string, string>(languageExtensions.Count * 2 + 32, StringComparer.OrdinalIgnoreCase);
 
-        foreach (var (pattern, lang) in languageExtensions)
-            AddQueryLanguageAlias(aliases, pattern, lang);
         foreach (var lang in FileIndexer.GetDetectedLanguageNames())
             AddQueryLanguageAlias(aliases, lang, lang);
+        foreach (var (pattern, lang) in languageExtensions)
+            AddQueryLanguageAlias(aliases, pattern, lang);
 
         AddQueryLanguageAlias(aliases, "c#", "csharp");
         AddQueryLanguageAlias(aliases, "blazor", "csharp");
