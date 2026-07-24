@@ -4169,7 +4169,7 @@ exit 7
         env.Set("XDG_RUNTIME_DIR", null);
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        var resolved = GlobalToolLog.ResolveLogDirectoryForReport();
+        var resolved = GlobalToolLog.ResolveLogDirectoryWithoutWriteProbeForTesting();
 
         Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), resolved);
     }
