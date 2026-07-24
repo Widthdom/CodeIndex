@@ -77,6 +77,16 @@ public partial class SymbolExtractorTests
             :- module(hybrid, [prolog_helper/0]).
             :- use_module(library(lists)).
             prolog_helper :- perl_helper().
+            =pod
+            package PodFake;
+            sub pod_fake { return 1; }
+            pod_predicate.
+            =cut
+            /*
+            package BlockFake;
+            sub block_fake { return 1; }
+            block_predicate.
+            */
             """;
 
         var symbols = SymbolExtractor.Extract(1, "ambiguous_pl", content);
@@ -84,6 +94,9 @@ public partial class SymbolExtractorTests
         AssertSymbolsContain(symbols, "namespace", "Hybrid", "hybrid");
         AssertSymbolsContain(symbols, "import", "Shared::Tools", "library(lists)");
         AssertSymbolsContain(symbols, "function", "perl_helper", "prolog_helper");
+        Assert.DoesNotContain(symbols, symbol =>
+            symbol.Name is "PodFake" or "pod_fake" or "pod_predicate"
+                or "BlockFake" or "block_fake" or "block_predicate");
     }
 
     [Fact]

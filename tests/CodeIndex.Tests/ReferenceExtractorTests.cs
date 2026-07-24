@@ -1198,16 +1198,21 @@ public partial class ReferenceExtractorTests
               text = <<-TEXT
             ready?(value)
             save!(value)
+            def fake
             TEXT
+              regex = /ready?(value)/
+              literal = %q(save!(value))
               ready? value
               ready?(value)
               save! value
               save!(value)
+              fake value
             end
             """;
 
-        var (_, references) = ExtractSymbolsAndReferences("crystal", content);
+        var (symbols, references) = ExtractSymbolsAndReferences("crystal", content);
 
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "fake");
         Assert.Equal(2, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
@@ -1216,6 +1221,7 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "save!"));
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
     }
 
     [Fact]
@@ -1228,20 +1234,26 @@ public partial class ReferenceExtractorTests
                 // helper()
                 def singleQuoted = '''
             helper()
+            def fake() {}
             '''
                 def doubleQuoted = """
             helper()
             """
+                def slashy = /helper()/
+                def dollarSlashy = $/helper()/$
+                fake 1
                 helper()
             }
             """";
 
-        var (_, references) = ExtractSymbolsAndReferences("groovy", content);
+        var (symbols, references) = ExtractSymbolsAndReferences("groovy", content);
 
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "fake");
         Assert.Single(references, reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
     }
 
     [Fact]
@@ -1250,9 +1262,16 @@ public partial class ReferenceExtractorTests
         const string content = """
             proc helper {} { return 1 }
             # [helper]
-            proc run {} { helper }
+            proc run {helper} {
+                set literal {helper}
+                set substituted [helper]
+            }
             proc multiline {} {
                 set value 1 ;# [helper]
+                helper
+            }
+            proc split {value}
+            {
                 helper
             }
             """;
@@ -1261,7 +1280,8 @@ public partial class ReferenceExtractorTests
 
         AssertReferencesContain(references, "call", "run", "helper");
         AssertReferencesContain(references, "call", "multiline", "helper");
-        Assert.Equal(2, references.Count(reference =>
+        AssertReferencesContain(references, "call", "split", "helper");
+        Assert.Equal(3, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
     }
@@ -1274,6 +1294,8 @@ public partial class ReferenceExtractorTests
             helper.
             threshold(1.5) :-
                 helper.
+            quoted('value.') :-
+                helper.
             % helper().
             /*
             helper().
@@ -1283,11 +1305,13 @@ public partial class ReferenceExtractorTests
         var (symbols, references) = ExtractSymbolsAndReferences("prolog", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "threshold");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "quoted");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
         AssertReferencesContain(references, "type_reference", null, "support");
-        Assert.Single(references, reference =>
+        Assert.Equal(2, references.Count(reference =>
             reference.ReferenceKind == "call"
-            && reference.ContainerName == "threshold"
-            && reference.SymbolName == "helper");
+            && reference.ContainerName is "threshold" or "quoted"
+            && reference.SymbolName == "helper"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "threshold");
@@ -1299,6 +1323,8 @@ public partial class ReferenceExtractorTests
         const string content = """
             sub helper { return 1; }
             prolog_entry :- helper().
+            my %cache = (answer => helper());
+            clp_entry(X) :- X #= 1, helper.
             # helper();
             % helper().
             =pod
@@ -1308,10 +1334,11 @@ public partial class ReferenceExtractorTests
 
         var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
 
-        Assert.Single(references, reference =>
+        Assert.Equal(3, references.Count(reference =>
             reference.ReferenceKind == "call"
-            && reference.ContainerName == "prolog_entry"
-            && reference.SymbolName == "helper");
+            && reference.SymbolName == "helper"));
+        AssertReferencesContain(references, "call", "prolog_entry", "helper");
+        AssertReferencesContain(references, "call", "clp_entry", "helper");
     }
 
     [Fact]

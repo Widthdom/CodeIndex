@@ -144,6 +144,9 @@ public static partial class SymbolExtractor
             : null;
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        structuralLines = DynamicDeclarativeReferenceExtractor.MaskNonCodeLines(
+            lang,
+            structuralLines);
         string[]? javaScriptTypeScriptSanitizedLines = null;
         string[] GetJavaScriptTypeScriptSanitizedLines() =>
             javaScriptTypeScriptSanitizedLines ??= BuildJavaScriptTypeScriptSanitizedLines(lines);
@@ -2158,7 +2161,7 @@ public static partial class SymbolExtractor
     }
 
     private static readonly Regex PrologOpenClauseRegex = new(
-        @"^\s*(?:(?:[a-z][A-Za-z0-9_]*\s*(?:\([^.\r\n]*\))?\s*(?::-|-->))|:-)",
+        @"^\s*(?:(?:[a-z][A-Za-z0-9_]*\s*(?:\([^\r\n]*\))?\s*(?::-|-->))|:-)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool[] BuildPrologClauseContinuationLines(IReadOnlyList<string> structuralLines)
@@ -2187,6 +2190,12 @@ public static partial class SymbolExtractor
     {
         for (var column = 0; column < line.Length; column++)
         {
+            if (line[column] is '\'' or '"')
+            {
+                column = SkipPrologQuotedTerm(line, column, line[column]) - 1;
+                continue;
+            }
+
             if (line[column] != '.')
                 continue;
 
@@ -2198,6 +2207,31 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static int SkipPrologQuotedTerm(string line, int startColumn, char delimiter)
+    {
+        for (var column = startColumn + 1; column < line.Length; column++)
+        {
+            if (line[column] == '\\')
+            {
+                column++;
+                continue;
+            }
+
+            if (line[column] != delimiter)
+                continue;
+
+            if (column + 1 < line.Length && line[column + 1] == delimiter)
+            {
+                column++;
+                continue;
+            }
+
+            return column + 1;
+        }
+
+        return line.Length;
     }
 
     private const int CSharpFieldInitializerSignatureLimit = 1024;

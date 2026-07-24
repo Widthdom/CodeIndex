@@ -10,14 +10,17 @@ internal static class DynamicDeclarativeReferenceExtractor
     {
         public ExtractionState(
             HashSet<string> callableNames,
-            IReadOnlyDictionary<int, SymbolRecord> containersByLine)
+            IReadOnlyDictionary<int, SymbolRecord> containersByLine,
+            IReadOnlyDictionary<int, IReadOnlyList<int>> tclScriptBodyColumnsByLine)
         {
             CallableNames = callableNames;
             ContainersByLine = containersByLine;
+            TclScriptBodyColumnsByLine = tclScriptBodyColumnsByLine;
         }
 
         public HashSet<string> CallableNames { get; }
         public IReadOnlyDictionary<int, SymbolRecord> ContainersByLine { get; }
+        public IReadOnlyDictionary<int, IReadOnlyList<int>> TclScriptBodyColumnsByLine { get; }
 
         public SymbolRecord? ResolveContainer(int lineNumber, SymbolRecord? fallback)
             => ContainersByLine.TryGetValue(lineNumber, out var container) ? container : fallback;
@@ -51,7 +54,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"(?:^|[;=])\s*(?:return\s+)?(?<name>[A-Za-z_]\w*)\b(?!\s*\()",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TclCommandRegex = new(
-        @"(?:^|[;\[{}])\s*(?<name>[A-Za-z_:][\w:.-]*)",
+        @"(?:^|[;\[])\s*(?<name>[A-Za-z_:][\w:.-]*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PrologBareCallRegex = new(
         @"(?:^|:-|-->|[,;])\s*(?:\\\+\s*)?(?<name>[a-z][A-Za-z0-9_]*)\b(?!\s*\()",
@@ -63,7 +66,9 @@ internal static class DynamicDeclarativeReferenceExtractor
     private readonly record struct TclContainerScope(
         SymbolRecord Symbol,
         int StartLine,
-        int EndLine);
+        int EndLine,
+        int BodyStartLine,
+        int BodyStartColumn);
 
     private readonly record struct TclBraceEnd(
         int Line,
@@ -79,6 +84,11 @@ internal static class DynamicDeclarativeReferenceExtractor
         char groovyTripleQuote = '\0';
         string? crystalHeredocDelimiter = null;
         var insideAmbiguousPerlPod = false;
+        var insideSlashyLiteral = false;
+        var insideGroovyDollarSlashyLiteral = false;
+        char crystalPercentOpeningDelimiter = '\0';
+        char crystalPercentClosingDelimiter = '\0';
+        var crystalPercentDelimiterDepth = 0;
 
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
@@ -151,6 +161,70 @@ internal static class DynamicDeclarativeReferenceExtractor
                     continue;
                 }
 
+                if (insideGroovyDollarSlashyLiteral)
+                {
+                    buffer[column] = ' ';
+                    if (column + 1 < line.Length
+                        && line[column] == '/'
+                        && line[column + 1] == '$')
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                        insideGroovyDollarSlashyLiteral = false;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (insideSlashyLiteral)
+                {
+                    buffer[column] = ' ';
+                    if (line[column] == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (line[column] == '/')
+                    {
+                        column++;
+                        insideSlashyLiteral = false;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (crystalPercentClosingDelimiter != '\0')
+                {
+                    buffer[column] = ' ';
+                    if (line[column] == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                        continue;
+                    }
+
+                    if (crystalPercentOpeningDelimiter != crystalPercentClosingDelimiter
+                        && line[column] == crystalPercentOpeningDelimiter)
+                    {
+                        crystalPercentDelimiterDepth++;
+                    }
+                    else if (line[column] == crystalPercentClosingDelimiter
+                        && --crystalPercentDelimiterDepth == 0)
+                    {
+                        crystalPercentOpeningDelimiter = '\0';
+                        crystalPercentClosingDelimiter = '\0';
+                    }
+
+                    column++;
+                    continue;
+                }
+
                 var ch = line[column];
                 if (language == "groovy"
                     && ch is '\'' or '"'
@@ -204,16 +278,78 @@ internal static class DynamicDeclarativeReferenceExtractor
                     break;
                 }
 
-                if ((language is "crystal" or "tcl" or "ambiguous_pl") && ch == '#')
+                if ((language is "crystal" or "tcl") && ch == '#')
                 {
                     FillWithSpaces(buffer, column);
                     break;
                 }
 
-                if ((language is "prolog" or "ambiguous_pl") && ch == '%')
+                if (language == "prolog" && ch == '%')
                 {
                     FillWithSpaces(buffer, column);
                     break;
+                }
+
+                if (language == "ambiguous_pl" && ch == '#')
+                {
+                    if (IsPrologHashOperator(line, column))
+                    {
+                        column++;
+                        continue;
+                    }
+
+                    FillWithSpaces(buffer, column);
+                    break;
+                }
+
+                if (language == "ambiguous_pl" && ch == '%')
+                {
+                    if (IsPerlHashSigil(line, column))
+                    {
+                        column++;
+                        continue;
+                    }
+
+                    FillWithSpaces(buffer, column);
+                    break;
+                }
+
+                if (language == "groovy"
+                    && ch == '$'
+                    && column + 1 < line.Length
+                    && line[column + 1] == '/')
+                {
+                    buffer[column] = ' ';
+                    buffer[column + 1] = ' ';
+                    column += 2;
+                    insideGroovyDollarSlashyLiteral = true;
+                    continue;
+                }
+
+                if (language == "crystal"
+                    && TryBeginCrystalPercentLiteral(
+                        line,
+                        column,
+                        out var percentOpeningDelimiter,
+                        out var percentClosingDelimiter,
+                        out var percentContentColumn))
+                {
+                    FillWithSpaces(buffer, column, percentContentColumn);
+                    crystalPercentOpeningDelimiter = percentOpeningDelimiter;
+                    crystalPercentClosingDelimiter = percentClosingDelimiter;
+                    crystalPercentDelimiterDepth = 1;
+                    column = percentContentColumn;
+                    continue;
+                }
+
+                if (language is "groovy" or "crystal"
+                    && ch == '/'
+                    && IsLikelySlashyLiteralStart(line, column))
+                {
+                    buffer[column] = ' ';
+                    column++;
+                    insideSlashyLiteral = true;
+                    continue;
                 }
 
                 column++;
@@ -241,12 +377,20 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
 
         var containersByLine = new Dictionary<int, SymbolRecord>();
+        var tclScriptBodyColumnsByLine = new Dictionary<int, IReadOnlyList<int>>();
         if (language == "tcl")
-            AddTclContainers(preparedLines, symbols, containersByLine);
+            AddTclContainers(
+                preparedLines,
+                symbols,
+                containersByLine,
+                tclScriptBodyColumnsByLine);
         else if (language is "prolog" or "ambiguous_pl")
             AddPrologContainers(preparedLines, symbols, containersByLine);
 
-        return new ExtractionState(callableNames, containersByLine);
+        return new ExtractionState(
+            callableNames,
+            containersByLine,
+            tclScriptBodyColumnsByLine);
     }
 
     public static void EmitAdditionalReferences(
@@ -319,6 +463,24 @@ internal static class DynamicDeclarativeReferenceExtractor
 
             addCallLikeReference(nameGroup.Value, nameGroup.Index);
         }
+
+        if (language == "tcl"
+            && state.TclScriptBodyColumnsByLine.TryGetValue(lineNumber, out var bodyColumns))
+        {
+            foreach (var bodyColumn in bodyColumns)
+            {
+                if (bodyColumn >= preparedLine.Length)
+                    continue;
+
+                var bodyLine = preparedLine[bodyColumn..];
+                foreach (Match match in BoundedRegex.EnumerateMatches(TclCommandRegex, bodyLine))
+                {
+                    var nameGroup = match.Groups["name"];
+                    if (state.CallableNames.Contains(nameGroup.Value))
+                        addCallLikeReference(nameGroup.Value, bodyColumn + nameGroup.Index);
+                }
+            }
+        }
     }
 
     private static int SkipQuotedToken(string line, int startColumn, char delimiter)
@@ -350,6 +512,82 @@ internal static class DynamicDeclarativeReferenceExtractor
     {
         for (var column = startColumn; column < buffer.Length; column++)
             buffer[column] = ' ';
+    }
+
+    private static void FillWithSpaces(char[] buffer, int startColumn, int endColumn)
+    {
+        for (var column = startColumn; column < endColumn && column < buffer.Length; column++)
+            buffer[column] = ' ';
+    }
+
+    private static bool IsPrologHashOperator(string line, int column)
+    {
+        if (column + 1 >= line.Length)
+            return false;
+
+        return line[column + 1] is '=' or '<' or '>' or '\\' or '/' or '#';
+    }
+
+    private static bool IsPerlHashSigil(string line, int column)
+    {
+        if (column + 1 >= line.Length)
+            return false;
+
+        return line[column + 1] == '{'
+            || line[column + 1] == '_'
+            || char.IsLetter(line[column + 1]);
+    }
+
+    private static bool IsLikelySlashyLiteralStart(string line, int column)
+    {
+        if (column + 1 >= line.Length || line[column + 1] is '/' or '*')
+            return false;
+
+        var previousColumn = column - 1;
+        while (previousColumn >= 0 && char.IsWhiteSpace(line[previousColumn]))
+            previousColumn--;
+
+        if (previousColumn < 0)
+            return true;
+
+        return line[previousColumn] is '=' or '(' or '[' or '{' or ',' or ':' or ';'
+            or '!' or '&' or '|' or '?' or '+' or '-' or '*' or '%';
+    }
+
+    private static bool TryBeginCrystalPercentLiteral(
+        string line,
+        int column,
+        out char openingDelimiter,
+        out char closingDelimiter,
+        out int contentColumn)
+    {
+        openingDelimiter = '\0';
+        closingDelimiter = '\0';
+        contentColumn = column;
+        if (line[column] != '%' || column + 1 >= line.Length)
+            return false;
+
+        var delimiterColumn = column + 1;
+        if (line[delimiterColumn] is 'q' or 'Q' or 'w' or 'W' or 'i' or 'I' or 'x' or 'r')
+            delimiterColumn++;
+        if (delimiterColumn >= line.Length
+            || char.IsLetterOrDigit(line[delimiterColumn])
+            || char.IsWhiteSpace(line[delimiterColumn]))
+        {
+            return false;
+        }
+
+        openingDelimiter = line[delimiterColumn];
+        closingDelimiter = openingDelimiter switch
+        {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '<' => '>',
+            _ => openingDelimiter,
+        };
+        contentColumn = delimiterColumn + 1;
+        return true;
     }
 
     private static void EmitImportReference(
@@ -409,7 +647,8 @@ internal static class DynamicDeclarativeReferenceExtractor
     private static void AddTclContainers(
         IReadOnlyList<string> lines,
         IReadOnlyList<SymbolRecord> symbols,
-        Dictionary<int, SymbolRecord> containersByLine)
+        Dictionary<int, SymbolRecord> containersByLine,
+        Dictionary<int, IReadOnlyList<int>> scriptBodyColumnsByLine)
     {
         var braceEnds = BuildTclBraceEndPositions(lines);
         var scopes = new List<TclContainerScope>();
@@ -426,12 +665,19 @@ internal static class DynamicDeclarativeReferenceExtractor
                     braceEnds,
                     startLineIndex,
                     declarationMatch.Index + declarationMatch.Length,
+                    out var bodyStartLineIndex,
+                    out var bodyStartColumn,
                     out var endLineIndex))
             {
                 continue;
             }
 
-            scopes.Add(new TclContainerScope(symbol, symbol.StartLine, endLineIndex + 1));
+            scopes.Add(new TclContainerScope(
+                symbol,
+                symbol.StartLine,
+                endLineIndex + 1,
+                bodyStartLineIndex + 1,
+                bodyStartColumn + 1));
         }
 
         scopes.Sort(static (left, right) =>
@@ -460,6 +706,15 @@ internal static class DynamicDeclarativeReferenceExtractor
             if (activeScopes.Count > 0)
                 containersByLine[lineNumber] = activeScopes.Peek().Symbol;
         }
+
+        foreach (var lineGroup in scopes.GroupBy(static scope => scope.BodyStartLine))
+        {
+            scriptBodyColumnsByLine[lineGroup.Key] = lineGroup
+                .Select(static scope => scope.BodyStartColumn)
+                .Distinct()
+                .Order()
+                .ToArray();
+        }
     }
 
     private static bool TryFindTclBodyEnd(
@@ -467,8 +722,12 @@ internal static class DynamicDeclarativeReferenceExtractor
         IReadOnlyDictionary<long, TclBraceEnd> braceEnds,
         int startLineIndex,
         int searchColumn,
+        out int bodyStartLineIndex,
+        out int bodyStartColumn,
         out int endLineIndex)
     {
+        bodyStartLineIndex = startLineIndex;
+        bodyStartColumn = -1;
         endLineIndex = startLineIndex;
         if (!TryFindNextNonWhitespace(lines[startLineIndex], searchColumn, out var argsColumn)
             || !TryFindTclWordEnd(
@@ -478,9 +737,16 @@ internal static class DynamicDeclarativeReferenceExtractor
                 argsColumn,
                 out var argsEndLine,
                 out var argsEndColumn)
-            || !TryFindNextNonWhitespace(lines[argsEndLine], argsEndColumn + 1, out var bodyColumn)
-            || lines[argsEndLine][bodyColumn] != '{'
-            || !braceEnds.TryGetValue(GetTclPositionKey(argsEndLine, bodyColumn), out var bodyEnd))
+            || !TryFindNextNonWhitespace(
+                lines,
+                argsEndLine,
+                argsEndColumn + 1,
+                out bodyStartLineIndex,
+                out bodyStartColumn)
+            || lines[bodyStartLineIndex][bodyStartColumn] != '{'
+            || !braceEnds.TryGetValue(
+                GetTclPositionKey(bodyStartLineIndex, bodyStartColumn),
+                out var bodyEnd))
         {
             return false;
         }
@@ -556,6 +822,28 @@ internal static class DynamicDeclarativeReferenceExtractor
             }
         }
 
+        foundColumn = -1;
+        return false;
+    }
+
+    private static bool TryFindNextNonWhitespace(
+        IReadOnlyList<string> lines,
+        int startLine,
+        int startColumn,
+        out int foundLine,
+        out int foundColumn)
+    {
+        for (var lineIndex = startLine; lineIndex < lines.Count; lineIndex++)
+        {
+            var column = lineIndex == startLine ? startColumn : 0;
+            if (TryFindNextNonWhitespace(lines[lineIndex], column, out foundColumn))
+            {
+                foundLine = lineIndex;
+                return true;
+            }
+        }
+
+        foundLine = -1;
         foundColumn = -1;
         return false;
     }
