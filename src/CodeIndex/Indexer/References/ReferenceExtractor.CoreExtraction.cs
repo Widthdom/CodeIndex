@@ -2611,7 +2611,7 @@ public static partial class ReferenceExtractor
                     DynamicDeclarativeReferenceExtractor.EmitAdditionalReferences(
                         language,
                         preparedLine,
-                        originalLine,
+                        referenceStructuralLines[i],
                         dynamicDeclarativeState,
                         references,
                         seen,

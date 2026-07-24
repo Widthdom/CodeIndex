@@ -12542,6 +12542,14 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.XmlContractVersion, SymbolExtractor.GetContractVersion("xml"));
         Assert.True(SymbolExtractor.XmlContractVersion > SymbolExtractor.StyleAndXamlContractVersion);
+        Assert.Equal(SymbolExtractor.DynamicReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("crystal"));
+        Assert.Equal(SymbolExtractor.DynamicReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("groovy"));
+        Assert.Equal(SymbolExtractor.DynamicReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("tcl"));
+        Assert.True(SymbolExtractor.DynamicReferenceGraphContractVersion > SymbolExtractor.DynamicLanguageContractVersion);
+        Assert.Equal(SymbolExtractor.DynamicLanguageContractVersion, SymbolExtractor.GetContractVersion("julia"));
+        Assert.Equal(SymbolExtractor.PrologReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("prolog"));
+        Assert.Equal(SymbolExtractor.PrologReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("ambiguous_pl"));
+        Assert.True(SymbolExtractor.PrologReferenceGraphContractVersion > SymbolExtractor.DefaultContractVersion);
     }
 
     [Fact]

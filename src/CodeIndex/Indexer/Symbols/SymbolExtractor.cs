@@ -23,6 +23,8 @@ public static partial class SymbolExtractor
     public const int XmlContractVersion = 3;
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
+    public const int DynamicReferenceGraphContractVersion = 3;
+    public const int PrologReferenceGraphContractVersion = 2;
     public const int SystemsLanguageContractVersion = 2;
     private static readonly string[] AdditionalSymbolLanguages =
     [
@@ -79,7 +81,9 @@ public static partial class SymbolExtractor
             "sass" or "stylus" => StyleAndXamlContractVersion,
             "xml" => XmlContractVersion,
             "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
-            "crystal" or "groovy" or "julia" or "tcl" => DynamicLanguageContractVersion,
+            "crystal" or "groovy" or "tcl" => DynamicReferenceGraphContractVersion,
+            "julia" => DynamicLanguageContractVersion,
+            "prolog" or "ambiguous_pl" => PrologReferenceGraphContractVersion,
             "ada" or "d" or "nim" => SystemsLanguageContractVersion,
             "app_manifest" or "cmake" or "dependency_lock" or "dependency_manifest" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
@@ -1711,7 +1715,7 @@ public static partial class SymbolExtractor
         [
             new("namespace", new Regex(@"^\s*:-\s*module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import", new Regex(@"^\s*:-\s*use_module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*(?:\([^)]*\))?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n.]*\))?\s*(?::-|-->|\.)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["ambiguous_pl"] =
         [
@@ -1729,7 +1733,7 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*(?:method|fun)\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             new("namespace", new Regex(@"^\s*:-\s*module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import", new Regex(@"^\s*:-\s*use_module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*(?:\([^)]*\))?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n.]*\))?\s*(?::-|-->|\.)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["c"] =
         [

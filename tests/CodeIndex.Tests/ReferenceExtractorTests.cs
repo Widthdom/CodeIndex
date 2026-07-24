@@ -1182,6 +1182,139 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Crystal_PreservesPredicateAndBangCallsWhileMaskingCommentsAndHeredocs_Issue4746()
+    {
+        const string content = """
+            def ready?(value)
+              value
+            end
+
+            def save!(value)
+              value
+            end
+
+            def run(value)
+              # ready?(value)
+              text = <<-TEXT
+            ready?(value)
+            save!(value)
+            TEXT
+              ready? value
+              ready?(value)
+              save! value
+              save!(value)
+            end
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("crystal", content);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "ready?"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "save!"));
+    }
+
+    [Fact]
+    public void Extract_Groovy_MasksTripleQuotedStringsAndComments_Issue4746()
+    {
+        const string content = """"
+            def helper() {}
+
+            def run() {
+                // helper()
+                def singleQuoted = '''
+            helper()
+            '''
+                def doubleQuoted = """
+            helper()
+            """
+                helper()
+            }
+            """";
+
+        var (_, references) = ExtractSymbolsAndReferences("groovy", content);
+
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+    }
+
+    [Fact]
+    public void Extract_Tcl_IndexesSingleLineProcBodiesAndMasksComments_Issue4746()
+    {
+        const string content = """
+            proc helper {} { return 1 }
+            # [helper]
+            proc run {} { helper }
+            proc multiline {} {
+                set value 1 ;# [helper]
+                helper
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        AssertReferencesContain(references, "call", "run", "helper");
+        AssertReferencesContain(references, "call", "multiline", "helper");
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"));
+    }
+
+    [Fact]
+    public void Extract_Prolog_IndexesRelativeImportsAndDecimalHeadsWhileMaskingComments_Issue4746()
+    {
+        const string content = """
+            :- use_module('./support.pl').
+            helper.
+            threshold(1.5) :-
+                helper.
+            % helper().
+            /*
+            helper().
+            */
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("prolog", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "threshold");
+        AssertReferencesContain(references, "type_reference", null, "support");
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "threshold"
+            && reference.SymbolName == "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "threshold");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_MasksPerlAndPrologCommentsAndPod_Issue4746()
+    {
+        const string content = """
+            sub helper { return 1; }
+            prolog_entry :- helper().
+            # helper();
+            % helper().
+            =pod
+            helper();
+            =cut
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "prolog_entry"
+            && reference.SymbolName == "helper");
+    }
+
+    [Fact]
     public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
     {
         const string content = """

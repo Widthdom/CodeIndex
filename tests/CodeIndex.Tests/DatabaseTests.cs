@@ -4692,6 +4692,34 @@ public class DatabaseTests : IDisposable
         Assert.Null(id);
     }
 
+    [Theory]
+    [InlineData("crystal", 2)]
+    [InlineData("groovy", 2)]
+    [InlineData("tcl", 2)]
+    [InlineData("prolog", 1)]
+    [InlineData("ambiguous_pl", 1)]
+    public void GetUnchangedFileId_InvalidatesPreGraphLanguageContracts_Issue4746(
+        string language,
+        int previousContractVersion)
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = $"src/legacy-{language}.txt",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            previousContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.True(SymbolExtractor.GetContractVersion(language) > previousContractVersion);
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
     [Fact]
     public void GetUnchangedFileId_MatchesByChecksumWhenTimestampDiffers()
     {
