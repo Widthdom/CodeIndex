@@ -2713,11 +2713,17 @@ public static partial class ReferenceExtractor
         bool UseCSharpTriggerFastPath,
         bool MaskRustLifetimes,
         bool MaskStringLiterals,
+        bool MaskNimRawStrings,
         bool IncludeBacktickStringDelimiter,
+        bool PreserveStringLiteralLength,
+        bool PreservePostfixSingleQuotes,
+        bool UseMatlabStringRules,
+        bool ScientificStringUsesBackslashEscapes,
         bool UsesHashComments,
         bool UsesRHashComments,
         bool UsesSlashComments,
         bool UsesDashDashComments,
+        bool UsesPercentComments,
         bool UsesFortranBangComments,
         bool UsesPascalBlockComments,
         bool UsesVisualBasicComments);
@@ -2727,11 +2733,17 @@ public static partial class ReferenceExtractor
             UseCSharpTriggerFastPath: lang == "csharp",
             MaskRustLifetimes: lang == "rust",
             MaskStringLiterals: lang != "cobol",
+            MaskNimRawStrings: lang == "nim",
             IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
+            PreserveStringLiteralLength: ScientificNativeReferenceExtractor.Supports(lang),
+            PreservePostfixSingleQuotes: lang is "ada" or "julia" or "matlab",
+            UseMatlabStringRules: lang == "matlab",
+            ScientificStringUsesBackslashEscapes: lang is "cython" or "d" or "julia" or "nim" or "objc",
             UsesHashComments: UsesHashComments(lang),
             UsesRHashComments: lang == "r",
             UsesSlashComments: UsesSlashComments(lang),
             UsesDashDashComments: UsesDashDashComments(lang),
+            UsesPercentComments: lang == "matlab",
             UsesFortranBangComments: lang == "fortran",
             UsesPascalBlockComments: lang == "pascal",
             UsesVisualBasicComments: lang == "vb");
@@ -2750,12 +2762,25 @@ public static partial class ReferenceExtractor
         var result = line;
         if (options.MaskRustLifetimes)
             result = MaskRustLifetimeTokens(result);
+        if (options.MaskNimRawStrings)
+            result = ScientificNativeCommentMasker.MaskNimRawStringLiterals(result);
         if (options.MaskStringLiterals && MayContainStringLiteralDelimiter(result, options.IncludeBacktickStringDelimiter))
         {
-            var stringLiteralRegex = !options.IncludeBacktickStringDelimiter
-                ? NonBacktickStringLiteralRegex
-                : StringLiteralRegex;
-            result = stringLiteralRegex.Replace(result, "\"\"");
+            if (options.PreserveStringLiteralLength)
+            {
+                result = ScientificNativeCommentMasker.MaskLineStringLiteralsPreservingPostfixSingleQuotes(
+                    result,
+                    options.UseMatlabStringRules,
+                    options.ScientificStringUsesBackslashEscapes,
+                    options.PreservePostfixSingleQuotes);
+            }
+            else
+            {
+                var stringLiteralRegex = !options.IncludeBacktickStringDelimiter
+                    ? NonBacktickStringLiteralRegex
+                    : StringLiteralRegex;
+                result = stringLiteralRegex.Replace(result, "\"\"");
+            }
         }
         if (result.Contains("/*", StringComparison.Ordinal))
             result = InlineBlockCommentRegex.Replace(result, " ");
@@ -2782,6 +2807,19 @@ public static partial class ReferenceExtractor
             var dashCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
             if (dashCommentIndex >= 0)
                 result = result[..dashCommentIndex];
+        }
+
+        if (options.UsesPercentComments)
+        {
+            // Outside strings, MATLAB treats `...` and the rest of the physical line as a
+            // continuation comment. MATLAB では文字列外の `...` 以降は継続コメントになる。
+            var continuationIndex = result.IndexOf("...", StringComparison.Ordinal);
+            if (continuationIndex >= 0)
+                result = result[..continuationIndex];
+
+            var percentCommentIndex = result.IndexOf('%');
+            if (percentCommentIndex >= 0)
+                result = result[..percentCommentIndex];
         }
 
         if (options.UsesFortranBangComments)
@@ -4782,15 +4820,17 @@ public static partial class ReferenceExtractor
 
     private static bool UsesHashComments(string lang) =>
         lang is "python" or "ruby" or "perl" or "php" or "elixir" or "r" or "powershell"
-            or "shell" or "makefile" or "terraform" or "dockerfile" or "protobuf";
+            or "shell" or "makefile" or "terraform" or "dockerfile" or "protobuf"
+            or "nim" or "julia" or "cython";
 
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby" and not "r" and not "haskell"
             and not "makefile" and not "terraform" and not "dockerfile"
-            and not "css" and not "fortran";
+            and not "css" and not "fortran" and not "nim" and not "matlab"
+            and not "julia" and not "cython" and not "ada";
 
     private static bool UsesDashDashComments(string lang) =>
-        lang is "lua" or "sql" or "haskell";
+        lang is "lua" or "sql" or "haskell" or "ada";
 
     private static bool IsPythonStringPrefixChar(char c) =>
         c is 'r' or 'R' or 'u' or 'U' or 'b' or 'B' or 'f' or 'F';

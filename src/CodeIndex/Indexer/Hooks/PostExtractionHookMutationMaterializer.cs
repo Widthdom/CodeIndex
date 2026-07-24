@@ -59,6 +59,27 @@ internal static class PostExtractionHookMutationMaterializer
         return true;
     }
 
+    internal static void RefreshLanguageIdentity(string? language, IEnumerable<SymbolRecord> symbols)
+    {
+        if (!string.Equals(language, "nim", StringComparison.Ordinal))
+            return;
+
+        foreach (var symbol in symbols)
+            symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
+    }
+
+    internal static void RefreshLanguageIdentity(string? language, IEnumerable<ReferenceRecord> references)
+    {
+        if (!string.Equals(language, "nim", StringComparison.Ordinal))
+            return;
+
+        foreach (var reference in references)
+        {
+            reference.IdentitySymbolNameFolded = NimIdentifierIdentity.Fold(reference.SymbolName);
+            reference.IdentityContainerNameFolded = NimIdentifierIdentity.Fold(reference.ContainerName);
+        }
+    }
+
     private static SymbolRecord CloneSymbol(SymbolRecord symbol)
         => new()
         {
@@ -67,6 +88,7 @@ internal static class PostExtractionHookMutationMaterializer
             Kind = symbol.Kind,
             SubKind = symbol.SubKind,
             Name = symbol.Name,
+            IdentityNameFolded = symbol.IdentityNameFolded,
             Line = symbol.Line,
             StartLine = symbol.StartLine,
             StartColumn = symbol.StartColumn,
@@ -91,12 +113,16 @@ internal static class PostExtractionHookMutationMaterializer
             Id = reference.Id,
             FileId = reference.FileId,
             SymbolName = reference.SymbolName,
+            IdentitySymbolNameFolded = reference.IdentitySymbolNameFolded,
             ReferenceKind = reference.ReferenceKind,
             Line = reference.Line,
             Column = reference.Column,
             Context = reference.Context,
             ContainerKind = reference.ContainerKind,
             ContainerName = reference.ContainerName,
+            IdentityContainerNameFolded = reference.IdentityContainerNameFolded,
+            TargetQualifier = reference.TargetQualifier,
+            SuppressInferredTargetQualifier = reference.SuppressInferredTargetQualifier,
             IsSelfReference = reference.IsSelfReference,
             IsMutualRecursion = reference.IsMutualRecursion,
         };

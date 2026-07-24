@@ -30,6 +30,14 @@ public partial class DbWriter
         return (object?)folded ?? DBNull.Value;
     }
 
+    private static object FoldedNameDbValue(
+        string? name,
+        string? identityNameFolded,
+        Dictionary<string, string?> cache) =>
+        identityNameFolded != null
+            ? identityNameFolded
+            : FoldedNameDbValue(name, cache);
+
     private static Dictionary<string, string?> CreateFoldedNameCache(int rowCount, int namesPerRow)
     {
         if (rowCount <= 0 || namesPerRow <= 0)

@@ -1515,14 +1515,14 @@ public partial class QueryCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_unsupported_extractor");
         try
         {
-            File.WriteAllText(Path.Combine(projectRoot, "settings.m"), "enabled = true\n");
+            File.WriteAllText(Path.Combine(projectRoot, "settings.pl"), "enabled = true\n");
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["enabled", "--db", dbPath, "--lang", "ambiguous_m"],
+                ["enabled", "--db", dbPath, "--lang", "ambiguous_pl"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -1530,7 +1530,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("symbol extraction is not available", stderr);
-            Assert.Contains("cdidx search <query> --lang ambiguous_m", stderr);
+            Assert.Contains("cdidx search <query> --lang ambiguous_pl", stderr);
             Assert.Contains("missing-symbols", stderr);
         }
         finally

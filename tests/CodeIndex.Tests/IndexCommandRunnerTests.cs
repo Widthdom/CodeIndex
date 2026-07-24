@@ -499,6 +499,32 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_NimIdentityKeySurvivesProtocolRoundTrip_Issue4738()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            using var worker = new SymbolExtractionWorkerClient();
+            var result = worker.Invoke(
+                0,
+                "nim",
+                "proc my_proc() = discard\n",
+                Path.Combine(projectRoot, "sample.nim"),
+                projectRoot,
+                TimeSpan.FromSeconds(5));
+
+            Assert.True(result.Success, result.WorkerError);
+            var symbol = Assert.Single(result.Symbols!);
+            Assert.Equal("my_proc", symbol.Name);
+            Assert.Equal("myproc", symbol.IdentityNameFolded);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_StreamResponseWritesBomlessUtf8Frame()
     {
         var projectRoot = CreateTempProject();
