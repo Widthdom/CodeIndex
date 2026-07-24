@@ -1068,13 +1068,18 @@ internal sealed class LspServer : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var item = ToDocumentSymbol(document, symbol, lineCache);
-            var node = new DocumentSymbolNode(symbol, item);
-            var parent = FindDocumentSymbolParent(nodes, symbol);
+            nodes.Add(new DocumentSymbolNode(symbol, item));
+        }
+
+        for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var node = nodes[nodeIndex];
+            var parent = FindDocumentSymbolParent(nodes, nodeIndex);
             if (parent == null)
-                roots.Add((JsonNode)item);
+                roots.Add((JsonNode)node.Item);
             else
-                AddDocumentSymbolChild(parent.Value.Item, item);
-            nodes.Add(node);
+                AddDocumentSymbolChild(parent.Value.Item, node.Item);
         }
 
         return new DocumentSymbolTreeResult(roots, TrimDocumentSymbolsToBudget(roots));
@@ -2125,10 +2130,17 @@ internal sealed class LspServer : IDisposable
             }));
     }
 
-    private DocumentSymbolNode? FindDocumentSymbolParent(IReadOnlyList<DocumentSymbolNode> nodes, SymbolResult symbol)
+    private DocumentSymbolNode? FindDocumentSymbolParent(IReadOnlyList<DocumentSymbolNode> nodes, int symbolIndex)
     {
+        var symbolNode = nodes[symbolIndex];
+        var symbol = symbolNode.Symbol;
+        DocumentSymbolNode? parent = null;
+        int? nearestSameLineStart = null;
         for (var i = nodes.Count - 1; i >= 0; i--)
         {
+            if (i == symbolIndex)
+                continue;
+
             var candidate = nodes[i].Symbol;
             if (!ContainsDocumentSymbol(candidate, symbol))
                 continue;
@@ -2143,20 +2155,52 @@ internal sealed class LspServer : IDisposable
                 continue;
             }
 
-            return nodes[i];
+            ConsiderDocumentSymbolParent(nodes[i], symbolNode, ref parent, ref nearestSameLineStart);
         }
 
+        if (parent != null)
+            return parent;
         if (symbol.ContainerName != null)
             return null;
 
         for (var i = nodes.Count - 1; i >= 0; i--)
         {
+            if (i == symbolIndex)
+                continue;
+
             var candidate = nodes[i].Symbol;
             if (ContainsDocumentSymbol(candidate, symbol))
-                return nodes[i];
+                ConsiderDocumentSymbolParent(nodes[i], symbolNode, ref parent, ref nearestSameLineStart);
         }
 
-        return null;
+        return parent;
+    }
+
+    private static void ConsiderDocumentSymbolParent(
+        DocumentSymbolNode candidate,
+        DocumentSymbolNode symbol,
+        ref DocumentSymbolNode? parent,
+        ref int? nearestSameLineStart)
+    {
+        if (candidate.Symbol.StartLine == symbol.Symbol.StartLine)
+        {
+            var candidateStart = candidate.Item["selectionRange"]?["start"]?["character"]?.GetValue<int>();
+            var symbolStart = symbol.Item["selectionRange"]?["start"]?["character"]?.GetValue<int>();
+            if (candidateStart.HasValue && symbolStart.HasValue)
+            {
+                if (candidateStart.Value > symbolStart.Value)
+                    return;
+                if (!nearestSameLineStart.HasValue || candidateStart.Value > nearestSameLineStart.Value)
+                {
+                    parent = candidate;
+                    nearestSameLineStart = candidateStart.Value;
+                }
+                return;
+            }
+        }
+
+        if (!nearestSameLineStart.HasValue && parent == null)
+            parent = candidate;
     }
 
     private static bool ContainsDocumentSymbol(SymbolResult candidate, SymbolResult symbol) =>

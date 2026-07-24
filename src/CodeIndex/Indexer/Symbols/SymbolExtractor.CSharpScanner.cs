@@ -1282,6 +1282,23 @@ public static partial class SymbolExtractor
         if (IsCSharpNonMemberHeaderLine(matchLine))
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
 
+        if (IsCSharpDeclarationExpressionArrow(matchLine)
+            && TryFindCSharpExpressionArrow(lines, startLineIndex, startLineIndex, out var sameLineArrowLineIndex, out var sameLineArrowColumn))
+        {
+            var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(
+                lines,
+                sameLineArrowLineIndex,
+                sameLineArrowColumn,
+                out var expressionEndLineExclusiveEndColumn);
+            return new CSharpPropertyMatchCandidate(
+                matchLine,
+                startLineIndex,
+                startLineIndex,
+                null,
+                expressionEndLineIndex,
+                expressionEndLineExclusiveEndColumn);
+        }
+
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
         var isMethodHeaderPrefix = !isPropertyHeaderPrefix
             && (CSharpMethodHeaderPrefixRegex.IsMatch(matchLine)
@@ -1311,12 +1328,6 @@ public static partial class SymbolExtractor
             // 生の matchLine を返してモディファイア行ではパターンに失敗させ、名前行のみが
             // シンボルを emit するようにする。Closes #348.
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
-        }
-
-        if (TryFindCSharpExpressionArrow(lines, startLineIndex, startLineIndex, out var sameLineArrowLineIndex, out var sameLineArrowColumn))
-        {
-            var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(lines, sameLineArrowLineIndex, sameLineArrowColumn);
-            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex, null, expressionEndLineIndex);
         }
 
         var builder = new StringBuilder(matchLine.TrimEnd());
@@ -1374,10 +1385,21 @@ public static partial class SymbolExtractor
                     openBraceLineIndex >= 0 ? openBraceExclusiveEndColumn : null);
             }
 
-            if (TryFindCSharpExpressionArrow(lines, startLineIndex, i, out var arrowLineIndex, out var arrowColumn))
+            if (IsCSharpDeclarationExpressionArrow(normalizedCombined)
+                && TryFindCSharpExpressionArrow(lines, startLineIndex, i, out var arrowLineIndex, out var arrowColumn))
             {
-                var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(lines, arrowLineIndex, arrowColumn);
-                return new CSharpPropertyMatchCandidate(normalizedCombined, i, i, null, expressionEndLineIndex);
+                var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(
+                    lines,
+                    arrowLineIndex,
+                    arrowColumn,
+                    out var expressionEndLineExclusiveEndColumn);
+                return new CSharpPropertyMatchCandidate(
+                    normalizedCombined,
+                    i,
+                    i,
+                    null,
+                    expressionEndLineIndex,
+                    expressionEndLineExclusiveEndColumn);
             }
 
             // Plain-field multi-line declaration: continuation reaches a top-level `;`.
@@ -1997,6 +2019,71 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool IsCSharpDeclarationExpressionArrow(string matchLine)
+    {
+        var arrowColumn = matchLine.IndexOf("=>", StringComparison.Ordinal);
+        if (arrowColumn < 0)
+            return false;
+
+        var header = matchLine[..arrowColumn];
+        return CSharpConfirmedMemberPrefixRegex.IsMatch(header)
+            || CSharpConfirmedMethodPrefixRegex.IsMatch(header);
+    }
+
+    private static bool IsCSharpFunctionMatchInsideExpressionBody(string matchLine, int nameIndex)
+    {
+        var boundedNameIndex = Math.Min(Math.Max(0, nameIndex), matchLine.Length);
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        int? expressionBraceDepth = null;
+
+        for (int i = 0; i < boundedNameIndex; i++)
+        {
+            var ch = matchLine[i];
+            if (ch == '='
+                && i + 1 < boundedNameIndex
+                && matchLine[i + 1] == '>'
+                && parenDepth == 0
+                && bracketDepth == 0)
+            {
+                expressionBraceDepth ??= braceDepth;
+                i++;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')' when parenDepth > 0:
+                    parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    break;
+                case ';' when expressionBraceDepth.HasValue
+                    && parenDepth == 0
+                    && bracketDepth == 0
+                    && braceDepth <= expressionBraceDepth.Value:
+                    expressionBraceDepth = null;
+                    break;
+            }
+        }
+
+        return expressionBraceDepth.HasValue;
+    }
+
     private static bool IsCSharpMultilineExpressionBodiedMember(string[] lines, int startLineIndex, int startColumn)
     {
         var lexState = new CSharpLexState();
@@ -2053,7 +2140,11 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static int FindCSharpExpressionBodyEndLine(string[] lines, int arrowLineIndex, int arrowColumn)
+    private static int FindCSharpExpressionBodyEndLine(
+        string[] lines,
+        int arrowLineIndex,
+        int arrowColumn,
+        out int? exclusiveEndColumn)
     {
         var lexState = new CSharpLexState();
         var parenDepth = 0;
@@ -2093,11 +2184,13 @@ public static partial class SymbolExtractor
                         braceDepth--;
                         break;
                     case ';' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        exclusiveEndColumn = column + 1;
                         return i;
                 }
             }
         }
 
+        exclusiveEndColumn = null;
         return arrowLineIndex;
     }
 

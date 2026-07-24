@@ -2673,9 +2673,6 @@ public partial class DbReader
         return string.Equals(leftFolded, rightFolded, StringComparison.Ordinal);
     }
 
-    private static bool IsNonCallableImpactKind(string? kind) =>
-        kind is "namespace" or "import";
-
     private static bool IsPreciseImpactFallbackKind(string? kind)
     {
         return kind is "class" or "struct" or "interface";
