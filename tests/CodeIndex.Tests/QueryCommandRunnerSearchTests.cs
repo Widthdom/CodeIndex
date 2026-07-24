@@ -7360,6 +7360,8 @@ public partial class QueryCommandRunnerTests
             (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--count-by", "path", "--first-per-file" }, Expected: "recipe row-selection controls"),
             (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--format", "compact", "--summary-only", "--sample", "1" }, Expected: "recipe row-selection controls"),
             (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--per-file-limit", "1" }, Expected: "--per-file-limit is not supported with --recipe"),
+            (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--cursor", "0:1:1", "--sample", "1" }, Expected: "cannot be combined with --cursor"),
+            (Args: new[] { "--recipe", "risky-code/raw-diagnostic-echo", "--cursor", "0:1:1", "--first-per-file" }, Expected: "cannot be combined with --cursor"),
         };
 
         foreach (var testCase in cases)

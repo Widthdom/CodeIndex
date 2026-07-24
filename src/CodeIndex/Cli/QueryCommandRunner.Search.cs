@@ -413,6 +413,15 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.UsageError;
             }
             if ((options.FirstPerFile || options.SampleSize.HasValue)
+                && options.SearchCursor.HasValue)
+            {
+                WriteUsageError(
+                    "recipe row-selection controls cannot be combined with --cursor because raw recipe cursors cannot preserve selector state.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove --cursor and rerun selection from the beginning, or remove --first-per-file / --sample to resume from the cursor.");
+                return CommandExitCodes.UsageError;
+            }
+            if ((options.FirstPerFile || options.SampleSize.HasValue)
                 && (options.CountOnly
                     || options.GroupBy != null
                     || options.CountBy != null
