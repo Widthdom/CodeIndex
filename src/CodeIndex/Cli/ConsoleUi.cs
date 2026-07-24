@@ -161,7 +161,7 @@ public static class ConsoleUi
 
     private static readonly (string Command, string Note)[] CommandUsageNotes =
     [
-        ("index", "--rebuild deletes the existing index before a full rescan. When stdin is redirected, pass --yes to confirm this destructive operation; an interactive terminal prompts instead."),
+        ("index", "--rebuild deletes the existing index before a full rescan. Interactive terminals prompt unless --yes or --force bypasses confirmation; when stdin is redirected, either flag is required."),
         ("mcp", "--json is not supported; MCP requests and responses are JSON-RPC over the selected transport."),
         ("mcp", "stdio transport uses one UTF-8 JSON-RPC object per LF-delimited line, not LSP Content-Length framing; lifecycle diagnostics go to stderr."),
         ("mcp", "HTTP requires bearer authentication by default; --allow-unauthenticated-http is an explicit unsafe loopback-only opt-in."),
@@ -206,7 +206,7 @@ public static class ConsoleUi
         ("workspace-use", "Requires exactly one manifest member name or manifest-relative path; `default` selects the current directory without a manifest. The selection is persisted in the per-user cdidx configuration."),
         ("workspace-use", $"If {ActiveWorkspace.EnvironmentVariable} is set, environment configuration takes precedence over persisted active-workspace state."),
         ("workspace-use", "Example: `cdidx workspace use src/service --json`."),
-        ("workspace-current", "Reports the effective persisted active workspace without changing it."),
+        ("workspace-current", $"Reports the effective active workspace from {ActiveWorkspace.EnvironmentVariable} when set, otherwise the persisted selection, without changing it."),
         ("workspace-current", "Example: `cdidx workspace current --json`."),
         ("workspace-clear", $"Removes persisted active-workspace state. It refuses to run while {ActiveWorkspace.EnvironmentVariable} supplies the effective selection."),
         ("workspace-clear", "Example: `cdidx workspace clear --json`."),
@@ -247,11 +247,11 @@ public static class ConsoleUi
         ("suggestions-export", "Example: `cdidx suggestions export --format issue-drafts --open-issues github:owner/repo --issue-state open --output drafts.json`."),
         ("suggestions-add", "Writes one local draft to the selected suggestion store; normalized category, language, and description duplicates succeed without adding another record."),
         ("suggestions-add", "Example: `cdidx suggestions add \"Improve macro handling\" --category language_support --language rust --json`."),
-        ("suggestions-update", "Mutates only an editable local draft. Content edits and status transitions are separate forms and cannot be combined; submitted_pending_triage is managed by GitHub submission."),
+        ("suggestions-update", "Content edits mutate only an editable local draft. Status transitions are a separate form, may update records with upstream references according to lifecycle rules, and cannot be combined with content edits; submitted_pending_triage is managed by GitHub submission."),
         ("suggestions-update", "Example: `cdidx suggestions update <id> --status wont_fix --reason \"Not actionable\" --json`."),
         ("suggestions-delete", "Deletes only an editable local draft and accepts no query, export, or content-edit options."),
         ("suggestions-delete", "Example: `cdidx suggestions delete <id> --json`."),
-        ("export-ctags", "Writes a ctags file (or stdout when --output is omitted) without changing the index; generated files are excluded unless --include-generated is set."),
+        ("export-ctags", "Writes a ctags file without changing the index, defaulting to `tags` in the current directory when --output is omitted and replacing an existing destination; generated files are excluded unless --include-generated is set."),
         ("export-ctags", "Example: `cdidx export ctags --output tags --exclude-tests`."),
     ];
 

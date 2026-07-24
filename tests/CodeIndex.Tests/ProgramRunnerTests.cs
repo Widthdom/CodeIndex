@@ -283,6 +283,15 @@ public class ProgramRunnerTests
         var (exportExitCode, exportStdout, exportStderr) = CaptureConsole(() => ProgramRunner.Run(
             ["help", "suggestions", "export"],
             appVersion: "1.10.0"));
+        var (updateExitCode, updateStdout, updateStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["help", "suggestions", "update"],
+            appVersion: "1.10.0"));
+        var (workspaceExitCode, workspaceStdout, workspaceStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["help", "workspace", "current"],
+            appVersion: "1.10.0"));
+        var (ctagsExitCode, ctagsStdout, ctagsStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["help", "export", "ctags"],
+            appVersion: "1.10.0"));
 
         Assert.Equal(CommandExitCodes.Success, fullExitCode);
         Assert.Contains("--suppress-noise", fullStdout, StringComparison.Ordinal);
@@ -294,6 +303,7 @@ public class ProgramRunnerTests
         Assert.Contains("--rebuild [--yes]", indexStdout, StringComparison.Ordinal);
         Assert.Contains("--yes", indexStdout, StringComparison.Ordinal);
         Assert.Contains("stdin is redirected", indexStdout, StringComparison.Ordinal);
+        Assert.Contains("--force bypasses confirmation", indexStdout, StringComparison.Ordinal);
         Assert.Empty(indexStderr);
 
         Assert.Equal(CommandExitCodes.Success, exportExitCode);
@@ -303,6 +313,21 @@ public class ProgramRunnerTests
         Assert.Contains("CDIDX_GITHUB_TOKEN", exportStdout, StringComparison.Ordinal);
         Assert.Contains("export never submits or opens GitHub issues", exportStdout, StringComparison.Ordinal);
         Assert.Empty(exportStderr);
+
+        Assert.Equal(CommandExitCodes.Success, updateExitCode);
+        Assert.Contains("Content edits mutate only an editable local draft", updateStdout, StringComparison.Ordinal);
+        Assert.Contains("may update records with upstream references", updateStdout, StringComparison.Ordinal);
+        Assert.Empty(updateStderr);
+
+        Assert.Equal(CommandExitCodes.Success, workspaceExitCode);
+        Assert.Contains(ActiveWorkspace.EnvironmentVariable, workspaceStdout, StringComparison.Ordinal);
+        Assert.Contains("otherwise the persisted selection", workspaceStdout, StringComparison.Ordinal);
+        Assert.Empty(workspaceStderr);
+
+        Assert.Equal(CommandExitCodes.Success, ctagsExitCode);
+        Assert.Contains("defaulting to `tags` in the current directory", ctagsStdout, StringComparison.Ordinal);
+        Assert.Contains("replacing an existing destination", ctagsStdout, StringComparison.Ordinal);
+        Assert.Empty(ctagsStderr);
     }
 
     [Theory]
