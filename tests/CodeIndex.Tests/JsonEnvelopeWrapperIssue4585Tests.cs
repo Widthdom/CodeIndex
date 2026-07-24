@@ -174,6 +174,48 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
     }
 
     [Fact]
+    public void Definition_MissingBoundedJsonPreservesStructuredError_Issue4744()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_definition_missing_4744");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public sealed class App { }");
+
+            var cases = new[]
+            {
+                new[] { "definition", "MissingDefinitionIssue4744", "--db", dbPath, "--json-envelope", "--max-json-bytes", "800" },
+                new[] { "definition", "MissingDefinitionIssue4744", "--db", dbPath, "--fields", "file,line" },
+            };
+
+            foreach (var args in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                if (args.Contains("--max-json-bytes", StringComparer.Ordinal))
+                    Assert.True(Encoding.UTF8.GetByteCount(stdout) <= 800);
+
+                using var document = JsonDocument.Parse(stdout);
+                var metadata = document.RootElement.GetProperty("metadata");
+                var error = metadata.GetProperty("error");
+                Assert.Equal(CommandExitCodes.NotFound, metadata.GetProperty("exit_code").GetInt32());
+                Assert.Equal(0, metadata.GetProperty("total_count").GetInt32());
+                Assert.Equal(0, metadata.GetProperty("returned_count").GetInt32());
+                Assert.Equal(CommandErrorCodes.QueryNotFound, error.GetProperty("error_code").GetString());
+                Assert.Equal("not_found", error.GetProperty("category").GetString());
+                Assert.Empty(document.RootElement.GetProperty("results").EnumerateArray());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Impact_CollapsedPartialDefinitionsDoNotEmitUnusableCursor_Issue4585()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("bounded_impact_partial_cursor_4585");
