@@ -1109,6 +1109,12 @@ public static partial class ReferenceExtractor
             : null;
         var sassStylusPreparedInBlockComment = false;
         var sassStylusOriginalInBlockComment = false;
+        var shaderState = ShaderReferenceExtractor.CreateState(
+            language,
+            preparedLines,
+            symbols,
+            workspaceSymbols,
+            request.ReportDiagnostic);
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1471,6 +1477,20 @@ public static partial class ReferenceExtractor
                 }
 
                 return ResolveContainerForCall(column);
+            }
+
+            if (shaderState is not null)
+            {
+                ShaderReferenceExtractor.EmitLineReferences(
+                    shaderState,
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
 
             if (isJsxFile && (language is "javascript" or "typescript"))
@@ -2297,6 +2317,8 @@ public static partial class ReferenceExtractor
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
                     return false;
                 if (language == "rust" && RustReferenceExtractor.IsDeriveAttributeCallSite(preparedLine, normalizedName, callIndex))
+                    return false;
+                if (language == "wgsl" && name.StartsWith('@'))
                     return false;
                 if (language == "kotlin" && KotlinReferenceExtractor.IsInfixFunctionDeclarationSite(preparedLine, callIndex))
                     return false;

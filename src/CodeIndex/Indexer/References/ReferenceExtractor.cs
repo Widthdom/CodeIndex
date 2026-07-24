@@ -64,6 +64,8 @@ public static partial class ReferenceExtractor
         "reference_definition_lookup_line_name_budget_exceeded",
         "reference_definition_lookup_symbol_budget_exceeded",
         "reference_enclosing_type_candidate_budget_exceeded",
+        ShaderReferenceExtractor.LineNameBudgetDiagnosticKind,
+        ShaderReferenceExtractor.TrackedNameBudgetDiagnosticKind,
         "reference_swift_property_line_budget_exceeded",
         "reference_swift_property_line_name_budget_exceeded",
         "reference_swift_property_symbol_budget_exceeded",
@@ -212,6 +214,33 @@ public static partial class ReferenceExtractor
             "mutable", "noexcept", "operator", "override", "private", "protected", "public",
             "requires", "static", "template", "this", "typedef", "typename", "using", "virtual",
             "volatile",
+        },
+        // GPU-language metadata is declarative, even when its surface syntax uses parentheses.
+        // GPU 言語のメタデータは括弧を使う構文でも宣言であり、呼び出しではない。
+        ["cuda"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "alignas", "auto", "break", "case", "catch", "concept", "const", "constexpr",
+            "consteval", "constinit", "continue", "co_await", "co_return", "co_yield",
+            "decltype", "default", "delete", "explicit", "extern", "friend", "inline",
+            "mutable", "noexcept", "operator", "override", "private", "protected", "public",
+            "requires", "static", "template", "this", "typedef", "typename", "using", "virtual",
+            "volatile",
+            "__global__", "__device__", "__host__", "__shared__", "__constant__",
+            "__launch_bounds__", "__align__", "__device_builtin__",
+        },
+        ["glsl"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "layout",
+        },
+        ["hlsl"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "register", "packoffset", "numthreads", "domain", "partitioning",
+            "outputtopology", "outputcontrolpoints", "patchconstantfunc", "maxtessfactor",
+        },
+        ["metal"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "buffer", "texture", "sampler", "threadgroup", "stage_in",
+            "thread_position_in_grid", "threads_per_threadgroup",
         },
         ["go"] = new HashSet<string>(StringComparer.Ordinal)
         {

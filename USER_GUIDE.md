@@ -2419,8 +2419,8 @@ entries with the unsupported capability, an explanatory message, and
 | MATLAB / Prolog | classes/modules, functions/predicates, imports | none yet | `.m` / `.pl` are classified conservatively; declaration symbols are searchable, but use `search` for reference and graph questions. |
 | Cython | `cdef` / `cpdef` declarations, cimports, extern declarations | none yet | Cython native-extension declarations are searchable as symbols; use `search` for call/reference questions. |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | functions, types, methods, imports/modules | calls, constructors, macro invocations where supported, type references | C++ templates/macros and Rust macro expansion are not evaluated; Rust macro invocations are still reference edges. |
-| CUDA | C++-style functions/types plus CUDA kernel/device/host sub-kinds | none yet | CUDA kernel/device/host declarations are indexed as C++-style symbols with CUDA sub-kinds; use `search` for call/reference questions. |
-| GLSL / HLSL / Metal / WGSL | entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, uniforms/inputs/outputs | none yet | Shader entry points and resource declarations are searchable as symbols; use `search` for data-flow, binding compatibility, and call/reference questions. |
+| CUDA | C++-style functions/types plus CUDA kernel/device/host sub-kinds | calls and kernel launches, includes, workspace-backed user-defined type references, constant bindings, scoped kernel-parameter resource uses | CUDA references are bounded syntactic edges. Macro-generated launches, function pointers, and semantic data flow still require `search`. |
+| GLSL / HLSL / Metal / WGSL | entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, uniforms/inputs/outputs | entry-point/helper calls, includes where supported, workspace-backed user-defined type references, block/direct resource uses, binding metadata | Shader references are bounded syntactic edges. They do not validate binding compatibility or model semantic data flow; use `search` for those questions. |
 | Verilog / SystemVerilog / VHDL | modules, packages, interfaces, classes, functions/tasks/processes, types, signals/parameters | none yet | HDL declarations are available to `symbols`, `definition`, `outline`, and symbol-aware `search`; use plain `search` for netlist/reference questions. |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
 | Solution / application manifest | solution projects and manifest identity/settings | solution project references; application manifests are symbol-only | `.sln` project paths are graph edges for repository structure; use `symbols --lang app_manifest` for Windows manifest metadata. |
@@ -2428,6 +2428,11 @@ entries with the unsupported capability, an explanatory message, and
 | Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | headings, anchors, selectors, UI elements, generic XML element/attribute paths, schema types/messages where supported | links/assets/components, local anchors, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Generic non-XAML XML emits bounded structural symbols; use `search` for prose and generated markup. |
 | Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
 | Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
+
+CUDA, GLSL, HLSL, Metal, and WGSL report `reference_extraction: true` and
+`graph_queries: true` in `languages --json`. This readiness means the bounded,
+statically visible edges listed above are indexed; it is not a claim of compiler
+or driver-level semantic analysis.
 
 The graph commands surface `graph_supported` / `graph_support_reason` in JSON and
 MCP outputs when a language filter is provided. An empty unsupported-language
@@ -5559,8 +5564,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | MATLAB / Prolog | class/module、function/predicate、import | まだなし | `.m` / `.pl` は保守的に分類され、宣言 symbol は検索できます。reference / graph の調査には `search` を使ってください。 |
 | Cython | `cdef` / `cpdef` 宣言、cimport、extern 宣言 | まだなし | Cython の native extension 宣言はシンボルとして検索できます。call/reference の調査には `search` を使ってください。 |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | function、type、method、import/module | call、constructor、対応言語の macro invocation、type reference | C++ template/macro と Rust macro expansion は評価しません。Rust macro invocation 自体は reference edge です。 |
-| CUDA | C++ 風の function/type と CUDA kernel/device/host sub-kind | まだなし | CUDA の kernel / device / host 宣言は CUDA sub-kind 付きの C++ 風シンボルとして索引します。call/reference の調査には `search` を使ってください。 |
-| GLSL / HLSL / Metal / WGSL | entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output | まだなし | Shader entry point と resource 宣言はシンボルとして検索できます。data-flow、binding compatibility、call/reference の調査には `search` を使ってください。 |
+| CUDA | C++ 風の function/type と CUDA kernel/device/host sub-kind | call と kernel launch、include、workspace に基づくユーザー定義型参照、constant binding、scope 付き kernel parameter の resource 利用 | CUDA の参照は上限付きの構文エッジです。macro 生成 launch、function pointer、意味的 data flow には引き続き `search` を使ってください。 |
+| GLSL / HLSL / Metal / WGSL | entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output | entry point/helper の call、対応言語の include、workspace に基づくユーザー定義型参照、block / direct resource 利用、binding metadata | Shader の参照は上限付きの構文エッジです。binding compatibility の検証や意味的 data flow の modeling は行わないため、それらには `search` を使ってください。 |
 | Verilog / SystemVerilog / VHDL | module、package、interface、class、function/task/process、type、signal/parameter | まだなし | HDL 宣言は `symbols`、`definition`、`outline`、symbol-aware `search` で使えます。netlist / reference の調査には通常の `search` を使ってください。 |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
 | ソリューション / アプリケーションマニフェスト | solution project、manifest identity / setting | `.sln` の project reference。manifest は symbol-only | `.sln` の project path はリポジトリ構造の graph edge です。Windows manifest metadata は `symbols --lang app_manifest` で確認できます。 |
@@ -5568,6 +5573,11 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | heading、anchor、selector、UI element、汎用 XML の要素・属性パス、対応 schema type/message | link/asset/component、local anchor、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | 汎用の非 XAML XML は上限付きの構造シンボルを出力します。prose や generated markup には `search` を使ってください。 |
 | Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
 | その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
+
+CUDA、GLSL、HLSL、Metal、WGSL は `languages --json` で
+`reference_extraction: true` と `graph_queries: true` を返します。この readiness は上記の
+上限付きで静的に確認できるエッジを索引することを意味し、compiler / driver レベルの
+意味解析を保証するものではありません。
 
 Language filter を指定した graph commands は、JSON / MCP 出力に
 `graph_supported` / `graph_support_reason` を含めます。Unsupported language の空結果は
