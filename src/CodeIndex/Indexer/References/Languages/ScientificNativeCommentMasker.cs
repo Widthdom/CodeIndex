@@ -235,30 +235,38 @@ internal static class ScientificNativeCommentMasker
 
     internal static string MaskNimRawStringLiterals(string line)
     {
-        if (!line.Contains("r\"", StringComparison.Ordinal))
+        if (!line.Contains('"'))
             return line;
 
         char[]? chars = null;
-        for (var cursor = 0; cursor + 1 < line.Length; cursor++)
+        for (var cursor = 0; cursor < line.Length;)
         {
-            if (line[cursor] != 'r'
-                || line[cursor + 1] != '"'
+            if (!(char.IsLetter(line[cursor]) || line[cursor] == '_')
                 || (cursor > 0 && IsIdentifierChar(line[cursor - 1])))
             {
+                cursor++;
                 continue;
             }
+
+            var prefixStart = cursor;
+            while (cursor < line.Length && IsIdentifierChar(line[cursor]))
+                cursor++;
+            if (cursor >= line.Length || line[cursor] != '"')
+                continue;
 
             chars ??= line.ToCharArray();
-            if (cursor + 3 < line.Length
-                && line[cursor + 2] == '"'
-                && line[cursor + 3] == '"')
+            for (var prefixIndex = prefixStart; prefixIndex < cursor; prefixIndex++)
+                chars[prefixIndex] = ' ';
+
+            if (cursor + 2 < line.Length
+                && line[cursor + 1] == '"'
+                && line[cursor + 2] == '"')
             {
                 // Leave the triple-quote delimiter for the stateful multiline masker.
-                chars[cursor] = ' ';
+                cursor += 3;
                 continue;
             }
 
-            chars[cursor++] = ' ';
             chars[cursor++] = ' ';
             while (cursor < line.Length)
             {
@@ -275,8 +283,6 @@ internal static class ScientificNativeCommentMasker
 
                 break;
             }
-
-            cursor--;
         }
 
         return chars is null ? line : new string(chars);

@@ -358,6 +358,27 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DTemplateInvocationsAcceptLiteralAndNestedArguments_Issue4738()
+    {
+        const string content = """
+            void run() {
+                literal!42();
+                nested!(Tuple!(int))();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "d", content);
+
+        var references = ReferenceExtractor.Extract(1, "d", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "literal" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "nested" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "Tuple" or "int" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_DManyTemplateInvocationsSuppressArgumentCallsInOnePass_Issue4738()
     {
         var content = "void run() { " + string.Join(' ', Enumerable.Repeat("helper!Type();", 512)) + " }";
@@ -409,6 +430,24 @@ public partial class ReferenceExtractorTests
         {
             Assert.Equal("Run", Assert.Single(references, reference =>
                 reference.SymbolName == name && reference.ReferenceKind == "call").ContainerName);
+        }
+    }
+
+    [Fact]
+    public void Extract_AdaInlineStatementBoundariesPreserveBareCalls_Issue4738()
+    {
+        const string content = """
+            procedure Run is begin First; end Run;
+            procedure Check is begin if Ready then Second; else Third; end if; end Check;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "ada", content);
+
+        var references = ReferenceExtractor.Extract(1, "ada", content, symbols);
+
+        foreach (var name in new[] { "First", "Second", "Third" })
+        {
+            Assert.Single(references, reference =>
+                reference.SymbolName == name && reference.ReferenceKind == "call");
         }
     }
 
@@ -966,6 +1005,23 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_NimGeneralizedRawStringsUseLiteralBackslashRules_Issue4738()
+    {
+        const string content = """
+            proc run() =
+              let text = foo"notACall()\"
+              helper()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "nim", content);
+
+        var references = ReferenceExtractor.Extract(1, "nim", content, symbols);
+
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "notACall");
+    }
+
+    [Fact]
     public void Extract_NimRawStringBeforeBlockCommentDoesNotExposeCommentCode_Issue4738()
     {
         const string content = """
@@ -1027,6 +1083,23 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "native.h" && reference.ReferenceKind == "import");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "phantom.pxi");
+    }
+
+    [Fact]
+    public void Extract_CythonOrdinaryFromImportsEmitModuleDependencies_Issue4738()
+    {
+        const string content = """
+            from helpers import thing
+            from .local import other
+            """;
+        var symbols = SymbolExtractor.Extract(1, "cython", content);
+
+        var references = ReferenceExtractor.Extract(1, "cython", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "helpers" && reference.ReferenceKind == "import");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "local" && reference.ReferenceKind == "import");
     }
 
     [Fact]
