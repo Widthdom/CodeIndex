@@ -4129,7 +4129,11 @@ exit 7
         env.Set("XDG_STATE_HOME", null);
         env.Set("XDG_CACHE_HOME", null);
         env.Set("XDG_RUNTIME_DIR", null);
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var home = OperatingSystem.IsWindows()
+            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            : Environment.GetEnvironmentVariable("HOME");
+        if (string.IsNullOrWhiteSpace(home))
+            home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         var resolved = GlobalToolLog.ResolveLogDirectoryForReport();
 
