@@ -176,7 +176,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Batch `--json-summary` coverage keeps side-effect-free dispatch plus successful JSON, single-row NDJSON, and JSON-looking text projection in one seeded fixture when the assertions stay distinct; include case-insensitive format values, command-specific JSON formats, and alias-injected JSON defaults so batch classification cannot drift from child parsers. Serialized-output exhaustion remains a separate boundary fixture because of its large escaped payload. Assert `result` / `results` versus raw `stdout` presence explicitly, compare `output_chars` with the actual captured stream length, and cover repeated malformed lines up to the input cap so neither syntax sniffing nor envelope overhead can bypass the transport bounds.
   Argument-validation variants that only differ by invalid scalar input share one database fixture and iterate within a fact when no per-case state or discovery identity is required.
   Positional `files` glob coverage shares one indexed-file fixture and iterates `*`, `?`, and recursive `**` patterns in a fact, matching the exact tokens that a quoted shell argument passes to the CLI.
-  Excerpt focus-column validation follows this rule for zero and non-numeric values, reusing one indexed Markdown fixture.
+  Excerpt focus coverage reuses one indexed fixture for line-only leading-window behavior, the focus-length dependency, and focus-column range validation; zero and non-numeric focus-column values share one indexed Markdown fixture.
   Inspect path-line exact/enclosing-symbol cases reuse one indexed source fixture and iterate read-only line queries within a fact.
   Definition and symbols exact-mode conflict validation share one empty database and a cross-command flag-pair table.
   Symbols compact flag/alias and summary-only JSON envelopes share one editor-format fixture.
@@ -1010,7 +1010,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   batch `--json-summary` coverage は、assertion を明確に保てる場合、副作用なし dispatch と成功時の JSON / 1 row NDJSON / JSON に見える text projection を1つの seeded fixture で共有し、case-insensitive な format 値、command 固有の JSON format、alias が内部追加する JSON default も含めて child parser と batch classification の drift を防いでください。serialized output の枯渇は escape を多く含む大きな payload の境界 fixture として分離します。test 側で `result` / `results` と raw `stdout` の有無を明示し、`output_chars` を実際に捕捉した stream 長と比較し、input cap までの malformed line 反復も検証して、syntax sniffing や envelope overhead が transport 上限を迂回しないようにしてください。
   invalid scalar input だけが異なる argument-validation variant は、case ごとの state や discovery identity が不要なら1つの database fixture を共有し、fact 内で反復してください。
   `files` の positional glob coverage は1つの indexed-file fixture を共有し、quote された shell 引数が CLI に渡す token と同じ `*`、`?`、recursive `**` pattern を fact 内で反復してください。
-  excerpt の focus-column validation も zero と non-numeric value にこの規則を適用し、1つの indexed Markdown fixture を再利用してください。
+  excerpt の focus coverage は、line-only 時の先頭側 window、focus-length の依存関係、focus-column の範囲検証を1つの indexed fixture で共有してください。focus-column の zero / non-numeric value も1つの indexed Markdown fixture を再利用してください。
   inspect path-line の exact/enclosing-symbol case は1つの indexed source fixture を再利用し、read-only line query を fact 内で反復してください。
   definition と symbols の exact-mode conflict validation は1つの空databaseとcross-command flag-pair tableを共有してください。
   symbols compact flag/aliasとsummary-only JSON envelopeは1つのeditor-format fixtureを共有してください。

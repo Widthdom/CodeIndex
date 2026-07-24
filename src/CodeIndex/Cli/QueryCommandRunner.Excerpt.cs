@@ -37,15 +37,10 @@ public static partial class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("excerpt", options))
             return CommandExitCodes.UsageError;
         var focusLengthSpecified = cmdArgs.Any(arg => arg == "--focus-length" || arg.StartsWith("--focus-length=", StringComparison.Ordinal));
-        if (options.FocusColumn == null && (options.FocusLine.HasValue || focusLengthSpecified))
+        if (options.FocusColumn == null && focusLengthSpecified)
         {
-            var focusError = options.FocusLine.HasValue && focusLengthSpecified
-                ? "--focus-line and --focus-length require --focus-column."
-                : options.FocusLine.HasValue
-                    ? "--focus-line requires --focus-column."
-                    : "--focus-length requires --focus-column.";
             WriteValidationError(
-                focusError,
+                "--focus-length requires --focus-column.",
                 "Add `--focus-column <n>` so excerpt knows which token to keep visible inside the clamped line.");
             return CommandExitCodes.UsageError;
         }
