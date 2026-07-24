@@ -4720,6 +4720,48 @@ public class DatabaseTests : IDisposable
         Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
     }
 
+    [Theory]
+    [InlineData("crystal", 2)]
+    [InlineData("groovy", 2)]
+    [InlineData("tcl", 2)]
+    [InlineData("prolog", 1)]
+    [InlineData("ambiguous_pl", 1)]
+    public void GetStatus_DegradesPreGraphLanguageContractsUntilRefresh_Issue4746(
+        string language,
+        int previousContractVersion)
+    {
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/legacy-status-{language}.txt",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var versionKey = DbContext.GetSymbolExtractorVersionMetaKey(language);
+        _writer.SetMeta(
+            versionKey,
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+
+        var staleStatus = new DbReader(_db.Connection).GetStatus();
+
+        Assert.False(staleStatus.ReferenceGraphComplete);
+        Assert.False(staleStatus.GraphDataCurrent);
+        Assert.Contains(
+            DbReader.DynamicReferenceGraphContractStaleReason,
+            staleStatus.ReferenceGraphIncompleteReasons ?? []);
+
+        _writer.SetMeta(
+            versionKey,
+            SymbolExtractor.GetContractVersion(language).ToString(CultureInfo.InvariantCulture));
+
+        var refreshedStatus = new DbReader(_db.Connection).GetStatus();
+
+        Assert.DoesNotContain(
+            DbReader.DynamicReferenceGraphContractStaleReason,
+            refreshedStatus.ReferenceGraphIncompleteReasons ?? []);
+    }
+
     [Fact]
     public void GetUnchangedFileId_MatchesByChecksumWhenTimestampDiffers()
     {

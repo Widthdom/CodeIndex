@@ -192,6 +192,7 @@ public static partial class ReferenceExtractor
         var dynamicDeclarativeState = DynamicDeclarativeReferenceExtractor.CreateState(
             language,
             preparedLines,
+            referenceStructuralLines,
             symbols);
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
             ? BuildCSharpNamespaceScopes(symbols)
@@ -1449,7 +1450,7 @@ public static partial class ReferenceExtractor
                     }
                 }
 
-                return dynamicDeclarativeState?.ResolveContainer(lineNumber, container) ?? container;
+                return dynamicDeclarativeState?.ResolveContainer(lineNumber, column, container) ?? container;
             }
 
             SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
@@ -2493,6 +2494,10 @@ public static partial class ReferenceExtractor
 
             HashSet<int>? matchedCallIndices = null;
             HashSet<int> GetMatchedCallIndices() => matchedCallIndices ??= [];
+            var callScanLine = dynamicDeclarativeState?.GetCallScanLine(
+                language,
+                lineNumber,
+                preparedLine) ?? preparedLine;
 
             if (language is "commonlisp" or "racket")
             {
@@ -2538,7 +2543,7 @@ public static partial class ReferenceExtractor
             }
             else
             {
-                foreach (Match match in CallRegex.Matches(preparedLine))
+                foreach (Match match in CallRegex.Matches(callScanLine))
                 {
                     var name = match.Groups["name"].Value;
                     var callIndex = match.Groups["name"].Index;
@@ -2595,7 +2600,7 @@ public static partial class ReferenceExtractor
                 else if (language is "perl" or "ambiguous_pl")
                 {
                     PerlReferenceExtractor.EmitAdditionalReferences(
-                        preparedLine,
+                        language == "ambiguous_pl" ? callScanLine : preparedLine,
                         originalLine,
                         references,
                         seen,
@@ -2610,7 +2615,7 @@ public static partial class ReferenceExtractor
                 {
                     DynamicDeclarativeReferenceExtractor.EmitAdditionalReferences(
                         language,
-                        preparedLine,
+                        callScanLine,
                         referenceStructuralLines[i],
                         dynamicDeclarativeState,
                         references,

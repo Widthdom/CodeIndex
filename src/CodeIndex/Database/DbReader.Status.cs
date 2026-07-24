@@ -4,6 +4,18 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    public const string DynamicReferenceGraphContractStaleReason =
+        "dynamic_reference_graph_contract_stale";
+
+    private static readonly string[] DynamicReferenceGraphContractLanguages =
+    [
+        "crystal",
+        "groovy",
+        "tcl",
+        "prolog",
+        "ambiguous_pl",
+    ];
+
     /// <summary>
     /// Get database statistics.
     /// データベースの統計情報を取得する。
@@ -142,8 +154,20 @@ public partial class DbReader
         var indexComplete = !batchInProgress
             && !string.Equals(indexCompleteness, "incomplete", StringComparison.OrdinalIgnoreCase);
         var referenceExtractionCapHits = GetReferenceExtractionCapHits();
+        var dynamicReferenceGraphContractsCurrent =
+            AreDynamicReferenceGraphContractsCurrent(langs);
+        var referenceGraphIncompleteReasons =
+            referenceExtractionCapHits.Reasons?.ToList() ?? [];
+        if (!dynamicReferenceGraphContractsCurrent
+            && !referenceGraphIncompleteReasons.Contains(
+                DynamicReferenceGraphContractStaleReason,
+                StringComparer.Ordinal))
+        {
+            referenceGraphIncompleteReasons.Add(DynamicReferenceGraphContractStaleReason);
+        }
         var referenceGraphComplete = referenceExtractionCapHits.StateAvailable
-            && referenceExtractionCapHits.HitCount == 0;
+            && referenceExtractionCapHits.HitCount == 0
+            && dynamicReferenceGraphContractsCurrent;
         if (batchInProgress)
         {
             indexIncompleteReasons ??= [];
@@ -176,7 +200,9 @@ public partial class DbReader
             GraphDataCurrent = _hasReferencesTable && indexComplete && referenceGraphComplete,
             ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
             ReferenceGraphComplete = referenceGraphComplete,
-            ReferenceGraphIncompleteReasons = referenceGraphComplete ? null : referenceExtractionCapHits.Reasons,
+            ReferenceGraphIncompleteReasons = referenceGraphComplete
+                ? null
+                : referenceGraphIncompleteReasons,
             ReferenceExtractionCapHits = referenceExtractionCapHits,
             IssuesTableAvailable = _hasIssuesPhysicalTable,
             FileIssuesDataCurrent = _hasIssuesTable,
@@ -243,6 +269,25 @@ public partial class DbReader
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
         txn.Commit();
         return result;
+    }
+
+    private bool AreDynamicReferenceGraphContractsCurrent(
+        IReadOnlyDictionary<string, long> indexedLanguages)
+    {
+        foreach (var language in DynamicReferenceGraphContractLanguages)
+        {
+            if (!indexedLanguages.ContainsKey(language))
+                continue;
+
+            var storedVersion = TryGetMetaStringInternal(
+                DbContext.GetSymbolExtractorVersionMetaKey(language));
+            var currentVersion = SymbolExtractor.GetContractVersion(language).ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+            if (!string.Equals(storedVersion, currentVersion, StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
     }
 
     private StatusPreparedCommandCache? GetPreparedCommandCacheStatus()

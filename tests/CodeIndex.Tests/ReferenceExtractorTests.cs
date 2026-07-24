@@ -1202,6 +1202,7 @@ public partial class ReferenceExtractorTests
             TEXT
               regex = /ready?(value)/
               literal = %q(save!(value))
+              value %= 2
               ready? value
               ready?(value)
               save! value
@@ -1241,6 +1242,7 @@ public partial class ReferenceExtractorTests
             """
                 def slashy = /helper()/
                 def dollarSlashy = $/helper()/$
+                def returned = { return /helper()/ }
                 fake 1
                 helper()
             }
@@ -1268,12 +1270,16 @@ public partial class ReferenceExtractorTests
             }
             proc multiline {} {
                 set value 1 ;# [helper]
+                set color #fff; helper
+                set quoted "[helper]"
+                set braced {[helper]}
                 helper
             }
             proc split {value}
             {
                 helper
             }
+            proc sameLine {} { helper }; helper
             """;
 
         var (_, references) = ExtractSymbolsAndReferences("tcl", content);
@@ -1281,9 +1287,14 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(references, "call", "run", "helper");
         AssertReferencesContain(references, "call", "multiline", "helper");
         AssertReferencesContain(references, "call", "split", "helper");
-        Assert.Equal(3, references.Count(reference =>
+        AssertReferencesContain(references, "call", "sameLine", "helper");
+        Assert.Equal(7, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"
+            && reference.ContainerName == null);
     }
 
     [Fact]
@@ -1296,6 +1307,8 @@ public partial class ReferenceExtractorTests
                 helper.
             quoted('value.') :-
                 helper.
+            bar(_).
+            nested(bar(X)).
             % helper().
             /*
             helper().
@@ -1314,7 +1327,7 @@ public partial class ReferenceExtractorTests
             && reference.SymbolName == "helper"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName == "threshold");
+            && reference.SymbolName is "threshold" or "bar");
     }
 
     [Fact]
@@ -1327,6 +1340,7 @@ public partial class ReferenceExtractorTests
             clp_entry(X) :- X #= 1, helper.
             # helper();
             % helper().
+            %helper().
             =pod
             helper();
             =cut

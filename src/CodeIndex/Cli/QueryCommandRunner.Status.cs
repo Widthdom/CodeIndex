@@ -546,11 +546,20 @@ public static partial class QueryCommandRunner
     }
 
     private static string GetReferenceGraphDegradationRootCause(StatusResult status)
-        => status.ReferenceGraphIncompleteReasons?.Contains(
-                DbReader.ReferenceExtractionCapStateUnavailableReason,
-                StringComparer.Ordinal) == true
-            ? DegradationReasonCodes.ReferenceExtractionCapStateUnavailable
-            : DegradationReasonCodes.ReferenceGraphIncomplete;
+    {
+        if (status.ReferenceGraphIncompleteReasons?.Contains(
+                DbReader.DynamicReferenceGraphContractStaleReason,
+                StringComparer.Ordinal) == true)
+        {
+            return DegradationReasonCodes.DynamicReferenceGraphContractStale;
+        }
+
+        return status.ReferenceGraphIncompleteReasons?.Contains(
+                    DbReader.ReferenceExtractionCapStateUnavailableReason,
+                    StringComparer.Ordinal) == true
+                ? DegradationReasonCodes.ReferenceExtractionCapStateUnavailable
+                : DegradationReasonCodes.ReferenceGraphIncomplete;
+    }
 
     private static StatusReadinessDegradation BuildStatusReadinessDegradation(string field, string rootCause, QueryCommandOptions options, StatusResult status)
     {
@@ -672,9 +681,7 @@ public static partial class QueryCommandRunner
                     options,
                     failure.Name,
                     rebuild: false,
-                    GetReferenceGraphDegradationRootCause(status) == DegradationReasonCodes.ReferenceExtractionCapStateUnavailable
-                        ? "Refresh indexing to populate current per-file issue state before trusting reference-graph completeness."
-                        : "Reduce or exclude the cap-hitting generated/pathological source before rerunning indexing."),
+                    GetReferenceGraphRepairSafetyNote(status)),
                 "graph_table_available" or "issues_table_available" or "file_issues_data_current"
                     or "sql_graph_contract_ready" or "csharp_symbol_name_ready" or "csharp_metadata_target_ready"
                     => BuildIndexRepairCommand(
@@ -699,6 +706,17 @@ public static partial class QueryCommandRunner
 
         return commands.Count == 0 ? null : commands;
     }
+
+    private static string GetReferenceGraphRepairSafetyNote(StatusResult status)
+        => GetReferenceGraphDegradationRootCause(status) switch
+        {
+            DegradationReasonCodes.DynamicReferenceGraphContractStale =>
+                "Refresh indexing to rewrite stale dynamic-language graph rows and extractor-version stamps.",
+            DegradationReasonCodes.ReferenceExtractionCapStateUnavailable =>
+                "Refresh indexing to populate current per-file issue state before trusting reference-graph completeness.",
+            _ =>
+                "Reduce or exclude the cap-hitting generated/pathological source before rerunning indexing.",
+        };
 
     private static StatusRepairCommand BuildIndexRepairCommand(
         StatusResult status,

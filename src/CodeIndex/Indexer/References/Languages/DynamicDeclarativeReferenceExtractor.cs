@@ -11,19 +11,46 @@ internal static class DynamicDeclarativeReferenceExtractor
         public ExtractionState(
             HashSet<string> callableNames,
             IReadOnlyDictionary<int, SymbolRecord> containersByLine,
-            IReadOnlyDictionary<int, IReadOnlyList<int>> tclScriptBodyColumnsByLine)
+            IReadOnlyList<TclContainerScope> tclContainerScopes,
+            IReadOnlyList<string>? tclCallLines)
         {
             CallableNames = callableNames;
             ContainersByLine = containersByLine;
-            TclScriptBodyColumnsByLine = tclScriptBodyColumnsByLine;
+            TclContainerScopes = tclContainerScopes;
+            TclCallLines = tclCallLines;
         }
 
         public HashSet<string> CallableNames { get; }
         public IReadOnlyDictionary<int, SymbolRecord> ContainersByLine { get; }
-        public IReadOnlyDictionary<int, IReadOnlyList<int>> TclScriptBodyColumnsByLine { get; }
+        private IReadOnlyList<TclContainerScope> TclContainerScopes { get; }
+        private IReadOnlyList<string>? TclCallLines { get; }
 
-        public SymbolRecord? ResolveContainer(int lineNumber, SymbolRecord? fallback)
-            => ContainersByLine.TryGetValue(lineNumber, out var container) ? container : fallback;
+        public SymbolRecord? ResolveContainer(int lineNumber, int column, SymbolRecord? fallback)
+        {
+            for (var scopeIndex = TclContainerScopes.Count - 1; scopeIndex >= 0; scopeIndex--)
+            {
+                var scope = TclContainerScopes[scopeIndex];
+                if (scope.Contains(lineNumber, column))
+                    return scope.Symbol;
+            }
+
+            return ContainersByLine.TryGetValue(lineNumber, out var container) ? container : fallback;
+        }
+
+        public string GetCallScanLine(string language, int lineNumber, string preparedLine)
+        {
+            if (language == "tcl"
+                && TclCallLines != null
+                && lineNumber > 0
+                && lineNumber <= TclCallLines.Count)
+            {
+                return TclCallLines[lineNumber - 1];
+            }
+
+            var isClauseContinuation = ContainersByLine.TryGetValue(lineNumber, out var container)
+                && container.StartLine < lineNumber;
+            return PreparePrologCallScanLine(language, preparedLine, isClauseContinuation);
+        }
     }
 
     private static readonly Regex TclProcRegex = new(
@@ -63,16 +90,47 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"<<-\s*['""]?(?<delimiter>[A-Za-z_]\w*)['""]?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private readonly record struct TclContainerScope(
+    internal readonly record struct TclContainerScope(
         SymbolRecord Symbol,
-        int StartLine,
-        int EndLine,
         int BodyStartLine,
-        int BodyStartColumn);
+        int BodyStartColumn,
+        int BodyEndLine,
+        int BodyEndColumn)
+    {
+        public bool Contains(int lineNumber, int column)
+        {
+            if (lineNumber < BodyStartLine || lineNumber > BodyEndLine)
+                return false;
+            if (BodyStartLine == BodyEndLine)
+                return column > BodyStartColumn && column < BodyEndColumn;
+            if (lineNumber == BodyStartLine)
+                return column > BodyStartColumn;
+            if (lineNumber == BodyEndLine)
+                return column < BodyEndColumn;
+            return true;
+        }
+    }
 
     private readonly record struct TclBraceEnd(
         int Line,
         int Column);
+
+    private enum TclLexicalFrameKind
+    {
+        Script,
+        Quote,
+        BracedWord,
+    }
+
+    private sealed class TclLexicalFrame(
+        TclLexicalFrameKind kind,
+        char terminator = '\0')
+    {
+        public TclLexicalFrameKind Kind { get; } = kind;
+        public char Terminator { get; } = terminator;
+        public bool CommandStart { get; set; } = true;
+        public bool WordStart { get; set; } = true;
+    }
 
     public static string[] MaskNonCodeLines(string language, IReadOnlyList<string> lines)
     {
@@ -278,7 +336,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                     break;
                 }
 
-                if ((language is "crystal" or "tcl") && ch == '#')
+                if (language == "crystal" && ch == '#')
                 {
                     FillWithSpaces(buffer, column);
                     break;
@@ -364,6 +422,7 @@ internal static class DynamicDeclarativeReferenceExtractor
     public static ExtractionState? CreateState(
         string language,
         IReadOnlyList<string> preparedLines,
+        IReadOnlyList<string> structuralLines,
         IReadOnlyList<SymbolRecord> symbols)
     {
         if (language is not ("crystal" or "groovy" or "tcl" or "prolog" or "ambiguous_pl"))
@@ -377,20 +436,26 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
 
         var containersByLine = new Dictionary<int, SymbolRecord>();
-        var tclScriptBodyColumnsByLine = new Dictionary<int, IReadOnlyList<int>>();
+        var tclContainerScopes = new List<TclContainerScope>();
+        string[]? tclCallLines = null;
         if (language == "tcl")
+        {
+            var tclScriptBodyOpenings = new HashSet<long>();
             AddTclContainers(
-                preparedLines,
+                structuralLines,
                 symbols,
-                containersByLine,
-                tclScriptBodyColumnsByLine);
+                tclContainerScopes,
+                tclScriptBodyOpenings);
+            tclCallLines = BuildTclCallLines(structuralLines, tclScriptBodyOpenings);
+        }
         else if (language is "prolog" or "ambiguous_pl")
             AddPrologContainers(preparedLines, symbols, containersByLine);
 
         return new ExtractionState(
             callableNames,
             containersByLine,
-            tclScriptBodyColumnsByLine);
+            tclContainerScopes,
+            tclCallLines);
     }
 
     public static void EmitAdditionalReferences(
@@ -464,23 +529,6 @@ internal static class DynamicDeclarativeReferenceExtractor
             addCallLikeReference(nameGroup.Value, nameGroup.Index);
         }
 
-        if (language == "tcl"
-            && state.TclScriptBodyColumnsByLine.TryGetValue(lineNumber, out var bodyColumns))
-        {
-            foreach (var bodyColumn in bodyColumns)
-            {
-                if (bodyColumn >= preparedLine.Length)
-                    continue;
-
-                var bodyLine = preparedLine[bodyColumn..];
-                foreach (Match match in BoundedRegex.EnumerateMatches(TclCommandRegex, bodyLine))
-                {
-                    var nameGroup = match.Groups["name"];
-                    if (state.CallableNames.Contains(nameGroup.Value))
-                        addCallLikeReference(nameGroup.Value, bodyColumn + nameGroup.Index);
-                }
-            }
-        }
     }
 
     private static int SkipQuotedToken(string line, int startColumn, char delimiter)
@@ -530,12 +578,32 @@ internal static class DynamicDeclarativeReferenceExtractor
 
     private static bool IsPerlHashSigil(string line, int column)
     {
-        if (column + 1 >= line.Length)
+        if (column + 1 >= line.Length
+            || (line[column + 1] != '{'
+                && line[column + 1] != '_'
+                && !char.IsLetter(line[column + 1])))
+        {
             return false;
+        }
 
-        return line[column + 1] == '{'
-            || line[column + 1] == '_'
-            || char.IsLetter(line[column + 1]);
+        var previousColumn = column - 1;
+        while (previousColumn >= 0 && char.IsWhiteSpace(line[previousColumn]))
+            previousColumn--;
+        if (previousColumn >= 0)
+            return true;
+
+        var tokenEnd = column + 1;
+        if (line[tokenEnd] == '{')
+            return true;
+        while (tokenEnd < line.Length
+            && (char.IsLetterOrDigit(line[tokenEnd]) || line[tokenEnd] == '_'))
+        {
+            tokenEnd++;
+        }
+        while (tokenEnd < line.Length && char.IsWhiteSpace(line[tokenEnd]))
+            tokenEnd++;
+
+        return tokenEnd >= line.Length || line[tokenEnd] is '=' or ';' or '{' or '[' or ',';
     }
 
     private static bool IsLikelySlashyLiteralStart(string line, int column)
@@ -550,8 +618,26 @@ internal static class DynamicDeclarativeReferenceExtractor
         if (previousColumn < 0)
             return true;
 
-        return line[previousColumn] is '=' or '(' or '[' or '{' or ',' or ':' or ';'
-            or '!' or '&' or '|' or '?' or '+' or '-' or '*' or '%';
+        if (line[previousColumn] is '=' or '(' or '[' or '{' or ',' or ':' or ';'
+            or '!' or '&' or '|' or '?' or '+' or '-' or '*' or '%' or '~')
+        {
+            return true;
+        }
+
+        var tokenEnd = previousColumn + 1;
+        while (previousColumn >= 0
+            && (char.IsLetterOrDigit(line[previousColumn]) || line[previousColumn] == '_'))
+        {
+            previousColumn--;
+        }
+
+        var token = line.AsSpan(previousColumn + 1, tokenEnd - previousColumn - 1);
+        return token.SequenceEqual("return")
+            || token.SequenceEqual("case")
+            || token.SequenceEqual("throw")
+            || token.SequenceEqual("assert")
+            || token.SequenceEqual("in")
+            || token.SequenceEqual("when");
     }
 
     private static bool TryBeginCrystalPercentLiteral(
@@ -568,11 +654,13 @@ internal static class DynamicDeclarativeReferenceExtractor
             return false;
 
         var delimiterColumn = column + 1;
-        if (line[delimiterColumn] is 'q' or 'Q' or 'w' or 'W' or 'i' or 'I' or 'x' or 'r')
+        var hasTypePrefix = line[delimiterColumn] is 'q' or 'Q' or 'w' or 'W' or 'i' or 'I' or 'x' or 'r';
+        if (hasTypePrefix)
             delimiterColumn++;
         if (delimiterColumn >= line.Length
             || char.IsLetterOrDigit(line[delimiterColumn])
-            || char.IsWhiteSpace(line[delimiterColumn]))
+            || char.IsWhiteSpace(line[delimiterColumn])
+            || (!hasTypePrefix && line[delimiterColumn] is not ('(' or '[' or '{' or '<')))
         {
             return false;
         }
@@ -587,6 +675,75 @@ internal static class DynamicDeclarativeReferenceExtractor
             _ => openingDelimiter,
         };
         contentColumn = delimiterColumn + 1;
+        return true;
+    }
+
+    private static string PreparePrologCallScanLine(
+        string language,
+        string line,
+        bool isClauseContinuation)
+    {
+        if (language is not ("prolog" or "ambiguous_pl") || isClauseContinuation)
+            return line;
+
+        var firstColumn = 0;
+        while (firstColumn < line.Length && char.IsWhiteSpace(line[firstColumn]))
+            firstColumn++;
+        if (firstColumn >= line.Length
+            || !char.IsLower(line[firstColumn])
+            || line.AsSpan(firstColumn).StartsWith(":-", StringComparison.Ordinal))
+        {
+            return line;
+        }
+
+        var parenthesisDepth = 0;
+        for (var column = firstColumn; column < line.Length; column++)
+        {
+            var ch = line[column];
+            if (ch is '\'' or '"')
+            {
+                column = SkipQuotedToken(line, column, ch) - 1;
+                continue;
+            }
+            if (ch == '(')
+            {
+                parenthesisDepth++;
+                continue;
+            }
+            if (ch == ')' && parenthesisDepth > 0)
+            {
+                parenthesisDepth--;
+                continue;
+            }
+            if (parenthesisDepth != 0)
+                continue;
+
+            var separatorLength = line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal)
+                ? 3
+                : line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal)
+                    ? 2
+                    : 0;
+            if (separatorLength > 0)
+            {
+                var masked = line.ToCharArray();
+                FillWithSpaces(masked, 0, column);
+                return new string(masked);
+            }
+
+            if (ch == '.' && IsOnlyWhitespaceAfter(line, column + 1))
+                return new string(' ', line.Length);
+        }
+
+        return line;
+    }
+
+    private static bool IsOnlyWhitespaceAfter(string line, int startColumn)
+    {
+        for (var column = startColumn; column < line.Length; column++)
+        {
+            if (!char.IsWhiteSpace(line[column]))
+                return false;
+        }
         return true;
     }
 
@@ -647,11 +804,10 @@ internal static class DynamicDeclarativeReferenceExtractor
     private static void AddTclContainers(
         IReadOnlyList<string> lines,
         IReadOnlyList<SymbolRecord> symbols,
-        Dictionary<int, SymbolRecord> containersByLine,
-        Dictionary<int, IReadOnlyList<int>> scriptBodyColumnsByLine)
+        List<TclContainerScope> scopes,
+        HashSet<long> scriptBodyOpenings)
     {
         var braceEnds = BuildTclBraceEndPositions(lines);
-        var scopes = new List<TclContainerScope>();
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "function" || symbol.StartLine < 1 || symbol.StartLine > lines.Count)
@@ -667,54 +823,27 @@ internal static class DynamicDeclarativeReferenceExtractor
                     declarationMatch.Index + declarationMatch.Length,
                     out var bodyStartLineIndex,
                     out var bodyStartColumn,
-                    out var endLineIndex))
+                    out var bodyEnd))
             {
                 continue;
             }
 
             scopes.Add(new TclContainerScope(
                 symbol,
-                symbol.StartLine,
-                endLineIndex + 1,
                 bodyStartLineIndex + 1,
-                bodyStartColumn + 1));
+                bodyStartColumn,
+                bodyEnd.Line + 1,
+                bodyEnd.Column));
+            scriptBodyOpenings.Add(GetTclPositionKey(bodyStartLineIndex, bodyStartColumn));
         }
 
         scopes.Sort(static (left, right) =>
         {
-            var startComparison = left.StartLine.CompareTo(right.StartLine);
+            var startComparison = left.BodyStartLine.CompareTo(right.BodyStartLine);
             return startComparison != 0
                 ? startComparison
-                : right.EndLine.CompareTo(left.EndLine);
+                : left.BodyStartColumn.CompareTo(right.BodyStartColumn);
         });
-
-        var activeScopes = new Stack<TclContainerScope>();
-        var scopeIndex = 0;
-        for (var lineNumber = 1; lineNumber <= lines.Count; lineNumber++)
-        {
-            while (activeScopes.Count > 0 && activeScopes.Peek().EndLine < lineNumber)
-                activeScopes.Pop();
-
-            while (scopeIndex < scopes.Count && scopes[scopeIndex].StartLine == lineNumber)
-            {
-                var scope = scopes[scopeIndex++];
-                while (activeScopes.Count > 0 && activeScopes.Peek().EndLine < lineNumber)
-                    activeScopes.Pop();
-                activeScopes.Push(scope);
-            }
-
-            if (activeScopes.Count > 0)
-                containersByLine[lineNumber] = activeScopes.Peek().Symbol;
-        }
-
-        foreach (var lineGroup in scopes.GroupBy(static scope => scope.BodyStartLine))
-        {
-            scriptBodyColumnsByLine[lineGroup.Key] = lineGroup
-                .Select(static scope => scope.BodyStartColumn)
-                .Distinct()
-                .Order()
-                .ToArray();
-        }
     }
 
     private static bool TryFindTclBodyEnd(
@@ -724,11 +853,11 @@ internal static class DynamicDeclarativeReferenceExtractor
         int searchColumn,
         out int bodyStartLineIndex,
         out int bodyStartColumn,
-        out int endLineIndex)
+        out TclBraceEnd bodyEnd)
     {
         bodyStartLineIndex = startLineIndex;
         bodyStartColumn = -1;
-        endLineIndex = startLineIndex;
+        bodyEnd = default;
         if (!TryFindNextNonWhitespace(lines[startLineIndex], searchColumn, out var argsColumn)
             || !TryFindTclWordEnd(
                 lines,
@@ -746,12 +875,11 @@ internal static class DynamicDeclarativeReferenceExtractor
             || lines[bodyStartLineIndex][bodyStartColumn] != '{'
             || !braceEnds.TryGetValue(
                 GetTclPositionKey(bodyStartLineIndex, bodyStartColumn),
-                out var bodyEnd))
+                out bodyEnd))
         {
             return false;
         }
 
-        endLineIndex = bodyEnd.Line;
         return true;
     }
 
@@ -852,26 +980,229 @@ internal static class DynamicDeclarativeReferenceExtractor
     {
         var result = new Dictionary<long, TclBraceEnd>();
         var openings = new Stack<(int Line, int Column)>();
+        var commandStart = true;
+        var wordStart = true;
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
             for (var column = 0; column < line.Length; column++)
             {
-                if (line[column] == '\\')
+                var ch = line[column];
+                if (openings.Count > 0)
                 {
+                    if (ch == '\\')
+                    {
+                        column++;
+                        continue;
+                    }
+                    if (ch == '{')
+                    {
+                        openings.Push((lineIndex, column));
+                    }
+                    else if (ch == '}')
+                    {
+                        var opening = openings.Pop();
+                        result[GetTclPositionKey(opening.Line, opening.Column)] =
+                            new TclBraceEnd(lineIndex, column);
+                    }
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    column++;
+                    commandStart = false;
+                    wordStart = false;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    column = SkipQuotedToken(line, column, ch) - 1;
+                    commandStart = false;
+                    wordStart = false;
+                    continue;
+                }
+
+                if (ch == '#' && commandStart)
+                    break;
+                if (ch == ';' || ch == '[')
+                {
+                    commandStart = true;
+                    wordStart = true;
+                    continue;
+                }
+                if (char.IsWhiteSpace(ch))
+                {
+                    wordStart = true;
+                    continue;
+                }
+                if (ch == '{' && wordStart)
+                {
+                    openings.Push((lineIndex, column));
+                    commandStart = false;
+                    wordStart = false;
+                    continue;
+                }
+
+                commandStart = false;
+                wordStart = false;
+            }
+
+            if (openings.Count == 0)
+            {
+                commandStart = true;
+                wordStart = true;
+            }
+        }
+
+        return result;
+    }
+
+    private static string[] BuildTclCallLines(
+        IReadOnlyList<string> lines,
+        IReadOnlySet<long> scriptBodyOpenings)
+    {
+        var result = new string[lines.Count];
+        var frames = new Stack<TclLexicalFrame>();
+        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script));
+
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var buffer = line.ToCharArray();
+            for (var column = 0; column < line.Length;)
+            {
+                var frame = frames.Peek();
+                var ch = line[column];
+                if (frame.Kind == TclLexicalFrameKind.BracedWord)
+                {
+                    buffer[column] = ' ';
+                    if (ch == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (ch == '{')
+                    {
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.BracedWord, '}'));
+                        column++;
+                    }
+                    else if (ch == frame.Terminator)
+                    {
+                        frames.Pop();
+                        column++;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (frame.Kind == TclLexicalFrameKind.Quote)
+                {
+                    buffer[column] = ' ';
+                    if (ch == '\\' && column + 1 < line.Length)
+                    {
+                        buffer[column + 1] = ' ';
+                        column += 2;
+                    }
+                    else if (ch == frame.Terminator)
+                    {
+                        frames.Pop();
+                        column++;
+                    }
+                    else if (ch == '[')
+                    {
+                        buffer[column] = '[';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
+                        column++;
+                    }
+                    else
+                    {
+                        column++;
+                    }
+                    continue;
+                }
+
+                if (frame.Terminator != '\0' && ch == frame.Terminator)
+                {
+                    frames.Pop();
+                    buffer[column] = frame.Terminator == '}' ? ' ' : ch;
+                    column++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    column += Math.Min(2, line.Length - column);
+                    frame.CommandStart = false;
+                    frame.WordStart = false;
+                    continue;
+                }
+                if (ch == '#' && frame.CommandStart)
+                {
+                    FillWithSpaces(buffer, column);
+                    break;
+                }
+                if (ch == '"')
+                {
+                    buffer[column] = ' ';
+                    frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Quote, '"'));
+                    frame.CommandStart = false;
+                    frame.WordStart = false;
+                    column++;
+                    continue;
+                }
+                if (ch == '[')
+                {
+                    frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, ']'));
+                    frame.CommandStart = false;
+                    frame.WordStart = false;
+                    column++;
+                    continue;
+                }
+                if (ch == '{' && frame.WordStart)
+                {
+                    if (scriptBodyOpenings.Contains(GetTclPositionKey(lineIndex, column)))
+                    {
+                        buffer[column] = ';';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, '}'));
+                    }
+                    else
+                    {
+                        buffer[column] = ' ';
+                        frames.Push(new TclLexicalFrame(TclLexicalFrameKind.BracedWord, '}'));
+                    }
+                    frame.CommandStart = false;
+                    frame.WordStart = false;
+                    column++;
+                    continue;
+                }
+                if (ch == ';')
+                {
+                    frame.CommandStart = true;
+                    frame.WordStart = true;
+                    column++;
+                    continue;
+                }
+                if (char.IsWhiteSpace(ch))
+                {
+                    frame.WordStart = true;
                     column++;
                     continue;
                 }
 
-                if (line[column] == '{')
-                {
-                    openings.Push((lineIndex, column));
-                }
-                else if (line[column] == '}' && openings.Count > 0)
-                {
-                    var opening = openings.Pop();
-                    result[GetTclPositionKey(opening.Line, opening.Column)] = new TclBraceEnd(lineIndex, column);
-                }
+                frame.CommandStart = false;
+                frame.WordStart = false;
+                column++;
+            }
+
+            result[lineIndex] = new string(buffer);
+            if (frames.Peek().Kind == TclLexicalFrameKind.Script)
+            {
+                frames.Peek().CommandStart = true;
+                frames.Peek().WordStart = true;
             }
         }
 
