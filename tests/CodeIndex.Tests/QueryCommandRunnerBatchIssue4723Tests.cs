@@ -222,21 +222,19 @@ public partial class QueryCommandRunnerTests
         using var firstRecordEmitted = new ManualResetEventSlim();
         using var stdout = new NotifyingStringWriter(firstRecordEmitted);
         using var stderr = new StringWriter();
-        var originalIn = Console.In;
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
         Task<int>? runTask = null;
         var emittedBeforeEof = false;
         var exitCode = CommandExitCodes.UnhandledException;
 
-        Console.SetIn(input);
-        Console.SetOut(stdout);
-        Console.SetError(stderr);
         try
         {
-            runTask = Task.Run(() => QueryCommandRunner.RunBatch(
-                ["--db", dbPath, "--json-summary", "--parallel", "2"],
-                _jsonOptions));
+            runTask = Task.Run(() =>
+            {
+                using var capture = ConsoleCapture.Start(stdout, stderr, input);
+                return QueryCommandRunner.RunBatch(
+                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                    _jsonOptions);
+            });
             input.WriteLine("""{"command":"languages","args":["--format","count"]}""");
 
             emittedBeforeEof = firstRecordEmitted.Wait(TimeSpan.FromSeconds(15));
@@ -259,9 +257,6 @@ public partial class QueryCommandRunnerTests
                     // Preserve the primary assertion while still making cleanup bounded.
                 }
             }
-            Console.SetIn(originalIn);
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
         }
 
         Assert.True(emittedBeforeEof);

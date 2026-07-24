@@ -364,6 +364,7 @@ public static partial class QueryCommandRunner
         string appVersion,
         CancellationToken cancellationToken)
     {
+        using var consoleOwnership = ConsoleStreamOwnership.Enter();
         var originalOut = Console.Out;
         var originalError = Console.Error;
         var stdoutRouter = new BatchConsoleRouter(originalOut);
@@ -691,8 +692,7 @@ public static partial class QueryCommandRunner
         }
         finally
         {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
+            ConsoleStreamOwnership.Restore(originalOut, originalError);
         }
     }
 
@@ -1601,10 +1601,11 @@ public static partial class QueryCommandRunner
 
     private sealed class BatchCommandOutputCapture : IDisposable
     {
-        private readonly TextWriter _originalOut = Console.Out;
-        private readonly TextWriter _originalError = Console.Error;
         private readonly BatchBoundedStringWriter _stdout = new(BatchMaxCapturedOutputChars, "stdout");
         private readonly BatchBoundedStringWriter _stderr = new(BatchMaxCapturedOutputChars, "stderr");
+        private TextWriter? _originalOut;
+        private TextWriter? _originalError;
+        private IDisposable? _ownership;
         private bool _started;
         private bool _stopped;
 
@@ -1616,8 +1617,20 @@ public static partial class QueryCommandRunner
             if (_started)
                 return;
             _started = true;
-            Console.SetOut(_stdout);
-            Console.SetError(_stderr);
+            var ownership = ConsoleStreamOwnership.Enter();
+            try
+            {
+                _originalOut = Console.Out;
+                _originalError = Console.Error;
+                Console.SetOut(_stdout);
+                Console.SetError(_stderr);
+                _ownership = ownership;
+            }
+            catch
+            {
+                ownership.Dispose();
+                throw;
+            }
         }
 
         public void Stop()
@@ -1625,8 +1638,15 @@ public static partial class QueryCommandRunner
             if (!_started || _stopped)
                 return;
             _stopped = true;
-            Console.SetOut(_originalOut);
-            Console.SetError(_originalError);
+            try
+            {
+                ConsoleStreamOwnership.Restore(_originalOut!, _originalError!);
+            }
+            finally
+            {
+                _ownership?.Dispose();
+                _ownership = null;
+            }
         }
 
         public void Dispose()

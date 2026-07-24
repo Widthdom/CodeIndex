@@ -1,3 +1,5 @@
+using CodeIndex.Cli;
+
 namespace CodeIndex.Tests;
 
 [CollectionDefinition("Console sensitive")]
@@ -33,7 +35,7 @@ public sealed class TrustedPluginAssemblyFixture : IDisposable
 
 internal static class TestConsoleLock
 {
-    internal static readonly object Gate = new();
+    internal static object Gate => ConsoleStreamOwnership.Gate;
 }
 
 internal sealed class ConsoleCapture : IDisposable
@@ -44,6 +46,7 @@ internal sealed class ConsoleCapture : IDisposable
     private readonly bool restoreOut;
     private readonly bool restoreError;
     private readonly bool restoreIn;
+    private readonly IDisposable ownership;
     private bool disposed;
 
     private ConsoleCapture(bool captureOut, bool captureError, TextWriter? outWriter = null, TextWriter? errorWriter = null, TextReader? inputReader = null)
@@ -56,7 +59,7 @@ internal sealed class ConsoleCapture : IDisposable
         if (captureError)
             Error = errorWriter ?? new StringWriter();
 
-        System.Threading.Monitor.Enter(TestConsoleLock.Gate);
+        ownership = ConsoleStreamOwnership.Enter();
         try
         {
             if (captureOut)
@@ -79,8 +82,14 @@ internal sealed class ConsoleCapture : IDisposable
         }
         catch
         {
-            Restore();
-            System.Threading.Monitor.Exit(TestConsoleLock.Gate);
+            try
+            {
+                Restore();
+            }
+            finally
+            {
+                ownership.Dispose();
+            }
             throw;
         }
     }
@@ -94,8 +103,27 @@ internal sealed class ConsoleCapture : IDisposable
     internal static ConsoleCapture Start(TextWriter? output, TextWriter? error)
         => new(output is not null, error is not null, output, error);
 
+    internal static ConsoleCapture Start(TextWriter? output, TextWriter? error, TextReader? input)
+        => new(output is not null, error is not null, output, error, input);
+
     internal static ConsoleCapture StartWithInput(TextReader input, bool captureOut = false, bool captureError = false)
         => new(captureOut, captureError, inputReader: input);
+
+    internal static Task CaptureAsync(
+        Func<Task> action,
+        TextWriter? output = null,
+        TextWriter? error = null,
+        TextReader? input = null)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        return Task.Run(() =>
+        {
+            // Monitor ownership must enter and exit on this worker thread. The async
+            // operation may resume elsewhere while this thread retains serialized ownership.
+            using var capture = Start(output, error, input);
+            action().GetAwaiter().GetResult();
+        });
+    }
 
     internal static string CaptureError(Action action)
     {
@@ -115,18 +143,26 @@ internal sealed class ConsoleCapture : IDisposable
         if (disposed)
             return;
 
-        Restore();
-        disposed = true;
-        System.Threading.Monitor.Exit(TestConsoleLock.Gate);
+        try
+        {
+            Restore();
+            disposed = true;
+        }
+        finally
+        {
+            ownership.Dispose();
+        }
     }
 
     private void Restore()
     {
         if (restoreIn && originalIn is not null)
             Console.SetIn(originalIn);
-        if (restoreError && originalError is not null)
-            Console.SetError(originalError);
-        if (restoreOut && originalOut is not null)
-            Console.SetOut(originalOut);
+        if (restoreOut && originalOut is not null && restoreError && originalError is not null)
+            ConsoleStreamOwnership.Restore(originalOut, originalError);
+        else if (restoreError && originalError is not null)
+            ConsoleStreamOwnership.RestoreError(originalError);
+        else if (restoreOut && originalOut is not null)
+            ConsoleStreamOwnership.RestoreOut(originalOut);
     }
 }

@@ -21,9 +21,28 @@ internal static class ScopedConsoleOutput
         if (s_activeRouter.Value is { } router)
             return router.Push(target);
 
+        var ownership = ConsoleStreamOwnership.Enter();
         var original = Console.Out;
-        Console.SetOut(target);
-        return new DelegateScope(() => Console.SetOut(original));
+        try
+        {
+            Console.SetOut(target);
+            return new DelegateScope(() =>
+            {
+                try
+                {
+                    ConsoleStreamOwnership.RestoreOut(original);
+                }
+                finally
+                {
+                    ownership.Dispose();
+                }
+            });
+        }
+        catch
+        {
+            ownership.Dispose();
+            throw;
+        }
     }
 
     private sealed class DelegateScope(Action dispose) : IDisposable
