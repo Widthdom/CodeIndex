@@ -401,6 +401,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` and `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
   are broad runaway guards for known large symbol-extraction fixtures. Keep their budgets generous enough for full-suite load; tighten them only with focused optimization evidence, not as benchmark thresholds.
+- `SymbolExtractorTests.Extract_CSharp_LargeSwitchExpression_CompletesWithinPracticalBudget`
+  keeps 10,000 switch arms plus functional symbol assertions and uses a broad 15-second runaway budget. Treat it as a quadratic-regression tripwire rather than a benchmark threshold; the margin must absorb noisy full-suite hosts (#4792).
 - `ReferenceExtractorTests.Extract_CSharpLargePlainCallFile_CompletesWithinPracticalBudget`
   is a broad runaway guard for high-volume C# reference extraction on ordinary call lines. Treat its budget as a regression tripwire, not a benchmark target; keep it wide enough for noisy CI unless a focused optimization change justifies tightening it.
 - Reference-extraction cap coverage keeps the four published boundaries in one
@@ -1246,6 +1248,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` と `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
   は既知の大きな symbol extraction fixture に対する広めの runaway guard です。full suite の負荷に耐えるよう budget は十分広く保ち、benchmark 閾値としてではなく、焦点を絞った最適化根拠がある場合にだけ締めてください。
+- `SymbolExtractorTests.Extract_CSharp_LargeSwitchExpression_CompletesWithinPracticalBudget`
+  は10,000個の switch arm と機能的な symbol assertion を維持し、広めの15秒 runaway budget を使います。benchmark 閾値ではなく二乗時間への回帰を検出する tripwire として扱い、余裕幅で負荷の高い full-suite host を吸収してください (#4792)。
 - extractor の広い `*CompletesWithinPracticalBudget` runaway guard は primary の `net8.0` test target だけで実行します。focused な extractor 機能テストは cross-target のまま維持しますが、その guard が target-framework 固有の契約を証明する場合を除き、大規模 fixture の budget guard をすべての target framework で重複実行しないでください。
 - C# reflection-name 抽出 coverage は、literal、定数連結、dynamic、comment、string decoy を1つの source fixture にまとめ、これらの parser boundary で1回の symbol/reference pass を共有します。
 - C# BOM 抽出は、単純な先頭 BOM import fixture と、CRLF・bare CR・LF 境界で先頭/mid-file BOM を同時に扱う1つの混在改行 fixture を維持します。混在 fixture に含まれる改行 subset ごとに抽出 pass を重複させないでください。
