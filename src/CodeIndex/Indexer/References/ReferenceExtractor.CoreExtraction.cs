@@ -2623,7 +2623,9 @@ public static partial class ReferenceExtractor
                         context,
                         lineNumber,
                         ResolveContainerForCall,
-                        AddCallLikeReference);
+                        AddCallLikeReference,
+                        emitArrowCallReferences: language != "ambiguous_pl"
+                            || dynamicDeclarativeState?.HasPrologContainer(lineNumber) != true);
                 }
 
                 if (dynamicDeclarativeState != null)

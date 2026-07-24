@@ -152,6 +152,8 @@ public static partial class SymbolExtractor
             structuralLines = DynamicDeclarativeReferenceExtractor.MaskTclContinuedCommentLines(
                 lines,
                 structuralLines);
+            structuralLines = DynamicDeclarativeReferenceExtractor.MaskTclNonScriptLines(
+                structuralLines);
         }
         string[]? javaScriptTypeScriptSanitizedLines = null;
         string[] GetJavaScriptTypeScriptSanitizedLines() =>
@@ -2237,26 +2239,31 @@ public static partial class SymbolExtractor
         {
             continuationLines[lineIndex] = clauseOpen;
             var line = structuralLines[lineIndex];
-            if (clauseOpen)
+            var lastTerminatorColumn = -1;
+            for (var column = 0; column < line.Length; column++)
             {
-                if (HasPrologClauseTerminator(line))
-                    clauseOpen = false;
-                continue;
+                if (DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column))
+                    lastTerminatorColumn = column;
             }
 
-            if (PrologOpenClauseRegex.IsMatch(line) && !HasPrologClauseTerminator(line))
+            if (clauseOpen && lastTerminatorColumn < 0)
+                continue;
+
+            clauseOpen = false;
+            var clauseCandidateOffset = lastTerminatorColumn + 1;
+            var clauseCandidate = line[clauseCandidateOffset..];
+            if (PrologOpenClauseRegex.IsMatch(clauseCandidate))
             {
                 clauseOpen = true;
                 continue;
             }
 
-            var multilineHead = PrologMultilineHeadStartRegex.Match(line);
+            var multilineHead = PrologMultilineHeadStartRegex.Match(clauseCandidate);
             if (multilineHead.Success
-                && !HasPrologClauseTerminator(line)
                 && IsValidatedMultilinePrologHead(
                     structuralLines,
                     lineIndex,
-                    multilineHead.Groups["open"].Index))
+                    clauseCandidateOffset + multilineHead.Groups["open"].Index))
             {
                 multilineHeads[lineIndex] = multilineHead.Groups["name"].Value;
                 clauseOpen = true;

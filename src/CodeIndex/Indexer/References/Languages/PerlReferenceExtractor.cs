@@ -41,14 +41,26 @@ internal static class PerlReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall,
-        Action<string, int> addCallLikeReference)
+        Action<string, int> addCallLikeReference,
+        bool emitArrowCallReferences = true)
     {
         EmitModuleReference(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitRequiredModulePathReference(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitBaseModuleReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitMooseInheritanceReferences(originalLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         EmitQualifiedFunctionCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall);
-        EmitArrowCallReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForCall, addCallLikeReference);
+        if (emitArrowCallReferences)
+        {
+            EmitArrowCallReferences(
+                preparedLine,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForCall,
+                addCallLikeReference);
+        }
     }
 
     private static void EmitModuleReference(

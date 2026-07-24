@@ -1616,6 +1616,113 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CrystalAndGroovy_DoNotTreatColonLabelsAsBareCalls_Issue4746()
+    {
+        const string crystalContent = """
+            def helper
+              1
+            end
+            def run
+              consume(
+                helper: 1
+              )
+            end
+            """;
+        const string groovyContent = """
+            def helper() {}
+            def run() {
+                def options = [
+                    helper: 1
+                ]
+            }
+            """;
+
+        var (_, crystalReferences) = ExtractSymbolsAndReferences("crystal", crystalContent);
+        var (_, groovyReferences) = ExtractSymbolsAndReferences("groovy", groovyContent);
+
+        Assert.DoesNotContain(crystalReferences, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+        Assert.DoesNotContain(groovyReferences, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+    }
+
+    [Fact]
+    public void Extract_Prolog_SuppressesMultilineDataTermsAndTracksLaterContinuedClause_Issue4746()
+    {
+        const string content = """
+            bar(_).
+            process(_).
+            operator_data :-
+                bar(
+                    value
+                )
+                = bar(other),
+                process(value).
+            phantom.
+            run :- seed. other :-
+                phantom.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("prolog", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "other");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "phantom");
+        AssertReferencesContain(references, "call", "operator_data", "process");
+        AssertReferencesContain(references, "call", "other", "phantom");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "operator_data"
+            && reference.SymbolName == "bar");
+    }
+
+    [Fact]
+    public void Extract_Tcl_RejectsProcTextInsideLiteralBracedWords_Issue4746()
+    {
+        const string content = """
+            set data {
+                proc fake {} { return 1 }
+            }
+            proc helper {} { return 1 }
+            proc run {} {
+                fake
+                helper
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "fake");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+        AssertReferencesContain(references, "call", "run", "helper");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_PreservesPerlModuloAndRejectsPrologIfThenArrow_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            sub helper { return 1; }
+            :- module(hybrid, [entry/0]).
+            entry :- condition -> external_goal.
+            sub run {
+                my $value = 5 % 2; helper();
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        AssertReferencesContain(references, "call", "run", "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "entry"
+            && reference.SymbolName == "external_goal");
+    }
+
+    [Fact]
     public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
     {
         const string content = """

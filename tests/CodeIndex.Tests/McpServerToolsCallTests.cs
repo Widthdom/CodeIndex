@@ -11675,6 +11675,68 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_StampsSuppressedDynamicGraphLanguage_Issue4746()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_suppressed_dynamic_4746_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_suppressed_dynamic_4746");
+        using var env = EnvironmentVariableScope.Capture(
+            IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, "*.cr");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "generated.cr"),
+                """
+                def helper
+                  1
+                end
+                """);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir,
+                        ["rebuild"] = true
+                    }
+                }
+            };
+
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.True(structured["reference_graph_complete"]!.GetValue<bool>());
+
+            SqliteConnection.ClearAllPools();
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText =
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("crystal")}'";
+            Assert.Equal(
+                SymbolExtractor.DynamicReferenceGraphContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_ClearsHotspotFamilyTrustOnPartialFailure()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_hotspot_family_fixture_{Guid.NewGuid():N}");

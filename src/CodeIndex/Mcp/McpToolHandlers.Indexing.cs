@@ -1635,6 +1635,8 @@ public partial class McpServer
                     if (!useFullRunBatchMarker)
                         writer.ClearBatchInProgress();
                     txn.Commit();
+                    if (!string.IsNullOrWhiteSpace(record.Lang))
+                        indexedSymbolExtractorLanguages.Add(record.Lang);
                     CountFreshInsertedRows(chunkCount: chunks.Count);
                     ftsMutated = true;
                     processed++;

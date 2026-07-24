@@ -4071,6 +4071,48 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_StampsSuppressedDynamicGraphLanguage_Issue4746()
+    {
+        var projectRoot = CreateTempProject();
+        using var env = EnvironmentVariableScope.Capture(
+            IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        env.Set(IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable, "*.cr");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "generated.cr"),
+                """
+                def helper
+                  1
+                end
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--json", "--rebuild", "--yes"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.True(json.GetProperty("graph_data_current").GetBoolean());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText =
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("crystal")}'";
+            Assert.Equal(
+                SymbolExtractor.DynamicReferenceGraphContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_ReindexesUnchangedCSharpTupleReadonlyFieldWhenExtractorVersionChanged_Issue4616()
     {
         var projectRoot = CreateTempProject();

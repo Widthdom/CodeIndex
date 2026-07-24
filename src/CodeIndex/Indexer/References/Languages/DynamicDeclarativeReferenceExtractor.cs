@@ -114,13 +114,13 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"^\s*:-\s*use_module\s*\(\s*(?:library\s*\(\s*)?['""]?(?<name>(?:\.\.?/)*[a-z][A-Za-z0-9_./-]*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CrystalBareCallRegex = new(
-        @"(?:^|[;={]|\b(?:then|do)\b|&&|\|\|)\s*(?:return\s+)?(?<name>[A-Za-z_]\w*[?!]?)(?![\w?!])(?!\s*(?:\(|(?:<<|>>|[+\-*/%&|^])?=))",
+        @"(?:^|[;={]|\b(?:then|do)\b|&&|\|\|)\s*(?:return\s+)?(?<name>[A-Za-z_]\w*[?!]?)(?![\w?!])(?!\s*(?::|\(|(?:<<|>>|[+\-*/%&|^])?=))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CrystalSuffixedParenthesizedCallRegex = new(
         @"(?<![\w])(?<name>[A-Za-z_]\w*[?!])\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GroovyBareCallRegex = new(
-        @"(?:^|[;={])\s*(?:return\s+)?(?<name>[A-Za-z_]\w*)\b(?!\s*(?:\(|(?:<<|>>|[+\-*/%&|^])?=))",
+        @"(?:^|[;={])\s*(?:return\s+)?(?<name>[A-Za-z_]\w*)\b(?!\s*(?::|\(|(?:<<|>>|[+\-*/%&|^])?=))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GroovyConstructorDeclarationRegex = new(
         @"(?:^|[;{])\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?:(?:public|protected|private)\s+)*(?<name>[A-Z]\w*)\s*\(",
@@ -531,7 +531,8 @@ internal static class DynamicDeclarativeReferenceExtractor
 
                 if (language == "ambiguous_pl" && ch == '%')
                 {
-                    if (IsPerlHashSigil(line, column))
+                    if (IsPerlHashSigil(line, column)
+                        || IsLikelyPerlModuloOperator(line, column))
                     {
                         column++;
                         continue;
@@ -614,6 +615,12 @@ internal static class DynamicDeclarativeReferenceExtractor
 
         return result;
     }
+
+    public static string[] MaskTclNonScriptLines(IReadOnlyList<string> maskedLines) =>
+        BuildTclCallLines(
+            maskedLines,
+            BuildTclBraceEndPositions(maskedLines),
+            new HashSet<long>());
 
     public static ExtractionState? CreateState(
         string language,
@@ -945,6 +952,50 @@ internal static class DynamicDeclarativeReferenceExtractor
             || previousToken.Equals("exists", StringComparison.Ordinal)
             || previousToken.Equals("defined", StringComparison.Ordinal)
             || previousToken.Equals("scalar", StringComparison.Ordinal);
+    }
+
+    private static bool IsLikelyPerlModuloOperator(string line, int column)
+    {
+        var prefix = line.AsSpan(0, column);
+        var hasPerlContext = prefix.Contains('$')
+            || prefix.Contains('@')
+            || StartsWithPerlStatementKeyword(prefix);
+        if (!hasPerlContext)
+            return false;
+
+        var previousColumn = column - 1;
+        while (previousColumn >= 0 && char.IsWhiteSpace(line[previousColumn]))
+            previousColumn--;
+        if (previousColumn < 0)
+            return false;
+
+        if (column + 1 < line.Length && line[column + 1] == '=')
+            return true;
+
+        var nextColumn = column + 1;
+        while (nextColumn < line.Length && char.IsWhiteSpace(line[nextColumn]))
+            nextColumn++;
+        if (nextColumn >= line.Length)
+            return false;
+
+        var previous = line[previousColumn];
+        var next = line[nextColumn];
+        return (char.IsLetterOrDigit(previous) || previous is '_' or ')' or ']' or '}')
+            && (char.IsLetterOrDigit(next) || next is '_' or '$' or '@' or '(' or '+' or '-');
+    }
+
+    private static bool StartsWithPerlStatementKeyword(ReadOnlySpan<char> prefix)
+    {
+        prefix = prefix.TrimStart();
+        foreach (var keyword in new[] { "my", "our", "state", "local", "return" })
+        {
+            if (!prefix.StartsWith(keyword, StringComparison.Ordinal))
+                continue;
+            if (prefix.Length == keyword.Length || char.IsWhiteSpace(prefix[keyword.Length]))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsLikelySlashyLiteralStart(string line, int column)
@@ -2142,6 +2193,8 @@ internal static class DynamicDeclarativeReferenceExtractor
             }
             var lineCalls = new List<PrologGoalCall>();
             ScanPrologGoalLine(
+                lines,
+                lineIndex,
                 callScanLine,
                 callableNames,
                 frames,
@@ -2216,6 +2269,8 @@ internal static class DynamicDeclarativeReferenceExtractor
     }
 
     private static void ScanPrologGoalLine(
+        IReadOnlyList<string> lines,
+        int lineIndex,
         string line,
         IReadOnlySet<string> callableNames,
         Stack<PrologLexicalFrame> frames,
@@ -2321,7 +2376,11 @@ internal static class DynamicDeclarativeReferenceExtractor
                         continue;
                     }
                     if (callableNames.Contains(name)
-                        && !IsPrologTermBeforeInfixOperator(line, column, nextColumn))
+                        && !IsPrologTermBeforeInfixOperator(
+                            lines,
+                            lineIndex,
+                            column,
+                            nextColumn))
                     {
                         calls.Add(new PrologGoalCall(name, nameStart));
                     }
@@ -2413,56 +2472,79 @@ internal static class DynamicDeclarativeReferenceExtractor
     }
 
     private static bool IsPrologTermBeforeInfixOperator(
-        string line,
+        IReadOnlyList<string> lines,
+        int lineIndex,
         int nameEndColumn,
         int nextColumn)
     {
+        const int lookaheadLineLimit = 256;
+        var line = lines[lineIndex];
+        var afterTermLine = lineIndex;
         var afterTermColumn = nextColumn;
         if (nextColumn < line.Length && line[nextColumn] == '(')
         {
             var depth = 0;
-            afterTermColumn = -1;
-            for (var column = nextColumn; column < line.Length; column++)
+            var termClosed = false;
+            var endLineExclusive = Math.Min(lines.Count, lineIndex + lookaheadLineLimit);
+            for (var scanLineIndex = lineIndex;
+                scanLineIndex < endLineExclusive && !termClosed;
+                scanLineIndex++)
             {
-                var ch = line[column];
-                if (ch is '\'' or '"')
+                var scanLine = lines[scanLineIndex];
+                var startColumn = scanLineIndex == lineIndex ? nextColumn : 0;
+                for (var column = startColumn; column < scanLine.Length; column++)
                 {
-                    column = SkipQuotedToken(line, column, ch) - 1;
-                    continue;
-                }
+                    var ch = scanLine[column];
+                    if (ch is '\'' or '"')
+                    {
+                        column = SkipQuotedToken(scanLine, column, ch) - 1;
+                        continue;
+                    }
 
-                if (ch == '(')
-                {
-                    depth++;
-                }
-                else if (ch == ')' && --depth == 0)
-                {
-                    afterTermColumn = column + 1;
-                    break;
+                    if (ch == '(')
+                    {
+                        depth++;
+                    }
+                    else if (ch == ')' && --depth == 0)
+                    {
+                        afterTermLine = scanLineIndex;
+                        afterTermColumn = column + 1;
+                        termClosed = true;
+                        break;
+                    }
                 }
             }
 
-            if (afterTermColumn < 0)
-                return false;
+            // An unterminated compound term is not authoritative evidence of a call.
+            // 未終端の compound term は call と判断できる根拠にならない。
+            if (!termClosed)
+                return true;
         }
         else
         {
             afterTermColumn = nameEndColumn;
         }
 
-        while (afterTermColumn < line.Length && char.IsWhiteSpace(line[afterTermColumn]))
-            afterTermColumn++;
-        if (afterTermColumn >= line.Length)
+        if (!TryFindNextPrologToken(
+                lines,
+                afterTermLine,
+                afterTermColumn,
+                lookaheadLineLimit,
+                out var operatorLine,
+                out var operatorColumn))
+        {
             return false;
+        }
 
-        var remaining = line.AsSpan(afterTermColumn);
+        var operatorSourceLine = lines[operatorLine];
+        var remaining = operatorSourceLine.AsSpan(operatorColumn);
         if (remaining.StartsWith("->", StringComparison.Ordinal)
             || remaining.StartsWith("*->", StringComparison.Ordinal))
         {
             return false;
         }
 
-        if (line[afterTermColumn] is '=' or '\\' or '<' or '>' or '@' or '#'
+        if (operatorSourceLine[operatorColumn] is '=' or '\\' or '<' or '>' or '@' or '#'
             or ':' or '+' or '-' or '*' or '/' or '^')
         {
             return true;
@@ -2472,14 +2554,43 @@ internal static class DynamicDeclarativeReferenceExtractor
         {
             if (!remaining.StartsWith(operatorName, StringComparison.Ordinal))
                 continue;
-            var operatorEnd = afterTermColumn + operatorName.Length;
-            if (operatorEnd >= line.Length
-                || !char.IsLetterOrDigit(line[operatorEnd]) && line[operatorEnd] != '_')
+            var operatorEnd = operatorColumn + operatorName.Length;
+            if (operatorEnd >= operatorSourceLine.Length
+                || !char.IsLetterOrDigit(operatorSourceLine[operatorEnd])
+                    && operatorSourceLine[operatorEnd] != '_')
             {
                 return true;
             }
         }
 
+        return false;
+    }
+
+    private static bool TryFindNextPrologToken(
+        IReadOnlyList<string> lines,
+        int startLine,
+        int startColumn,
+        int lookaheadLineLimit,
+        out int tokenLine,
+        out int tokenColumn)
+    {
+        var endLineExclusive = Math.Min(lines.Count, startLine + lookaheadLineLimit);
+        for (var lineIndex = startLine; lineIndex < endLineExclusive; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var column = lineIndex == startLine ? startColumn : 0;
+            while (column < line.Length && char.IsWhiteSpace(line[column]))
+                column++;
+            if (column < line.Length)
+            {
+                tokenLine = lineIndex;
+                tokenColumn = column;
+                return true;
+            }
+        }
+
+        tokenLine = -1;
+        tokenColumn = -1;
         return false;
     }
 

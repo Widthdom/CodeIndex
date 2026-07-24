@@ -3039,6 +3039,8 @@ public static partial class IndexCommandRunner
                             WriteProjectRootOnce();
                             txn.Commit();
                             ftsMutated |= fileFtsMutated;
+                            if (!string.IsNullOrWhiteSpace(record.Lang))
+                                indexedSymbolExtractorLanguages.Add(record.Lang);
                             CountFreshInsertedRows(chunkCount: chunks.Count);
 
                             processed++;
