@@ -1374,7 +1374,56 @@ public partial class McpServerTests
         Assert.NotNull(response["result"]!["structuredContent"]!["workspace_indexed_at"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["workspace_latest_modified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["project_root"]);
+        Assert.Equal("definition", response["result"]!["structuredContent"]!["graph_language_source"]!.GetValue<string>());
+        Assert.Equal("authoritative", response["result"]!["structuredContent"]!["graph_language_confidence"]!.GetValue<string>());
+        Assert.Empty(response["result"]!["structuredContent"]!["graph_language_candidates"]!.AsArray());
+        Assert.False(response["result"]!["structuredContent"]!["graph_language_conflict"]!.GetValue<bool>());
         Assert.True(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_MissingDefinitionPublishesInferredGraphLanguageInEveryFormat_Issue4727()
+    {
+        InsertIndexedFile(
+            "src/EvidenceCaller.cs",
+            "csharp",
+            """
+            public class EvidenceCaller
+            {
+                public void Run() => MissingDefinitionIssue4727();
+            }
+            """);
+
+        foreach (var format in new[] { null, "compact", "count" })
+        {
+            var arguments = new JsonObject
+            {
+                ["query"] = "MissingDefinitionIssue4727",
+            };
+            if (format != null)
+                arguments["format"] = format;
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 4727,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "analyze_symbol",
+                    ["arguments"] = arguments,
+                },
+            };
+
+            var response = _server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal("csharp", structured["graph_language"]!.GetValue<string>());
+            Assert.Equal("graph_evidence", structured["graph_language_source"]!.GetValue<string>());
+            Assert.Equal("inferred_consistent", structured["graph_language_confidence"]!.GetValue<string>());
+            Assert.Equal(["csharp"], structured["graph_language_candidates"]!.AsArray().Select(node => node!.GetValue<string>()));
+            Assert.False(structured["graph_language_conflict"]!.GetValue<bool>());
+            Assert.True(structured["graph_supported"]!.GetValue<bool>());
+        }
     }
 
     [Fact]
@@ -3954,8 +4003,17 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_DepsCyclesUsesGraphBudgetBeyondDisplayLimit_Issue3185()
+    public void ToolsCall_DepsCyclesUsesStableCursorPagination_Issues3185And4731()
     {
+        var invalidBudgetRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"deps","arguments":{"graphBudget":100}}}""")!;
+        var invalidBudgetResponse = _server.HandleMessage(invalidBudgetRequest)!;
+
+        Assert.True(invalidBudgetResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains(
+            "'graphBudget' requires 'cycles=true'.",
+            invalidBudgetResponse["result"]!["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
         var writer = new DbWriter(_db.Connection);
         var highTargetId = InsertDependencyFile(writer, "src/HighTarget.cs");
         var highCallerId = InsertDependencyFile(writer, "src/HighCaller.cs");
@@ -3970,9 +4028,9 @@ public partial class McpServerTests
         InsertDependencySymbols(writer, cycleBId, ["CycleB"]);
         InsertDependencyReferences(writer, cycleBId, ["CycleA"]);
         InsertDependencySymbols(writer, cycleCId, ["CycleC"]);
-        InsertDependencyReferences(writer, cycleCId, ["CycleD"]);
+        InsertDependencyReferences(writer, cycleCId, Enumerable.Repeat("CycleD", 5).ToArray());
         InsertDependencySymbols(writer, cycleDId, ["CycleD"]);
-        InsertDependencyReferences(writer, cycleDId, ["CycleC"]);
+        InsertDependencyReferences(writer, cycleDId, Enumerable.Repeat("CycleC", 5).ToArray());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"limit":1,"lang":"csharp"}}}""")!;
         var response = _server.HandleMessage(request)!;
@@ -3982,14 +4040,26 @@ public partial class McpServerTests
         var nextStepFlags = structured["next_step_flags"]!.AsArray()
             .Select(flag => flag!.GetValue<string>())
             .ToArray();
+        var cursor = structured["next_cursor"]!.GetValue<string>();
 
         Assert.Equal(1, structured["count"]!.GetValue<int>());
-        Assert.Equal(2, nodes.Length);
-        Assert.All(nodes, node => Assert.StartsWith("src/Cycle", node));
-        Assert.Equal("partial_display_limit", structured["cycle_result_scope"]!.GetValue<string>());
-        Assert.Contains("limit=2", nextStepFlags);
-        Assert.Contains("path=<narrower-glob>", nextStepFlags);
+        Assert.Equal(["src/CycleC.cs", "src/CycleD.cs"], nodes);
+        Assert.Equal(10, cycle["reference_count"]!.GetValue<long>());
+        Assert.True(structured["analysis_complete"]!.GetValue<bool>());
+        Assert.Equal("complete_graph_page", structured["cycle_result_scope"]!.GetValue<string>());
+        Assert.Contains($"cursor={cursor}", nextStepFlags);
         Assert.DoesNotContain(nextStepFlags, flag => flag.StartsWith("--", StringComparison.Ordinal));
+
+        var nextRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"limit":1,"lang":"csharp"}}}""")!;
+        nextRequest["params"]!["arguments"]!["cursor"] = cursor;
+        var nextResponse = _server.HandleMessage(nextRequest)!;
+        var nextStructured = nextResponse["result"]!["structuredContent"]!;
+        var nextCycle = Assert.Single(nextStructured["cycles"]!.AsArray());
+        var nextNodes = nextCycle!["nodes"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+
+        Assert.Equal(["src/CycleA.cs", "src/CycleB.cs"], nextNodes);
+        Assert.Equal(2, nextCycle["rank"]!.GetValue<int>());
+        Assert.False(nextStructured["has_more"]!.GetValue<bool>());
     }
 
     [Fact]

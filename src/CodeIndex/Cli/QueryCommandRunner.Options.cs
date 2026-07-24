@@ -60,6 +60,7 @@ public static partial class QueryCommandRunner
         "--limit",
         "--max-results",
         "--top",
+        "--graph-budget",
         "--lang",
         "--language",
         "--extension",

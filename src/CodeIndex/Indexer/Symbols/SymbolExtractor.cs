@@ -16,7 +16,7 @@ public static partial class SymbolExtractor
     public const int DefaultContractVersion = 1;
     public const int ExpandedLanguageContractVersion = 2;
     public const int PythonContractVersion = 2;
-    public const int CSharpContractVersion = 4;
+    public const int CSharpContractVersion = 5;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
@@ -572,20 +572,22 @@ public static partial class SymbolExtractor
         // IsInterpolated / InterpolationDollarCount describe the CURRENT string mode
         // (only meaningful while Mode is a string mode). Return* fields preserve the
         // outer interpolated string's info while we are inside an interpolation hole
-        // (Mode = Code with InterpolationBraceDepth > 0). Only one level of nesting
-        // is tracked — matches the single-line TrySkipCSharpStringOrCharLiteral
-        // approximation in DbSymbolReader.
+        // (Mode = Code with InterpolationBraceDepth > 0). InterpolationParent keeps
+        // an immutable stack when another interpolated string starts inside that hole.
         // 補間 verbatim / raw 文字列のホール追跡。IsInterpolated / InterpolationDollarCount は
         // 現在のモード（string 系モードのときだけ意味を持つ）を表し、Return* は
         // ホール内（Mode = Code かつ InterpolationBraceDepth > 0）の間、外側の
-        // 補間文字列情報を退避する。ネストは 1 レベルのみで、単一行版
-        // TrySkipCSharpStringOrCharLiteral と同等の近似とする。
+        // 補間文字列情報を退避する。ホール内で別の補間文字列が始まった場合は
+        // InterpolationParent の immutable stack に外側の状態を退避する。
         bool IsInterpolated = false,
         int InterpolationDollarCount = 0,
         int InterpolationBraceDepth = 0,
         CSharpLexMode InterpolationReturnMode = CSharpLexMode.Code,
         int InterpolationReturnRawDelimiterLength = 0,
-        int InterpolationReturnDollarCount = 0);
+        int InterpolationReturnDollarCount = 0,
+        CSharpInterpolationFrame? InterpolationParent = null);
+
+    private sealed record CSharpInterpolationFrame(CSharpLexState State);
 
     private readonly record struct CSharpLexedLine(
         string SanitizedLine,
@@ -596,7 +598,8 @@ public static partial class SymbolExtractor
         int LastConsumedLineIndex,
         int SignatureLastLineIndex,
         int? SignatureLastLineExclusiveEndColumn = null,
-        int? ExpressionBodyEndLineIndex = null);
+        int? ExpressionBodyEndLineIndex = null,
+        int? ExpressionBodyEndLineExclusiveEndColumn = null);
 
     private readonly record struct FortranContinuationMatchCandidate(
         string MatchLine,

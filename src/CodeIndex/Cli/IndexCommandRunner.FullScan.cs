@@ -650,42 +650,6 @@ public static partial class IndexCommandRunner
 
     private static HashSet<string> EmptyScanCheckpointDirectories() => new(StringComparer.Ordinal);
 
-    private static void SaveScanCheckpoint(
-        string path,
-        string? currentHead,
-        IReadOnlySet<string> directories,
-        List<CliJsonMessage> warningList,
-        bool json,
-        bool quiet)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(currentHead))
-                return;
-
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var checkpoint = new ScanCheckpoint(
-                ScanCheckpointVersion,
-                currentHead,
-                directories
-                    .Where(directory => directory.Length > 0)
-                    .OrderBy(directory => directory, StringComparer.Ordinal)
-                    .ToList());
-            if (WriteScanCheckpointForTesting != null)
-                WriteScanCheckpointForTesting(path);
-            else
-                AtomicFileWriter.WriteJson(
-                    path,
-                    checkpoint,
-                    new JsonSerializerOptions { WriteIndented = true },
-                    AtomicFileWriter.WriteProfile.Sensitive);
-        }
-        catch (Exception ex) when (IsScanCheckpointPersistenceException(ex))
-        {
-            RecordScanCheckpointPersistenceWarning(path, "save", ex, warningList, json, quiet);
-        }
-    }
-
     private static void DeleteScanCheckpoint(
         string path,
         List<CliJsonMessage> warningList,

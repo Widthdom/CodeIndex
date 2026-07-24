@@ -17,6 +17,7 @@ public static partial class QueryCommandRunner
         {
             ["--limit"] = MaxQueryResultLimit,
             ["--max-results"] = MaxQueryResultLimit,
+            ["--graph-budget"] = MaxDependencyCycleGraphBudget,
             ["--snippet-lines"] = SearchSnippetFormatter.MaxSnippetLines,
             ["--max-line-width"] = LineWidthFormatter.MaxAllowedLineWidth,
             ["--slow-query-ms"] = 3_600_000,

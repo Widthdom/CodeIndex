@@ -691,22 +691,6 @@ public static partial class ExtractorPluginRegistry
         ExecutableExtensionStagingHandle Staging,
         IReadOnlyList<PluginRegistration> Registrations);
 
-    private static void AddLanguageExtensions(
-        Dictionary<string, string> target,
-        IEnumerable<(string Language, IReadOnlyCollection<string> FileExtensions)> plugins)
-    {
-        foreach (var (language, fileExtensions) in plugins)
-        {
-            var normalizedLanguage = NormalizePluginLanguage(language);
-            foreach (var extension in fileExtensions)
-            {
-                var normalizedExtension = NormalizePluginExtension(extension);
-                if (normalizedExtension != null)
-                    target.TryAdd(normalizedExtension, normalizedLanguage);
-            }
-        }
-    }
-
     private static bool TryGetLanguageForExtension(
         string extension,
         IEnumerable<ISymbolExtractor> plugins,

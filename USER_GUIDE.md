@@ -618,8 +618,9 @@ downstream audit tooling. Count-only JSON includes `returned_bucket_counts` and
 Use `--compact` for audit summaries that keep counts, confidence buckets,
 taxonomy, and filter context without returning the full `symbols` array.
 Public APIs, framework entrypoints, DTOs, serialization contracts, generated
-hooks, test-only hooks, Markdown headings, reflection, and configuration-based
-usage can be false positives and are routed into lower-confidence buckets. C#
+hooks, test-only hooks, Markdown headings and fenced-code language markers,
+reflection, and configuration-based usage can be false positives and are
+routed into lower-confidence buckets. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
 `GetMethod("Foo")` are indexed, but dynamically constructed names still require
 manual review.
@@ -1897,7 +1898,7 @@ same source location.
 | `--no-dedup` | `search` | Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | Restrict dependency edges by an exact symbol, a symbol-name prefix, or the built-in noise profile. These filters run in SQLite before candidate ranking and `--limit`, including cycle and cross-workspace queries. `reference_count`, ranking, and JSON `symbol_filter` counters therefore describe the filtered scope. |
-| `--cycles` | `deps` | Return dependency cycles from a bounded approximate candidate-edge scan. `--limit` controls displayed cycles and the candidate budget (`max(--limit, 50)`). When `truncated_reason` is `candidate_edge_limit`, returned cycles are a bounded sample, not a complete or ranked cycle set. JSON includes `truncated`, `termination_reason`, `truncated_reason`, `candidate_edge_count`, `candidate_edge_limit`, `cycle_detection_mode`, `cycle_result_scope`, `cycle_result_note`, and `next_step_flags`; use suggested flags such as `--limit`, `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path` to expand or narrow the scan. |
+| `--cycles` / `--graph-budget <n>` / `--cursor <value>` | `deps` | Compute deterministic, stably ranked dependency SCCs. `--graph-budget` independently bounds analyzed edges (default `10000`), while `--limit` pages the ranked SCCs and an opaque `next_cursor` continues the same filtered graph. JSON reports `analysis_complete`, `graph_edge_count`, `graph_edge_budget`, ranking metadata, authoritative-total status, and continuation metadata. When the graph budget is exhausted, the SCC set and total are explicitly non-authoritative; increase `--graph-budget` or narrow the graph with `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path`. |
 | `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
 | `--top <n>` | Query commands | Alias for `--limit` |
 | `--max-results <n>` | `search` | Alias for `--limit` |
@@ -2944,7 +2945,7 @@ cdidx backfill-fold
 
 This recomputes persisted `name_folded` / `*_folded` columns from existing DB rows and stamps `fold_ready` when verification succeeds. The target must already be an existing CodeIndex DB; blank or missing paths are rejected instead of creating a new database.
 
-Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
+Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries. When `analyze_symbol` has no language filter or definition, it infers `graph_language` only when all returned reference/caller/callee evidence has one language. `graph_language_source`, `graph_language_confidence`, `graph_language_candidates`, and `graph_language_conflict` distinguish authoritative filter/definition support from consistent inference and leave mixed-language evidence unresolved.
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
 
@@ -3788,8 +3789,9 @@ bucket と confidence filter を直接確認できます。count-only JSON に�
 `returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含まれ、
 full JSON summary と同じ bucket totals を返します。count、confidence bucket、taxonomy、
 filter context だけが必要な場合は `--compact` を使ってください。Public API、framework entrypoint、DTO、
-serialization contract、generated hook、test-only hook、Markdown heading、reflection、
-config 経由の使用は false positive になりうるため、低 confidence bucket に寄せられます。
+serialization contract、generated hook、test-only hook、Markdown heading と fenced-code の
+language marker、reflection、config 経由の使用は false positive になりうるため、
+低 confidence bucket に寄せられます。
 C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。
@@ -5047,7 +5049,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--no-dedup` | `search` | overlap chunk の重複排除を無効化し、全 raw chunk hit を返す。chunk 境界の debug や raw match density 計測向け |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
 | `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | 完全一致のシンボル、シンボル名の接頭辞、または組み込み noise profile で依存 edge を絞り込む。cycle と cross-workspace query を含め、これらの filter は候補の ranking と `--limit` より前に SQLite 内で適用される。そのため `reference_count`、ranking、JSON の `symbol_filter` counter は絞り込み後の scope を表す。 |
-| `--cycles` | `deps` | 上限付きの近似候補 edge scan から依存 cycle を返す。`--limit` は表示する cycle 数と候補 budget（`max(--limit, 50)`）を制御する。`truncated_reason` が `candidate_edge_limit` の場合、返される cycle は上限内のサンプルであり、完全な cycle 集合やランキング済み集合ではない。JSON は `truncated`、`termination_reason`、`truncated_reason`、`candidate_edge_count`、`candidate_edge_limit`、`cycle_detection_mode`、`cycle_result_scope`、`cycle_result_note`、`next_step_flags` を返す。`--limit`、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` などの候補フラグで scan を広げるか絞り込む。 |
+| `--cycles` / `--graph-budget <n>` / `--cursor <value>` | `deps` | 決定的かつ安定順位付きの依存 SCC を計算する。`--graph-budget` は解析する edge 数を独立して制限し（既定値 `10000`）、`--limit` は順位付け済み SCC をページ分割し、不透明な `next_cursor` で同じ filter 済み graph の続きを取得する。JSON は `analysis_complete`、`graph_edge_count`、`graph_edge_budget`、ranking metadata、総件数が authoritative かどうか、continuation metadata を返す。graph budget 枯渇時は SCC 集合と総件数が non-authoritative であることを明示するため、`--graph-budget` を増やすか、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` で graph を絞り込む。 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。最大 7 個の distinct な追加 DB（`--db` を含め合計 8 個）まで繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--max-results <n>` | `search` | `--limit` のエイリアス |
@@ -6072,7 +6074,7 @@ cdidx backfill-fold
 
 これは既存 DB 行から `name_folded` / `*_folded` 列を再計算し、`fold_ready` を stamp する。対象は既存の CodeIndex DB に限られ、空のDBや存在しないパスを指定しても新規作成せず拒否する。
 
-`references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
+`references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。`analyze_symbol` に言語フィルタも定義もない場合は、返された reference/caller/callee evidence がすべて1言語で一貫するときに限って `graph_language` を推論します。`graph_language_source`、`graph_language_confidence`、`graph_language_candidates`、`graph_language_conflict` により、filter/definition による authoritative な support と一貫した推論を区別し、複数言語の evidence は未確定のままにします。
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
 
