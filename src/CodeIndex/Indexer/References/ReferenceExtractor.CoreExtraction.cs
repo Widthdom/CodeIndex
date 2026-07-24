@@ -20,6 +20,9 @@ public static partial class ReferenceExtractor
         var isJsxFile = IsJsxFilePath(path);
         var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
+        if (language is "clojure" or "erlang" or "ocaml" or "raku")
+            return ExtractFunctionalLanguageReferences(request);
+
         if (TryExtractStructuralMetadataReferences(
             fileId,
             language,

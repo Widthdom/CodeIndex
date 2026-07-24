@@ -3285,7 +3285,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
+    public void RunLanguages_Json_ExtractorBucketsAdvertiseAccurateGraphSupport_Issue4743()
     {
         // Languages that have conservative symbol extractors but no dedicated reference
         // extractors must advertise symbol_extraction=true while keeping graph/reference
@@ -3300,7 +3300,7 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var symbolOnly in new[] { "ada", "clojure", "crystal", "d", "erlang", "groovy", "julia", "nim", "ocaml", "raku", "tcl" })
+        foreach (var symbolOnly in new[] { "ada", "crystal", "d", "groovy", "julia", "nim", "tcl" })
         {
             Assert.True(languages.ContainsKey(symbolOnly), $"expected '{symbolOnly}' to be listed");
             var entry = languages[symbolOnly];
@@ -3315,6 +3315,19 @@ public partial class QueryCommandRunnerTests
             Assert.DoesNotContain("missing-symbols", gaps);
             Assert.Contains("missing-references", gaps);
             Assert.Contains("missing-graph", gaps);
+        }
+
+        foreach (var functionalGraphLanguage in new[] { "clojure", "erlang", "ocaml", "raku" })
+        {
+            Assert.True(languages.ContainsKey(functionalGraphLanguage), $"expected '{functionalGraphLanguage}' to be listed");
+            var entry = languages[functionalGraphLanguage];
+            Assert.True(entry.GetProperty("symbol_extraction").GetBoolean(),
+                $"{functionalGraphLanguage} must advertise symbol_extraction=true");
+            Assert.True(entry.GetProperty("reference_extraction").GetBoolean(),
+                $"{functionalGraphLanguage} must advertise reference_extraction=true");
+            Assert.True(entry.GetProperty("graph_queries").GetBoolean(),
+                $"{functionalGraphLanguage} must advertise graph_queries=true");
+            Assert.Empty(entry.GetProperty("capability_gaps").EnumerateArray());
         }
 
         var yamlAliases = languages["yaml"].GetProperty("aliases").EnumerateArray()
