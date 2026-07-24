@@ -1308,7 +1308,9 @@ public class LspServerTests
             {
                 BeforeSymbolRequestForTesting = cancellationToken =>
                 {
-                    cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+                    Assert.True(
+                        cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)),
+                        "The active request was not cancelled after output backpressure was released.");
                     cancellationToken.ThrowIfCancellationRequested();
                 },
             };
@@ -1844,6 +1846,92 @@ public class LspServerTests
             var z = Assert.Single(symbols.Where(symbol => symbol?["name"]?.GetValue<string>() == "Z"));
             var children = z!["children"]!.AsArray();
             Assert.Contains(children, symbol => symbol?["name"]?.GetValue<string>() == "A");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("record Z(int A) {} class B { record Z(int X) {} }\n")]
+    [InlineData("class B { record Z(int X) {} } record Z(int A) {}\n")]
+    public void HandleMessage_DocumentSymbol_DisambiguatesSameLineRecordContainersBySourceOrder_Issue4736(string source)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_qualified_record_members");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = TestProjectHelper.WriteTextFile(projectRoot, "App.java", source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "App.java", "java", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 47361,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var roots = response!["result"]!.AsArray();
+            var topLevelZ = Assert.Single(roots.Where(symbol => symbol?["name"]?.GetValue<string>() == "Z"));
+            Assert.Equal(
+                ["A"],
+                topLevelZ!["children"]!.AsArray().Select(child => child!["name"]!.GetValue<string>()));
+            var b = Assert.Single(roots.Where(symbol => symbol?["name"]?.GetValue<string>() == "B"));
+            var nestedZ = Assert.Single(b!["children"]!.AsArray());
+            Assert.Equal("Z", nestedZ!["name"]!.GetValue<string>());
+            Assert.Equal(
+                ["X"],
+                nestedZ["children"]!.AsArray().Select(child => child!["name"]!.GetValue<string>()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_NestsMixedRecordMembersDeterministically_Issue4736()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_record_members");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const string source = "class Outer { readonly record struct Token(int Line, int Length) { int Body => Length; } }\n";
+            var sourcePath = TestProjectHelper.WriteTextFile(projectRoot, "app.cs", source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 4736,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var roots = response!["result"]!.AsArray();
+            var outer = Assert.Single(roots);
+            Assert.Equal("Outer", outer!["name"]!.GetValue<string>());
+            var token = Assert.Single(outer["children"]!.AsArray());
+            Assert.Equal("Token", token!["name"]!.GetValue<string>());
+            Assert.Equal(
+                ["Body", "Length", "Line"],
+                token["children"]!.AsArray().Select(child => child!["name"]!.GetValue<string>()));
         }
         finally
         {

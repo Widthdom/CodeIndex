@@ -444,6 +444,11 @@ results preserve the provider's deterministic order and use `$/progress`
 notifications capped at 100 items and 64 KiB of JSON body each; document-symbol
 partial results deliberately use flat `SymbolInformation` items, while the
 token-free response keeps the existing hierarchical `DocumentSymbol` contract.
+That hierarchy materializes every symbol before resolving parents from indexed
+container names, container kinds, enclosing ranges, and same-line selection
+columns. Same-range members such as positional record properties therefore stay
+beneath their declaring type regardless of deterministic presentation order,
+while a later same-named container on the line cannot capture an earlier member.
 The stdio reader and the single response worker are separated by a bounded
 queue, so `$/cancelRequest` can cancel an active or queued symbol request without
 making database-backed request processing concurrent. Cancellation IDs retain
@@ -3395,7 +3400,11 @@ integer `partialResultToken` と `workDoneToken` を処理する。partial resul
 決定的な順序を維持し、1 notification あたり最大100 item・64 KiB JSON body の
 `$/progress` で送る。document-symbol の partial result は意図的に flat な
 `SymbolInformation` item を使い、token のない response は既存の階層化された
-`DocumentSymbol` contract を維持する。stdio reader と単一 response worker は上限付き queue
+`DocumentSymbol` contract を維持する。この階層は全 symbol を materialize してから、indexed
+container name・container kind・包含 range・同一行の selection column で親を解決するため、
+positional record property のように同じ range を持つ member も決定的な表示順序に左右されず
+宣言元 type の配下に留まり、行内で後にある同名 container が前の member を取り込まない。
+stdio reader と単一 response worker は上限付き queue
 で分離するため、database-backed request processing を並行化せずに `$/cancelRequest` で active
 または queued symbol request を cancel できる。cancellation ID は JSON 型を保持し、cancel
 された request は work-done progress を終了して `-32800` を返す。result / progress cap は
