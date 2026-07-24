@@ -33,6 +33,7 @@ public static partial class IndexCommandRunner
         string? priorCSharpSymbolNameContractVersion,
         string? priorMetadataTargetCsharp,
         string? priorSqlGraphContractVersion,
+        string? priorHdlGraphContractVersion,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentHotspotFamilyMarkerFingerprints,
@@ -48,6 +49,8 @@ public static partial class IndexCommandRunner
         var memorySamples = options.MemoryTrace ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) } : [];
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var currentHdlGraphContractVersion = DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var hdlGraphContractMatchesCurrent = priorHdlGraphContractVersion == currentHdlGraphContractVersion;
         var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions, cancellationToken);
         if (unresolvedMergeExitCode != null)
             return unresolvedMergeExitCode.Value;
@@ -147,6 +150,7 @@ public static partial class IndexCommandRunner
                 priorCSharpSymbolNameContractVersion,
                 priorMetadataTargetCsharp,
                 priorSqlGraphContractVersion,
+                priorHdlGraphContractVersion,
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints,
@@ -1787,7 +1791,8 @@ public static partial class IndexCommandRunner
                         allowReuse: symbolKindFilterMatchesPrior
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
+                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent)
+                            && (statReusableLanguage is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent));
                     if (statMatchedFile != null)
                     {
                         skipped++;
@@ -1860,7 +1865,8 @@ public static partial class IndexCommandRunner
                         allowReuse: symbolKindFilterMatchesPrior
                             && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                            && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
+                            && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
+                            && (record.Lang is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent));
                     if (existingId != null)
                     {
                         using var purgeTxn = writer.BeginTransaction(cancellationToken, "update purge unchanged stale paths");
@@ -2543,6 +2549,11 @@ public static partial class IndexCommandRunner
             }
             if (sqlGraphContractMatchesCurrent || !hasSqlFilesAfter)
                 writer.MarkSqlGraphContractReady();
+            var hasHdlFilesAfter = writer.HasAnyFilesWithLanguage("verilog")
+                || writer.HasAnyFilesWithLanguage("systemverilog")
+                || writer.HasAnyFilesWithLanguage("vhdl");
+            if (hdlGraphContractMatchesCurrent || !hasHdlFilesAfter)
+                writer.MarkHdlGraphContractReady();
             if (csharpSymbolNameContractMatchesCurrent || !hasCSharpFilesAfter)
             {
                 writer.MarkCSharpSymbolNameContractReady();
@@ -2680,6 +2691,7 @@ public static partial class IndexCommandRunner
         var referenceGraphCompleteAfter = referenceExtractionCapHitsAfter.StateAvailable
             && referenceExtractionCapHitsAfter.HitCount == 0;
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
+        var hdlGraphContractSignalAfter = signalReader.GetHdlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
         var sqlGraphContractReadyAfter = sqlGraphContractSignalAfter.Ready;
         var sqlGraphContractDegradedReasonAfter = sqlGraphContractSignalAfter.DegradedReason;
@@ -2721,7 +2733,10 @@ public static partial class IndexCommandRunner
                 },
                 SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 GraphTableAvailable = graphTableAvailableAfter,
-                GraphDataCurrent = errors == 0 && graphTableAvailableAfter && referenceGraphCompleteAfter,
+                GraphDataCurrent = errors == 0
+                    && graphTableAvailableAfter
+                    && referenceGraphCompleteAfter
+                    && hdlGraphContractSignalAfter.Ready,
                 IndexComplete = errors == 0,
                 ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
                 ReferenceGraphComplete = referenceGraphCompleteAfter,
@@ -2730,6 +2745,8 @@ public static partial class IndexCommandRunner
                 IssuesTableAvailable = issuesTableAvailableAfter,
                 SqlGraphContractReady = sqlGraphContractReadyAfter,
                 SqlGraphContractDegradedReason = sqlGraphContractDegradedReasonAfter,
+                HdlGraphContractReady = hdlGraphContractSignalAfter.Ready,
+                HdlGraphContractDegradedReason = hdlGraphContractSignalAfter.DegradedReason,
                 HotspotFamilyReady = hotspotFamilyReadyAfter,
                 HotspotFamilyDegradedReason = hotspotFamilyDegradedReasonAfter,
                 CSharpSymbolNameReady = csharpSymbolNameReadyAfter,

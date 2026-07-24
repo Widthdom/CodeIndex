@@ -84,6 +84,7 @@ public static partial class QueryCommandRunner
             bool? graphSupported = options.Lang != null ? reader.SupportsReferenceLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests);
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests);
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests));
@@ -164,6 +165,7 @@ public static partial class QueryCommandRunner
                     if (countSuppression is { Applied: true })
                         payload["default_suppression"] = BuildUnusedDefaultCountSuppressionJson(countSuppression, jsonOptions);
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                    AddHdlGraphContractJsonFields(payload, hdlGraphSignal);
                     var queryContext = BuildUnusedQueryContextJson(options, unusedScope, jsonOptions);
                     if (countSuppression is { Applied: true })
                         queryContext["default_suppression"] = true;
@@ -186,6 +188,7 @@ public static partial class QueryCommandRunner
                     if (countSuppression is { Applied: true })
                         WriteUnusedDefaultCountSuppressionSummary(countSuppression);
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                    WriteHdlGraphContractWarningIfNeeded(json: false, hdlGraphSignal);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return CommandExitCodes.Success;
@@ -247,6 +250,7 @@ public static partial class QueryCommandRunner
                         graphSupported,
                         graphSupportReason,
                         sqlGraphSignal,
+                        hdlGraphSignal,
                         reader._hasReferencesTable,
                         jsonOptions,
                         options,
@@ -259,6 +263,7 @@ public static partial class QueryCommandRunner
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No unsuppressed unused symbols found", options));
                     WriteUnusedDefaultSuppressionSummary(suppression);
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteHdlGraphContractWarningIfNeeded(json: false, hdlGraphSignal);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 else
@@ -268,6 +273,7 @@ public static partial class QueryCommandRunner
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteHdlGraphContractWarningIfNeeded(json: false, hdlGraphSignal);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return UnusedZeroResultExitCode(options, suppression);
@@ -275,7 +281,7 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, unusedScope, byBucket: byBucket, nextCursor: nextCursor, suppression: suppression));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, hdlGraphSignal, reader._hasReferencesTable, jsonOptions, options, unusedScope, byBucket: byBucket, nextCursor: nextCursor, suppression: suppression));
             }
             else
             {
@@ -305,6 +311,7 @@ public static partial class QueryCommandRunner
                     CommandErrorWriter.WriteStderr($"next_cursor={nextCursor}");
                 WriteUnusedDefaultSuppressionSummary(suppression);
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                WriteHdlGraphContractWarningIfNeeded(json: false, hdlGraphSignal);
             }
             return CommandExitCodes.Success;
 
@@ -705,7 +712,7 @@ public static partial class QueryCommandRunner
         _ => "Unknown unused-symbol bucket.",
     };
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, UnusedAuditScopeFilters? unusedScope = null, bool byBucket = false, string? nextCursor = null, UnusedDefaultSuppressionResult? suppression = null)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, HdlGraphContractSignal hdlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, UnusedAuditScopeFilters? unusedScope = null, bool byBucket = false, string? nextCursor = null, UnusedDefaultSuppressionResult? suppression = null)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -749,6 +756,7 @@ public static partial class QueryCommandRunner
         }
 
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        AddHdlGraphContractJsonFields(payload, hdlGraphSignal);
         if (queryOptions != null)
         {
             var queryContext = unusedScope != null

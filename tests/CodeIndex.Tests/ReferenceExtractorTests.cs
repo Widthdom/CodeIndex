@@ -98,6 +98,185 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Hdl_DetectsInstantiationImportArchitectureAndKnownReferences_Issue4742()
+    {
+        const string verilog = """
+            `include "defs.vh"
+            module fifo(input logic clk);
+            endmodule
+            module top;
+                logic clk;
+                logic hFF;
+                fifo #(.WIDTH(8)) u_fifo[3:0] (.clk(clk));
+                helper(clk);
+                assign sink = 8'hFF;
+                // fifo ignored_in_comment (.clk(clk));
+                /*
+                `include "ignored-in-comment.vh"
+                */
+            endmodule
+            """;
+        const string systemVerilog = """
+            package util_pkg;
+                typedef struct packed { logic valid; } packet_t;
+            endpackage
+            module child(input logic clk);
+            endmodule
+            module top(external_if.master bus, input logic clk);
+                import util_pkg::*, other_pkg::member;
+                packet_t packet;
+                util_pkg::packet_t qualified_packet;
+                child u_child (.clk(clk));
+                property p(input logic value);
+                    value;
+                endproperty
+                sequence s(input logic value);
+                    value;
+                endsequence
+                covergroup cg(input logic value);
+                endgroup
+            endmodule
+            """;
+        const string vhdl = """
+            package util_pkg is
+                function declared_only(x : integer) return integer;
+                constant X : integer := 1;
+                type state_t is (Idle, Busy);
+                constant after_decl : integer := declared_only(1);
+            end package;
+            package body util_pkg is
+                function declared_only
+                    (x : integer)
+                    return integer is
+                begin
+                    return x;
+                end function declared_only;
+            end package body util_pkg;
+
+            library ieee, osvvm;
+            use ieee.std_logic_1164.all, work.util_pkg.all;
+
+            entity Child is
+                port (clk : in std_logic);
+            end Child;
+            architecture rtl of Child is
+            begin
+            end rtl;
+
+            entity Top is
+                port (clk : in std_logic);
+            end Top;
+            architecture structural of Top is
+                signal current : state_t;
+                signal X : std_logic;
+            begin
+                u_child : entity work.Child(rtl) port map (clk => clk);
+                u_component : Child
+                    port map (clk => clk);
+                current <= current;
+                current <= 'X';
+                current <= X"FF";
+            end structural;
+            """;
+
+        var (_, verilogReferences) = ExtractSymbolsAndReferences("verilog", verilog);
+        var (_, systemVerilogReferences) = ExtractSymbolsAndReferences("systemverilog", systemVerilog);
+        var (_, vhdlReferences) = ExtractSymbolsAndReferences("vhdl", vhdl);
+
+        AssertReferencesContain(verilogReferences, "import", null, "defs.vh");
+        AssertReferencesContain(verilogReferences, "instantiate", "top", "fifo");
+        AssertReferencesContain(verilogReferences, "reference", "top", "clk");
+        Assert.DoesNotContain(verilogReferences, reference =>
+            reference.ReferenceKind == "instantiate"
+            && reference.Context.Contains("helper(clk)", StringComparison.Ordinal));
+        Assert.DoesNotContain(verilogReferences, reference =>
+            reference.SymbolName == "hFF"
+            && reference.Context.Contains("8'hFF", StringComparison.Ordinal));
+        Assert.DoesNotContain(verilogReferences, reference => reference.Context.Contains("ignored_in_comment", StringComparison.Ordinal));
+        Assert.DoesNotContain(verilogReferences, reference => reference.SymbolName == "ignored-in-comment.vh");
+
+        AssertReferencesContain(systemVerilogReferences, "import", "top", "util_pkg", "other_pkg");
+        AssertReferencesContain(systemVerilogReferences, "instantiate", "top", "child");
+        AssertReferencesContain(systemVerilogReferences, "type_reference", null, "external_if");
+        AssertReferencesContain(systemVerilogReferences, "type_reference", "top", "packet_t");
+        AssertReferencesContain(systemVerilogReferences, "reference", "top", "util_pkg");
+        Assert.DoesNotContain(systemVerilogReferences, reference =>
+            reference.ReferenceKind == "instantiate"
+            && reference.SymbolName is "property" or "sequence" or "covergroup");
+
+        AssertReferencesContain(vhdlReferences, "import", null, "ieee", "osvvm", "std_logic_1164", "util_pkg");
+        AssertReferencesContain(vhdlReferences, "type_reference", null, "Child", "Top");
+        AssertReferencesContain(vhdlReferences, "call", "util_pkg", "declared_only");
+        AssertReferencesContain(vhdlReferences, "instantiate", "structural", "Child");
+        Assert.Equal(2, vhdlReferences.Count(reference =>
+            reference.SymbolName == "Child"
+            && reference.ReferenceKind == "instantiate"
+            && reference.ContainerName == "structural"));
+        AssertReferencesContain(vhdlReferences, "type_reference", "structural", "rtl", "state_t");
+        AssertReferencesContain(vhdlReferences, "reference", "structural", "current");
+        Assert.DoesNotContain(vhdlReferences, reference =>
+            reference.SymbolName == "X"
+            && (reference.Context.Contains("'X'", StringComparison.Ordinal)
+                || reference.Context.Contains("X\"FF\"", StringComparison.Ordinal)
+                || reference.Context.Contains("(x : integer)", StringComparison.OrdinalIgnoreCase)
+                || reference.Context.Equals("return x;", StringComparison.OrdinalIgnoreCase)));
+        Assert.DoesNotContain(vhdlReferences, reference =>
+            reference.SymbolName == "declared_only"
+            && reference.ContainerName == "declared_only");
+        Assert.DoesNotContain(vhdlReferences, reference =>
+            reference.SymbolName == "ieee"
+            && reference.ContainerName == "util_pkg");
+        Assert.DoesNotContain(vhdlReferences, reference =>
+            reference.ReferenceKind == "instantiate"
+            && reference.Context.StartsWith("entity ", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(vhdlReferences, reference => reference.Context.StartsWith("end ", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Contains("verilog", ReferenceExtractor.GetSupportedLanguages());
+        Assert.Contains("systemverilog", ReferenceExtractor.GetSupportedLanguages());
+        Assert.Contains("vhdl", ReferenceExtractor.GetSupportedLanguages());
+    }
+
+    [Fact]
+    public void Extract_HdlKnownReferenceLookup_HonorsPublishedSymbolBudget_Issue4742()
+    {
+        const string content = """
+            module top;
+                logic first;
+                logic second;
+                assign sink = first ^ second;
+            endmodule
+            """;
+        var symbols = new[]
+        {
+            new SymbolRecord { Kind = "property", Name = "first", Line = 2 },
+            new SymbolRecord { Kind = "property", Name = "second", Line = 3 },
+        };
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        try
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = new ReferenceExtractionSafetyLimits
+            {
+                MaxLookupSymbols = 1,
+                MaxLookupLines = 100,
+                MaxNamesPerLine = 100,
+                MaxContainerCandidates = 100,
+            };
+
+            var result = ReferenceExtractor.ExtractDetailed(1, "verilog", content, symbols);
+
+            Assert.Contains(result.References, reference => reference.SymbolName == "first" && reference.ReferenceKind == "reference");
+            Assert.DoesNotContain(result.References, reference => reference.SymbolName == "second");
+            Assert.Contains(
+                result.Diagnostics,
+                diagnostic => diagnostic.Kind == "reference_definition_lookup_symbol_budget_exceeded");
+        }
+        finally
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+        }
+    }
+
+    [Fact]
     public void StructuralLineMasker_MaskLines_ReturnsOriginalArrayForUnmaskedLanguage()
     {
         var lines = new[] { "package main", "func main() {}" };
