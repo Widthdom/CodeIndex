@@ -3956,6 +3956,15 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_DepsCyclesUsesStableCursorPagination_Issues3185And4731()
     {
+        var invalidBudgetRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"deps","arguments":{"graphBudget":100}}}""")!;
+        var invalidBudgetResponse = _server.HandleMessage(invalidBudgetRequest)!;
+
+        Assert.True(invalidBudgetResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains(
+            "'graphBudget' requires 'cycles=true'.",
+            invalidBudgetResponse["result"]!["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
         var writer = new DbWriter(_db.Connection);
         var highTargetId = InsertDependencyFile(writer, "src/HighTarget.cs");
         var highCallerId = InsertDependencyFile(writer, "src/HighCaller.cs");

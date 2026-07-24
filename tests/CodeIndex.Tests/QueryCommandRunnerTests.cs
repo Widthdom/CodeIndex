@@ -4819,6 +4819,35 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void BuildDependencyCycleGraphFingerprint_IgnoresUnorderedSymbolSamples_Issue4731()
+    {
+        var first = new[]
+        {
+            new FileDependencyResult
+            {
+                SourcePath = "a.cs",
+                TargetPath = "b.cs",
+                ReferenceCount = 2,
+                Symbols = "Beta,Alpha",
+            },
+        };
+        var second = new[]
+        {
+            new FileDependencyResult
+            {
+                SourcePath = "a.cs",
+                TargetPath = "b.cs",
+                ReferenceCount = 2,
+                Symbols = "Alpha,Beta",
+            },
+        };
+
+        Assert.Equal(
+            QueryCommandRunner.BuildDependencyCycleGraphFingerprint("query", first, first.Length),
+            QueryCommandRunner.BuildDependencyCycleGraphFingerprint("query", second, second.Length));
+    }
+
+    [Fact]
     public void RunDeps_CyclesUsesStableCompleteRankingAndCursorPagination_Issues3185And4731()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycle_budget");

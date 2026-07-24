@@ -22,7 +22,7 @@ public static partial class QueryCommandRunner
     internal const int MapIssueDraftLineThreshold = 800;
     internal const long MapIssueDraftByteThreshold = 64 * 1024;
     internal const int DefaultImpactLimit = 50;
-    internal const int DefaultDependencyCycleGraphBudget = 250_000;
+    internal const int DefaultDependencyCycleGraphBudget = 10_000;
     internal const int MaxDependencyCycleGraphBudget = 1_000_000;
     internal const int GraphLivenessLimitThreshold = 80;
     internal const string DependencyCycleDetectionMode = "deterministic_scc";

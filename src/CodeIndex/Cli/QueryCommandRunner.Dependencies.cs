@@ -1323,7 +1323,6 @@ public static partial class QueryCommandRunner
             AppendDependencyCycleGraphHashValue(hash, edge.TargetDb);
             AppendDependencyCycleGraphHashValue(hash, edge.TargetPath);
             AppendDependencyCycleGraphHashValue(hash, edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
-            AppendDependencyCycleGraphHashValue(hash, edge.Symbols);
         }
 
         var digest = hash.GetHashAndReset();

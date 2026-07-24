@@ -2803,6 +2803,8 @@ public partial class McpServer
         var cyclesOnly = args?["cycles"]?.GetValue<bool>() ?? false;
         var format = args?["format"]?.GetValue<string>()?.ToLowerInvariant() ?? "edgelist";
         var cursorValue = args?["cursor"]?.GetValue<string>();
+        if (requestedGraphBudget.HasValue && !cyclesOnly)
+            return CreateToolErrorResponse(id, "'graphBudget' requires 'cycles=true'.");
         if (cursorValue != null && !cyclesOnly)
             return CreateToolErrorResponse(id, "'cursor' requires 'cycles=true'.");
         if (cursorValue != null && !QueryCommandRunner.TryParseDependencyCycleCursor(cursorValue, out _))
