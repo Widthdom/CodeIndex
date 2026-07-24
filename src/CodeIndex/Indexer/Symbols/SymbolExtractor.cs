@@ -595,7 +595,8 @@ public static partial class SymbolExtractor
         int LastConsumedLineIndex,
         int SignatureLastLineIndex,
         int? SignatureLastLineExclusiveEndColumn = null,
-        int? ExpressionBodyEndLineIndex = null);
+        int? ExpressionBodyEndLineIndex = null,
+        int? ExpressionBodyEndLineExclusiveEndColumn = null);
 
     private readonly record struct FortranContinuationMatchCandidate(
         string MatchLine,

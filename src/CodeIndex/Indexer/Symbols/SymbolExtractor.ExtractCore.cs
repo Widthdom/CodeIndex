@@ -221,6 +221,8 @@ public static partial class SymbolExtractor
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
         var csharpSuppressedContinuationUntil = -1;
+        var csharpSuppressedContinuationResumeLine = -1;
+        var csharpSuppressedContinuationResumeRawColumn = 0;
         var goImportBlock = false;
 
         for (int i = 0; i < lines.Length; i++)
@@ -378,6 +380,17 @@ public static partial class SymbolExtractor
                 if (firstNonWhitespace < matchLine.Length
                     && matchLine[firstNonWhitespace] is '}' or ';' or '"')
                     patternStartOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, firstNonWhitespace + 1, lang);
+            }
+            if (lang == "csharp" && i == csharpSuppressedContinuationResumeLine)
+            {
+                patternStartOffset = Math.Max(
+                    patternStartOffset,
+                    TranslateCSharpRawColumnToCollapsed(
+                        csharpMatchColumnToRaw,
+                        i,
+                        csharpSuppressedContinuationResumeRawColumn,
+                        matchLine.Length,
+                        line.Length));
             }
             while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
             {
@@ -1631,7 +1644,27 @@ public static partial class SymbolExtractor
                             && pattern.Kind == "property"
                             && csharpPropertyCandidate.ExpressionBodyEndLineIndex.HasValue)
                         {
-                            csharpSuppressedContinuationUntil = Math.Max(csharpSuppressedContinuationUntil, csharpPropertyCandidate.ExpressionBodyEndLineIndex.Value);
+                            var expressionEndLineIndex = csharpPropertyCandidate.ExpressionBodyEndLineIndex.Value;
+                            if (expressionEndLineIndex > i
+                                && csharpPropertyCandidate.ExpressionBodyEndLineExclusiveEndColumn.HasValue)
+                            {
+                                // Suppress complete continuation lines, but resume after the
+                                // terminating semicolon so a valid same-line sibling remains visible.
+                                // 完全な continuation 行だけを抑止し、終端 semicolon の後から
+                                // 再開して有効な same-line sibling を維持する。
+                                csharpSuppressedContinuationUntil = Math.Max(
+                                    csharpSuppressedContinuationUntil,
+                                    expressionEndLineIndex - 1);
+                                csharpSuppressedContinuationResumeLine = expressionEndLineIndex;
+                                csharpSuppressedContinuationResumeRawColumn =
+                                    csharpPropertyCandidate.ExpressionBodyEndLineExclusiveEndColumn.Value;
+                            }
+                            else
+                            {
+                                csharpSuppressedContinuationUntil = Math.Max(
+                                    csharpSuppressedContinuationUntil,
+                                    expressionEndLineIndex);
+                            }
                         }
 
                         if (lang == "csharp"

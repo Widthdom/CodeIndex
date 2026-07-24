@@ -1284,8 +1284,18 @@ public static partial class SymbolExtractor
 
         if (TryFindCSharpExpressionArrow(lines, startLineIndex, startLineIndex, out var sameLineArrowLineIndex, out var sameLineArrowColumn))
         {
-            var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(lines, sameLineArrowLineIndex, sameLineArrowColumn);
-            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex, null, expressionEndLineIndex);
+            var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(
+                lines,
+                sameLineArrowLineIndex,
+                sameLineArrowColumn,
+                out var expressionEndLineExclusiveEndColumn);
+            return new CSharpPropertyMatchCandidate(
+                matchLine,
+                startLineIndex,
+                startLineIndex,
+                null,
+                expressionEndLineIndex,
+                expressionEndLineExclusiveEndColumn);
         }
 
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
@@ -1376,8 +1386,18 @@ public static partial class SymbolExtractor
 
             if (TryFindCSharpExpressionArrow(lines, startLineIndex, i, out var arrowLineIndex, out var arrowColumn))
             {
-                var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(lines, arrowLineIndex, arrowColumn);
-                return new CSharpPropertyMatchCandidate(normalizedCombined, i, i, null, expressionEndLineIndex);
+                var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(
+                    lines,
+                    arrowLineIndex,
+                    arrowColumn,
+                    out var expressionEndLineExclusiveEndColumn);
+                return new CSharpPropertyMatchCandidate(
+                    normalizedCombined,
+                    i,
+                    i,
+                    null,
+                    expressionEndLineIndex,
+                    expressionEndLineExclusiveEndColumn);
             }
 
             // Plain-field multi-line declaration: continuation reaches a top-level `;`.
@@ -2107,7 +2127,11 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static int FindCSharpExpressionBodyEndLine(string[] lines, int arrowLineIndex, int arrowColumn)
+    private static int FindCSharpExpressionBodyEndLine(
+        string[] lines,
+        int arrowLineIndex,
+        int arrowColumn,
+        out int? exclusiveEndColumn)
     {
         var lexState = new CSharpLexState();
         var parenDepth = 0;
@@ -2147,11 +2171,13 @@ public static partial class SymbolExtractor
                         braceDepth--;
                         break;
                     case ';' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        exclusiveEndColumn = column + 1;
                         return i;
                 }
             }
         }
 
+        exclusiveEndColumn = null;
         return arrowLineIndex;
     }
 

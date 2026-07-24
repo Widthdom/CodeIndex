@@ -491,6 +491,11 @@ public partial class SymbolExtractorTests
                         ? HasSymbolIndex("idx_symbols_name_folded")
                         : HasSymbolIndex("idx_symbols_name_nocase");
 
+                private int MultilineWithSibling =>
+                    1; public int PreservedContinuationSibling;
+                private Func<int> Factory = () =>
+                    1; public int PreservedLambdaSibling;
+
                 public int BeforeSameLine() => 1; public bool InlineAvailability => HasSymbolIndex("idx_symbols_inline"); public int SameLineSibling() => 2;
                 public int AfterTemplates() => 1;
             }
@@ -501,7 +506,15 @@ public partial class SymbolExtractorTests
         Assert.Equal(content.Split('\n').Length, fixtureHost.EndLine);
         Assert.Equal(fixtureHost.EndLine, fixtureHost.BodyEndLine);
 
-        foreach (var name in new[] { "SymbolNameExactIndexAvailable", "InlineAvailability" })
+        foreach (var name in new[]
+        {
+            "SymbolNameExactIndexAvailable",
+            "MultilineWithSibling",
+            "Factory",
+            "PreservedContinuationSibling",
+            "PreservedLambdaSibling",
+            "InlineAvailability",
+        })
         {
             var property = Assert.Single(symbols.Where(symbol => symbol.Kind == "property" && symbol.Name == name));
             Assert.Equal("class", property.ContainerKind);
