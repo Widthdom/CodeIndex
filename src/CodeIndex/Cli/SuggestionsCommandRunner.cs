@@ -44,6 +44,9 @@ internal static class SuggestionsCommandRunner
           Records are deduplicated by normalized category, language, and description; adding a duplicate succeeds without creating another record.
           --duplicate-confidence and --duplicate-threshold apply only to `suggestions export --format issue-drafts`.
 
+        Side effects:
+          Writes one local draft to the suggestion store selected by --db; it does not submit or open a GitHub issue.
+
         Examples:
           cdidx suggestions add "Missing record extraction" --category symbol_extraction --language csharp
           cdidx suggestions add --description "Improve macro handling" --category language_support --evidence-path src/parser.rs --json

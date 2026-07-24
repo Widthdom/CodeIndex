@@ -287,33 +287,13 @@ internal static partial class ProgramRunner
     private static string ResolveSubcommandHelpName(string[] args)
     {
         if (args.Length > 2
-            && string.Equals(args[0], "db", StringComparison.Ordinal)
-            && TryGetHelpSubcommand(args.AsSpan(1), out var dbSubcommand))
+            && TryGetHelpSubcommand(args.AsSpan(1), out var requestedSubcommand))
         {
-            return dbSubcommand switch
-            {
-                "integrity" or "--integrity-check" => "db-integrity",
-                "schema" => "db-schema",
-                "prune" => "db-prune",
-                "checkpoint" => "db-checkpoint",
-                "checkpoints" => "db-checkpoints",
-                "restore" => "db-restore",
-                "restore-backups" => "db-restore-backups",
-                _ => "db",
-            };
-        }
-
-        if (args.Length > 2
-            && string.Equals(args[0], "hooks", StringComparison.Ordinal)
-            && TryGetHelpSubcommand(args.AsSpan(1), out var hooksSubcommand))
-        {
-            return hooksSubcommand switch
-            {
-                "install" => "hooks-install",
-                "uninstall" => "hooks-uninstall",
-                "status" => "hooks-status",
-                _ => "hooks",
-            };
+            var command = CliCommandCatalog.NormalizePublicCommandName(args[0]);
+            var subcommand = CliCommandCatalog.NormalizeSubcommandName(command, requestedSubcommand);
+            var nestedHelpName = $"{command}-{subcommand}";
+            if (ConsoleUi.GetUsageLine(nestedHelpName) is not null)
+                return nestedHelpName;
         }
 
         return args[0];

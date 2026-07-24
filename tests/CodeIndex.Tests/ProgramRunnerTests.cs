@@ -226,7 +226,8 @@ public class ProgramRunnerTests
     [InlineData(new[] { "help", "search" }, "cdidx search")]
     [InlineData(new[] { "help", "db", "schema" }, "cdidx db schema")]
     [InlineData(new[] { "help", "db", "--integrity-check" }, "cdidx db integrity|--integrity-check")]
-    [InlineData(new[] { "help", "workspace", "use" }, "cdidx workspace <list|status|use|current|clear|deactivate>")]
+    [InlineData(new[] { "help", "workspace", "use" }, "cdidx workspace use <name-or-relative-path|default>")]
+    [InlineData(new[] { "help", "suggestions", "export" }, "cdidx suggestions export")]
     [InlineData(new[] { "help", "suggestions", "add" }, "cdidx suggestions add")]
     [InlineData(new[] { "help", "refs" }, "cdidx references")]
     [InlineData(new[] { "help", "stats" }, "cdidx status")]
@@ -242,6 +243,66 @@ public class ProgramRunnerTests
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Contains(expectedUsage, stdout, StringComparison.Ordinal);
         Assert.Empty(stderr);
+    }
+
+    [Fact]
+    public void Run_ConventionalHelpEveryCatalogSubcommandHasVerbSpecificUsage_Issue4733()
+    {
+        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
+        {
+            foreach (var subcommand in subcommands)
+            {
+                foreach (var args in new[]
+                {
+                    new[] { "help", command, subcommand },
+                    new[] { command, subcommand, "--help" },
+                })
+                {
+                    var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                        args,
+                        appVersion: "1.10.0"));
+
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Contains($"cdidx {command} {subcommand}", stdout, StringComparison.Ordinal);
+                    Assert.Contains("Example", stdout, StringComparison.Ordinal);
+                    Assert.Empty(stderr);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_HelpCatalogDocumentsAcceptedAggregateAndSafetyContracts_Issue4733()
+    {
+        var (fullExitCode, fullStdout, fullStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["--help-all"],
+            appVersion: "1.10.0"));
+        var (indexExitCode, indexStdout, indexStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["help", "index"],
+            appVersion: "1.10.0"));
+        var (exportExitCode, exportStdout, exportStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["help", "suggestions", "export"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, fullExitCode);
+        Assert.Contains("--suppress-noise", fullStdout, StringComparison.Ordinal);
+        Assert.Contains("--symbol <name>", fullStdout, StringComparison.Ordinal);
+        Assert.Contains("--symbol-family <prefix>", fullStdout, StringComparison.Ordinal);
+        Assert.Empty(fullStderr);
+
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Contains("--rebuild [--yes]", indexStdout, StringComparison.Ordinal);
+        Assert.Contains("--yes", indexStdout, StringComparison.Ordinal);
+        Assert.Contains("stdin is redirected", indexStdout, StringComparison.Ordinal);
+        Assert.Empty(indexStderr);
+
+        Assert.Equal(CommandExitCodes.Success, exportExitCode);
+        Assert.Contains("--format <json|markdown|issue-drafts>", exportStdout, StringComparison.Ordinal);
+        Assert.Contains("--open-issues <path|github|github:owner/name>", exportStdout, StringComparison.Ordinal);
+        Assert.Contains("read-only GitHub API GETs", exportStdout, StringComparison.Ordinal);
+        Assert.Contains("CDIDX_GITHUB_TOKEN", exportStdout, StringComparison.Ordinal);
+        Assert.Contains("export never submits or opens GitHub issues", exportStdout, StringComparison.Ordinal);
+        Assert.Empty(exportStderr);
     }
 
     [Theory]
