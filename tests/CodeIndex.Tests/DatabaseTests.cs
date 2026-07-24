@@ -4724,6 +4724,35 @@ public class DatabaseTests : IDisposable
     }
 
     [Theory]
+    [InlineData("groovy", 4)]
+    [InlineData("prolog", 3)]
+    [InlineData("ambiguous_pl", 3)]
+    public void GetUnchangedFileId_InvalidatesPriorDynamicGraphContracts_Issue4746(
+        string language,
+        int previousContractVersion)
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = $"src/prior-graph-{language}.txt",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+        _writer.SetMeta(
+            DbContext.GetDynamicReferenceGraphContractVersionMetaKey(language),
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+
+        Assert.True(SymbolExtractor.GetContractVersion(language) > previousContractVersion);
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
+    [Theory]
     [InlineData("crystal")]
     [InlineData("groovy")]
     [InlineData("tcl")]

@@ -181,7 +181,10 @@ internal static class DynamicDeclarativeReferenceExtractor
         SwitchTable,
     }
 
-    internal readonly record struct PrologGoalCall(string Name, int Column);
+    internal readonly record struct PrologGoalCall(
+        string Name,
+        int Column,
+        bool IsTopLevelDirective = false);
 
     internal readonly record struct DeclarationPosition(int Line, int Column, string Name);
 
@@ -888,7 +891,25 @@ internal static class DynamicDeclarativeReferenceExtractor
                 if (!state.CallableNames.Contains(call.Name))
                     continue;
 
-                var prologContainer = state.ResolveContainer(lineNumber, call.Column, fallback: null);
+                var prologContainer = call.IsTopLevelDirective
+                    ? null
+                    : state.ResolveContainer(lineNumber, call.Column, fallback: null);
+                if (call.IsTopLevelDirective)
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        call.Name,
+                        call.Column,
+                        "call",
+                        context,
+                        lineNumber,
+                        container: null,
+                        language);
+                    continue;
+                }
+
                 if (prologContainer != null
                     && !string.Equals(prologContainer.Name, call.Name, StringComparison.Ordinal))
                 {
@@ -951,6 +972,11 @@ internal static class DynamicDeclarativeReferenceExtractor
             var nameGroup = match.Groups["name"];
             if (!state.CallableNames.Contains(nameGroup.Value))
                 continue;
+            if (language == "groovy"
+                && IsGroovyClosureParameterHeader(preparedLine, nameGroup.Index))
+            {
+                continue;
+            }
 
             addCallLikeReference(nameGroup.Value, nameGroup.Index);
         }
@@ -1043,6 +1069,28 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
 
         return -1;
+    }
+
+    private static bool IsGroovyClosureParameterHeader(string line, int nameColumn)
+    {
+        var openingBrace = line.LastIndexOf('{', Math.Max(0, nameColumn - 1));
+        if (openingBrace < 0)
+            return false;
+
+        var closingBraceBeforeName = line.LastIndexOf('}', Math.Max(0, nameColumn - 1));
+        if (closingBraceBeforeName > openingBrace)
+            return false;
+
+        var arrowColumn = line.IndexOf("->", nameColumn, StringComparison.Ordinal);
+        if (arrowColumn < 0)
+            return false;
+
+        var closingBraceAfterName = line.IndexOf('}', nameColumn);
+        if (closingBraceAfterName >= 0 && closingBraceAfterName < arrowColumn)
+            return false;
+
+        return line.AsSpan(nameColumn, arrowColumn - nameColumn)
+            .IndexOfAny(';', '{', '}') < 0;
     }
 
     private static int SkipWhitespace(string line, int column)
@@ -1350,11 +1398,10 @@ internal static class DynamicDeclarativeReferenceExtractor
         if (operatorLength == 0)
             return false;
 
-        var delimiterColumn = column + operatorLength;
+        var delimiterColumn = SkipWhitespace(line, column + operatorLength);
         if (delimiterColumn >= line.Length
             || char.IsLetterOrDigit(line[delimiterColumn])
-            || line[delimiterColumn] == '_'
-            || char.IsWhiteSpace(line[delimiterColumn]))
+            || line[delimiterColumn] == '_')
         {
             return false;
         }
@@ -2833,7 +2880,11 @@ internal static class DynamicDeclarativeReferenceExtractor
                     ref expectGoal,
                     directiveCalls);
                 if (directiveCalls.Count > 0)
-                    result[lineNumber] = directiveCalls;
+                {
+                    result[lineNumber] = directiveCalls
+                        .Select(static call => call with { IsTopLevelDirective = true })
+                        .ToList();
+                }
                 if (ContainsPrologClauseTerminator(lines[lineIndex]))
                 {
                     frames.Clear();
@@ -2891,7 +2942,13 @@ internal static class DynamicDeclarativeReferenceExtractor
                 ref expectGoal,
                 lineCalls);
             if (lineCalls.Count > 0)
-                result[lineNumber] = lineCalls;
+            {
+                result[lineNumber] = lineCalls
+                    .Select(call => IsTopLevelPrologDirectiveGoal(lines[lineIndex], call.Column)
+                        ? call with { IsTopLevelDirective = true }
+                        : call)
+                    .ToList();
+            }
 
             if (ContainsPrologClauseTerminator(callScanLine))
             {
@@ -2910,6 +2967,20 @@ internal static class DynamicDeclarativeReferenceExtractor
         while (column < line.Length && char.IsWhiteSpace(line[column]))
             column++;
         return line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal);
+    }
+
+    private static bool IsTopLevelPrologDirectiveGoal(string line, int goalColumn)
+    {
+        var segmentStartColumn = 0;
+        for (var column = 0; column < goalColumn; column++)
+        {
+            if (IsPrologClauseTerminator(line, column))
+                segmentStartColumn = column + 1;
+        }
+
+        segmentStartColumn = SkipWhitespace(line, segmentStartColumn);
+        return segmentStartColumn + 2 <= goalColumn
+            && line.AsSpan(segmentStartColumn).StartsWith(":-", StringComparison.Ordinal);
     }
 
     private static bool TryInitializePrologMultilineHeadScan(

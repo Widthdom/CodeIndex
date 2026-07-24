@@ -1440,6 +1440,7 @@ public partial class ReferenceExtractorTests
             run :- a. other :- b.
             continued :-
                 a. continuation_sibling :- b.
+            fact. :- a.
             before_directive. :- dynamic before_directive/0.
             before_multiline. multiline_after(
                 X
@@ -1457,6 +1458,7 @@ public partial class ReferenceExtractorTests
                 "other",
                 "continued",
                 "continuation_sibling",
+                "fact",
                 "before_directive",
                 "before_multiline",
                 "multiline_after",
@@ -1469,6 +1471,14 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(references, "call", "continued", "a");
         AssertReferencesContain(references, "call", "continuation_sibling", "b");
         AssertReferencesContain(references, "call", "multiline_after", "a");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == null
+            && reference.SymbolName == "a");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "fact"
+            && reference.SymbolName == "a");
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
@@ -1517,6 +1527,9 @@ public partial class ReferenceExtractorTests
             my $paired = s{helper()}{replacement};
             my $translated = tr/helper()/replacement/;
             my $quoted = q(helper());
+            my $spacedQuoted = q {helper()};
+            my $spacedRegex = qr {helper()};
+            my $spacedSubstitution = s {helper()} {replacement};
             my $multiline = qr{
                 helper()
             };
@@ -1642,6 +1655,33 @@ public partial class ReferenceExtractorTests
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+    }
+
+    [Fact]
+    public void Extract_Groovy_DoesNotTreatClosureParametersAsBareCalls_Issue4746()
+    {
+        const string content = """
+            def helper() {}
+
+            def run() {
+                [1].each { helper -> println helper }
+            }
+
+            def actual() {
+                helper; [1].each { value -> println value }
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("groovy", content);
+
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "actual"
+            && reference.SymbolName == "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
     }
 
     [Fact]

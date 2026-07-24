@@ -323,7 +323,7 @@ public static partial class QueryCommandRunner
                         ? string.Join(", ", status.ReferenceGraphIncompleteReasons.Take(4))
                         : DbReader.ReferenceExtractionCapStateUnavailableReason;
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"reference graph is incomplete ({reasons}); absent callers/callees/deps/impact edges are not authoritative."));
-                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", "inspect reference_extraction_cap_hits.files, reduce or exclude the generated/pathological source, then rerun indexing."));
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", GetReferenceGraphRepairSafetyNote(status)));
                 }
                 if (!status.GraphTableAvailable)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", "symbol_references table missing — reference / caller / callee / unused counts are degraded to 0."));

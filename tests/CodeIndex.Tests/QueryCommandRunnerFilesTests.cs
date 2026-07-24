@@ -1241,6 +1241,49 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_HumanOutput_UsesDynamicGraphContractRepairHint_Issue4746()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_dynamic_graph_contract_4746");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.groovy"),
+                "def helper() { }\ndef run() { helper() }\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(
+                    DbContext.GetDynamicReferenceGraphContractVersionMetaKey("groovy"),
+                    "0");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(
+                "Refresh indexing to rewrite stale dynamic-language graph rows and extractor-version stamps.",
+                stdout,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "reduce or exclude the cap-hitting generated/pathological source",
+                stdout,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_Json_ReadOnlyUriFoldRemediationUsesWritableDbPath()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_uri");
