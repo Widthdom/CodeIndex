@@ -69,6 +69,52 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void GraphCommands_StaleDynamicContractMarksAbsenceQueriesIncomplete_Issue4746()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_dynamic_contract_4746");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cr",
+                "crystal",
+                "def helper(value)\n  value\nend\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+                writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("crystal"), "2");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(
+                "callers",
+                ["MissingSymbol", "--db", dbPath, "--json", "--count", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.Equal(
+                0L,
+                json.GetProperty("reference_extraction_cap_hits").GetProperty("hit_count").GetInt64());
+            Assert.Contains(
+                DbReader.DynamicReferenceGraphContractStaleReason,
+                json.GetProperty("reference_graph_incomplete_reasons")
+                    .EnumerateArray()
+                    .Select(value => value.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static void AssertReferenceGraphIncomplete(JsonElement json)
     {
         Assert.True(json.GetProperty("degraded").GetBoolean());

@@ -1324,7 +1324,11 @@ public partial class McpServer
             AddMcpIndexDiagnostics(structured, failures, mcpIndexDiagnostics);
             var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(
                 issuesStateAvailable: (priorReadiness & DbContext.IssuesReadyFlag) != 0);
-            AddReferenceGraphCompletenessSignal(structured, referenceExtractionCapHits);
+            using var referenceSignalReader = new DbReader(writer.Connection, isReadOnly: true);
+            AddReferenceGraphCompletenessSignal(
+                structured,
+                referenceSignalReader,
+                referenceExtractionCapHits);
             if (!sqlGraphContractReady)
             {
                 AddSqlGraphContractSignal(

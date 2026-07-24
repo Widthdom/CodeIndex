@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 
 namespace CodeIndex.Database;
 
@@ -67,14 +68,7 @@ public partial class DbReader
         // reader を内側ブロックに閉じ込め、txn.Commit() の前に statement handle を
         // 解放する。SqliteTransaction.Commit() は同じ connection 上で開いている reader
         // があると失敗する。
-        var langs = new Dictionary<string, long>();
-        {
-            using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-                langs[reader.GetString(0)] = reader.GetInt64(1);
-        }
+        var langs = GetIndexedLanguageCounts();
 
         var symbolsByLanguage = new Dictionary<string, Dictionary<string, long>>(StringComparer.Ordinal);
         {
@@ -288,6 +282,36 @@ public partial class DbReader
         }
 
         return true;
+    }
+
+    internal bool IsReferenceGraphComplete(ReferenceExtractionCapHitSummary capHits) =>
+        capHits.StateAvailable
+        && capHits.HitCount == 0
+        && AreDynamicReferenceGraphContractsCurrent(GetIndexedLanguageCounts());
+
+    internal IReadOnlyList<string> GetReferenceGraphIncompleteReasons(
+        ReferenceExtractionCapHitSummary capHits)
+    {
+        var reasons = capHits.Reasons.ToList();
+        if (!AreDynamicReferenceGraphContractsCurrent(GetIndexedLanguageCounts())
+            && !reasons.Contains(DynamicReferenceGraphContractStaleReason, StringComparer.Ordinal))
+        {
+            reasons.Add(DynamicReferenceGraphContractStaleReason);
+        }
+
+        return reasons;
+    }
+
+    private Dictionary<string, long> GetIndexedLanguageCounts()
+    {
+        var languages = new Dictionary<string, long>();
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText =
+            "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            languages[reader.GetString(0)] = reader.GetInt64(1);
+        return languages;
     }
 
     private StatusPreparedCommandCache? GetPreparedCommandCacheStatus()

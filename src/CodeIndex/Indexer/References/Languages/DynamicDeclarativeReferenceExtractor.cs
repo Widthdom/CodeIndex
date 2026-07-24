@@ -13,6 +13,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             HashSet<DeclarationPosition> declarationPositions,
             IReadOnlyDictionary<int, SymbolRecord> containersByLine,
             IReadOnlyList<TclContainerScope> tclContainerScopes,
+            IReadOnlyDictionary<int, List<SymbolRecord>> prologContainersByLine,
             IReadOnlyList<string>? tclCallLines,
             IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine)
         {
@@ -20,6 +21,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             DeclarationPositions = declarationPositions;
             ContainersByLine = containersByLine;
             TclContainerScopes = tclContainerScopes;
+            PrologContainersByLine = prologContainersByLine;
             TclCallLines = tclCallLines;
             PrologGoalCallsByLine = prologGoalCallsByLine;
         }
@@ -28,6 +30,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         private HashSet<DeclarationPosition> DeclarationPositions { get; }
         public IReadOnlyDictionary<int, SymbolRecord> ContainersByLine { get; }
         private IReadOnlyList<TclContainerScope> TclContainerScopes { get; }
+        private IReadOnlyDictionary<int, List<SymbolRecord>> PrologContainersByLine { get; }
         private IReadOnlyList<string>? TclCallLines { get; }
         private IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? PrologGoalCallsByLine { get; }
 
@@ -38,6 +41,18 @@ internal static class DynamicDeclarativeReferenceExtractor
                 var scope = TclContainerScopes[scopeIndex];
                 if (scope.Contains(lineNumber, column))
                     return scope.Symbol;
+            }
+
+            if (PrologContainersByLine.TryGetValue(lineNumber, out var prologContainers))
+            {
+                for (var containerIndex = prologContainers.Count - 1;
+                    containerIndex >= 0;
+                    containerIndex--)
+                {
+                    var prologContainer = prologContainers[containerIndex];
+                    if (prologContainer.StartColumn is { } startColumn && startColumn < column)
+                        return prologContainer;
+                }
             }
 
             return ContainersByLine.TryGetValue(lineNumber, out var container) ? container : fallback;
@@ -70,7 +85,8 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
 
         public bool HasPrologContainer(int lineNumber) =>
-            ContainersByLine.ContainsKey(lineNumber);
+            ContainersByLine.ContainsKey(lineNumber)
+            || PrologContainersByLine.ContainsKey(lineNumber);
 
         public bool IsDeclarationAt(int lineNumber, int column, string name) =>
             DeclarationPositions.Contains(new DeclarationPosition(lineNumber, column, name));
@@ -80,7 +96,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"^\s*proc\s+[A-Za-z_:][\w:.-]*\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PrologHeadRegex = new(
-        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*$))",
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*(?:$|[a-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s*(?::-|-->|\.))))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PrologMultilineHeadRegex = new(
         @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*\(",
@@ -98,7 +114,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"^\s*:-\s*use_module\s*\(\s*(?:library\s*\(\s*)?['""]?(?<name>(?:\.\.?/)*[a-z][A-Za-z0-9_./-]*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CrystalBareCallRegex = new(
-        @"(?:^|[;=])\s*(?:return\s+)?(?<name>[A-Za-z_]\w*[?!]?)(?![\w?!])(?!\s*(?:\(|(?:<<|>>|[+\-*/%&|^])?=))",
+        @"(?:^|[;={]|\b(?:then|do)\b|&&|\|\|)\s*(?:return\s+)?(?<name>[A-Za-z_]\w*[?!]?)(?![\w?!])(?!\s*(?:\(|(?:<<|>>|[+\-*/%&|^])?=))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CrystalSuffixedParenthesizedCallRegex = new(
         @"(?<![\w])(?<name>[A-Za-z_]\w*[?!])\s*\(",
@@ -627,6 +643,7 @@ internal static class DynamicDeclarativeReferenceExtractor
 
         var containersByLine = new Dictionary<int, SymbolRecord>();
         var tclContainerScopes = new List<TclContainerScope>();
+        var prologContainersByLine = new Dictionary<int, List<SymbolRecord>>();
         string[]? tclCallLines = null;
         IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine = null;
         if (language == "tcl")
@@ -646,7 +663,11 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
         else if (language is "prolog" or "ambiguous_pl")
         {
-            AddPrologContainers(preparedLines, symbols, containersByLine);
+            AddPrologContainers(
+                preparedLines,
+                symbols,
+                containersByLine,
+                prologContainersByLine);
             prologGoalCallsByLine = BuildPrologGoalCalls(
                 preparedLines,
                 containersByLine,
@@ -658,6 +679,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             declarationPositions,
             containersByLine,
             tclContainerScopes,
+            prologContainersByLine,
             tclCallLines,
             prologGoalCallsByLine);
     }
@@ -692,7 +714,8 @@ internal static class DynamicDeclarativeReferenceExtractor
                 if (!state.CallableNames.Contains(call.Name))
                     continue;
 
-                if (state.ContainersByLine.TryGetValue(lineNumber, out var prologContainer)
+                var prologContainer = state.ResolveContainer(lineNumber, call.Column, fallback: null);
+                if (prologContainer != null
                     && !string.Equals(prologContainer.Name, call.Name, StringComparison.Ordinal))
                 {
                     ReferenceExtractor.AddReference(
@@ -1004,18 +1027,65 @@ internal static class DynamicDeclarativeReferenceExtractor
         if (language is not ("prolog" or "ambiguous_pl") || isClauseContinuation)
             return line;
 
-        var firstColumn = 0;
-        while (firstColumn < line.Length && char.IsWhiteSpace(line[firstColumn]))
-            firstColumn++;
-        if (firstColumn >= line.Length
-            || !char.IsLower(line[firstColumn])
-            || line.AsSpan(firstColumn).StartsWith(":-", StringComparison.Ordinal))
+        var masked = line.ToCharArray();
+        var clauseStartColumn = 0;
+        var changed = false;
+        while (TryFindNextPrologClauseStart(line, clauseStartColumn, out var headStartColumn)
+            && TryFindPrologHeadBoundary(
+                line,
+                headStartColumn,
+                out var bodyStartColumn,
+                out var clauseEndColumn))
         {
-            return line;
+            if (bodyStartColumn >= 0)
+            {
+                FillWithSpaces(masked, headStartColumn, bodyStartColumn);
+                changed = true;
+                if (clauseEndColumn < 0)
+                    break;
+            }
+            else
+            {
+                FillWithSpaces(masked, headStartColumn, clauseEndColumn + 1);
+                changed = true;
+            }
+
+            clauseStartColumn = clauseEndColumn + 1;
         }
 
+        return changed ? new string(masked) : line;
+    }
+
+    private static bool TryFindNextPrologClauseStart(
+        string line,
+        int searchColumn,
+        out int clauseStartColumn)
+    {
+        for (var column = Math.Max(0, searchColumn); column < line.Length; column++)
+        {
+            if (char.IsWhiteSpace(line[column]))
+                continue;
+
+            clauseStartColumn = column;
+            return char.IsLower(line[column]);
+        }
+
+        clauseStartColumn = -1;
+        return false;
+    }
+
+    private static bool TryFindPrologHeadBoundary(
+        string line,
+        int headStartColumn,
+        out int bodyStartColumn,
+        out int clauseEndColumn)
+    {
+        bodyStartColumn = -1;
+        clauseEndColumn = -1;
         var parenthesisDepth = 0;
-        for (var column = firstColumn; column < line.Length; column++)
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var column = headStartColumn; column < line.Length; column++)
         {
             var ch = line[column];
             if (ch is '\'' or '"')
@@ -1023,17 +1093,28 @@ internal static class DynamicDeclarativeReferenceExtractor
                 column = SkipQuotedToken(line, column, ch) - 1;
                 continue;
             }
-            if (ch == '(')
+            switch (ch)
             {
-                parenthesisDepth++;
-                continue;
+                case '(':
+                    parenthesisDepth++;
+                    continue;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    continue;
             }
-            if (ch == ')' && parenthesisDepth > 0)
-            {
-                parenthesisDepth--;
-                continue;
-            }
-            if (parenthesisDepth != 0)
+            if (parenthesisDepth != 0 || bracketDepth != 0 || braceDepth != 0)
                 continue;
 
             var separatorLength = line.AsSpan(column).StartsWith("-->", StringComparison.Ordinal)
@@ -1043,27 +1124,18 @@ internal static class DynamicDeclarativeReferenceExtractor
                     : 0;
             if (separatorLength > 0)
             {
-                var masked = line.ToCharArray();
-                FillWithSpaces(masked, 0, column);
-                return new string(masked);
+                bodyStartColumn = column + separatorLength;
+                clauseEndColumn = FindPrologClauseTerminator(line, bodyStartColumn);
+                return true;
             }
-
-            if (IsPrologClauseTerminator(line, column)
-                && IsOnlyWhitespaceAfter(line, column + 1))
-                return new string(' ', line.Length);
+            if (IsPrologClauseTerminator(line, column))
+            {
+                clauseEndColumn = column;
+                return true;
+            }
         }
 
-        return line;
-    }
-
-    private static bool IsOnlyWhitespaceAfter(string line, int startColumn)
-    {
-        for (var column = startColumn; column < line.Length; column++)
-        {
-            if (!char.IsWhiteSpace(line[column]))
-                return false;
-        }
-        return true;
+        return false;
     }
 
     internal static bool IsPrologClauseTerminator(string line, int column)
@@ -1077,7 +1149,59 @@ internal static class DynamicDeclarativeReferenceExtractor
             return false;
         if (char.IsDigit(previous) && char.IsDigit(next))
             return false;
-        return IsOnlyWhitespaceAfter(line, column + 1);
+        if (next != '\0' && !char.IsWhiteSpace(next))
+            return false;
+        return IsTopLevelPrologColumn(line, column);
+    }
+
+    private static bool IsTopLevelPrologColumn(string line, int targetColumn)
+    {
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var column = 0; column < targetColumn; column++)
+        {
+            var ch = line[column];
+            if (ch is '\'' or '"')
+            {
+                column = SkipQuotedToken(line, column, ch) - 1;
+                continue;
+            }
+            switch (ch)
+            {
+                case '(':
+                    parenthesisDepth++;
+                    break;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    break;
+            }
+        }
+
+        return parenthesisDepth == 0 && bracketDepth == 0 && braceDepth == 0;
+    }
+
+    private static int FindPrologClauseTerminator(string line, int startColumn)
+    {
+        for (var column = Math.Max(0, startColumn); column < line.Length; column++)
+        {
+            if (IsPrologClauseTerminator(line, column))
+                return column;
+        }
+
+        return -1;
     }
 
     private static void EmitImportReference(
@@ -1164,10 +1288,15 @@ internal static class DynamicDeclarativeReferenceExtractor
             scopes.Add(new TclContainerScope(
                 symbol,
                 bodyStartLineIndex + 1,
-                bodyStartColumn,
+                lines[bodyStartLineIndex][bodyStartColumn] is '{' or '"'
+                    ? bodyStartColumn
+                    : bodyStartColumn - 1,
                 bodyEnd.Line + 1,
-                bodyEnd.Column));
-            scriptBodyOpenings.Add(GetTclPositionKey(bodyStartLineIndex, bodyStartColumn));
+                lines[bodyStartLineIndex][bodyStartColumn] is '{' or '"'
+                    ? bodyEnd.Column
+                    : bodyEnd.Column + 1));
+            if (lines[bodyStartLineIndex][bodyStartColumn] == '{')
+                scriptBodyOpenings.Add(GetTclPositionKey(bodyStartLineIndex, bodyStartColumn));
         }
 
         scopes.Sort(static (left, right) =>
@@ -1205,14 +1334,18 @@ internal static class DynamicDeclarativeReferenceExtractor
                 argsEndColumn + 1,
                 out bodyStartLineIndex,
                 out bodyStartColumn)
-            || lines[bodyStartLineIndex][bodyStartColumn] != '{'
-            || !braceEnds.TryGetValue(
-                GetTclPositionKey(bodyStartLineIndex, bodyStartColumn),
-                out bodyEnd))
+            || !TryFindTclWordEnd(
+                lines,
+                braceEnds,
+                bodyStartLineIndex,
+                bodyStartColumn,
+                out var bodyEndLine,
+                out var bodyEndColumn))
         {
             return false;
         }
 
+        bodyEnd = new TclBraceEnd(bodyEndLine, bodyEndColumn);
         return true;
     }
 
@@ -1466,16 +1599,41 @@ internal static class DynamicDeclarativeReferenceExtractor
                     }
                     else if (ch == '"' && frame.WordStart)
                     {
-                        frame.WordIndex++;
-                        var endColumn = SkipQuotedToken(line, column, '"');
-                        FillWithSpaces(buffer, column, endColumn);
+                        var wordIndex = frame.WordIndex++;
+                        if (wordIndex % 2 == 1)
+                        {
+                            buffer[column] = ';';
+                            frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script, '"'));
+                            suppressLeadingContinuedWord = false;
+                        }
+                        else
+                        {
+                            var endColumn = SkipQuotedToken(line, column, '"');
+                            FillWithSpaces(buffer, column, endColumn);
+                            column = endColumn - 1;
+                        }
                         frame.WordStart = false;
-                        column = endColumn;
+                        column++;
                     }
                     else
                     {
                         if (frame.WordStart)
-                            frame.WordIndex++;
+                        {
+                            var wordIndex = frame.WordIndex++;
+                            if (wordIndex % 2 == 1)
+                            {
+                                var endColumn = column;
+                                while (endColumn < line.Length
+                                    && !char.IsWhiteSpace(line[endColumn])
+                                    && line[endColumn] != frame.Terminator)
+                                {
+                                    buffer[endColumn] = line[endColumn];
+                                    endColumn++;
+                                }
+                                MarkTclBareScriptCommandBoundary(buffer, column);
+                                column = endColumn - 1;
+                            }
+                        }
                         frame.WordStart = false;
                         column++;
                     }
@@ -2080,6 +2238,13 @@ internal static class DynamicDeclarativeReferenceExtractor
                     expectGoal = false;
                 continue;
             }
+            if (IsPrologClauseTerminator(line, column))
+            {
+                frames.Clear();
+                expectGoal = true;
+                column++;
+                continue;
+            }
 
             if (expectGoal)
             {
@@ -2351,7 +2516,8 @@ internal static class DynamicDeclarativeReferenceExtractor
     private static void AddPrologContainers(
         IReadOnlyList<string> lines,
         IReadOnlyList<SymbolRecord> symbols,
-        Dictionary<int, SymbolRecord> containersByLine)
+        Dictionary<int, SymbolRecord> containersByLine,
+        Dictionary<int, List<SymbolRecord>> declarationsByLine)
     {
         foreach (var symbol in symbols)
         {
@@ -2359,27 +2525,49 @@ internal static class DynamicDeclarativeReferenceExtractor
                 continue;
 
             var startLineIndex = symbol.StartLine - 1;
-            var headMatch = PrologHeadRegex.Match(lines[startLineIndex]);
+            var startColumn = Math.Clamp(
+                symbol.StartColumn ?? 0,
+                0,
+                lines[startLineIndex].Length);
+            var headLine = lines[startLineIndex][startColumn..];
+            var headMatch = PrologHeadRegex.Match(headLine);
             if (!headMatch.Success)
-                headMatch = PrologMultilineHeadRegex.Match(lines[startLineIndex]);
+                headMatch = PrologMultilineHeadRegex.Match(headLine);
             if (!headMatch.Success
                 || !string.Equals(headMatch.Groups["name"].Value, symbol.Name, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            var endLineIndex = FindPrologClauseEnd(lines, startLineIndex);
+            if (!declarationsByLine.TryGetValue(symbol.StartLine, out var declarations))
+            {
+                declarations = [];
+                declarationsByLine[symbol.StartLine] = declarations;
+            }
+            declarations.Add(symbol);
+
+            var endLineIndex = FindPrologClauseEnd(lines, startLineIndex, startColumn);
             for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
                 containersByLine.TryAdd(lineIndex + 1, symbol);
         }
+
+        foreach (var declarations in declarationsByLine.Values)
+        {
+            declarations.Sort(static (left, right) =>
+                (left.StartColumn ?? 0).CompareTo(right.StartColumn ?? 0));
+        }
     }
 
-    private static int FindPrologClauseEnd(IReadOnlyList<string> lines, int startLineIndex)
+    private static int FindPrologClauseEnd(
+        IReadOnlyList<string> lines,
+        int startLineIndex,
+        int startColumn)
     {
         for (var lineIndex = startLineIndex; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
-            for (var column = 0; column < line.Length; column++)
+            var firstColumn = lineIndex == startLineIndex ? startColumn : 0;
+            for (var column = firstColumn; column < line.Length; column++)
             {
                 if (IsPrologClauseTerminator(line, column))
                     return lineIndex;

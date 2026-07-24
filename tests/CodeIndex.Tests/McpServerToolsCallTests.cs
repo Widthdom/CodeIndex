@@ -70,6 +70,38 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_ReferenceGraphCommandsExposeStaleDynamicContract_Issue4746()
+    {
+        var writer = new DbWriter(_db.Connection);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/stale.cr",
+            Lang = "crystal",
+            Size = 20,
+            Lines = 3,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("crystal"), "2");
+
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4746,"method":"tools/call","params":{"name":"callers","arguments":{"query":"MissingSymbol","countOnly":true}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.False(structured["reference_graph_complete"]!.GetValue<bool>());
+        Assert.True(structured["degraded"]!.GetValue<bool>());
+        Assert.Equal(
+            0L,
+            structured["reference_extraction_cap_hits"]!["hit_count"]!.GetValue<long>());
+        Assert.Contains(
+            DbReader.DynamicReferenceGraphContractStaleReason,
+            structured["reference_graph_incomplete_reasons"]!
+                .AsArray()
+                .Select(reason => reason!.GetValue<string>()));
+    }
+
+    [Fact]
     public void ToolsCall_LanguagesPublishesReferenceExtractionLimits_Issue4620()
     {
         var request = JsonNode.Parse(

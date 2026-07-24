@@ -1713,6 +1713,16 @@ public static partial class SymbolExtractor
                             restartPatternScanOffset = nextJavaSiblingOffset;
                             break;
                         }
+                        if (lang is "prolog" or "ambiguous_pl"
+                            && pattern.Kind == "function"
+                            && TryGetNextPrologClauseOffset(
+                                patternMatchLine,
+                                absoluteStartColumn,
+                                out var nextPrologClauseOffset))
+                        {
+                            restartPatternScanOffset = nextPrologClauseOffset;
+                            break;
+                        }
 
                         CollectRecordPrimaryComponentSymbols(
                             fileId,
@@ -2188,6 +2198,34 @@ public static partial class SymbolExtractor
         @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?<open>\()",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private const int PrologMultilineHeadLookaheadLineLimit = 256;
+
+    private static bool TryGetNextPrologClauseOffset(
+        string line,
+        int currentClauseOffset,
+        out int nextClauseOffset)
+    {
+        for (var column = Math.Max(0, currentClauseOffset); column < line.Length; column++)
+        {
+            if (!DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column))
+                continue;
+
+            for (var candidate = column + 1; candidate < line.Length; candidate++)
+            {
+                if (char.IsWhiteSpace(line[candidate]))
+                    continue;
+
+                if (char.IsLower(line[candidate]))
+                {
+                    nextClauseOffset = candidate;
+                    return true;
+                }
+                break;
+            }
+        }
+
+        nextClauseOffset = -1;
+        return false;
+    }
 
     private static bool[] BuildPrologClauseContinuationLines(
         IReadOnlyList<string> structuralLines,

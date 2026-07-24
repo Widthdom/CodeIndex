@@ -136,7 +136,8 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions)
     {
         var capHits = reader.GetReferenceExtractionCapHits();
-        var complete = capHits.StateAvailable && capHits.HitCount == 0;
+        var complete = reader.IsReferenceGraphComplete(capHits);
+        var incompleteReasons = reader.GetReferenceGraphIncompleteReasons(capHits);
         payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
             ReferenceExtractor.GetSafetyLimits(),
             CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceExtractionSafetyLimits);
@@ -147,7 +148,7 @@ public static partial class QueryCommandRunner
         if (!complete)
         {
             payload["reference_graph_incomplete_reasons"] = JsonSerializer.SerializeToNode(
-                capHits.Reasons,
+                incompleteReasons,
                 CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
             payload["degraded"] = true;
         }
@@ -158,11 +159,12 @@ public static partial class QueryCommandRunner
         if (json)
             return;
         var capHits = reader.GetReferenceExtractionCapHits();
-        if (capHits.StateAvailable && capHits.HitCount == 0)
+        if (reader.IsReferenceGraphComplete(capHits))
             return;
-        var reasons = capHits.Reasons.Count == 0
+        var incompleteReasons = reader.GetReferenceGraphIncompleteReasons(capHits);
+        var reasons = incompleteReasons.Count == 0
             ? DbReader.ReferenceExtractionCapStateUnavailableReason
-            : string.Join(", ", capHits.Reasons.Take(4));
+            : string.Join(", ", incompleteReasons.Take(4));
         CommandErrorWriter.WriteStderr($"WARN: reference graph is incomplete ({reasons}); callers, callees, deps, and impact results are not authoritative absences.");
     }
 

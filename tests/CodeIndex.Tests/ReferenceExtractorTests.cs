@@ -1067,6 +1067,7 @@ public partial class ReferenceExtractorTests
               multiline = "helper()
             continued"
               divided = value // 2; helper(value)
+              [value].each { helper }
               helper = 1
             end
 
@@ -1083,7 +1084,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "declared");
         AssertReferencesContain(references, "type_reference", null, "support");
         AssertReferencesContain(references, "call", "run", "helper");
-        Assert.Equal(4, references.Count(reference =>
+        Assert.Equal(5, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper"));
@@ -1195,6 +1196,9 @@ public partial class ReferenceExtractorTests
             proc variadic args {
                 helper
             }
+
+            proc quoted {} "helper"
+            proc bare {} helper
             """;
 
         var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
@@ -1203,6 +1207,8 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(references, "type_reference", null, "json");
         AssertReferencesContain(references, "call", "run", "helper");
         AssertReferencesContain(references, "call", "variadic", "helper");
+        AssertReferencesContain(references, "call", "quoted", "helper");
+        AssertReferencesContain(references, "call", "bare", "helper");
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName is "package" or "proc" or "set");
@@ -1219,6 +1225,8 @@ public partial class ReferenceExtractorTests
             proc switch_run {value} {
                 switch -regexp -matchvar matched -indexvar indices -- $value {
                     one { helper }
+                    quoted "helper"
+                    bare helper
                     default { helper }
                 }
             }
@@ -1238,7 +1246,7 @@ public partial class ReferenceExtractorTests
 
         var (_, references) = ExtractSymbolsAndReferences("tcl", content);
 
-        Assert.Equal(2, references.Count(reference =>
+        Assert.Equal(4, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "switch_run"
             && reference.SymbolName == "helper"));
@@ -1295,6 +1303,35 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "multi_line_head");
+    }
+
+    [Theory]
+    [InlineData("prolog")]
+    [InlineData("ambiguous_pl")]
+    public void Extract_Prolog_IndexesSameLineClausesWithCorrectCallers_Issue4746(
+        string language)
+    {
+        const string content = """
+            a.
+            b.
+            first. second.
+            run :- a. other :- b.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences(language, content);
+
+        foreach (var name in new[] { "first", "second", "run", "other" })
+            Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == name);
+        AssertReferencesContain(references, "call", "run", "a");
+        AssertReferencesContain(references, "call", "other", "b");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "b");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "other"
+            && reference.SymbolName == "a");
     }
 
     [Fact]

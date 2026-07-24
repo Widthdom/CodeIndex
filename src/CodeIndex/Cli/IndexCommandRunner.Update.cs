@@ -1219,8 +1219,8 @@ public static partial class IndexCommandRunner
                     GraphDataCurrent = false,
                     IndexComplete = false,
                     ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
-                    ReferenceGraphComplete = referenceExtractionCapHits.StateAvailable
-                        && referenceExtractionCapHits.HitCount == 0,
+                    ReferenceGraphComplete = signalReader.IsReferenceGraphComplete(
+                        referenceExtractionCapHits),
                     ReferenceExtractionCapHits = referenceExtractionCapHits,
                     ErrorCode = CommandErrorCodes.IndexPartial,
                     IssuesTableAvailable = issuesTableAvailable,
@@ -2677,8 +2677,8 @@ public static partial class IndexCommandRunner
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
-        var referenceGraphCompleteAfter = referenceExtractionCapHitsAfter.StateAvailable
-            && referenceExtractionCapHitsAfter.HitCount == 0;
+        var referenceGraphCompleteAfter = signalReader.IsReferenceGraphComplete(
+            referenceExtractionCapHitsAfter);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
         var sqlGraphContractReadyAfter = sqlGraphContractSignalAfter.Ready;

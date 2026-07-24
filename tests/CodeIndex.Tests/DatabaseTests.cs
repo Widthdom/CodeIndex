@@ -4766,10 +4766,14 @@ public class DatabaseTests : IDisposable
             versionKey,
             previousContractVersion.ToString(CultureInfo.InvariantCulture));
 
-        var staleStatus = new DbReader(_db.Connection).GetStatus();
+        var staleReader = new DbReader(_db.Connection);
+        var staleStatus = staleReader.GetStatus();
+        var staleWorkspaceHealth = staleReader.GetWorkspaceIndexHealth();
 
         Assert.False(staleStatus.ReferenceGraphComplete);
         Assert.False(staleStatus.GraphDataCurrent);
+        Assert.False(staleWorkspaceHealth.ReferenceGraphComplete);
+        Assert.False(staleWorkspaceHealth.GraphDataCurrent);
         Assert.Contains(
             DbReader.DynamicReferenceGraphContractStaleReason,
             staleStatus.ReferenceGraphIncompleteReasons ?? []);
@@ -4778,11 +4782,19 @@ public class DatabaseTests : IDisposable
             versionKey,
             SymbolExtractor.GetContractVersion(language).ToString(CultureInfo.InvariantCulture));
 
-        var refreshedStatus = new DbReader(_db.Connection).GetStatus();
+        var refreshedReader = new DbReader(_db.Connection);
+        var refreshedStatus = refreshedReader.GetStatus();
+        var refreshedWorkspaceHealth = refreshedReader.GetWorkspaceIndexHealth();
 
         Assert.DoesNotContain(
             DbReader.DynamicReferenceGraphContractStaleReason,
             refreshedStatus.ReferenceGraphIncompleteReasons ?? []);
+        Assert.Equal(
+            refreshedStatus.ReferenceGraphComplete,
+            refreshedWorkspaceHealth.ReferenceGraphComplete);
+        Assert.Equal(
+            refreshedStatus.GraphDataCurrent,
+            refreshedWorkspaceHealth.GraphDataCurrent);
     }
 
     [Fact]
