@@ -553,7 +553,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_AuditSortModesReuseRankingFixture_Issue3451()
+    public void RunSymbols_AuditSortModesAndHotspotPaginationReuseRankingFixture_Issues3451And4753()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_reference_signals");
         try
@@ -569,9 +569,11 @@ public partial class QueryCommandRunnerTests
                 Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}; stderr={stderr}; stdout={stdout}");
                 Assert.Equal(string.Empty, stderr);
                 var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+                Assert.Equal(4, rows.Count);
+                Assert.Equal(4, rows.Select(row => row.GetProperty("symbol_id").GetInt64()).Distinct().Count());
                 Assert.Equal("ShortHot", rows[0].GetProperty("name").GetString());
                 Assert.Equal(sortMode, rows[0].GetProperty("sort_mode").GetString());
-                Assert.True(rows[0].GetProperty("reference_count").GetInt32() >= 2);
+                Assert.Equal(3, rows[0].GetProperty("reference_count").GetInt32());
                 Assert.True(rows[0].GetProperty("hotspot_score").GetDouble() > 0);
                 Assert.True(rows[0].GetProperty("ranking_reference_score").GetDouble() > 0);
                 Assert.True(rows[0].GetProperty("ranking_hotspot_score").GetDouble() > 0);
@@ -604,6 +606,35 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, pathStderr);
             Assert.Equal("src/Alpha.cs", pathRow.GetProperty("path").GetString());
             Assert.Equal("path", pathRow.GetProperty("sort_mode").GetString());
+
+            using var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var reader = new DbReader(queryDb);
+            var firstPage = reader.SearchSymbols(
+                limit: 2,
+                kind: "function",
+                lang: "csharp",
+                pathPatterns: ["src/Beta.cs"],
+                sortMode: SymbolSortMode.Hotspot);
+            var secondPage = reader.SearchSymbols(
+                limit: 2,
+                kind: "function",
+                lang: "csharp",
+                pathPatterns: ["src/Beta.cs"],
+                sortMode: SymbolSortMode.Hotspot,
+                offset: 2);
+            var unpaged = reader.SearchSymbols(
+                limit: 4,
+                kind: "function",
+                lang: "csharp",
+                pathPatterns: ["src/Beta.cs"],
+                sortMode: SymbolSortMode.Hotspot);
+            var paged = firstPage.Concat(secondPage).ToList();
+
+            Assert.Equal(2, firstPage.Count);
+            Assert.Equal(2, secondPage.Count);
+            Assert.Equal(4, paged.Select(symbol => symbol.SymbolId).Distinct().Count());
+            Assert.Empty(firstPage.Select(symbol => symbol.SymbolId).Intersect(secondPage.Select(symbol => symbol.SymbolId)));
+            Assert.Equal(unpaged.Select(symbol => symbol.SymbolId), paged.Select(symbol => symbol.SymbolId));
         }
         finally
         {
@@ -752,6 +783,20 @@ public partial class QueryCommandRunnerTests
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
+        var betaFileId = GetIndexedFileId(db.Connection, "src/Beta.cs");
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = betaFileId,
+                SymbolName = "shorthot",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "shorthot(); // case-variant ranking reference",
+                ContainerKind = "function",
+                ContainerName = "Caller",
+            },
+        ]);
         writer.MarkGraphReady();
         return dbPath;
     }

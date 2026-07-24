@@ -422,7 +422,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteCappedJsonDiagnosticsUsageError("files", options))
             return CommandExitCodes.UsageError;
-        var filesScope = BuildFilesScopeFilters(options);
+        var filesScope = BuildDiscoveryFileScopeFilters(options);
 
         string? ndjsonTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>
@@ -581,12 +581,12 @@ public static partial class QueryCommandRunner
         return (deduped.Count == 0 ? null : deduped, hadExplicitInput);
     }
 
-    private sealed record FileListScopeFilters(
+    private sealed record DiscoveryFileScopeFilters(
         IReadOnlyList<string> PathPatterns,
         IReadOnlyList<string> ExcludePaths,
         bool ExcludeTests);
 
-    private static FileListScopeFilters BuildFilesScopeFilters(QueryCommandOptions options)
+    private static DiscoveryFileScopeFilters BuildDiscoveryFileScopeFilters(QueryCommandOptions options)
     {
         if (!options.ExcludeTests || options.PathPatterns.Count > 0)
         {
@@ -603,7 +603,7 @@ public static partial class QueryCommandRunner
         return new(pathPatterns, excludePaths, ExcludeTests: true);
     }
 
-    private static int? CountGeneratedFilesExcluded(DbReader reader, QueryCommandOptions options, FileListScopeFilters filesScope)
+    private static int? CountGeneratedFilesExcluded(DbReader reader, QueryCommandOptions options, DiscoveryFileScopeFilters filesScope)
         => options.IncludeGenerated
             ? 0
             : !reader.GeneratedFileFilterAvailable
