@@ -404,6 +404,36 @@ public static partial class QueryCommandRunner
                     "Use `--recipe <name> --format sarif` with result filters and `--limit` / `--total-limit`, or choose the JSON/count output shape instead.");
                 return CommandExitCodes.UsageError;
             }
+            if (options.GroupedPerFileLimitExplicit)
+            {
+                WriteUsageError(
+                    "--per-file-limit is not supported with --recipe because recipe execution does not produce grouped search output.",
+                    GetUsageLineOrThrow("search"),
+                    "Use --first-per-file for one selected recipe row per file, or remove --recipe and use grouped ad hoc search output.");
+                return CommandExitCodes.UsageError;
+            }
+            if ((options.FirstPerFile || options.SampleSize.HasValue)
+                && options.SearchCursor.HasValue)
+            {
+                WriteUsageError(
+                    "recipe row-selection controls cannot be combined with --cursor because raw recipe cursors cannot preserve selector state.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove --cursor and rerun selection from the beginning, or remove --first-per-file / --sample to resume from the cursor.");
+                return CommandExitCodes.UsageError;
+            }
+            if ((options.FirstPerFile || options.SampleSize.HasValue)
+                && (options.CountOnly
+                    || options.GroupBy != null
+                    || options.CountBy != null
+                    || options.UniqueBy != null
+                    || (options.SummaryOnly && (options.Compact || options.OutputFormat == OutputFormatCompact))))
+            {
+                WriteUsageError(
+                    "recipe row-selection controls cannot be combined with count, aggregation, or summary-only compact output.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove --first-per-file / --sample to keep the non-row output, or choose text, JSON, compact, NDJSON, or issue-drafts row output.");
+                return CommandExitCodes.UsageError;
+            }
             if (options.MaxJsonBytes.HasValue && !SupportsSearchJsonByteLimit(options))
             {
                 WriteUsageError(
