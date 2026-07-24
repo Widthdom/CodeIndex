@@ -168,4 +168,25 @@ public class ConsoleCaptureTests
             }
         }
     }
+
+    [Fact]
+    public async Task CaptureAsync_AwaitedContinuationCanReenterConsoleOwnership_Issue4749()
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        await ConsoleCapture.CaptureAsync(
+            async () =>
+            {
+                await Task.Yield();
+                ConsoleUi.EnsureConsoleWritersSynchronized();
+                Console.Write("out");
+                Console.Error.Write("err");
+            },
+            stdout,
+            stderr).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("out", stdout.ToString());
+        Assert.Equal("err", stderr.ToString());
+    }
 }

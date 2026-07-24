@@ -740,7 +740,7 @@ Use `ConsoleCapture` for ordinary `Console.Out` / `Console.Error` capture. Speci
 
 `TestConsoleLock.Gate` is the same reentrant gate used by production `ConsoleStreamOwnership`. This prevents a production synchronization or scoped redirect from retaining a test-owned writer after the capture ends, and the shared restore helpers verify that the process-global writer references have recovered before ownership is released.
 
-When capture must span an awaited operation, use `ConsoleCapture.CaptureAsync`. It keeps `Monitor` entry and exit on one worker thread while the asynchronous operation completes, avoiding cross-thread ownership release.
+When capture must span an awaited operation, use `ConsoleCapture.CaptureAsync`. It keeps `Monitor` entry and exit on one worker thread and pumps captured continuations on that thread while the asynchronous operation completes. Awaited callbacks can therefore re-enter console ownership without releasing the monitor from another thread or deadlocking against its owner.
 
 Keep the console lock even when a test class already belongs to a non-parallel collection: it documents the process-global console hazard locally and protects shared helper code if the class is ever moved out of that collection later.
 
@@ -1560,7 +1560,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 
 `TestConsoleLock.Gate`は本番の`ConsoleStreamOwnership`が使うreentrant gateと同一です。これにより、本番のconsole同期処理やscoped redirectがcapture終了後もtest所有writerを保持することを防ぎ、共有restore helperは所有権を解放する前にprocess-global writer参照が復旧したことを検証します。
 
-awaitをまたぐcaptureには`ConsoleCapture.CaptureAsync`を使ってください。非同期処理の完了を待つ間も`Monitor`のenterとexitを同一worker thread上に保ち、別threadから所有権を解放することを防ぎます。
+awaitをまたぐcaptureには`ConsoleCapture.CaptureAsync`を使ってください。非同期処理の完了を待つ間も`Monitor`のenterとexitを同一worker thread上に保ち、captureされたcontinuationをそのthread上でpumpします。これにより、await後のcallbackは別threadからmonitorを解放したり所有threadとdeadlockしたりせず、console所有権へ再入できます。
 
 テストクラス自体が non-parallel collection に入っている場合でも、console lock は残してください。process-global な console ハザードを各テストの近くで明示でき、将来そのクラスやヘルパーが collection 外に移った場合の保険にもなります。
 

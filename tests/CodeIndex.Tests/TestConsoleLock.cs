@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
@@ -118,10 +119,10 @@ internal sealed class ConsoleCapture : IDisposable
         ArgumentNullException.ThrowIfNull(action);
         return Task.Run(() =>
         {
-            // Monitor ownership must enter and exit on this worker thread. The async
-            // operation may resume elsewhere while this thread retains serialized ownership.
+            // Monitor ownership must enter and exit on this worker thread. Pump captured
+            // continuations here so awaited code can re-enter console ownership safely.
             using var capture = Start(output, error, input);
-            action().GetAwaiter().GetResult();
+            SingleThreadAsyncPump.Run(action);
         });
     }
 
@@ -164,5 +165,43 @@ internal sealed class ConsoleCapture : IDisposable
             ConsoleStreamOwnership.RestoreError(originalError);
         else if (restoreOut && originalOut is not null)
             ConsoleStreamOwnership.RestoreOut(originalOut);
+    }
+
+    private sealed class SingleThreadAsyncPump : SynchronizationContext, IDisposable
+    {
+        private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> work = new();
+
+        internal static void Run(Func<Task> action)
+        {
+            using var pump = new SingleThreadAsyncPump();
+            var previous = Current;
+            SetSynchronizationContext(pump);
+            try
+            {
+                var task = action()
+                    ?? throw new InvalidOperationException("The console capture callback returned a null task.");
+                _ = task.ContinueWith(
+                    static (_, state) => ((SingleThreadAsyncPump)state!).work.CompleteAdding(),
+                    pump,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+
+                foreach (var item in pump.work.GetConsumingEnumerable())
+                    item.Callback(item.State);
+
+                task.GetAwaiter().GetResult();
+            }
+            finally
+            {
+                SetSynchronizationContext(previous);
+            }
+        }
+
+        public override void Post(SendOrPostCallback d, object? state)
+            => work.Add((d, state));
+
+        public void Dispose()
+            => work.Dispose();
     }
 }
