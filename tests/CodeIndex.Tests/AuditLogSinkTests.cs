@@ -8,6 +8,7 @@ using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
 
+[Collection("Console sensitive")]
 public class AuditLogSinkTests
 {
     [Fact]

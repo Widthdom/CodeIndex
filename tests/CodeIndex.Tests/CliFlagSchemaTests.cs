@@ -14,6 +14,7 @@ namespace CodeIndex.Tests;
 /// #1570 で導入した「フラグ単一情報源」の契約を守るためのテスト群。スキーマと
 /// 補完スクリプト、コマンド一覧、parser-vs-completion の許容差分がずれた瞬間に失敗する。
 /// </summary>
+[Collection("Console sensitive")]
 public class CliFlagSchemaTests
 {
     [Fact]

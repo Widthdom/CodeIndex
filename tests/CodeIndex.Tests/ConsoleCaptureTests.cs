@@ -6,14 +6,38 @@ namespace CodeIndex.Tests;
 public class ConsoleCaptureTests
 {
     [Fact]
-    public void ImportCancellationFixture_UsesConsoleSensitiveCollection_Issue4650()
+    public void ConsoleSensitiveCollection_AssignsGlobalCaptureClassesAndDisablesParallelization_Issues4650_4798()
     {
-        var attribute = Assert.Single(
-            typeof(ExportImportCommandRunnerCancellationTests).CustomAttributes,
-            static candidate => candidate.AttributeType == typeof(CollectionAttribute));
-        var collectionName = Assert.Single(attribute.ConstructorArguments);
+        Type[] consoleSensitiveTypes =
+        [
+            typeof(AuditLogSinkTests),
+            typeof(CliFlagSchemaTests),
+            typeof(CommandErrorWriterTests),
+            typeof(DiffCommandHelpersTests),
+            typeof(ExportImportCommandRunnerCancellationTests),
+            typeof(LicensePolicyTests),
+            typeof(ProgramCliTests),
+            typeof(SymbolExtractorTests),
+            typeof(TestTelemetryTests),
+        ];
 
-        Assert.Equal("Console sensitive", collectionName.Value);
+        foreach (var type in consoleSensitiveTypes)
+        {
+            var attribute = Assert.Single(
+                type.CustomAttributes,
+                static candidate => candidate.AttributeType == typeof(CollectionAttribute));
+            var collectionName = Assert.Single(attribute.ConstructorArguments);
+            Assert.Equal("Console sensitive", collectionName.Value);
+        }
+
+        var definition = Assert.Single(
+            typeof(ConsoleSensitiveCollection).CustomAttributes,
+            static candidate => candidate.AttributeType == typeof(CollectionDefinitionAttribute));
+        var disableParallelization = Assert.Single(
+            definition.NamedArguments,
+            static candidate => candidate.MemberName == nameof(CollectionDefinitionAttribute.DisableParallelization));
+
+        Assert.True(Assert.IsType<bool>(disableParallelization.TypedValue.Value));
     }
 
     [Fact]

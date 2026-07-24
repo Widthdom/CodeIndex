@@ -16,6 +16,7 @@ namespace CodeIndex.Tests;
 /// Black-box CLI tests for Program entrypoint behavior.
 /// Program エントリポイント挙動のブラックボックステスト。
 /// </summary>
+[Collection("Console sensitive")]
 public class ProgramCliTests
 {
     [ProductionRuntimeFact]

@@ -16,6 +16,7 @@ namespace CodeIndex.Tests;
 /// Tests for SymbolExtractor.
 /// SymbolExtractorのテスト。
 /// </summary>
+[Collection("Console sensitive")]
 public partial class SymbolExtractorTests
 {
     private static void AssertSymbolsContain(

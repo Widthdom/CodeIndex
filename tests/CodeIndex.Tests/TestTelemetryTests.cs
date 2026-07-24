@@ -4,6 +4,7 @@ using System.Xml.Linq;
 
 namespace CodeIndex.Tests;
 
+[Collection("Console sensitive")]
 public sealed class TestTelemetryTests
 {
     [Fact]
