@@ -3673,6 +3673,9 @@ public static partial class ReferenceExtractor
             if (!string.Equals(request.Language, Language, StringComparison.Ordinal))
                 throw new ArgumentException($"Extractor for '{Language}' cannot handle '{request.Language}'.", nameof(request));
 
+            if (IsHdlReferenceLanguage(Language))
+                return ExtractHdlReferences(request);
+
             return ExtractCore(request);
         }
     }

@@ -2079,6 +2079,89 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_ReturnsPersistedHdlGraphEdges_Issue4742()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_hdl_references");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var fixtures = new[]
+            {
+                (
+                    Path: "src/top.v",
+                    Language: "verilog",
+                    Content: """
+                        module fifo;
+                        endmodule
+                        module verilog_top;
+                            fifo u_fifo ();
+                        endmodule
+                        """,
+                    SymbolName: "fifo",
+                    ReferenceKind: "instantiate",
+                    ContainerName: "verilog_top"),
+                (
+                    Path: "src/top.sv",
+                    Language: "systemverilog",
+                    Content: """
+                        package util_pkg;
+                        endpackage
+                        module systemverilog_top;
+                            import util_pkg::*;
+                        endmodule
+                        """,
+                    SymbolName: "util_pkg",
+                    ReferenceKind: "import",
+                    ContainerName: "systemverilog_top"),
+                (
+                    Path: "src/top.vhd",
+                    Language: "vhdl",
+                    Content: """
+                        entity Child is
+                        end Child;
+                        entity VhdlTop is
+                        end VhdlTop;
+                        architecture structural of VhdlTop is
+                        begin
+                            u_child : entity work.Child;
+                        end structural;
+                        """,
+                    SymbolName: "Child",
+                    ReferenceKind: "instantiate",
+                    ContainerName: "structural"),
+            };
+
+            foreach (var fixture in fixtures)
+                TestProjectHelper.InsertIndexedFile(dbPath, fixture.Path, fixture.Language, fixture.Content);
+            MarkGraphAndFoldReady(dbPath);
+
+            foreach (var fixture in fixtures)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    [fixture.SymbolName, "--db", dbPath, "--json", "--lang", fixture.Language, "--exact"],
+                    _jsonOptions));
+
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(fixture.Path, json.GetProperty("path").GetString());
+                Assert.Equal(fixture.Language, json.GetProperty("lang").GetString());
+                Assert.Equal(fixture.SymbolName, json.GetProperty("symbol_name").GetString());
+                Assert.Equal(fixture.ReferenceKind, json.GetProperty("reference_kind").GetString());
+                Assert.Equal(fixture.ContainerName, json.GetProperty("container_name").GetString());
+                Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+                Assert.False(json.TryGetProperty("graph_degraded", out _));
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_ExactCountJson_LargeMixedCandidateSetStillMarksEnumMemberGap()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_large_mixed_exact_count");
