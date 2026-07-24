@@ -1363,7 +1363,7 @@ public class ConsoleUiTests
         // #1570 によりスキーマ駆動。`__fish_seen_subcommand_from` の並びは `CliFlagSchema.AllCommands`
         // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand`)。
         var output = ConsoleCompletionRenderer.GetCompletionScript("fish");
-        Assert.Contains("__fish_seen_subcommand_from search definition goto references callers callees symbols files find inspect impact", output);
+        Assert.Contains("__fish_seen_subcommand_from search recipes definition goto references callers callees symbols files find inspect impact", output);
         Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
         // `--exact` schema membership: search + find + the name-resolution commands.
         // 旧手書きが `search find` だけだった所を、スキーマ準拠の正規列で確認する。
