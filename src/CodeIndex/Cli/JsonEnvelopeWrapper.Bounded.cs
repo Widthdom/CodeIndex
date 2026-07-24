@@ -190,6 +190,7 @@ internal static partial class JsonEnvelopeWrapper
             return WriteBoundedParseError(command, queryNormalized, resolvedDbPath, dbPathExplicit, appVersion, stopwatch.Elapsed.TotalMilliseconds, jsonOptions, $"Bounded response raw JSON {ex.BudgetName} exceeded {ex.MaxValue}.", "Reduce --limit or narrow the query.", ex.JsonPropertyName, ex.MaxValue, controls.MaxJsonBytes);
         }
 
+        var commandError = TakeCommandError(rawResults, exitCode);
         PromoteEmptyLegacyCompactPayload(command, controls, rawResults, streamControlRecords);
         var extraction = ExtractResponseItems(command, rawResults, controls);
         var availableItems = extraction.Items;
@@ -215,6 +216,7 @@ internal static partial class JsonEnvelopeWrapper
             totalAuthoritative,
             exitCode,
             extraction,
+            commandError,
             streamTerminal,
             streamControlRecords,
             jsonOptions,
@@ -246,6 +248,7 @@ internal static partial class JsonEnvelopeWrapper
         bool totalAuthoritative,
         int exitCode,
         ResponseExtraction extraction,
+        JsonObject? commandError,
         JsonObject? streamTerminal,
         JsonArray streamControlRecords,
         JsonSerializerOptions jsonOptions,
@@ -268,9 +271,27 @@ internal static partial class JsonEnvelopeWrapper
                 elapsedMs,
                 results,
                 exitCode,
+                error: commandError is null ? null : (JsonObject)commandError.DeepClone(),
                 streamTerminal: streamTerminal,
                 streamControlRecords: streamControlRecords);
             var metadata = (JsonObject)envelope["metadata"]!;
+            if (commandError is not null)
+            {
+                metadata["returned_count"] = 0;
+                metadata["total_count"] = 0;
+                metadata["total_count_authoritative"] = true;
+                metadata["omitted_count"] = 0;
+                if (controls.Fields is { Count: > 0 })
+                {
+                    var errorFields = new JsonArray();
+                    foreach (var field in controls.Fields)
+                        errorFields.Add(field);
+                    metadata["fields"] = errorFields;
+                }
+                if (controls.MaxJsonBytes.HasValue)
+                    metadata["max_json_bytes"] = controls.MaxJsonBytes.Value;
+                return envelope;
+            }
             var nextOffset = controls.Offset + count;
             var paginationWindowExhausted = nextOffset < totalCount && nextOffset >= MaxPageWindow;
             var hasMore = count > 0 && nextOffset < totalCount && !paginationWindowExhausted;
@@ -376,6 +397,26 @@ internal static partial class JsonEnvelopeWrapper
 
     private static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
         => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine) <= maxJsonBytes;
+
+    private static JsonObject? TakeCommandError(JsonArray rawResults, int exitCode)
+    {
+        if (exitCode == CommandExitCodes.Success
+            || rawResults.Count != 1
+            || rawResults[0] is not JsonObject candidate
+            || candidate["status"] is not JsonValue status
+            || !status.TryGetValue<string>(out var statusText)
+            || !string.Equals(statusText, "error", StringComparison.Ordinal)
+            || candidate["error_code"] is null)
+        {
+            return null;
+        }
+
+        var error = (JsonObject)candidate.DeepClone();
+        error.Remove("status");
+        error.Remove("api_version");
+        rawResults.Clear();
+        return error;
+    }
 
     private static void PromoteEmptyLegacyCompactPayload(
         string command,

@@ -307,6 +307,101 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void CSharpNullableGenericOutParameterAfterNestedInterpolationSurfacesAcrossDefinitionAndGraph_Issue4745()
+    {
+        const string path = "src/nullable_generic_out_after_interpolation.cs";
+        InsertIndexedFile(
+            path,
+            "csharp",
+            """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            class LspFixture
+            {
+                private string BuildCompletion(string[] items) =>
+                    $"items: {string.Join(' ', items.Select(item => $"'{item}:{item} item'"))}";
+
+                private bool TryReadPositionLineCached(
+                    string path,
+                    Dictionary<int, string?>? lineCache,
+                    out string sourceLine)
+                {
+                    if (lineCache is { Count: 0 } && TryReadAllPositionLines(path, out var sourceLines))
+                    {
+                        sourceLine = sourceLines[0] ?? string.Empty;
+                        return true;
+                    }
+
+                    sourceLine = string.Empty;
+                    return false;
+                }
+
+                private bool TryReadAllPositionLines(string path, out IReadOnlyList<string?> sourceLines)
+                {
+                    sourceLines = ReadLines(path);
+                    return sourceLines.Count > 0;
+                }
+
+                private static IReadOnlyList<string?> ReadLines(string path) => [];
+            }
+            """);
+
+        var definition = Assert.Single(_reader.GetDefinitions(
+            "TryReadAllPositionLines",
+            lang: "csharp",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("function", definition.Kind);
+        Assert.Equal("class", definition.ContainerKind);
+        Assert.Equal("LspFixture", definition.ContainerName);
+        Assert.Equal("bool", definition.ReturnType);
+        Assert.Equal(24, definition.StartLine);
+        Assert.Equal(28, definition.EndLine);
+        Assert.Equal(
+            "private bool TryReadAllPositionLines(string path, out IReadOnlyList<string?> sourceLines) {",
+            definition.Signature);
+
+        var outline = _reader.GetOutline(path);
+        Assert.NotNull(outline);
+        var outlineMethod = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "TryReadAllPositionLines"));
+        Assert.Equal("function", outlineMethod.Kind);
+        Assert.Equal("LspFixture.TryReadAllPositionLines", outlineMethod.Path);
+        Assert.Equal(24, outlineMethod.StartLine);
+        Assert.Equal(28, outlineMethod.EndLine);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "TryReadAllPositionLines",
+            lang: "csharp",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("call", reference.ReferenceKind);
+        Assert.Equal(14, reference.Line);
+        Assert.Equal("TryReadPositionLineCached", reference.ContainerName);
+        Assert.Equal("resolved", reference.ResolutionState);
+        Assert.NotNull(reference.TargetSymbolId);
+        Assert.Equal(1, reference.ResolutionCandidateCount);
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "TryReadAllPositionLines",
+            lang: "csharp",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("TryReadPositionLineCached", caller.CallerName);
+        Assert.Equal("TryReadAllPositionLines", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var callee = Assert.Single(_reader.GetCallees(
+            "TryReadAllPositionLines",
+            lang: "csharp",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("TryReadAllPositionLines", callee.CallerName);
+        Assert.Equal("ReadLines", callee.CalleeName);
+        Assert.Equal(1, callee.ReferenceCount);
+    }
+
+    [Fact]
     public void GetCallers_SolutionProjectReference_RequiresExplicitKind_Issue3662()
     {
         InsertManualReference(

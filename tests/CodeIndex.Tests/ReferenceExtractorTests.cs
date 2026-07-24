@@ -14716,6 +14716,275 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FunctionalLanguages_CapturesBoundedGraphRelationships_Issue4743()
+    {
+        const string clojure = """
+            (ns demo.core
+              (:require [demo.store :as store :refer [fetch]]))
+            (defprotocol Persist
+              (save! [this value]))
+            (def data '(quoted-call))
+            (comment (comment-call))
+            #_(discarded-call)
+            (def quote-char \")
+            (defrecord User [id] Persist
+              (save! [this value]
+                (audit value)))
+            (defn load-user [id]
+              "(fake-call id)"
+              ; (line-comment-call id)
+              (store/fetch id))
+            """;
+        const string erlang = """
+            -module(sample).
+            -behaviour(gen_server).
+            -import(lists, [map/2]).
+            -spec run(
+                term()) -> term().
+            -type tree() :: nil | {node, term(), tree(), tree()}.
+            quote() -> $".
+            atom() -> 'fake_call()'.
+            run(Value) ->
+                "% fake_call()",
+                lists:map(fun normalize/1, Value),
+                normalize(Value).
+            normalize(Value) ->
+                Value.
+            count(0) ->
+                0;
+            count(Value) ->
+                count(Value - 1).
+            'run-me'() ->
+                'helper-fun'(),
+                'my-mod':'do-work'().
+            'helper-fun'() ->
+                ok.
+            """;
+        const string ocaml = """
+            module Store = Demo.Store
+            open Core
+            type user = User.t
+            type wrapper = user
+            type event =
+              | User of User.t
+              | Post of Post.t
+            let quote = '"'
+            let convert (x : User.t) =
+              x
+            let load id =
+              "fake_call id";
+              Store.fetch id
+            let normalize value =
+              value
+            let choose value =
+              match value with
+              | _ -> value
+            let check predicate =
+              if predicate then true else false
+            let render x =
+              {| raw_fake_call x |};
+              normalize x
+            """;
+        const string raku = """
+            unit module Demo;
+            use Demo::Store :as Store;
+            role Persistable {}
+            class User does Persistable {}
+            sub load-user($id) {
+                "# fake-call()";
+                Store::fetch($id);
+            }
+            sub render($id) {
+                q[ quote-fake-call($id) ];
+                q/ slash-fake-call($id) /;
+                q [ spaced-fake-call($id) ];
+                q:to/END/;
+                heredoc-fake-call($id);
+                END
+                load-user($id);
+            }
+            class Worker {
+                method work() {}
+            }
+            sub split($worker)
+            {
+                $worker.work();
+            }
+            sub exported() is export {}
+            class Native is repr('CStruct') {}
+            """;
+
+        var clojureReferences = Extract("clojure", clojure);
+        Assert.Contains(clojureReferences, reference => reference.SymbolName == "demo.store" && reference.ReferenceKind == "import");
+        Assert.Contains(clojureReferences, reference => reference.SymbolName == "demo.store" && reference.ReferenceKind == "alias");
+        Assert.Contains(clojureReferences, reference =>
+            reference.SymbolName == "Persist"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "User");
+        Assert.Contains(clojureReferences, reference =>
+            reference.SymbolName == "fetch"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "load-user");
+        Assert.DoesNotContain(clojureReferences, reference =>
+            reference.SymbolName == "fetch"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(clojureReferences, reference =>
+            reference.SymbolName == "save!"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(clojureReferences, reference =>
+            reference.SymbolName == "audit"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "User");
+        Assert.DoesNotContain(clojureReferences, reference =>
+            reference.SymbolName is "fake-call" or "quoted-call" or "comment-call" or "discarded-call" or "line-comment-call");
+
+        var erlangReferences = Extract("erlang", erlang);
+        Assert.Contains(erlangReferences, reference => reference.SymbolName == "gen_server" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(erlangReferences, reference => reference.SymbolName == "lists" && reference.ReferenceKind == "import");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "map"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "normalize"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "count"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "count"
+            && reference.IsSelfReference);
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "'helper-fun'"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "'run-me'");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "'my-mod'"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "'run-me'");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "'do-work'"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "'run-me'");
+        Assert.DoesNotContain(erlangReferences, reference =>
+            reference.SymbolName is "run" or "term" or "tree"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(erlangReferences, reference => reference.SymbolName == "fake_call");
+
+        var ocamlReferences = Extract("ocaml", ocaml);
+        Assert.Contains(ocamlReferences, reference => reference.SymbolName == "Demo.Store" && reference.ReferenceKind == "alias");
+        Assert.Contains(ocamlReferences, reference => reference.SymbolName == "Core" && reference.ReferenceKind == "import");
+        Assert.Contains(ocamlReferences, reference =>
+            reference.SymbolName == "User.t"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "user");
+        Assert.Contains(ocamlReferences, reference =>
+            reference.SymbolName == "user"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "wrapper");
+        Assert.Contains(ocamlReferences, reference =>
+            reference.SymbolName == "User.t"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "event");
+        Assert.Contains(ocamlReferences, reference =>
+            reference.SymbolName == "fetch"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "load");
+        Assert.DoesNotContain(ocamlReferences, reference =>
+            reference.SymbolName is "value" or "predicate" or "raw_fake_call" or "of" or "t"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(ocamlReferences, reference => reference.SymbolName == "fake_call");
+
+        var rakuReferences = Extract("raku", raku);
+        Assert.Contains(rakuReferences, reference => reference.SymbolName == "Demo::Store" && reference.ReferenceKind == "import");
+        Assert.Contains(rakuReferences, reference => reference.SymbolName == "Demo::Store" && reference.ReferenceKind == "alias");
+        Assert.Contains(rakuReferences, reference =>
+            reference.SymbolName == "Persistable"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "User");
+        Assert.Contains(rakuReferences, reference =>
+            reference.SymbolName == "fetch"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "load-user");
+        Assert.Contains(rakuReferences, reference =>
+            reference.SymbolName == "work"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "split");
+        Assert.DoesNotContain(rakuReferences, reference =>
+            reference.SymbolName is "fake-call" or "quote-fake-call" or "slash-fake-call" or "spaced-fake-call" or "heredoc-fake-call"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(rakuReferences, reference =>
+            reference.SymbolName is "export" or "repr"
+            && reference.ReferenceKind is "call" or "type_reference");
+
+        var cycles = new Dictionary<string, string>
+        {
+            ["clojure"] = "(defn first [] (second))\n(defn second [] (first))\n",
+            ["erlang"] = "first() -> second().\nsecond() -> first().\n",
+            ["ocaml"] = "let first x = second x\nlet second x = first x\n",
+            ["raku"] = "sub first() { second(); }\nsub second() { first(); }\n",
+        };
+        foreach (var (language, content) in cycles)
+        {
+            var mutualCalls = Extract(language, content)
+                .Where(reference => reference.ReferenceKind == "call")
+                .ToList();
+            Assert.Equal(2, mutualCalls.Count);
+            Assert.All(mutualCalls, reference => Assert.True(reference.IsMutualRecursion));
+        }
+
+        var capped = ReferenceExtractor.Extract(
+            1,
+            "clojure",
+            clojure,
+            SymbolExtractor.Extract(1, "clojure", clojure),
+            maxReferenceCount: 2);
+        Assert.Equal(2, capped.Count);
+
+        static List<ReferenceRecord> Extract(string language, string content)
+        {
+            Assert.True(ReferenceExtractor.SupportsLanguage(language));
+            var symbols = SymbolExtractor.Extract(1, language, content);
+            return ReferenceExtractor.Extract(1, language, content, symbols);
+        }
+    }
+
+    [Fact]
+    public void Extract_FunctionalLanguageHighFanoutSymbols_ReportsLookupBudgetDiagnostics_Issue4743()
+    {
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        try
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = new ReferenceExtractionSafetyLimits
+            {
+                MaxLookupSymbols = 100,
+                MaxLookupLines = 2,
+                MaxNamesPerLine = 2,
+                MaxContainerCandidates = 100,
+            };
+            var symbols = new List<SymbolRecord>
+            {
+                new() { Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+                new() { Kind = "function", Name = "second", Line = 1, StartLine = 1, EndLine = 1 },
+                new() { Kind = "function", Name = "third", Line = 1, StartLine = 1, EndLine = 1 },
+                new() { Kind = "function", Name = "fourth", Line = 2, StartLine = 2, EndLine = 2 },
+                new() { Kind = "function", Name = "fifth", Line = 3, StartLine = 3, EndLine = 3 },
+            };
+
+            var result = ReferenceExtractor.ExtractDetailed(1, "clojure", "(target)\n", symbols);
+
+            Assert.Contains(result.Diagnostics, diagnostic =>
+                diagnostic.Kind == "reference_definition_lookup_line_budget_exceeded");
+            Assert.Contains(result.Diagnostics, diagnostic =>
+                diagnostic.Kind == "reference_definition_lookup_line_name_budget_exceeded");
+        }
+        finally
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+        }
+    }
+
+    [Fact]
     public void Extract_Perl_CapturesModuleInheritanceAndArrowCalls()
     {
         const string content = """
