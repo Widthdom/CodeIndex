@@ -427,6 +427,57 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_RepositoryMetadataAndManifestReferencesParticipateInGraph_Issue4740()
+    {
+        InsertIndexedFile(
+            "settings.toml",
+            "toml",
+            "include = \"config/shared.toml\"\n");
+        InsertIndexedFile(
+            "app.manifest",
+            "app_manifest",
+            """
+            <assembly xmlns="urn:schemas-microsoft-com:asm.v1">
+              <assemblyIdentity name="Contoso.App" version="1.0.0.0" />
+              <dependency>
+                <dependentAssembly>
+                  <assemblyIdentity name="Contoso.Core" version="2.0.0.0" />
+                </dependentAssembly>
+              </dependency>
+            </assembly>
+            """);
+        InsertIndexedFile(
+            "events.jsonl",
+            "jsonl",
+            "{\"input\":\"src/first.cs\"}\n");
+
+        var pathCaller = Assert.Single(_reader.GetCallers(
+            "config/shared.toml",
+            lang: "toml",
+            referenceKind: "project_reference",
+            exact: true));
+        Assert.Equal("settings.toml", pathCaller.Path);
+        Assert.Equal("project_reference", pathCaller.ReferenceKind);
+
+        var jsonLinesCaller = Assert.Single(_reader.GetCallers(
+            "src/first.cs",
+            lang: "jsonl",
+            referenceKind: "project_reference",
+            exact: true));
+        Assert.Equal("events.jsonl", jsonLinesCaller.Path);
+        Assert.Equal("[0]", jsonLinesCaller.CallerName);
+
+        var dependencyCaller = Assert.Single(_reader.GetCallers(
+            "Contoso.Core",
+            lang: "app_manifest",
+            referenceKind: "dependency",
+            exact: true));
+        Assert.Equal("app.manifest", dependencyCaller.Path);
+        Assert.Equal("Contoso.App", dependencyCaller.CallerName);
+        Assert.Equal("dependency", dependencyCaller.ReferenceKind);
+    }
+
+    [Fact]
     public void CreateSearchReferencesCommand_RanksWithoutLoweringReferenceNames()
     {
         using var cmd = CreateSearchReferencesCommandForSql("FetchData");
@@ -5808,9 +5859,9 @@ public partial class DbReaderTests : IDisposable
     [Fact]
     public void AnalyzeSymbol_UnsupportedLanguage_ReportsGraphSupportMetadata()
     {
-        var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "toml");
+        var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "text");
 
-        Assert.Equal("toml", analysis.GraphLanguage);
+        Assert.Equal("text", analysis.GraphLanguage);
         Assert.False(analysis.GraphSupported);
         Assert.Contains("not indexed", analysis.GraphSupportReason);
         Assert.Empty(analysis.Definitions);

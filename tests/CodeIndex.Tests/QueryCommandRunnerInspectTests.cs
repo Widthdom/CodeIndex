@@ -5556,21 +5556,21 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunInspect_ExactOnReadOnlyLegacyDb_UnsupportedGraphLanguage_DoesNotReportFalseDegradedSignal()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_toml_exact_ok");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_text_exact_ok");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "docs/guide.toml",
-                "toml",
+                "docs/guide.txt",
+                "text",
                 "title = \"Heading\"\nrun = \"Run\"\n");
             ForceLegacyExactFallbackMode(dbPath);
             DropGraphExactFallbackIndexes(dbPath);
 
             var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Heading", "--db", readOnlyUri, "--exact", "--lang", "toml", "--json"],
+                ["Heading", "--db", readOnlyUri, "--exact", "--lang", "text", "--json"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -5597,8 +5597,8 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "docs/guide.toml",
-                "toml",
+                "docs/guide.txt",
+                "text",
                 "title = \"Heading\"\nrun = \"Run\"\n");
             ForceLegacyExactFallbackMode(dbPath);
             DropGraphExactFallbackIndexes(dbPath);

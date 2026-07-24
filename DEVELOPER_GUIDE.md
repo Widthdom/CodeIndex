@@ -426,6 +426,10 @@ must read that live cache before disk so unsaved editor buffers can identify the
 requested token, but provider results remain conservative and index-backed:
 return empty arrays or null when the database cannot answer safely instead of
 inventing language-server analysis.
+Disk-backed position-line caching must enforce its 4 MiB input limit while
+streaming, not only through a pre-read `Length` check. Bytes beyond the limit
+must never reach text decoding, including when a shared file grows concurrently,
+and the bounded failure reason remains `position_file_too_large`.
 
 LSP references resolve an indexed definition or call-site target through the same
 identity-scoped candidate path as CLI symbol analysis; `includeDeclaration` adds
@@ -1231,7 +1235,9 @@ Extractor strategy by language surface:
 | Scala | Uses a separate block-call pass for `name { ... }` / `name { x => ... }` forms so idiomatic calls such as `foreach {}`, `Try {}`, and `synchronized {}` stay visible. |
 | Common Lisp / Racket | Use a lightweight S-expression scanner that masks strings, line comments, and `#| ... |#` block comments before extracting definitions and function ranges. |
 | HTML | Uses a dedicated character-level state machine instead of the regex pattern loop. It walks tag openers, quoted/unquoted attribute values including multi-line values, and masks `<script>` / `<style>` / `<textarea>` / `<title>` bodies plus `<!-- ... -->` comments so attribute-lookalike strings inside those regions do not leak phantom symbols. |
-| JSON / JSON Lines | JSON emits `object`, `array`, `property`, and bounded primitive-array `value` symbols with indexed paths. `.jsonl` and `.ndjson` parse each non-empty physical line independently and prefix symbols with a stable zero-based record path such as `[0].result.path`. |
+| JSON / JSON Lines | JSON emits `object`, `array`, `property`, and bounded primitive-array `value` symbols with indexed paths. `.jsonl` and `.ndjson` parse each non-empty physical line independently, prefix symbols with a stable zero-based record path such as `[0].result.path`, and emit repository-local path references from each valid record without flattening malformed neighbors. |
+| TOML / repository metadata | TOML tables and keys, EditorConfig sections and keys, Git/Docker ignore rules, Git attribute rules/attributes, and `.rules` blocks/keys are emitted as bounded structural symbols. References are limited to repository-local paths or globs; remote URLs, absolute filesystem paths, and parent traversal are suppressed. |
+| Windows application manifests | Manifest element paths, assembly identities, execution levels, and supported-OS values remain structural symbols. Dependent assembly identities emit `dependency` references, while local `file`, `codeBase`, and probing paths emit `project_reference` edges. |
 | XML / NuGet.config | Generic XML emits bounded element and attribute paths. NuGet.config additionally promotes package sources, source mappings, signature validation mode, trusted signer names, certificate fingerprints, and `allowUntrustedRoot` values to semantic `property` symbols with `nuget.*` subkinds. |
 
 JavaScript and TypeScript export/reference details:
@@ -3406,6 +3412,9 @@ editor integration は標準的な location 形状を直接要求できる。`de
 request token を特定できるよう disk より先に live cache を読む必要があるが、provider result は
 保守的かつ index-backed のままにする。database が安全に答えられない場合は、language-server
 analysis を作り上げず、空配列または null を返す。
+disk 上の position-line cache は、事前の `Length` check だけでなく streaming 中も 4 MiB の
+input 上限を強制する必要がある。共有 file が同時に増大する場合も上限超過 byte を text decode に
+渡してはならず、bounded な failure reason は `position_file_too_large` のままとする。
 
 LSP reference は、indexed definition または call site の target を CLI の symbol analysis と
 同じ identity-scoped candidate 経路で解決する。`includeDeclaration` が追加するのは、その選択済み
@@ -4234,7 +4243,9 @@ LIMIT 20;
 | Scala | `name { ... }` / `name { x => ... }` 形式を拾う専用の block-call path があり、`foreach {}`、`Try {}`、`synchronized {}` のような慣用的な呼び出しも graph から消えないようにしています。 |
 | Common Lisp / Racket | 文字列、行 comment、`#| ... |#` block comment を mask してから definition と function range を抽出する軽量な S-expression scanner を使います。 |
 | HTML | 汎用の正規表現 loop を使わず、専用の文字単位 state machine で tag opener、引用符付き/なし attribute value（複数行値を含む）、`<script>` / `<style>` / `<textarea>` / `<title>` body、`<!-- ... -->` comment を扱い、attribute 名に似た body 内文字列から phantom symbol が漏れないようにします。 |
-| JSON / JSON Lines | JSON は `object`、`array`、`property` と、上限付きの primitive-array `value` symbol を index 付き path で出力します。`.jsonl` と `.ndjson` は空でない物理行を個別に parse し、`[0].result.path` のような安定した 0 始まり record path を付けます。 |
+| JSON / JSON Lines | JSON は `object`、`array`、`property` と、上限付きの primitive-array `value` symbol を index 付き path で出力します。`.jsonl` と `.ndjson` は空でない物理行を個別に parse し、`[0].result.path` のような安定した 0 始まり record path を付けます。各有効 record から repository-local path reference を出し、不正な隣接 record の内容は平坦化しません。 |
+| TOML / repository metadata | TOML の table / key、EditorConfig の section / key、Git / Docker ignore rule、Git attribute の rule / attribute、`.rules` の block / key を上限付き structural symbol として出力します。reference は repository-local な path / glob に限定し、remote URL、絶対 filesystem path、親 directory traversal は抑止します。 |
+| Windows application manifest | manifest element path、assembly identity、execution level、supported OS value を structural symbol として維持します。依存 assembly identity は `dependency` reference、local な `file` / `codeBase` / probing path は `project_reference` edge を出力します。 |
 | XML / NuGet.config | 汎用 XML は上限付きの element / attribute path を出力します。NuGet.config ではさらに package source、source mapping、署名検証モード、trusted signer 名、証明書 fingerprint、`allowUntrustedRoot` の値を `nuget.*` subkind 付きの semantic `property` symbol にします。 |
 
 JavaScript / TypeScript の export / reference 詳細:

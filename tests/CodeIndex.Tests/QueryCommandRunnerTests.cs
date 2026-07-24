@@ -1655,6 +1655,7 @@ public partial class QueryCommandRunnerTests
     [InlineData("gnu octave", "matlab")]
     [InlineData("swi-prolog", "prolog")]
     [InlineData("swipl", "prolog")]
+    [InlineData("config", "config")]
     public void NormalizeQueryLanguage_MapsCommonAliasesToCanonicalLanguages(string input, string expected)
     {
         Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));
@@ -3398,6 +3399,28 @@ public partial class QueryCommandRunnerTests
             Assert.True(languages[markupSchema].GetProperty("graph_queries").GetBoolean(),
                 $"{markupSchema} must advertise graph_queries=true");
             Assert.Empty(languages[markupSchema].GetProperty("capability_gaps").EnumerateArray());
+        }
+
+        foreach (var repositoryMetadata in new[]
+                 {
+                     "toml",
+                     "jsonl",
+                     "gitignore",
+                     "gitattributes",
+                     "editorconfig",
+                     "dockerignore",
+                     "config",
+                     "app_manifest",
+                 })
+        {
+            Assert.True(languages.ContainsKey(repositoryMetadata), $"expected '{repositoryMetadata}' to be listed");
+            Assert.True(languages[repositoryMetadata].GetProperty("symbol_extraction").GetBoolean(),
+                $"{repositoryMetadata} must advertise symbol_extraction=true");
+            Assert.True(languages[repositoryMetadata].GetProperty("reference_extraction").GetBoolean(),
+                $"{repositoryMetadata} must advertise reference_extraction=true");
+            Assert.True(languages[repositoryMetadata].GetProperty("graph_queries").GetBoolean(),
+                $"{repositoryMetadata} must advertise graph_queries=true");
+            Assert.Empty(languages[repositoryMetadata].GetProperty("capability_gaps").EnumerateArray());
         }
 
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.

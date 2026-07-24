@@ -1799,6 +1799,7 @@ same source location.
 |---|---|---|
 | `--db <path>` | All commands except `languages`; for `mcp`, only `--db` is supported | Database file path. `index` defaults to `<projectPath>/.cdidx/codeindex.db`; query commands default to `.cdidx/codeindex.db` in the current directory. Query commands without `--db` keep trusting that default `.cdidx/codeindex.db` sibling path, so moving or renaming the current repo does not leave stale workspace metadata behind. For explicit query DBs, workspace metadata such as `project_root`, `git_head`, and `git_is_dirty` comes from the persisted `indexed_project_root` stored in that DB when available. Legacy explicit DBs created before that metadata existed may return those fields as `null` / absent until you rerun `cdidx index <projectPath> --db <path>` or a scoped update that actually commits at least one file delete/update against the intended project, even if the explicit path itself looks like `.../.cdidx/codeindex.db`. |
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use). `search --json` writes newline-delimited result objects followed by a final `{"done":true,"count":N,"interrupted":false}` sentinel, including zero-result output, so stream consumers can detect clean completion. |
+| `--quiet`, `-q`, `--silent` | All CLI commands | Suppress informational stderr without changing result stdout; errors remain visible. The flag can appear before or after the command. Use `--` before a query that literally starts with one of these tokens. |
 | `--pretty` | JSON-capable commands except `mcp` | Pretty-print JSON output with indentation. Default `search --json` remains newline-delimited; use `search --json=array --pretty` for an indented search result array. |
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
 | `--summary-only` | `map`, `recipes`, `audit`, `deps`, `hotspots`, and supported `search` JSON contexts | Emit aggregate/context JSON while omitting heavy result arrays where supported. For `deps`, use `--json` or `--format json-graph`; for `hotspots`, use `--json`. Machine-readable `deps` output emits `Progress:` diagnostics only with `--verbose`; other large graph queries emit them at `--limit 80+` or with `--verbose`. |
@@ -2794,6 +2795,10 @@ root when possible and uses `[outside workspace]` for absolute paths outside the
 known roots.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
+Disk-backed position-line materialization is also streamed through a 4194304-byte
+limit. If the file grows beyond that limit after its initial length check, the
+reader stops before decoding the over-limit bytes and reports
+`position_file_too_large`.
 `textDocument/references` honors `context.includeDeclaration`; when true, the
 definition locations are prepended to the reference result without duplicating
 identical locations. `declaration`, `typeDefinition`, and `implementation`
@@ -4959,6 +4964,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 |---|---|---|
 | `--db <path>` | `languages` を除く全コマンド。`mcp` は `--db` のみ対応 | DBファイルパス。`index` のデフォルトは `<projectPath>/.cdidx/codeindex.db`、クエリ系コマンドのデフォルトはカレントディレクトリの `.cdidx/codeindex.db`。`--db` を付けない query は、その既定の `.cdidx/codeindex.db` sibling path を引き続き正とするため、カレント repo を move/rename しても古い workspace metadata を引きずらない。明示指定 query DB の `project_root`、`git_head`、`git_is_dirty` などの workspace metadata は、利用可能な場合はその DB に保存された `indexed_project_root` から解決される。保存前の古い explicit DB では、意図した project に対して `cdidx index <projectPath> --db <path>`、または少なくとも 1 件の file delete/update を実際に commit する scoped update を一度実行するまで、これらの項目が `null` / 未出力になることがあり、明示パス自体が `.../.cdidx/codeindex.db` でも同じ。 |
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
+| `--quiet`、`-q`、`--silent` | 全 CLI コマンド | 結果の stdout を変えずに informational stderr を抑制し、エラーは表示する。フラグはコマンドの前後どちらにも指定できる。これらのトークン自体で始まるクエリを検索する場合は、その前に `--` を指定する。 |
 | `--pretty` | `mcp` を除く JSON 対応コマンド | JSON 出力をインデント付きで整形。既定の `search --json` は newline-delimited のまま維持されるため、検索結果配列を整形したい場合は `search --json=array --pretty` を使う。 |
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
 | `--summary-only` | `map`、`recipes`、`audit`、`deps`、`hotspots`、および対応する `search` JSON 文脈 | 対応コマンドで重い結果配列を省き、集計と文脈中心の JSON を返す。`deps` では `--json` または `--format json-graph`、`hotspots` では `--json` と組み合わせる。machine-readable な `deps` 出力は `--verbose` 指定時だけ stderr へ `Progress:` 診断を出し、それ以外の大きい graph query は `--limit 80` 以上または `--verbose` 指定時に出す。 |
@@ -5935,6 +5941,9 @@ cancel された symbol request に LSP `RequestCancelled` (`-32800`) を返し�
 表示し、既知の root 外の absolute path は `[outside workspace]` に置き換えます。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
+disk 上の position-line materialization も 4194304-byte 上限付きで stream 処理します。
+最初の length check 後に file がこの上限を超えて増大した場合、上限超過 byte を decode する前に
+読み取りを停止し、`position_file_too_large` を報告します。
 `textDocument/references` は `context.includeDeclaration` を尊重し、true の場合は definition location を
 重複なしで reference result の先頭に追加します。`declaration`、`typeDefinition`、`implementation`
 request は同じ indexed definition lookup を再利用し、`definition` と同じ location shape を返します。
