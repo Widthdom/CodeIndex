@@ -22,7 +22,7 @@ public static partial class ReferenceExtractor
         "defmulti", "defmethod", "defprotocol", "defrecord", "deftype", "extend-type",
         "fn", "let", "letfn", "loop", "recur", "if", "if-let", "if-some", "when", "when-let",
         "when-some", "cond", "case", "do", "doseq", "for", "binding", "try", "catch",
-        "finally", "throw", "quote", "var", "set!", "new", ".",
+        "finally", "throw", "quote", "comment", "var", "set!", "new", ".",
     };
 
     private static readonly Regex ErlangImportRegex = new(
@@ -41,7 +41,7 @@ public static partial class ReferenceExtractor
         @"(?<![-:\w@])(?<name>[a-z][\w@]*|'(?:\\.|[^'\\\r\n])+')\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex ErlangSpecificationAttributeRegex = new(
-        @"^\s*-(?:spec|callback)\b",
+        @"^\s*-(?:spec|callback|type|opaque|record)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> ErlangIgnoredCalls = new(StringComparer.Ordinal)
     {
@@ -118,6 +118,9 @@ public static partial class ReferenceExtractor
         internal int ClojureRequireBracketDepth;
         internal bool ClojureProtocolMode;
         internal int ClojureProtocolBaseDepth;
+        internal bool ClojureTypeBodyMode;
+        internal int ClojureTypeBodyBaseDepth;
+        internal int ClojureSuppressedFormDepth;
         internal int ClojureParenDepth;
         internal int CallableBaseDepth;
         internal int RakuBraceDepth;
@@ -127,7 +130,11 @@ public static partial class ReferenceExtractor
         internal int RakuQuoteDepth;
         internal bool ErlangQuotedAtom;
         internal bool ErlangSpecificationMode;
+        internal bool OcamlTypeDeclarationMode;
         internal string? OcamlQuotedStringTerminator;
+        internal string? RakuHeredocTerminator;
+        internal SymbolRecord? ClojureActiveTypeDefinition;
+        internal SymbolRecord? OcamlActiveTypeDefinition;
         internal SymbolRecord? ActiveCallable;
     }
 
@@ -179,7 +186,7 @@ public static partial class ReferenceExtractor
                     break;
                 case "ocaml":
                     EmitOcamlReferences(
-                        request.FileId, maskedLine, context, lineNumber, definition, typeDefinition, container, references, seen);
+                        request.FileId, maskedLine, context, lineNumber, definition, typeDefinition, container, references, seen, state);
                     break;
                 case "raku":
                     EmitRakuReferences(
@@ -190,6 +197,7 @@ public static partial class ReferenceExtractor
             AdvanceFunctionalCallableState(request.Language, maskedLine, state);
         }
 
+        MarkMutualRecursionReferences(references);
         return references;
     }
 
@@ -331,6 +339,11 @@ public static partial class ReferenceExtractor
                     state.ActiveCallable = null;
                 if (state.ClojureProtocolMode && state.ClojureParenDepth <= state.ClojureProtocolBaseDepth)
                     state.ClojureProtocolMode = false;
+                if (state.ClojureTypeBodyMode && state.ClojureParenDepth <= state.ClojureTypeBodyBaseDepth)
+                {
+                    state.ClojureTypeBodyMode = false;
+                    state.ClojureActiveTypeDefinition = null;
+                }
                 break;
             case "erlang":
                 if (state.ActiveCallable != null && maskedLine.TrimEnd().EndsWith(".", StringComparison.Ordinal))
@@ -376,6 +389,13 @@ public static partial class ReferenceExtractor
         if (language == "raku")
         {
             var trimmed = line.TrimStart();
+            if (state.RakuHeredocTerminator != null)
+            {
+                if (string.Equals(trimmed.TrimEnd(), state.RakuHeredocTerminator, StringComparison.Ordinal))
+                    state.RakuHeredocTerminator = null;
+                return new string(' ', line.Length);
+            }
+
             if (state.RakuPod)
             {
                 if (trimmed.StartsWith("=end", StringComparison.Ordinal))
@@ -478,6 +498,33 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            if (language == "clojure" && line[index] == '\\')
+            {
+                var characterEnd = FindClojureCharacterLiteralEnd(line, index);
+                Array.Fill(masked, ' ', index, characterEnd - index);
+                index = characterEnd - 1;
+                continue;
+            }
+
+            if (language == "erlang" && line[index] == '$' && index + 1 < masked.Length)
+            {
+                var characterEnd = index + 2;
+                if (line[index + 1] == '\\' && characterEnd < masked.Length)
+                    characterEnd++;
+                Array.Fill(masked, ' ', index, characterEnd - index);
+                index = characterEnd - 1;
+                continue;
+            }
+
+            if (language == "ocaml"
+                && line[index] == '\''
+                && TryGetOcamlCharacterLiteralEnd(line, index, out var ocamlCharacterEnd))
+            {
+                Array.Fill(masked, ' ', index, ocamlCharacterEnd - index);
+                index = ocamlCharacterEnd - 1;
+                continue;
+            }
+
             if (language == "ocaml"
                 && TryStartOcamlQuotedString(line, index, out var ocamlOpeningEnd, out var ocamlTerminator))
             {
@@ -494,6 +541,15 @@ public static partial class ReferenceExtractor
                 state.OcamlCommentDepth++;
                 index++;
                 continue;
+            }
+
+            if (language == "raku"
+                && TryStartRakuHeredoc(line, index, out var rakuHeredocEnd, out var rakuHeredocTerminator))
+            {
+                Array.Fill(masked, ' ', index, masked.Length - index);
+                state.RakuHeredocTerminator = rakuHeredocTerminator;
+                index = Math.Max(index, rakuHeredocEnd - 1);
+                break;
             }
 
             if (language == "raku"
@@ -543,6 +599,44 @@ public static partial class ReferenceExtractor
         return new string(masked);
     }
 
+    private static int FindClojureCharacterLiteralEnd(string line, int start)
+    {
+        var index = Math.Min(line.Length, start + 2);
+        while (index < line.Length
+               && !char.IsWhiteSpace(line[index])
+               && line[index] is not ('(' or ')' or '[' or ']' or '{' or '}' or '"' or ';' or ','))
+        {
+            index++;
+        }
+
+        return index;
+    }
+
+    private static bool TryGetOcamlCharacterLiteralEnd(string line, int start, out int end)
+    {
+        end = 0;
+        var escaped = false;
+        var limit = Math.Min(line.Length, start + 14);
+        for (var index = start + 1; index < limit; index++)
+        {
+            var character = line[index];
+            if (!escaped && character == '\'')
+            {
+                if (index == start + 1)
+                    return false;
+                end = index + 1;
+                return true;
+            }
+
+            if (!escaped && character == '\\')
+                escaped = true;
+            else
+                escaped = false;
+        }
+
+        return false;
+    }
+
     private static bool TryStartOcamlQuotedString(
         string line,
         int start,
@@ -578,19 +672,11 @@ public static partial class ReferenceExtractor
         openingEnd = 0;
         openDelimiter = '\0';
         closeDelimiter = '\0';
-        if (line[start] is not ('q' or 'Q')
-            || (start > 0 && (char.IsLetterOrDigit(line[start - 1]) || line[start - 1] == '_')))
-        {
-            return false;
-        }
-
-        var index = start + 1;
-        if (index < line.Length && line[index] == 'q')
-            index++;
-        if (index >= line.Length)
+        if (!TryReadRakuQuotePrefix(line, start, out var delimiterIndex, out var isHeredoc)
+            || isHeredoc)
             return false;
 
-        openDelimiter = line[index];
+        openDelimiter = line[delimiterIndex];
         closeDelimiter = openDelimiter switch
         {
             '(' => ')',
@@ -605,7 +691,82 @@ public static partial class ReferenceExtractor
         if (openDelimiter == closeDelimiter)
             openDelimiter = '\0';
 
-        openingEnd = index + 1;
+        openingEnd = delimiterIndex + 1;
+        return true;
+    }
+
+    private static bool TryStartRakuHeredoc(
+        string line,
+        int start,
+        out int openingEnd,
+        out string terminator)
+    {
+        openingEnd = 0;
+        terminator = string.Empty;
+        if (!TryReadRakuQuotePrefix(line, start, out var delimiterIndex, out var isHeredoc)
+            || !isHeredoc)
+        {
+            return false;
+        }
+
+        var openDelimiter = line[delimiterIndex];
+        var closeDelimiter = openDelimiter switch
+        {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '<' => '>',
+            _ => openDelimiter,
+        };
+        var closeIndex = line.IndexOf(closeDelimiter, delimiterIndex + 1);
+        if (closeIndex <= delimiterIndex + 1)
+            return false;
+
+        terminator = line[(delimiterIndex + 1)..closeIndex].Trim();
+        if (terminator.Length == 0)
+            return false;
+
+        openingEnd = closeIndex + 1;
+        return true;
+    }
+
+    private static bool TryReadRakuQuotePrefix(
+        string line,
+        int start,
+        out int delimiterIndex,
+        out bool isHeredoc)
+    {
+        delimiterIndex = 0;
+        isHeredoc = false;
+        if (line[start] is not ('q' or 'Q')
+            || (start > 0 && (char.IsLetterOrDigit(line[start - 1]) || line[start - 1] == '_')))
+        {
+            return false;
+        }
+
+        var index = start + 1;
+        if (index < line.Length && line[index] == 'q')
+            index++;
+        while (index < line.Length && line[index] == ':')
+        {
+            var nameStart = ++index;
+            while (index < line.Length
+                   && (char.IsAsciiLetterOrDigit(line[index]) || line[index] is '_' or '-'))
+            {
+                index++;
+            }
+            if (nameStart == index)
+                return false;
+            if (string.Equals(line[nameStart..index], "to", StringComparison.Ordinal))
+                isHeredoc = true;
+        }
+
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length)
+            return false;
+
+        delimiterIndex = index;
         return true;
     }
 
@@ -636,6 +797,9 @@ public static partial class ReferenceExtractor
         var relationMatch = ClojureTypeRelationRegex.Match(line);
         if (relationMatch.Success)
         {
+            state.ClojureTypeBodyMode = true;
+            state.ClojureTypeBodyBaseDepth = state.ClojureParenDepth;
+            state.ClojureActiveTypeDefinition = typeDefinition;
             var typeContainer = typeDefinition ?? container;
             var types = relationMatch.Groups["types"];
             foreach (Match typeMatch in Regex.Matches(
@@ -679,13 +843,23 @@ public static partial class ReferenceExtractor
             return;
         }
 
-        foreach (Match match in ClojureCallHeadRegex.Matches(line))
+        var callLine = MaskClojureSuppressedForms(line, state);
+        var methodHeader = state.ClojureTypeBodyMode
+                           && state.ClojureParenDepth == state.ClojureTypeBodyBaseDepth + 1
+            ? ClojureCallHeadRegex.Match(callLine)
+            : Match.Empty;
+        foreach (Match match in ClojureCallHeadRegex.Matches(callLine))
         {
             var fullName = match.Groups["name"].Value;
             var separator = fullName.LastIndexOf('/');
             var name = separator >= 0 ? fullName[(separator + 1)..] : fullName;
             if (ClojureIgnoredCallHeads.Contains(name))
                 continue;
+            if (methodHeader.Success
+                && match.Groups["name"].Index == methodHeader.Groups["name"].Index)
+            {
+                continue;
+            }
 
             AddReference(
                 references,
@@ -696,7 +870,7 @@ public static partial class ReferenceExtractor
                 "call",
                 context,
                 lineNumber,
-                container,
+                state.ClojureActiveTypeDefinition ?? container,
                 "clojure");
         }
 
@@ -747,6 +921,84 @@ public static partial class ReferenceExtractor
         }
     }
 
+    private static string MaskClojureSuppressedForms(string line, FunctionalReferenceState state)
+    {
+        var masked = line.ToCharArray();
+        for (var index = 0; index < masked.Length; index++)
+        {
+            if (state.ClojureSuppressedFormDepth > 0)
+            {
+                masked[index] = ' ';
+                UpdateDepth(line[index]);
+                continue;
+            }
+
+            var isNamedSuppressedForm =
+                (line.IndexOf("(quote", index, StringComparison.Ordinal) == index
+                 && IsClojureFormBoundary(line, index + 6))
+                || (line.IndexOf("(comment", index, StringComparison.Ordinal) == index
+                    && IsClojureFormBoundary(line, index + 8));
+            if (isNamedSuppressedForm)
+            {
+                state.ClojureSuppressedFormDepth = 1;
+                masked[index] = ' ';
+                continue;
+            }
+
+            var prefixLength = line[index] == '\''
+                ? 1
+                : line[index] == '#' && index + 1 < line.Length && line[index + 1] == '_'
+                    ? 2
+                    : 0;
+            if (prefixLength == 0 || !IsClojureReaderPrefixPosition(line, index))
+                continue;
+
+            var formStart = index + prefixLength;
+            while (formStart < line.Length && char.IsWhiteSpace(line[formStart]))
+                formStart++;
+            Array.Fill(masked, ' ', index, formStart - index);
+            if (formStart >= line.Length)
+                continue;
+
+            if (line[formStart] is '(' or '[' or '{')
+            {
+                state.ClojureSuppressedFormDepth = 1;
+                masked[formStart] = ' ';
+                index = formStart;
+                continue;
+            }
+
+            var tokenEnd = formStart;
+            while (tokenEnd < line.Length
+                   && !char.IsWhiteSpace(line[tokenEnd])
+                   && line[tokenEnd] is not ('(' or ')' or '[' or ']' or '{' or '}' or ',' or ';'))
+            {
+                masked[tokenEnd++] = ' ';
+            }
+            index = Math.Max(index, tokenEnd - 1);
+        }
+
+        return new string(masked);
+
+        void UpdateDepth(char character)
+        {
+            if (character is '(' or '[' or '{')
+                state.ClojureSuppressedFormDepth++;
+            else if (character is ')' or ']' or '}')
+                state.ClojureSuppressedFormDepth--;
+        }
+    }
+
+    private static bool IsClojureReaderPrefixPosition(string line, int index)
+        => index == 0
+           || char.IsWhiteSpace(line[index - 1])
+           || line[index - 1] is '(' or '[' or '{' or ',';
+
+    private static bool IsClojureFormBoundary(string line, int index)
+        => index >= line.Length
+           || char.IsWhiteSpace(line[index])
+           || line[index] is '(' or '[' or '{' or ')' or ']' or '}';
+
     private static void EmitErlangReferences(
         long fileId,
         string line,
@@ -768,9 +1020,12 @@ public static partial class ReferenceExtractor
             return;
         }
 
+        var quotedAtomSpans = GetErlangQuotedAtomSpans(line);
         var remoteCallSpans = new List<(int Start, int End)>();
         foreach (Match match in ErlangRemoteCallRegex.Matches(line))
         {
+            if (IsInsideQuotedAtom(match.Index))
+                continue;
             remoteCallSpans.Add((match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["module"], "reference", context, lineNumber, container, "erlang");
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "erlang");
@@ -780,6 +1035,8 @@ public static partial class ReferenceExtractor
         foreach (Match match in ErlangLocalCallRegex.Matches(line))
         {
             if (remoteCallSpans.Any(span => match.Index >= span.Start && match.Index < span.End))
+                continue;
+            if (IsInsideQuotedAtom(match.Groups["name"].Index))
                 continue;
 
             var name = match.Groups["name"].Value;
@@ -800,6 +1057,37 @@ public static partial class ReferenceExtractor
             if (match.Success)
                 AddFunctionalReference(references, seen, fileId, match.Groups["name"], kind, context, lineNumber, container, "erlang");
         }
+
+        bool IsInsideQuotedAtom(int index)
+            => quotedAtomSpans.Any(span => index > span.Start && index < span.End);
+    }
+
+    private static List<(int Start, int End)> GetErlangQuotedAtomSpans(string line)
+    {
+        var spans = new List<(int Start, int End)>();
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (line[index] != '\'')
+                continue;
+
+            var start = index;
+            for (index++; index < line.Length; index++)
+            {
+                if (line[index] == '\\' && index + 1 < line.Length)
+                {
+                    index++;
+                    continue;
+                }
+
+                if (line[index] != '\'')
+                    continue;
+
+                spans.Add((start, index + 1));
+                break;
+            }
+        }
+
+        return spans;
     }
 
     private static void EmitOcamlReferences(
@@ -811,8 +1099,32 @@ public static partial class ReferenceExtractor
         SymbolRecord? typeDefinition,
         SymbolRecord? container,
         List<ReferenceRecord> references,
-        ReferenceDedupeSet seen)
+        ReferenceDedupeSet seen,
+        FunctionalReferenceState state)
     {
+        if (state.OcamlTypeDeclarationMode
+            && Regex.IsMatch(
+                line,
+                @"^\s*(?:let|module|class|exception|external|open|include)\b",
+                RegexOptions.CultureInvariant,
+                ExtractionRegexTimeout))
+        {
+            state.OcamlTypeDeclarationMode = false;
+            state.OcamlActiveTypeDefinition = null;
+        }
+
+        var startsTypeDeclaration = Regex.IsMatch(
+            line,
+            @"^\s*type\b",
+            RegexOptions.CultureInvariant,
+            ExtractionRegexTimeout);
+        if (startsTypeDeclaration)
+        {
+            state.OcamlTypeDeclarationMode = true;
+            state.OcamlActiveTypeDefinition = typeDefinition;
+        }
+
+        var typeReferenceSpans = new List<(int Start, int End)>();
         AddMatch(OcamlImportRegex.Match(line), "import");
         AddMatch(OcamlModuleAliasRegex.Match(line), "alias");
         var typeAliasTarget = OcamlTypeAliasTargetRegex.Match(line);
@@ -822,6 +1134,8 @@ public static partial class ReferenceExtractor
         }
         foreach (Match match in OcamlTypeReferenceRegex.Matches(line))
             AddOcamlTypeReference(match.Groups["name"]);
+        if (state.OcamlTypeDeclarationMode)
+            return;
 
         if (Regex.IsMatch(
                 line,
@@ -832,9 +1146,11 @@ public static partial class ReferenceExtractor
             return;
         }
 
-        var qualifiedCallSpans = new List<(int Start, int End)>();
+        var qualifiedCallSpans = new List<(int Start, int End)>(typeReferenceSpans);
         foreach (Match match in OcamlQualifiedCallRegex.Matches(line))
         {
+            if (qualifiedCallSpans.Any(span => RangesOverlap(span.Start, span.End, match.Index, match.Index + match.Length)))
+                continue;
             qualifiedCallSpans.Add((match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["module"], "reference", context, lineNumber, container, "ocaml");
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "ocaml");
@@ -869,7 +1185,11 @@ public static partial class ReferenceExtractor
 
         void AddOcamlTypeReference(Group group)
         {
-            if (group.Success && !OcamlIgnoredTypeReferences.Contains(group.Value))
+            if (!group.Success)
+                return;
+
+            typeReferenceSpans.Add((group.Index, group.Index + group.Length));
+            if (!OcamlIgnoredTypeReferences.Contains(group.Value))
             {
                 AddFunctionalReference(
                     references,
@@ -879,10 +1199,13 @@ public static partial class ReferenceExtractor
                     "type_reference",
                     context,
                     lineNumber,
-                    typeDefinition ?? container,
+                    typeDefinition ?? state.OcamlActiveTypeDefinition ?? container,
                     "ocaml");
             }
         }
+
+        static bool RangesOverlap(int leftStart, int leftEnd, int rightStart, int rightEnd)
+            => leftStart < rightEnd && rightStart < leftEnd;
     }
 
     private static void EmitRakuReferences(
