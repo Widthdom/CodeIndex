@@ -355,6 +355,11 @@ batch with the same filters and snippet bounds. Named batches emit one grouped
 JSON document, and `--format compact` keeps the per-result
 `CompactSearchResult` snippet/highlight context instead of reducing rows to
 file/line pairs.
+`search --format grouped` reports query-wide `total_matches`, `total_groups`,
+and `total_files` separately from `grouped_match_count` and
+`emitted_match_count`. When `--limit` or `--per-file-limit` omits rows,
+`omitted_match_count`, `truncated`, `has_more`, and `continuation_action`
+describe the bounded output instead of presenting the displayed page as complete.
 For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `--compact`. It implies JSON output, caps list sections to 5 items by default
 (or the explicit `--limit` / `--top` value), and adds `compact`,
@@ -3571,6 +3576,11 @@ output modifier は 1 つの contract として検証されます。`--json` と
 ad hoc な grouped batch を実行します。名前付き batch は 1 つの grouped JSON document を
 出力し、`--format compact` でも各 result の `CompactSearchResult` snippet / highlight
 context を維持し、file/line だけの行には縮約しません。
+`search --format grouped` は query 全体の `total_matches`、`total_groups`、
+`total_files` と、表示対象の `grouped_match_count`、実際に出力した
+`emitted_match_count` を分けて報告します。`--limit` または `--per-file-limit` で
+row を省略した場合は、`omitted_match_count`、`truncated`、`has_more`、
+`continuation_action` が上限付き出力であることを示します。
 AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outline` は
 `--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
 既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、

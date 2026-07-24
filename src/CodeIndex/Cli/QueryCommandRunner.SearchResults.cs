@@ -427,19 +427,34 @@ public static partial class QueryCommandRunner
         return sampled;
     }
 
-    private static int WriteGroupedSearchResults(List<SearchDisplayRow> rows, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static int WriteGroupedSearchResults(
+        List<SearchDisplayRow> rows,
+        QueryCountResult matchedCounts,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
     {
         var groups = BuildSearchFileGroups(rows, options);
-        var totalMatches = rows.Count;
+        var groupedMatchCount = rows.Count;
+        var emittedMatchCount = groups.Sum(group => group.Results.Count);
+        var omittedMatchCount = Math.Max(0, matchedCounts.Count - emittedMatchCount);
+        var truncated = omittedMatchCount > 0 || groups.Any(group => group.Truncated);
         var json = JsonSerializer.Serialize(
                 new SearchFileGroupedJsonResult(
                     JsonOutputContract.ApiVersion,
                     options.Query!,
-                    totalMatches,
+                    matchedCounts.Count,
+                    matchedCounts.Count,
+                    groupedMatchCount,
+                    emittedMatchCount,
+                    omittedMatchCount,
                     groups.Count,
+                    matchedCounts.FileCount,
                     rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
+                    matchedCounts.FileCount,
                     options.GroupedPerFileLimit,
-                    groups.Any(group => group.Truncated),
+                    truncated,
+                    truncated,
+                    truncated ? "Increase --limit or --per-file-limit, or use a resumable JSON envelope." : null,
                     groups),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchFileGroupedJsonResult);
         return WriteJsonObjectWithOptionalByteLimit(
@@ -448,6 +463,26 @@ public static partial class QueryCommandRunner
             "grouped search results",
             "Reduce --limit, --per-file-limit, or increase --max-json-bytes.");
     }
+
+    private static QueryCountResult CountSearchMatches(DbReader reader, QueryCommandOptions options, bool exact)
+        => HasSearchOriginFilters(options)
+            ? CountFilteredSearchResults(reader, options, exact)
+            : reader.CountSearchResults(
+                options.Query!,
+                options.Lang,
+                options.RawFts,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                !options.NoDedup,
+                options.Since,
+                exact,
+                options.Prefix,
+                !options.NoVisibilityRank,
+                options.GuardFilters,
+                options.GuardWindow,
+                options.GuardScope,
+                options.TokenBoundary);
 
     private static void WriteGroupedSearchResultsHuman(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {
