@@ -52,6 +52,7 @@ public static partial class QueryCommandRunner
         {
             WriteGraphReferenceKindHint("references", options.Kind, options.Json);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactGraphLanguage = exact
                 ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
                 : null;
@@ -70,13 +71,14 @@ public static partial class QueryCommandRunner
                     r => r.SymbolName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
+                WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddReferenceGraphContractJsonFields(payload, effectiveSqlGraphSignal, hdlGraphSignal));
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddReferenceGraphContractJsonFields(payload, effectiveSqlGraphSignal, hdlGraphSignal));
                 return CommandExitCodes.Success;
             }
 
@@ -94,12 +96,13 @@ public static partial class QueryCommandRunner
                 r => r.SymbolName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
+            WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
             if (results.Count == 0)
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
                     return ZeroResultExitCode(options);
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal));
                 else if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No references found", options));
@@ -136,9 +139,9 @@ public static partial class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, exactSignal, jsonOptions, extraFields: payload => AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal));
                     else
-                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceResult, jsonOptions, extraFields: payload => AddReferenceGraphContractJsonFields(payload, sqlGraphSignal, hdlGraphSignal));
                 }
             }
             else
@@ -207,6 +210,7 @@ public static partial class QueryCommandRunner
             WriteGraphReferenceKindHint("callers", options.Kind, options.Json);
             WriteReferenceGraphCompletenessWarningIfNeeded(options.Json, reader);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactGraphLanguage = exact
                 ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
                 : null;
@@ -225,13 +229,14 @@ public static partial class QueryCommandRunner
                     r => r.CalleeName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
+                WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal));
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal));
                 return CommandExitCodes.Success;
             }
 
@@ -249,12 +254,13 @@ public static partial class QueryCommandRunner
                 r => r.CalleeName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
+            WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
             if (results.Count == 0)
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
                     return ZeroResultExitCode(options);
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
                 else if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No callers found", options));
@@ -291,9 +297,9 @@ public static partial class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, exactSignal, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, exactSignal, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
                     else
-                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
                 }
             }
             else
@@ -362,6 +368,7 @@ public static partial class QueryCommandRunner
             WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
             WriteReferenceGraphCompletenessWarningIfNeeded(options.Json, reader);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactGraphLanguage = exact
                 ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
                 : null;
@@ -380,13 +387,14 @@ public static partial class QueryCommandRunner
                     r => r.CallerName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
+                WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal));
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, effectiveSqlGraphSignal, hdlGraphSignal));
                 return CommandExitCodes.Success;
             }
 
@@ -404,10 +412,11 @@ public static partial class QueryCommandRunner
                 r => r.CallerName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
+            WriteHdlGraphContractWarningIfNeeded(options.Json, hdlGraphSignal);
             if (results.Count == 0)
             {
                 if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal));
+                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
                 else if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No callees found", options));
@@ -444,9 +453,9 @@ public static partial class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, exactSignal, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, exactSignal, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
                     else
-                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
                 }
             }
             else

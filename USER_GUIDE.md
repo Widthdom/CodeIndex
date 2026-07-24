@@ -294,6 +294,13 @@ sections below show examples and option details for the most common workflows.
 | MCP | `mcp` | Start the MCP server for AI tools | server transport |
 | Legal | `license` | Show the license and commercial-use summary; add `--json` for the stable `license`, `commercial_use`, `trademark`, and controlling `documents` fields | -- |
 
+For `files` and `map`, `--exclude-tests` without an explicit `--path` applies the
+same production-source preset (`src/**` plus the built-in non-source exclusions).
+With an explicit `--path`, both commands keep that selected path scope and remove
+test paths from it. As a result, `files --exclude-tests --count` and the
+`file_count` reported by `map --exclude-tests --sections summary --json` describe
+the same filtered file set.
+
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
 Run `cdidx --help` for the full syntax line for every command. For focused help,
@@ -348,6 +355,23 @@ batch with the same filters and snippet bounds. Named batches emit one grouped
 JSON document, and `--format compact` keeps the per-result
 `CompactSearchResult` snippet/highlight context instead of reducing rows to
 file/line pairs.
+`search --format grouped` reports query-wide `total_matches`, `total_groups`,
+and `total_files` separately from `grouped_match_count` and
+`emitted_match_count`. When `--limit` or `--per-file-limit` omits rows,
+`omitted_match_count`, `truncated`, `has_more`, and `continuation_action`
+describe the bounded output instead of presenting the displayed page as complete.
+High-volume discovery output is resumable without increasing a global limit.
+`search --format compact`, `symbols --format compact`, and `files --format
+compact` add authoritative totals, omitted/truncated state, `result_stable_at`,
+and an opaque `next_cursor` while retaining their existing compact roots.
+`search --json=array --json-envelope` provides the same metadata around an
+array. `languages --json` accepts `--limit` / `--top`, `--cursor`, and
+`--max-json-bytes`; those controls select a bounded envelope without changing
+the ordinary unbounded JSON shape. Pass each `next_cursor` back to the same
+command and filters. A cursor is bound to that selection and index generation,
+so changed inputs or a refreshed index require restarting the pagination.
+When a bounded `find --all` scan exits partially, its terminal record includes
+`next_cursor`; replaying it resumes after the last scanned line.
 For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `--compact`. It implies JSON output, caps list sections to 5 items by default
 (or the explicit `--limit` / `--top` value), and adds `compact`,
@@ -377,6 +401,9 @@ as a signal to inspect the accompanying readiness or graph/exact trust fields.
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
 cdidx search authenticate --json=array    # single JSON array
+cdidx search authenticate --json=array --json-envelope --limit 50
+cdidx symbols --format compact --limit 50
+cdidx languages --json --limit 20 --max-json-bytes 65536
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # capped JSON with truncation metadata
 cdidx inspect Compute --outline-only      # file/definition/nearby symbol summary
@@ -617,6 +644,10 @@ downstream audit tooling. Count-only JSON includes `returned_bucket_counts` and
 `summary.by_bucket` / `summary.by_confidence`, matching the full JSON summary.
 Use `--compact` for audit summaries that keep counts, confidence buckets,
 taxonomy, and filter context without returning the full `symbols` array.
+When `unused` returns `next_cursor`, pass that opaque value back unchanged.
+The cursor is bound to the effective audit scope, filters, ordering, and index
+generation. Changing those inputs or refreshing the index requires restarting
+without `--cursor`; JSON pages also expose `result_stable_at`.
 Public APIs, framework entrypoints, DTOs, serialization contracts, generated
 hooks, test-only hooks, Markdown headings and fenced-code language markers,
 reflection, and configuration-based usage can be false positives and are
@@ -1489,6 +1520,10 @@ Use `--exact-name` when you already have a precise candidate list (e.g. names re
 For audit passes, add `--sort hotspot|references|size|complexity|path`.
 `--json` rows include `sort_mode`, `reference_count`, `hotspot_score`,
 `size_lines`, and `complexity_score` whenever an audit sort is active.
+Audit sorting combines case-insensitive reference-name variants before ordering
+and limiting, so each physical `symbol_id` appears at most once. Internal offset
+pagination is applied after that deduplication, and stable tie-breakers keep
+adjacent pages deterministic without repeating a symbol.
 Use `--format compact` when discovery output must stay small: it emits one JSON
 object with `count`, `file_count`, `emitted_count`, `omitted_count`,
 `truncated`, `omitted_by`, `query_context`, and freshness metadata. Compact
@@ -1572,13 +1607,13 @@ By default, `callers` and `callees` return only executable call, construction, a
 cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
-cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor "$NEXT_CURSOR" --limit 20 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 ```
 
 Shows all symbols in a single file ordered deterministically by line, start column when available, kind, and name, with signature, visibility, and container nesting. Lets AI agents understand file structure in one call instead of reading the whole file or chaining `symbols` + `definition`.
 
-For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, `--cursor <outline:offset>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. Controlled JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, and `has_more`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata, or select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
+For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, opaque `--cursor <next_cursor>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. Controlled JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, `has_more`, and `result_stable_at`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. The cursor is bound to the file path, filters, ordering, and index generation, so changing them or refreshing the index requires restarting without `--cursor`. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata, or select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
 
 ### Reconstruct a file excerpt
 
@@ -1799,6 +1834,7 @@ same source location.
 |---|---|---|
 | `--db <path>` | All commands except `languages`; for `mcp`, only `--db` is supported | Database file path. `index` defaults to `<projectPath>/.cdidx/codeindex.db`; query commands default to `.cdidx/codeindex.db` in the current directory. Query commands without `--db` keep trusting that default `.cdidx/codeindex.db` sibling path, so moving or renaming the current repo does not leave stale workspace metadata behind. For explicit query DBs, workspace metadata such as `project_root`, `git_head`, and `git_is_dirty` comes from the persisted `indexed_project_root` stored in that DB when available. Legacy explicit DBs created before that metadata existed may return those fields as `null` / absent until you rerun `cdidx index <projectPath> --db <path>` or a scoped update that actually commits at least one file delete/update against the intended project, even if the explicit path itself looks like `.../.cdidx/codeindex.db`. |
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use). `search --json` writes newline-delimited result objects followed by a final `{"done":true,"count":N,"interrupted":false}` sentinel, including zero-result output, so stream consumers can detect clean completion. |
+| `--quiet`, `-q`, `--silent` | All CLI commands | Suppress informational stderr without changing result stdout; errors remain visible. The flag can appear before or after the command. Use `--` before a query that literally starts with one of these tokens. |
 | `--pretty` | JSON-capable commands except `mcp` | Pretty-print JSON output with indentation. Default `search --json` remains newline-delimited; use `search --json=array --pretty` for an indented search result array. |
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
 | `--summary-only` | `map`, `recipes`, `audit`, `deps`, `hotspots`, and supported `search` JSON contexts | Emit aggregate/context JSON while omitting heavy result arrays where supported. For `deps`, use `--json` or `--format json-graph`; for `hotspots`, use `--json`. Machine-readable `deps` output emits `Progress:` diagnostics only with `--verbose`; other large graph queries emit them at `--limit 80+` or with `--verbose`. |
@@ -1849,7 +1885,7 @@ same source location.
 | `--search-fields <fields>` | `search` | Project compact JSON fields, including recipe `query_name` and `recipe` |
 | `--results-only` | `search`, `symbols`, `files` | Emit result-only NDJSON without a stream terminal record for shell pipelines |
 | `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | Bound broad audit output by file, deterministic sample size, or recipe total rows |
-| `--max-json-bytes <n>` | `search`, `recipes`, `audit`, `deps`, `hotspots` | Fail before emitting JSON that exceeds this UTF-8 byte budget. For large graph outputs, pair it with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
+| `--max-json-bytes <n>` | `search`, `definition`, `recipes`, `audit`, `deps`, `hotspots` | Fail before emitting JSON that exceeds this UTF-8 byte budget. A `definition --json` miss preflights its structured not-found object against the same cap and reports a usage error on stderr without oversized stdout when the object cannot fit. For large graph outputs, pair the cap with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
@@ -1874,7 +1910,7 @@ same source location.
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`; max: 10000000) |
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match (max: 1000) |
 | `--after <n>` | `excerpt`, `find` | Include extra context lines after the requested excerpt or match (max: 1000) |
-| `--focus-line <line>` | `excerpt` | Line inside the requested excerpt whose focused column should stay visible when `--max-line-width` clamps long single-line content; requires `--focus-column` (max: 10000000) |
+| `--focus-line <line>` | `excerpt` | Line inside the requested excerpt to focus when `--max-line-width` clamps long single-line content. It can be used without `--focus-column`; in that case, clamping keeps the leading window of the line (max: 10000000). |
 | `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content; must be within that line's length (max: 100000) |
 | `--focus-length <n>` | `excerpt` | Width of the focused span when `--max-line-width` clamps long single-line content (default: 1, max: 100000; requires `--focus-column`) |
 | `--no-semantic-tokens` | `excerpt` | Omit the `semantic_tokens` array from `excerpt --json` while keeping line spans and content metadata. Useful for compact excerpts and token-budgeted clients. |
@@ -1899,7 +1935,7 @@ same source location.
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | Restrict dependency edges by an exact symbol, a symbol-name prefix, or the built-in noise profile. These filters run in SQLite before candidate ranking and `--limit`, including cycle and cross-workspace queries. `reference_count`, ranking, and JSON `symbol_filter` counters therefore describe the filtered scope. |
 | `--cycles` / `--graph-budget <n>` / `--cursor <value>` | `deps` | Compute deterministic, stably ranked dependency SCCs. `--graph-budget` independently bounds analyzed edges (default `10000`), while `--limit` pages the ranked SCCs and an opaque `next_cursor` continues the same filtered graph. JSON reports `analysis_complete`, `graph_edge_count`, `graph_edge_budget`, ranking metadata, authoritative-total status, and continuation metadata. When the graph budget is exhausted, the SCC set and total are explicitly non-authoritative; increase `--graph-budget` or narrow the graph with `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path`. |
-| `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
+| `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries normally exit `0` and keep their normal empty/zero-result output; the default-format `definition --json` miss is an intentional exception that always emits `E018_QUERY_NOT_FOUND` and exits `2`. |
 | `--top <n>` | Query commands | Alias for `--limit` |
 | `--max-results <n>` | `search` | Alias for `--limit` |
 | `--color <when>` | All commands | Control ANSI color output. Accepts `auto` (default), `always`, or `never`. Precedence: `--color` flag > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > terminal capability auto-detect. Auto mode treats redirected stdout and StringWriter-style test capture as non-ANSI; on Windows it also accepts ConPTY/Windows Terminal virtual-terminal support and terminal hints such as `WT_SESSION`, `WT_PROFILE_ID`, `TERM_PROGRAM`, or non-`dumb` `TERM`. Use `--color=always` to keep colored kind labels through a pager such as `cdidx symbols Foo \| less -R`; use `--color=never` (or `NO_COLOR=1`) to suppress ANSI even on a TTY. |
@@ -1912,9 +1948,9 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 | Code | Meaning |
 |---|---|
-| `0` | Success, including valid queries that produce zero rows |
+| `0` | Success, including valid queries that produce zero rows, except a default-format `definition --json` miss |
 | `1` | Usage error (missing command, missing required positional input, or command-shape error) |
-| `2` | Not found (missing indexed path or zero-result query when `--strict-not-found` is set) |
+| `2` | Not found (missing indexed path, zero-result query when `--strict-not-found` is set, or a default-format `definition --json` miss) |
 | `3` | Permanent database error |
 | `4` | Feature unavailable on this build (for example CLI `--json` on a manually trimmed custom build) |
 | `5` | Stale index (`status --check` found DB/workspace differences) |
@@ -1927,7 +1963,7 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 ### Error codes
 
-For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `definition` / `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. A `definition` miss uses `E018_QUERY_NOT_FOUND` and exit code `2`; bounded-envelope controls retain the error under `metadata.error` with an empty `results` array, while an explicitly impossible `--max-json-bytes` cap instead produces a usage error on stderr before any oversized stdout is written. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
 
 | Code | When emitted |
 |---|---|
@@ -2369,16 +2405,15 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 
 - C/C++ headers: `.h` stays on the C path unless lexical code (after comments, strings, and macro payloads are masked) has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time. Detection scores the full header up to 48 KiB, then uses head/middle/tail ranges for larger files while retaining lexical state across skipped bytes, so long license blocks do not impose a fixed line cutoff. `index --dry-run --json` reports ambiguous-header decisions in `language_detections` with stable `source` and `confidence` values.
 - C++ callables: balanced declarators preserve constructors, destructors, conversion operators, ordinary functions, and trailing-return functions as navigable function symbols. Trailing return types populate `return_type` metadata.
-- Cython and CUDA: Cython `cdef` / `cpdef` declarations, `cimport` entries, and extern declarations are indexed as symbols. CUDA files reuse C++ symbols and classify `__global__`, `__device__`, and `__host__` functions with CUDA-specific sub-kinds.
+- Cython and CUDA: Cython `cdef` / `cpdef` declarations, `cimport` entries, and extern declarations are indexed as symbols; bounded cimport, base-type, and call references feed graph queries. CUDA files reuse C++ symbols and classify `__global__`, `__device__`, and `__host__` functions with CUDA-specific sub-kinds.
 - Shaders: GLSL, HLSL, Metal, and WGSL entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, and uniform/input/output declarations are indexed as symbols.
-- HDL: Verilog, SystemVerilog, and VHDL module/package/type/function/resource declarations are indexed as symbols. References and graph queries are not advertised for HDL yet.
+- HDL: Verilog, SystemVerilog, and VHDL module/package/type/function/resource declarations are indexed as symbols, with bounded syntax-visible reference edges available to graph queries.
 - SQL: query-time `--lang tsql` is accepted as a SQL alias, and T-SQL aggregate, assembly, and XML schema collection declarations are searchable.
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
-- Functional symbol-only languages: Clojure, Erlang, OCaml, and Raku expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
-- Dynamic symbol-only languages: Julia exposes conservative declarations as symbols. References and graph queries are not advertised for Julia yet.
+- Functional graph languages: Clojure, Erlang, OCaml, and Raku expose conservative declarations plus bounded imports, aliases, calls, and type/protocol/behaviour relationships. References and graph queries are advertised for these languages.
 - Dynamic/declarative graph languages: Crystal, Groovy, Tcl, and Prolog expose conservative declarations, imports, and call relationships. Crystal, Groovy, and Prolog parenthesized calls use the shared extractor; command-style calls are limited to callables declared in the same file. Tcl recognizes command substitutions and common control-command script arguments without treating ordinary `name()` words as calls, while Tcl proc / Prolog predicate bodies preserve caller containers.
   An index created before this graph contract reports `reference_graph_complete=false` and `graph_data_current=false` with `dynamic_reference_graph_contract_stale`; rerun `cdidx index <projectPath>` to refresh affected rows before treating absent edges as authoritative.
-- Systems symbol-only languages: Ada, D, and Nim expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
+- Scientific and native-extension graphs: Julia, MATLAB, Nim, D, Cython, and Ada emit bounded language-aware import/module, base/type, and call references. Julia macro invocations and Ada procedure-style calls without parentheses are also represented.
 - Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
@@ -2391,7 +2426,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. `Directory.Packages.props`, `packages.config`, `requirements.txt`, `pyproject.toml`, `packages.lock.json`, and npm `package-lock.json` / `npm-shrinkwrap.json` expose package symbols and `dependency` references with version, scope, and direct/transitive metadata where the format provides it.
 - Solution and application manifests: `.sln` files expose project entries as symbols and project path references; `.manifest` files expose assembly identity, requested execution level, supported OS, and long-path settings as symbols.
 - Shebang scripts: recognized first-line shebangs index extensionless and unknown-extension files for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Perl, Tcl (`tclsh`, `wish`), Node.js, PHP, Lua, and PowerShell. Explicit language-map overrides remain authoritative; for ambiguous `.t` files, a recognized shebang overrides the Perl default, while strong known extensions continue to win conflicts.
-- Ambiguous `.m` / `.pl`: recognized shebangs win first, then bounded content checks use only strong Objective-C/MATLAB or Perl/Prolog markers, followed by conservative project markers. Scoped updates that add, change, or remove one of those markers automatically rescan the workspace so unchanged ambiguous files do not retain stale classifications. Weak or conflicting evidence remains under `ambiguous_m` or `ambiguous_pl` instead of being assigned unconditionally. MATLAB exposes declaration symbols without reference or graph support. Prolog and `ambiguous_pl` expose conservative symbols, references, and graph queries after classification; `ambiguous_pl` uses a safe union of Perl and Prolog constructs without overriding the content-based language decision.
+- Ambiguous `.m` / `.pl`: recognized shebangs win first, then bounded content checks use only strong Objective-C/MATLAB or Perl/Prolog markers, followed by conservative project markers. Scoped updates that add, change, or remove one of those markers automatically rescan the workspace so unchanged ambiguous files do not retain stale classifications. Weak or conflicting evidence remains searchable under `ambiguous_m` or `ambiguous_pl` instead of being assigned unconditionally. Unresolved `.m` content exposes the conservative union of MATLAB and Objective-C symbols/references after both comment syntaxes are position-preservingly masked. Prolog and `ambiguous_pl` expose conservative symbols, references, and graph queries after classification; `ambiguous_pl` uses a safe union of Perl and Prolog constructs without overriding the content-based language decision.
 
 ### Language extraction matrix
 
@@ -2418,19 +2453,23 @@ entries with the unsupported capability, an explanatory message, and
 | Java / Kotlin / Scala | packages/imports, classes/interfaces, methods, properties | calls, constructors, annotations, type references | Kotlin inline lambda body modeling is limited; verify with `references` before relying on deep call chains. |
 | JavaScript / TypeScript / Vue / Svelte | functions, classes, exports, imports, variables | calls, constructors, static/dynamic imports, workers, service workers | Dynamic property calls and computed module specifiers are best-effort. `cdidx references render --lang typescript` |
 | Python / Ruby / PHP / Perl / R | functions, classes/modules, imports where supported | calls, constructors, decorators/annotations where supported | Dynamic dispatch and metaprogramming may require `search`. PHPDoc/static import patterns are indexed when statically visible. |
-| MATLAB | classes, functions, imports | none yet | `.m` files are classified conservatively; declaration symbols are searchable, but use `search` for reference and graph questions. |
+| MATLAB / Julia / Nim / D / Ada / Cython | classes/modules/types, functions/procedures, imports | bounded calls, imports/modules, base/type references; Julia macros and Ada procedure-style calls | Static syntax is indexed conservatively; dynamic dispatch, generated code, and macro expansion may still require `search`. |
 | Prolog / ambiguous `.pl` | modules, predicates, imports | conservative same-file predicate calls and imports | Calls are recorded only in goal positions for predicates declared in the same file. Ambiguous `.pl` retains its content classification while exposing the safe union of Perl and Prolog structure. |
-| Cython | `cdef` / `cpdef` declarations, cimports, extern declarations | none yet | Cython native-extension declarations are searchable as symbols; use `search` for call/reference questions. |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | functions, types, methods, imports/modules | calls, constructors, macro invocations where supported, type references | C++ templates/macros and Rust macro expansion are not evaluated; Rust macro invocations are still reference edges. |
-| CUDA | C++-style functions/types plus CUDA kernel/device/host sub-kinds | none yet | CUDA kernel/device/host declarations are indexed as C++-style symbols with CUDA sub-kinds; use `search` for call/reference questions. |
-| GLSL / HLSL / Metal / WGSL | entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, uniforms/inputs/outputs | none yet | Shader entry points and resource declarations are searchable as symbols; use `search` for data-flow, binding compatibility, and call/reference questions. |
-| Verilog / SystemVerilog / VHDL | modules, packages, interfaces, classes, functions/tasks/processes, types, signals/parameters | none yet | HDL declarations are available to `symbols`, `definition`, `outline`, and symbol-aware `search`; use plain `search` for netlist/reference questions. |
+| CUDA | C++-style functions/types plus CUDA kernel/device/host sub-kinds | calls and kernel launches, includes, workspace-backed user-defined type references, constant bindings, scoped kernel-parameter resource uses | CUDA references are bounded syntactic edges. Macro-generated launches, function pointers, and semantic data flow still require `search`. |
+| GLSL / HLSL / Metal / WGSL | entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, uniforms/inputs/outputs | entry-point/helper calls, includes where supported, workspace-backed user-defined type references, block/direct resource uses, binding metadata | Shader references are bounded syntactic edges. They do not validate binding compatibility or model semantic data flow; use `search` for those questions. |
+| Verilog / SystemVerilog / VHDL | modules, packages, interfaces, classes, functions/tasks/processes, types, signals/parameters | module/entity/interface instantiations, package/import/use relationships, architecture/entity links, bounded known signal/type references | HDL graph extraction is syntax-based and does not elaborate generates, macros, parameterized hierarchy, or signal data flow; use `search` for those cases. |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
 | Solution / application manifest | solution projects and manifest identity/settings | solution project references; application manifests are symbol-only | `.sln` project paths are graph edges for repository structure; use `symbols --lang app_manifest` for Windows manifest metadata. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
 | Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | headings, anchors, selectors, UI elements, generic XML element/attribute paths, schema types/messages where supported | links/assets/components, local anchors, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Generic non-XAML XML emits bounded structural symbols; use `search` for prose and generated markup. |
 | Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
 | Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
+
+CUDA, GLSL, HLSL, Metal, and WGSL report `reference_extraction: true` and
+`graph_queries: true` in `languages --json`. This readiness means the bounded,
+statically visible edges listed above are indexed; it is not a claim of compiler
+or driver-level semantic analysis.
 
 The graph commands surface `graph_supported` / `graph_support_reason` in JSON and
 MCP outputs when a language filter is provided. An empty unsupported-language
@@ -2792,6 +2831,10 @@ root when possible and uses `[outside workspace]` for absolute paths outside the
 known roots.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
+Disk-backed position-line materialization is also streamed through a 4194304-byte
+limit. If the file grows beyond that limit after its initial length check, the
+reader stops before decoding the over-limit bytes and reports
+`position_file_too_large`.
 `textDocument/references` honors `context.includeDeclaration`; when true, the
 definition locations are prepended to the reference result without duplicating
 identical locations. `declaration`, `typeDefinition`, and `implementation`
@@ -3492,6 +3535,13 @@ cdidx index . --quiet
 | MCP | `mcp` | AI tools 向け MCP server を起動 | server transport |
 | Legal | `license` | license と commercial-use summary を表示。`--json` を付けると、安定した `license`、`commercial_use`、`trademark`、controlling `documents` field を出力 | -- |
 
+`files` と `map` では、明示的な `--path` なしで `--exclude-tests` を指定すると、
+同じ本番ソース preset（`src/**` と組み込みの非ソース除外）が適用されます。
+明示的な `--path` がある場合は、両コマンドとも選択した path scope を維持し、
+そこから test path を除外します。このため、`files --exclude-tests --count` と
+`map --exclude-tests --sections summary --json` が返す `file_count` は、同じ
+filter 済み file 集合を表します。
+
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
 を参照してください。個別の help は `cdidx help <command> [subcommand]` を使え、既存の
@@ -3546,6 +3596,23 @@ output modifier は 1 つの contract として検証されます。`--json` と
 ad hoc な grouped batch を実行します。名前付き batch は 1 つの grouped JSON document を
 出力し、`--format compact` でも各 result の `CompactSearchResult` snippet / highlight
 context を維持し、file/line だけの行には縮約しません。
+`search --format grouped` は query 全体の `total_matches`、`total_groups`、
+`total_files` と、表示対象の `grouped_match_count`、実際に出力した
+`emitted_match_count` を分けて報告します。`--limit` または `--per-file-limit` で
+row を省略した場合は、`omitted_match_count`、`truncated`、`has_more`、
+`continuation_action` が上限付き出力であることを示します。
+高ボリュームな discovery 出力は global limit を増やさず再開できます。
+`search --format compact`、`symbols --format compact`、`files --format compact`
+は既存の compact root を維持したまま、authoritative な総数、省略 / truncation 状態、
+`result_stable_at`、opaque な `next_cursor` を追加します。
+`search --json=array --json-envelope` は array を同じ metadata で包みます。
+`languages --json` は `--limit` / `--top`、`--cursor`、`--max-json-bytes` を
+受け付け、これらを指定した場合だけ bounded envelope を選択するため、通常の上限なし
+JSON 形状は変わりません。`next_cursor` は同じ command と filter に渡してください。
+cursor はその選択条件と index generation に束縛されるため、入力変更後または index
+更新後は pagination を最初からやり直す必要があります。上限に達した
+`find --all` scan が partial exit した場合、terminal record の `next_cursor` を
+再利用すると最後に scan した line の次から継続します。
 AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outline` は
 `--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
 既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、
@@ -3573,6 +3640,9 @@ graph/exact trust field を確認してください。
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
 cdidx search authenticate --json=array    # 単一 JSON array
+cdidx search authenticate --json=array --json-envelope --limit 50
+cdidx symbols --format compact --limit 50
+cdidx languages --json --limit 20 --max-json-bytes 65536
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
 cdidx inspect Compute --outline-only      # ファイル・定義・近傍シンボルの概要
@@ -3791,8 +3861,11 @@ preset です。JSON 出力には `query_context` も含まれるため、audit 
 bucket と confidence filter を直接確認できます。count-only JSON には
 `returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含まれ、
 full JSON summary と同じ bucket totals を返します。count、confidence bucket、taxonomy、
-filter context だけが必要な場合は `--compact` を使ってください。Public API、framework entrypoint、DTO、
-serialization contract、generated hook、test-only hook、Markdown heading と fenced-code の
+filter context だけが必要な場合は `--compact` を使ってください。
+`unused` が `next_cursor` を返した場合は、その opaque 値を変更せず次の呼び出しへ渡してください。
+cursor は有効な audit scope、filter、ordering、index generation に束縛されます。条件を変更した場合や
+index を更新した場合は `--cursor` なしで再開する必要があり、JSON page は `result_stable_at` も返します。
+Public API、framework entrypoint、DTO、serialization contract、generated hook、test-only hook、Markdown heading と fenced-code の
 language marker、reflection、config 経由の使用は false positive になりうるため、
 低 confidence bucket に寄せられます。
 C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
@@ -4661,6 +4734,10 @@ cdidx symbols Run --format lsp                       # LSP locations。qf / sari
 audit では `--sort hotspot|references|size|complexity|path` を追加できます。
 audit sort が有効な `--json` row には `sort_mode`、`reference_count`、
 `hotspot_score`、`size_lines`、`complexity_score` が含まれます。
+audit sort は大文字小文字だけが異なる参照名を ordering / limit 適用前に統合するため、
+各物理 `symbol_id` は最大1回だけ返ります。内部 offset pagination もこの重複排除後に
+適用され、安定した tie-breaker により隣接ページ間で同じ symbol を繰り返さず
+決定的な順序を維持します。
 discovery 出力を小さく保つ必要がある場合は `--format compact` を使います。
 これは `count`、`file_count`、`emitted_count`、`omitted_count`、
 `truncated`、`omitted_by`、`query_context`、freshness metadata を含む 1 つの
@@ -4745,13 +4822,13 @@ cdidx callees AddToGitExclude --exclude-tests
 cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
-cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor "$NEXT_CURSOR" --limit 20 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 ```
 
 1ファイル内の全シンボルを行、利用可能な場合は開始列、種別、名前の決定的な順序で、シグネチャ・可視性・コンテナ深さに応じたネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
 
-大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、`--cursor <outline:offset>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
+大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、opaque な `--cursor <next_cursor>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more`、`result_stable_at` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。cursor は file path、filter、ordering、index generation に束縛されるため、それらを変更した場合や index を更新した場合は `--cursor` なしで再開してください。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
 
 ### ファイル抜粋を再構成する
 
@@ -4957,6 +5034,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 |---|---|---|
 | `--db <path>` | `languages` を除く全コマンド。`mcp` は `--db` のみ対応 | DBファイルパス。`index` のデフォルトは `<projectPath>/.cdidx/codeindex.db`、クエリ系コマンドのデフォルトはカレントディレクトリの `.cdidx/codeindex.db`。`--db` を付けない query は、その既定の `.cdidx/codeindex.db` sibling path を引き続き正とするため、カレント repo を move/rename しても古い workspace metadata を引きずらない。明示指定 query DB の `project_root`、`git_head`、`git_is_dirty` などの workspace metadata は、利用可能な場合はその DB に保存された `indexed_project_root` から解決される。保存前の古い explicit DB では、意図した project に対して `cdidx index <projectPath> --db <path>`、または少なくとも 1 件の file delete/update を実際に commit する scoped update を一度実行するまで、これらの項目が `null` / 未出力になることがあり、明示パス自体が `.../.cdidx/codeindex.db` でも同じ。 |
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
+| `--quiet`、`-q`、`--silent` | 全 CLI コマンド | 結果の stdout を変えずに informational stderr を抑制し、エラーは表示する。フラグはコマンドの前後どちらにも指定できる。これらのトークン自体で始まるクエリを検索する場合は、その前に `--` を指定する。 |
 | `--pretty` | `mcp` を除く JSON 対応コマンド | JSON 出力をインデント付きで整形。既定の `search --json` は newline-delimited のまま維持されるため、検索結果配列を整形したい場合は `search --json=array --pretty` を使う。 |
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
 | `--summary-only` | `map`、`recipes`、`audit`、`deps`、`hotspots`、および対応する `search` JSON 文脈 | 対応コマンドで重い結果配列を省き、集計と文脈中心の JSON を返す。`deps` では `--json` または `--format json-graph`、`hotspots` では `--json` と組み合わせる。machine-readable な `deps` 出力は `--verbose` 指定時だけ stderr へ `Progress:` 診断を出し、それ以外の大きい graph query は `--limit 80` 以上または `--verbose` 指定時に出す。 |
@@ -5006,7 +5084,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--search-fields <fields>` | `search` | recipe の `query_name` / `recipe` を含む compact JSON field を projection する |
 | `--results-only` | `search`、`symbols`、`files` | shell pipeline 向けに stream の終端レコードを含まない result-only NDJSON を出力する |
 | `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数で広い audit 出力を制限する |
-| `--max-json-bytes <n>` | `search`、`recipes`、`audit`、`deps`、`hotspots` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
+| `--max-json-bytes <n>` | `search`、`definition`、`recipes`、`audit`、`deps`、`hotspots` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。`definition --json` の未検出時も構造化 not-found object を同じ上限に対して事前検査し、object が収まらない場合は上限超過の stdout を出さず stderr に usage error を報告する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
@@ -5029,7 +5107,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ、最大: 10000000） |
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数（最大: 1000） |
 | `--after <n>` | `excerpt`, `find` | 指定範囲または一致箇所の後に追加する文脈行数（最大: 1000） |
-| `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、注目列を表示に残したい抜粋内の行。`--focus-column` 必須（最大: 10000000） |
+| `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に注目する抜粋内の行。`--focus-column` なしでも使用でき、その場合は対象行の先頭側の window を表示に残します（最大: 10000000）。 |
 | `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列。対象行の長さ以内である必要があります（最大: 100000） |
 | `--focus-length <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際の注目範囲の幅（デフォルト: 1、最大: 100000、`--focus-column` 必須） |
 | `--no-semantic-tokens` | `excerpt` | `excerpt --json` から `semantic_tokens` 配列を省略し、line span と content metadata は維持する。compact な excerpt や token budget が厳しい client 向け。 |
@@ -5054,6 +5132,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--symbol <name>` / `--symbol-family <prefix>` / `--suppress-noise` | `deps` | 完全一致のシンボル、シンボル名の接頭辞、または組み込み noise profile で依存 edge を絞り込む。cycle と cross-workspace query を含め、これらの filter は候補の ranking と `--limit` より前に SQLite 内で適用される。そのため `reference_count`、ranking、JSON の `symbol_filter` counter は絞り込み後の scope を表す。 |
 | `--cycles` / `--graph-budget <n>` / `--cursor <value>` | `deps` | 決定的かつ安定順位付きの依存 SCC を計算する。`--graph-budget` は解析する edge 数を独立して制限し（既定値 `10000`）、`--limit` は順位付け済み SCC をページ分割し、不透明な `next_cursor` で同じ filter 済み graph の続きを取得する。JSON は `analysis_complete`、`graph_edge_count`、`graph_edge_budget`、ranking metadata、総件数が authoritative かどうか、continuation metadata を返す。graph budget 枯渇時は SCC 集合と総件数が non-authoritative であることを明示するため、`--graph-budget` を増やすか、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` で graph を絞り込む。 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。最大 7 個の distinct な追加 DB（`--db` を含め合計 8 個）まで繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
+| `--strict-not-found` | クエリ系 | 有効な query の結果が 0 件なら終了コード `2` を返す。この flag がない場合、0 件の query は通常、既存の empty / zero-result output を維持して終了コード `0` を返す。ただし既定 format の `definition --json` 未検出は意図的な例外で、常に `E018_QUERY_NOT_FOUND` と終了コード `2` を返す。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--max-results <n>` | `search` | `--limit` のエイリアス |
 | `--color <when>` | 全コマンド | ANSI カラー出力の制御。`auto`（既定）、`always`、`never` を受け付ける。優先順位: `--color` フラグ > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > 端末能力の自動判定。auto では redirected stdout と StringWriter 風のテスト capture を非 ANSI とみなし、Windows では ConPTY / Windows Terminal の virtual-terminal 対応と `WT_SESSION`、`WT_PROFILE_ID`、`TERM_PROGRAM`、非 `dumb` の `TERM` などの端末ヒントも見る。`cdidx symbols Foo \| less -R` のような pager pipe でも色を維持したい場合は `--color=always`、TTY 上でも ANSI を抑止したい場合は `--color=never`（または `NO_COLOR=1`）を指定する。 |
@@ -5066,9 +5145,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 
 | コード | 意味 |
 |---|---|
-| `0` | 成功 |
+| `0` | 成功（有効な query の結果が 0 件の場合を含む。ただし既定 format の `definition --json` 未検出を除く） |
 | `1` | 引数エラー |
-| `2` | 未検出（検索結果なし、ディレクトリ不在） |
+| `2` | 未検出（index 済み path の不在、`--strict-not-found` 指定時の 0 件 query、または既定 format の `definition --json` 未検出） |
 | `3` | データベースエラー |
 | `4` | この build では機能未提供（例: trim 済み自己完結リリース上の CLI `--json`） |
 | `5` | stale index（`status --check` が DB / workspace の差分を検出） |
@@ -5081,7 +5160,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 
 ### エラーコード
 
-スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`definition` / `goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。`definition` の未検出は `E018_QUERY_NOT_FOUND` と終了コード `2` を使い、bounded-envelope control の使用時も空の `results` array と `metadata.error` に error を維持します。明示した `--max-json-bytes` が object を格納できない場合は、上限超過の stdout を書く前に stderr の usage error で終了します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
 
 | コード | 発行条件 |
 |---|---|
@@ -5518,16 +5597,15 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 - C/C++ ヘッダー: `.h` は既定では C として扱います。コメント、文字列、マクロのペイロードをマスクした後の字句コードに `namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。48 KiB まではヘッダー全体、それを超える場合は評価対象外の byte をまたいで字句状態を保持しながら先頭・中央・末尾 range を評価するため、長いライセンスブロックが固定行数の打ち切りを引き起こしません。`index --dry-run --json` は曖昧なヘッダー判定を、安定した `source` と `confidence` を持つ `language_detections` として報告します。
 - C++ callable: 括弧の対応を考慮した declarator 解析により、constructor、destructor、conversion operator、通常関数、後置戻り値関数を移動可能な function シンボルとして保持します。後置戻り値は `return_type` メタデータへ格納します。
-- Cython と CUDA: Cython の `cdef` / `cpdef` 宣言、`cimport`、extern 宣言をシンボルとして索引します。CUDA ファイルは C++ のシンボル抽出を再利用し、`__global__`、`__device__`、`__host__` 関数に CUDA 固有の sub-kind を付けます。
+- Cython と CUDA: Cython の `cdef` / `cpdef` 宣言、`cimport`、extern 宣言をシンボルとして索引し、上限付きの cimport・基底型・call 参照を graph query に提供します。CUDA ファイルは C++ のシンボル抽出を再利用し、`__global__`、`__device__`、`__host__` 関数に CUDA 固有の sub-kind を付けます。
 - Shaders: GLSL、HLSL、Metal、WGSL の entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output 宣言をシンボルとして索引します。
-- HDL: Verilog、SystemVerilog、VHDL の module / package / type / function / resource 宣言をシンボルとして索引します。HDL の references と graph queries はまだ対応として広告しません。
+- HDL: Verilog、SystemVerilog、VHDL の module / package / type / function / resource 宣言をシンボルとして索引し、構文上確認できる上限付き reference edge を graph query で利用できます。
 - SQL: クエリ時の `--lang tsql` は SQL の別名です。T-SQL の aggregate、assembly、XML schema collection 宣言も検索対象です。
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
-- 関数型言語のシンボル専用対応: Clojure、Erlang、OCaml、Raku は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
-- 動的言語のシンボル専用対応: Julia は保守的な宣言をシンボルとして公開します。Julia の references と graph queries はまだ対応として広告しません。
+- 関数型言語のグラフ対応: Clojure、Erlang、OCaml、Raku は保守的な宣言に加え、上限付きの import、alias、call、type / protocol / behaviour 関係を公開します。これらの言語では references と graph queries を対応済みとして広告します。
 - 動的・宣言型言語の graph 対応: Crystal、Groovy、Tcl、Prolog は保守的な宣言、import、call relationship を公開します。Crystal、Groovy、Prolog の括弧付き call は共通 extractor を使い、command-style call は同一ファイルで宣言済みの callable に限定します。Tcl は通常の `name()` word を call とみなさず、command substitution と主要な制御 command の script 引数を認識し、Tcl proc / Prolog predicate の本体では caller container を保持します。
   この graph contract より前に作成された index は `dynamic_reference_graph_contract_stale` とともに `reference_graph_complete=false`、`graph_data_current=false` を報告します。欠落 edge を authoritative とみなす前に `cdidx index <projectPath>` を再実行して対象 row を更新してください。
-- システム系言語のシンボル専用対応: Ada、D、Nim は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
+- 科学技術・ネイティブ拡張言語のグラフ: Julia、MATLAB、Nim、D、Cython、Ada は、言語構文に応じた import/module、基底型/type、call 参照を上限付きで出力します。Julia の macro invocation と、括弧を伴わない Ada の procedure call も記録します。
 - Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
@@ -5540,7 +5618,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。`Directory.Packages.props`、`packages.config`、`requirements.txt`、`pyproject.toml`、`packages.lock.json`、npm の `package-lock.json` / `npm-shrinkwrap.json` は、format が提供する範囲で version、scope、direct/transitive metadata を持つ package symbol と `dependency` reference を公開します。
 - ソリューションとアプリケーションマニフェスト: `.sln` は project entry をシンボルとして公開し、project path を参照として記録します。`.manifest` は assembly identity、requested execution level、supported OS、long-path 設定をシンボルとして公開します。
 - shebang script: 先頭行の shebang を認識できる拡張子なし/未知拡張子ファイルは、shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Perl、Tcl (`tclsh`, `wish`)、Node.js、PHP、Lua、PowerShell として index 対象です。明示的な language-map override は常に優先し、曖昧な `.t` では認識済み shebang が Perl の既定値を上書きします。一方、曖昧でない既知拡張子は競合する shebang より優先されます。
-- 曖昧な `.m` / `.pl`: 認識済み shebang を最優先し、その後は bounded content check で Objective-C/MATLAB または Perl/Prolog の強い marker だけを使い、最後に保守的な project marker を確認します。これらの marker を追加・変更・削除する scoped update は workspace を自動的に再 scan し、未変更の曖昧ファイルに古い分類を残しません。弱い証拠や競合する証拠は無条件に言語を割り当てず、`ambiguous_m` / `ambiguous_pl` のまま保持します。MATLAB は宣言 symbol を公開しますが reference / graph は未対応です。Prolog と `ambiguous_pl` は分類後に保守的な symbol、reference、graph query を公開し、`ambiguous_pl` は content-based の言語判定を上書きせず Perl / Prolog 構文の安全な和集合を使います。
+- 曖昧な `.m` / `.pl`: 認識済み shebang を最優先し、その後は bounded content check で Objective-C/MATLAB または Perl/Prolog の強い marker だけを使い、最後に保守的な project marker を確認します。これらの marker を追加・変更・削除する scoped update は workspace を自動的に再 scan し、未変更の曖昧ファイルに古い分類を残しません。弱い証拠や競合する証拠は無条件に言語を割り当てず、`ambiguous_m` / `ambiguous_pl` として全文検索可能なまま残します。未確定の `.m` は両方のコメント構文を位置を保ってマスクした後、MATLAB と Objective-C の symbol/reference を保守的に統合します。Prolog と `ambiguous_pl` は分類後に保守的な symbol、reference、graph query を公開し、`ambiguous_pl` は content-based の言語判定を上書きせず Perl / Prolog 構文の安全な和集合を使います。
 
 ### 言語別 extraction matrix
 
@@ -5561,19 +5639,23 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Java / Kotlin / Scala | package/import、class/interface、method、property | call、constructor、annotation、type reference | Kotlin inline lambda body の modeling は限定的です。深い call chain を信頼する前に `references` で確認してください。 |
 | JavaScript / TypeScript / Vue / Svelte | function、class、export、import、variable | call、constructor、static/dynamic import、worker、service worker | dynamic property call と computed module specifier は best-effort です。`cdidx references render --lang typescript` |
 | Python / Ruby / PHP / Perl / R | function、class/module、対応言語の import | call、constructor、対応言語の decorator/annotation | dynamic dispatch と metaprogramming は `search` が必要な場合があります。PHPDoc/static import pattern は静的に見える範囲で索引されます。 |
-| MATLAB | class、function、import | まだなし | `.m` は保守的に分類され、宣言 symbol は検索できます。reference / graph の調査には `search` を使ってください。 |
+| MATLAB / Julia / Nim / D / Ada / Cython | class/module/type、function/procedure、import | 上限付きの call、import/module、基底型/type reference。Julia macro と Ada の procedure-style call | 静的な構文を保守的に索引します。dynamic dispatch、generated code、macro expansion には `search` が必要な場合があります。 |
 | Prolog / 曖昧な `.pl` | module、predicate、import | 同一ファイル内の保守的な predicate call と import | 同一ファイルで宣言された predicate の goal 位置だけを call として記録します。曖昧な `.pl` は content classification を保持しながら、Perl / Prolog 構造の安全な和集合を公開します。 |
-| Cython | `cdef` / `cpdef` 宣言、cimport、extern 宣言 | まだなし | Cython の native extension 宣言はシンボルとして検索できます。call/reference の調査には `search` を使ってください。 |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | function、type、method、import/module | call、constructor、対応言語の macro invocation、type reference | C++ template/macro と Rust macro expansion は評価しません。Rust macro invocation 自体は reference edge です。 |
-| CUDA | C++ 風の function/type と CUDA kernel/device/host sub-kind | まだなし | CUDA の kernel / device / host 宣言は CUDA sub-kind 付きの C++ 風シンボルとして索引します。call/reference の調査には `search` を使ってください。 |
-| GLSL / HLSL / Metal / WGSL | entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output | まだなし | Shader entry point と resource 宣言はシンボルとして検索できます。data-flow、binding compatibility、call/reference の調査には `search` を使ってください。 |
-| Verilog / SystemVerilog / VHDL | module、package、interface、class、function/task/process、type、signal/parameter | まだなし | HDL 宣言は `symbols`、`definition`、`outline`、symbol-aware `search` で使えます。netlist / reference の調査には通常の `search` を使ってください。 |
+| CUDA | C++ 風の function/type と CUDA kernel/device/host sub-kind | call と kernel launch、include、workspace に基づくユーザー定義型参照、constant binding、scope 付き kernel parameter の resource 利用 | CUDA の参照は上限付きの構文エッジです。macro 生成 launch、function pointer、意味的 data flow には引き続き `search` を使ってください。 |
+| GLSL / HLSL / Metal / WGSL | entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output | entry point/helper の call、対応言語の include、workspace に基づくユーザー定義型参照、block / direct resource 利用、binding metadata | Shader の参照は上限付きの構文エッジです。binding compatibility の検証や意味的 data flow の modeling は行わないため、それらには `search` を使ってください。 |
+| Verilog / SystemVerilog / VHDL | module、package、interface、class、function/task/process、type、signal/parameter | module/entity/interface のインスタンス化、package/import/use 関係、architecture/entity link、上限付きの既知 signal/type reference | HDL graph extraction は構文ベースで、generate、macro、parameterized hierarchy、signal data flow の elaboration は行いません。これらには `search` を使ってください。 |
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
 | ソリューション / アプリケーションマニフェスト | solution project、manifest identity / setting | `.sln` の project reference。manifest は symbol-only | `.sln` の project path はリポジトリ構造の graph edge です。Windows manifest metadata は `symbols --lang app_manifest` で確認できます。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
 | Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | heading、anchor、selector、UI element、汎用 XML の要素・属性パス、対応 schema type/message | link/asset/component、local anchor、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | 汎用の非 XAML XML は上限付きの構造シンボルを出力します。prose や generated markup には `search` を使ってください。 |
 | Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
 | その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
+
+CUDA、GLSL、HLSL、Metal、WGSL は `languages --json` で
+`reference_extraction: true` と `graph_queries: true` を返します。この readiness は上記の
+上限付きで静的に確認できるエッジを索引することを意味し、compiler / driver レベルの
+意味解析を保証するものではありません。
 
 Language filter を指定した graph commands は、JSON / MCP 出力に
 `graph_supported` / `graph_support_reason` を含めます。Unsupported language の空結果は
@@ -5930,6 +6012,9 @@ cancel された symbol request に LSP `RequestCancelled` (`-32800`) を返し�
 表示し、既知の root 外の absolute path は `[outside workspace]` に置き換えます。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
+disk 上の position-line materialization も 4194304-byte 上限付きで stream 処理します。
+最初の length check 後に file がこの上限を超えて増大した場合、上限超過 byte を decode する前に
+読み取りを停止し、`position_file_too_large` を報告します。
 `textDocument/references` は `context.includeDeclaration` を尊重し、true の場合は definition location を
 重複なしで reference result の先頭に追加します。`declaration`、`typeDefinition`、`implementation`
 request は同じ indexed definition lookup を再利用し、`definition` と同じ location shape を返します。

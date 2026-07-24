@@ -497,16 +497,8 @@ public class LegacySchemaMigrationTests : IDisposable
             pragma.ExecuteNonQuery();
         }
 
-        var originalError = Console.Error;
-        Console.SetError(new StringWriter());
-        try
-        {
+        using (ConsoleCapture.Start(captureError: true))
             db.TryMigrateForRead();
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
 
         // Failure outlives the call — caller can correlate downstream errors against it.
         // TryMigrateForRead を抜けたあとも参照可能。

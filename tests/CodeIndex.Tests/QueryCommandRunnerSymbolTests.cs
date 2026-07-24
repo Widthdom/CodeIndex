@@ -553,7 +553,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_AuditSortModesReuseRankingFixture_Issue3451()
+    public void RunSymbols_AuditSortModesAndHotspotPaginationReuseRankingFixture_Issues3451And4753()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_reference_signals");
         try
@@ -569,9 +569,11 @@ public partial class QueryCommandRunnerTests
                 Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}; stderr={stderr}; stdout={stdout}");
                 Assert.Equal(string.Empty, stderr);
                 var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+                Assert.Equal(4, rows.Count);
+                Assert.Equal(4, rows.Select(row => row.GetProperty("symbol_id").GetInt64()).Distinct().Count());
                 Assert.Equal("ShortHot", rows[0].GetProperty("name").GetString());
                 Assert.Equal(sortMode, rows[0].GetProperty("sort_mode").GetString());
-                Assert.True(rows[0].GetProperty("reference_count").GetInt32() >= 2);
+                Assert.Equal(3, rows[0].GetProperty("reference_count").GetInt32());
                 Assert.True(rows[0].GetProperty("hotspot_score").GetDouble() > 0);
                 Assert.True(rows[0].GetProperty("ranking_reference_score").GetDouble() > 0);
                 Assert.True(rows[0].GetProperty("ranking_hotspot_score").GetDouble() > 0);
@@ -604,6 +606,35 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, pathStderr);
             Assert.Equal("src/Alpha.cs", pathRow.GetProperty("path").GetString());
             Assert.Equal("path", pathRow.GetProperty("sort_mode").GetString());
+
+            using var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var reader = new DbReader(queryDb);
+            var firstPage = reader.SearchSymbols(
+                limit: 2,
+                kind: "function",
+                lang: "csharp",
+                pathPatterns: ["src/Beta.cs"],
+                sortMode: SymbolSortMode.Hotspot);
+            var secondPage = reader.SearchSymbols(
+                limit: 2,
+                kind: "function",
+                lang: "csharp",
+                pathPatterns: ["src/Beta.cs"],
+                sortMode: SymbolSortMode.Hotspot,
+                offset: 2);
+            var unpaged = reader.SearchSymbols(
+                limit: 4,
+                kind: "function",
+                lang: "csharp",
+                pathPatterns: ["src/Beta.cs"],
+                sortMode: SymbolSortMode.Hotspot);
+            var paged = firstPage.Concat(secondPage).ToList();
+
+            Assert.Equal(2, firstPage.Count);
+            Assert.Equal(2, secondPage.Count);
+            Assert.Equal(4, paged.Select(symbol => symbol.SymbolId).Distinct().Count());
+            Assert.Empty(firstPage.Select(symbol => symbol.SymbolId).Intersect(secondPage.Select(symbol => symbol.SymbolId)));
+            Assert.Equal(unpaged.Select(symbol => symbol.SymbolId), paged.Select(symbol => symbol.SymbolId));
         }
         finally
         {
@@ -752,6 +783,20 @@ public partial class QueryCommandRunnerTests
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
+        var betaFileId = GetIndexedFileId(db.Connection, "src/Beta.cs");
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = betaFileId,
+                SymbolName = "shorthot",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "shorthot(); // case-variant ranking reference",
+                ContainerKind = "function",
+                ContainerName = "Caller",
+            },
+        ]);
         writer.MarkGraphReady();
         return dbPath;
     }
@@ -1470,14 +1515,14 @@ public partial class QueryCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_unsupported_extractor");
         try
         {
-            File.WriteAllText(Path.Combine(projectRoot, "settings.toml"), "enabled = true\n");
+            File.WriteAllText(Path.Combine(projectRoot, "settings.pl"), "enabled = true\n");
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["enabled", "--db", dbPath, "--lang", "toml"],
+                ["enabled", "--db", dbPath, "--lang", "ambiguous_pl"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -1485,7 +1530,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("symbol extraction is not available", stderr);
-            Assert.Contains("cdidx search <query> --lang toml", stderr);
+            Assert.Contains("cdidx search <query> --lang ambiguous_pl", stderr);
             Assert.Contains("missing-symbols", stderr);
         }
         finally
@@ -1822,11 +1867,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, firstStderr);
             Assert.Single(firstSymbols);
             Assert.Equal("Hidden", firstSymbols[0].GetProperty("name").GetString());
-            Assert.Equal("unused:1", firstJson.GetProperty("next_cursor").GetString());
+            var firstCursor = firstJson.GetProperty("next_cursor").GetString();
+            Assert.StartsWith("page:v1:", firstCursor, StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(firstJson.GetProperty("result_stable_at").GetString()));
             Assert.Equal(7, firstJson.GetProperty("default_suppression").GetProperty("suppressed_count").GetInt32());
 
             var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "1", "--cursor", "unused:1"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "1", "--cursor", firstCursor!],
                 _jsonOptions));
             using var secondDocument = ParseJsonOutput(secondStdout);
             var secondJson = secondDocument.RootElement;
@@ -1848,12 +1895,31 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, allFirstExitCode);
             Assert.Equal(string.Empty, allFirstStderr);
             Assert.Equal(2, allFirstJson.GetProperty("count").GetInt32());
-            Assert.Equal("unused:2", allFirstJson.GetProperty("next_cursor").GetString());
+            var allFirstCursor = allFirstJson.GetProperty("next_cursor").GetString();
+            Assert.StartsWith("page:v1:", allFirstCursor, StringComparison.Ordinal);
             Assert.Equal("Hidden", allFirstSymbols[0].GetProperty("name").GetString());
             Assert.Equal("InternalOnly", allFirstSymbols[1].GetProperty("name").GetString());
 
+            var (mismatchedExitCode, mismatchedStdout, mismatchedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--kind", "function", "--limit", "2", "--cursor", allFirstCursor!],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, mismatchedExitCode);
+            Assert.Equal(string.Empty, mismatchedStdout);
+            Assert.Contains("query scope, filters, or ordering", mismatchedStderr, StringComparison.Ordinal);
+            Assert.Contains("restart required", mismatchedStderr, StringComparison.Ordinal);
+
+            var (generatedMismatchExitCode, generatedMismatchStdout, generatedMismatchStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--include-generated", "--lang", "csharp", "--limit", "2", "--cursor", allFirstCursor!],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, generatedMismatchExitCode);
+            Assert.Equal(string.Empty, generatedMismatchStdout);
+            Assert.Contains("query scope, filters, or ordering", generatedMismatchStderr, StringComparison.Ordinal);
+            Assert.Contains("restart required", generatedMismatchStderr, StringComparison.Ordinal);
+
             var (allSecondExitCode, allSecondStdout, allSecondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "2", "--cursor", "unused:2"],
+                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "2", "--cursor", allFirstCursor!],
                 _jsonOptions));
             using var allSecondDocument = ParseJsonOutput(allSecondStdout);
             var allSecondJson = allSecondDocument.RootElement;
@@ -1863,11 +1929,26 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, allSecondExitCode);
             Assert.Equal(string.Empty, allSecondStderr);
             Assert.Equal(2, allSecondJson.GetProperty("count").GetInt32());
-            Assert.Equal("unused:4", allSecondJson.GetProperty("next_cursor").GetString());
-            Assert.Equal("unused:2", allSecondQuery.GetProperty("cursor").GetString());
+            Assert.StartsWith("page:v1:", allSecondJson.GetProperty("next_cursor").GetString(), StringComparison.Ordinal);
+            Assert.Equal(allFirstCursor, allSecondQuery.GetProperty("cursor").GetString());
             Assert.Equal(2, allSecondQuery.GetProperty("offset").GetInt32());
             Assert.Equal("PathResolver", allSecondSymbols[0].GetProperty("name").GetString());
             Assert.Equal("ConnectionString", allSecondSymbols[1].GetProperty("name").GetString());
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, "2026-07-24T12:00:00.0000000+00:00");
+            }
+
+            var (staleExitCode, staleStdout, staleStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "2", "--cursor", allFirstCursor!],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
+            Assert.Equal(string.Empty, staleStdout);
+            Assert.Contains("index generation changed", staleStderr, StringComparison.Ordinal);
+            Assert.Contains("restart required", staleStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -2642,7 +2723,7 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.TryGetProperty("unused", out _));
 
             var (unsupportedExitCode, unsupportedStdout, unsupportedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "toml"],
+                ["--db", dbPath, "--json", "--lang", "text"],
                 _jsonOptions));
 
             using var unsupportedDocument = ParseJsonOutput(unsupportedStdout);
@@ -6281,7 +6362,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDefinition_ExactZeroJson_ReturnsEmptyStdout()
+    public void RunDefinition_MissingJsonWithAndWithoutBody_ReturnsStructuredNotFound_Issue4744()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero");
         try
@@ -6299,13 +6380,49 @@ public partial class QueryCommandRunnerTests
                 }
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["Handle", "--db", dbPath, "--json", "--exact"],
-                _jsonOptions));
+            foreach (var includeBody in new[] { false, true })
+            {
+                var args = new List<string>
+                {
+                    "MissingDefinitionIssue4744",
+                    "--db",
+                    dbPath,
+                    "--json",
+                    "--exact-name",
+                };
+                if (includeBody)
+                    args.Add("--body");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Equal(string.Empty, stderr);
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    QueryCommandRunner.RunDefinition([.. args], _jsonOptions));
+
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.QueryNotFound, json.GetProperty("error_code").GetString());
+                Assert.Equal("not_found", json.GetProperty("category").GetString());
+                Assert.Equal("1", json.GetProperty("api_version").GetString());
+            }
+
+            var (boundedExitCode, boundedStdout, boundedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunDefinition(
+                    [
+                        "MissingDefinitionIssue4744",
+                        "--db",
+                        dbPath,
+                        "--json",
+                        "--exact-name",
+                        "--max-json-bytes",
+                        "20",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, boundedExitCode);
+            Assert.Equal(string.Empty, boundedStdout);
+            Assert.Contains("exceeds --max-json-bytes 20", boundedStderr);
         }
         finally
         {

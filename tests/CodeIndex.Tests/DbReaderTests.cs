@@ -307,6 +307,101 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void CSharpNullableGenericOutParameterAfterNestedInterpolationSurfacesAcrossDefinitionAndGraph_Issue4745()
+    {
+        const string path = "src/nullable_generic_out_after_interpolation.cs";
+        InsertIndexedFile(
+            path,
+            "csharp",
+            """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            class LspFixture
+            {
+                private string BuildCompletion(string[] items) =>
+                    $"items: {string.Join(' ', items.Select(item => $"'{item}:{item} item'"))}";
+
+                private bool TryReadPositionLineCached(
+                    string path,
+                    Dictionary<int, string?>? lineCache,
+                    out string sourceLine)
+                {
+                    if (lineCache is { Count: 0 } && TryReadAllPositionLines(path, out var sourceLines))
+                    {
+                        sourceLine = sourceLines[0] ?? string.Empty;
+                        return true;
+                    }
+
+                    sourceLine = string.Empty;
+                    return false;
+                }
+
+                private bool TryReadAllPositionLines(string path, out IReadOnlyList<string?> sourceLines)
+                {
+                    sourceLines = ReadLines(path);
+                    return sourceLines.Count > 0;
+                }
+
+                private static IReadOnlyList<string?> ReadLines(string path) => [];
+            }
+            """);
+
+        var definition = Assert.Single(_reader.GetDefinitions(
+            "TryReadAllPositionLines",
+            lang: "csharp",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("function", definition.Kind);
+        Assert.Equal("class", definition.ContainerKind);
+        Assert.Equal("LspFixture", definition.ContainerName);
+        Assert.Equal("bool", definition.ReturnType);
+        Assert.Equal(24, definition.StartLine);
+        Assert.Equal(28, definition.EndLine);
+        Assert.Equal(
+            "private bool TryReadAllPositionLines(string path, out IReadOnlyList<string?> sourceLines) {",
+            definition.Signature);
+
+        var outline = _reader.GetOutline(path);
+        Assert.NotNull(outline);
+        var outlineMethod = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "TryReadAllPositionLines"));
+        Assert.Equal("function", outlineMethod.Kind);
+        Assert.Equal("LspFixture.TryReadAllPositionLines", outlineMethod.Path);
+        Assert.Equal(24, outlineMethod.StartLine);
+        Assert.Equal(28, outlineMethod.EndLine);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "TryReadAllPositionLines",
+            lang: "csharp",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("call", reference.ReferenceKind);
+        Assert.Equal(14, reference.Line);
+        Assert.Equal("TryReadPositionLineCached", reference.ContainerName);
+        Assert.Equal("resolved", reference.ResolutionState);
+        Assert.NotNull(reference.TargetSymbolId);
+        Assert.Equal(1, reference.ResolutionCandidateCount);
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "TryReadAllPositionLines",
+            lang: "csharp",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("TryReadPositionLineCached", caller.CallerName);
+        Assert.Equal("TryReadAllPositionLines", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var callee = Assert.Single(_reader.GetCallees(
+            "TryReadAllPositionLines",
+            lang: "csharp",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("TryReadAllPositionLines", callee.CallerName);
+        Assert.Equal("ReadLines", callee.CalleeName);
+        Assert.Equal(1, callee.ReferenceCount);
+    }
+
+    [Fact]
     public void GetCallers_SolutionProjectReference_RequiresExplicitKind_Issue3662()
     {
         InsertManualReference(
@@ -329,6 +424,57 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("App", caller.CallerName);
         Assert.Equal("src/App/App.csproj", caller.CalleeName);
         Assert.Equal("project_reference", caller.ReferenceKind);
+    }
+
+    [Fact]
+    public void GetCallers_RepositoryMetadataAndManifestReferencesParticipateInGraph_Issue4740()
+    {
+        InsertIndexedFile(
+            "settings.toml",
+            "toml",
+            "include = \"config/shared.toml\"\n");
+        InsertIndexedFile(
+            "app.manifest",
+            "app_manifest",
+            """
+            <assembly xmlns="urn:schemas-microsoft-com:asm.v1">
+              <assemblyIdentity name="Contoso.App" version="1.0.0.0" />
+              <dependency>
+                <dependentAssembly>
+                  <assemblyIdentity name="Contoso.Core" version="2.0.0.0" />
+                </dependentAssembly>
+              </dependency>
+            </assembly>
+            """);
+        InsertIndexedFile(
+            "events.jsonl",
+            "jsonl",
+            "{\"input\":\"src/first.cs\"}\n");
+
+        var pathCaller = Assert.Single(_reader.GetCallers(
+            "config/shared.toml",
+            lang: "toml",
+            referenceKind: "project_reference",
+            exact: true));
+        Assert.Equal("settings.toml", pathCaller.Path);
+        Assert.Equal("project_reference", pathCaller.ReferenceKind);
+
+        var jsonLinesCaller = Assert.Single(_reader.GetCallers(
+            "src/first.cs",
+            lang: "jsonl",
+            referenceKind: "project_reference",
+            exact: true));
+        Assert.Equal("events.jsonl", jsonLinesCaller.Path);
+        Assert.Equal("[0]", jsonLinesCaller.CallerName);
+
+        var dependencyCaller = Assert.Single(_reader.GetCallers(
+            "Contoso.Core",
+            lang: "app_manifest",
+            referenceKind: "dependency",
+            exact: true));
+        Assert.Equal("app.manifest", dependencyCaller.Path);
+        Assert.Equal("Contoso.App", dependencyCaller.CallerName);
+        Assert.Equal("dependency", dependencyCaller.ReferenceKind);
     }
 
     [Fact]
@@ -5737,9 +5883,9 @@ public partial class DbReaderTests : IDisposable
     [Fact]
     public void AnalyzeSymbol_UnsupportedLanguage_ReportsGraphSupportMetadata()
     {
-        var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "toml");
+        var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "text");
 
-        Assert.Equal("toml", analysis.GraphLanguage);
+        Assert.Equal("text", analysis.GraphLanguage);
         Assert.False(analysis.GraphSupported);
         Assert.Contains("not indexed", analysis.GraphSupportReason);
         Assert.Empty(analysis.Definitions);

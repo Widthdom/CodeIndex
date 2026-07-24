@@ -767,6 +767,9 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                AddHdlGraphContractSignal(
+                    countOnlyPayload,
+                    reader.GetHdlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests));
                 adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "reference")}.", countOnlyPayload);
             }
@@ -811,6 +814,9 @@ public partial class McpServer
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
+            AddHdlGraphContractSignal(
+                payload,
+                reader.GetHdlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests));
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -877,7 +883,13 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
-                AddReferenceGraphCompletenessSignal(countOnlyPayload, reader);
+                AddReferenceGraphCompletenessSignal(
+                    countOnlyPayload,
+                    reader,
+                    lang,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests);
                 adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
             }
@@ -921,7 +933,13 @@ public partial class McpServer
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            AddReferenceGraphCompletenessSignal(payload, reader);
+            AddReferenceGraphCompletenessSignal(
+                payload,
+                reader,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -988,7 +1006,13 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
-                AddReferenceGraphCompletenessSignal(countOnlyPayload, reader);
+                AddReferenceGraphCompletenessSignal(
+                    countOnlyPayload,
+                    reader,
+                    lang,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests);
                 adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
             }
@@ -1032,7 +1056,13 @@ public partial class McpServer
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            AddReferenceGraphCompletenessSignal(payload, reader);
+            AddReferenceGraphCompletenessSignal(
+                payload,
+                reader,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -1266,6 +1296,9 @@ public partial class McpServer
                     ? BuildAnalyzeSymbolCompactPayload(analysis, lang, pathEcho, excludeTests, maxLineWidth)
                     : ToAnalyzeSymbolJsonObject(analysis);
             AddSqlGraphContractSignal(structured, sqlGraphSignal);
+            AddHdlGraphContractSignal(
+                structured,
+                reader.GetHdlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests));
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["maxLineWidth"] = maxLineWidth;
@@ -1312,11 +1345,36 @@ public partial class McpServer
         }
     }
 
-    private void AddReferenceGraphCompletenessSignal(JsonObject payload, DbReader reader)
-        => AddReferenceGraphCompletenessSignal(
+    private static void AddHdlGraphContractSignal(JsonObject payload, HdlGraphContractSignal signal)
+    {
+        if (!signal.Relevant)
+            return;
+
+        payload["hdl_graph_contract_ready"] = signal.Ready;
+        if (!signal.Ready)
+        {
+            payload["degraded"] = true;
+            if (signal.DegradedReason != null)
+                payload["hdl_graph_contract_degraded_reason"] = signal.DegradedReason;
+        }
+    }
+
+    private void AddReferenceGraphCompletenessSignal(
+        JsonObject payload,
+        DbReader reader,
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePaths = null,
+        bool excludeTests = false)
+    {
+        AddHdlGraphContractSignal(
+            payload,
+            reader.GetHdlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests));
+        AddReferenceGraphCompletenessSignal(
             payload,
             reader,
             reader.GetReferenceExtractionCapHits());
+    }
 
     private void AddReferenceGraphCompletenessSignal(
         JsonObject payload,
@@ -2166,8 +2224,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
         if (focusColumn.HasValue && focusColumn.Value <= 0)
             return CreateToolErrorResponse(id, "focusColumn must be greater than or equal to 1");
-        if (!focusColumn.HasValue && (focusLine.HasValue || explicitFocusLength))
-            return CreateToolErrorResponse(id, "focusLine and focusLength require focusColumn");
+        if (!focusColumn.HasValue && explicitFocusLength)
+            return CreateToolErrorResponse(id, "focusLength requires focusColumn");
 
         return WithDbReader(id, args, reader =>
         {
@@ -2895,7 +2953,13 @@ public partial class McpServer
             payload["generated_code_filter_supported"] = true;
             payload["generated_code_scope"] = "source_and_target_files";
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            AddReferenceGraphCompletenessSignal(payload, reader);
+            AddReferenceGraphCompletenessSignal(
+                payload,
+                reader,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests);
             var summary = payload["count"]!.GetValue<int>() > 0
                 ? cyclesOnly ? $"Found {ConsoleUi.Counted(cycles.Count, "dependency cycle")}." : $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
                 : cyclesOnly ? "No dependency cycles found." : "No file dependencies found.";

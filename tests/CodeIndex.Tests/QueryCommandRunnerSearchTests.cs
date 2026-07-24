@@ -9441,7 +9441,7 @@ jobs:
     }
 
     [Fact]
-    public void RunExcerpt_LocationAndFocusValidationReuseOneFixture_Issue3916()
+    public void RunExcerpt_LocationAndFocusValidationReuseOneFixture_Issues3916_4747()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_dep");
         try
@@ -9450,12 +9450,21 @@ jobs:
             TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
             TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three\n");
 
-            var (focusDependencyExitCode, _, focusDependencyStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (lineOnlyFocusExitCode, lineOnlyFocusStdout, lineOnlyFocusStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-line", "1"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, focusDependencyExitCode);
-            Assert.Contains("--focus-line requires --focus-column", focusDependencyStderr);
+            Assert.Equal(CommandExitCodes.Success, lineOnlyFocusExitCode);
+            Assert.Equal(string.Empty, lineOnlyFocusStderr);
+            using (var lineOnlyFocusDocument = ParseJsonOutput(lineOnlyFocusStdout))
+            {
+                var root = lineOnlyFocusDocument.RootElement;
+                var content = root.GetProperty("content").GetString()!;
+                Assert.True(root.GetProperty("content_truncated").GetBoolean());
+                Assert.StartsWith("a", content, StringComparison.Ordinal);
+                Assert.DoesNotContain("TARGET", content, StringComparison.Ordinal);
+                Assert.True(content.Length <= 96);
+            }
 
             var (focusLengthExitCode, _, focusLengthStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["dist/data.txt", "--start", "1", "--focus-length", "6"],
@@ -12366,6 +12375,60 @@ jobs:
             Assert.Equal("src/b.cs", groups[1].GetProperty("path").GetString());
             foreach (var group in groups)
                 Assert.True(group.GetProperty("results").EnumerateArray().Count() <= 1);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupedFormatReportsAuthoritativeTotalsWhenLimitBoundsRows_Issue4735()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_grouped_totals_4735");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/alpha.cs",
+                "csharp",
+                "GroupedTotalNeedle();\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/beta.cs",
+                "csharp",
+                "GroupedTotalNeedle();\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/gamma.cs",
+                "csharp",
+                "GroupedTotalNeedle();\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/delta.cs",
+                "csharp",
+                "GroupedTotalNeedle();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["GroupedTotalNeedle", "--db", dbPath, "--exact-substring", "--format", "grouped", "--limit", "2", "--per-file-limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal(4, root.GetProperty("total_matches").GetInt32());
+            Assert.Equal(4, root.GetProperty("matched_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("grouped_match_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("emitted_match_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("omitted_match_count").GetInt32());
+            Assert.Equal(4, root.GetProperty("total_groups").GetInt32());
+            Assert.Equal(4, root.GetProperty("total_files").GetInt32());
+            Assert.True(root.GetProperty("truncated").GetBoolean());
+            Assert.True(root.GetProperty("has_more").GetBoolean());
+            Assert.Contains("Increase --limit", root.GetProperty("continuation_action").GetString(), StringComparison.Ordinal);
         }
         finally
         {

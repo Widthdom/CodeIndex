@@ -56,6 +56,11 @@ public static partial class SymbolExtractor
             return ExtractJsonLinesSymbols(fileId, content, SplitContentLines(content));
         }
 
+        if (lang is "toml" or "gitignore" or "gitattributes" or "editorconfig" or "dockerignore" or "config")
+        {
+            return ExtractRepositoryMetadataSymbols(fileId, lang, SplitContentLines(content));
+        }
+
         if (lang == "yaml")
         {
             return ExtractYamlSymbols(fileId, SplitContentLines(content));
@@ -79,6 +84,43 @@ public static partial class SymbolExtractor
         if (lang is "dependency_manifest" or "dependency_lock")
         {
             return DependencyPackageExtractor.ExtractSymbols(fileId, content, SplitContentLines(content), filePath, lang);
+        }
+
+        if (lang == "ambiguous_m")
+        {
+            var matlabContent = AmbiguousMContentMasker.MaskComments(
+                content,
+                maskMatlabComments: true,
+                maskObjectiveCComments: true);
+            var objectiveCContent = AmbiguousMContentMasker.MaskComments(
+                content,
+                maskMatlabComments: true,
+                maskObjectiveCComments: true,
+                preserveObjectiveCModuloExpressions: true);
+            var matlabSymbols = ExtractCore(
+                fileId,
+                "matlab",
+                matlabContent,
+                contentIsNormalized: true,
+                hasOversizeLine: false,
+                conflictMarkerLine: 0,
+                filePath,
+                projectRoot,
+                patternConfigsAlreadyLoaded: true,
+                cancellationToken);
+            var objectiveCSymbols = ExtractCore(
+                fileId,
+                "objc",
+                objectiveCContent,
+                contentIsNormalized: true,
+                hasOversizeLine: false,
+                conflictMarkerLine: 0,
+                filePath,
+                projectRoot,
+                patternConfigsAlreadyLoaded: true,
+                cancellationToken);
+            matlabSymbols.AddRange(objectiveCSymbols);
+            return matlabSymbols;
         }
 
         if (lang == "markdown")
@@ -143,7 +185,10 @@ public static partial class SymbolExtractor
             ? GetPythonModulePrefix(filePath)
             : null;
 
-        var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var structuralMaskLanguage = lang == "cython" ? "python" : lang;
+        var structuralLines = StructuralLineMasker.MaskLines(structuralMaskLanguage, lines);
+        if (lang is "d" or "julia" or "matlab" or "nim")
+            structuralLines = ScientificNativeCommentMasker.MaskBlockComments(lang, structuralLines);
         structuralLines = DynamicDeclarativeReferenceExtractor.MaskNonCodeLines(
             lang,
             structuralLines);
@@ -155,6 +200,12 @@ public static partial class SymbolExtractor
             structuralLines = DynamicDeclarativeReferenceExtractor.MaskTclNonScriptLines(
                 structuralLines);
         }
+        var scientificBodyScannerLines = lang is "julia" or "matlab"
+            ? PrepareScientificBodyScannerLines(structuralLines, lang)
+            : null;
+        var matlabExplicitOuterClosureByLine = lang == "matlab" && scientificBodyScannerLines != null
+            ? BuildMatlabExplicitOuterClosureMap(scientificBodyScannerLines)
+            : null;
         string[]? javaScriptTypeScriptSanitizedLines = null;
         string[] GetJavaScriptTypeScriptSanitizedLines() =>
             javaScriptTypeScriptSanitizedLines ??= BuildJavaScriptTypeScriptSanitizedLines(lines);
@@ -882,7 +933,14 @@ public static partial class SymbolExtractor
                                                 i,
                                                 absoluteStartColumn,
                                                 csharpGateRawStartColumn)
-                                            : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                                            : ResolveRange(
+                                                rangeLines,
+                                                i,
+                                                pattern.BodyStyle,
+                                                lang,
+                                                absoluteStartColumn,
+                                                scientificBodyScannerLines,
+                                                matlabExplicitOuterClosureByLine);
                         if (fortranContinuationCandidate != null)
                             endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);
                         var startLine = i + 1;
@@ -1585,8 +1643,10 @@ public static partial class SymbolExtractor
                                             Name = name,
                                             Line = startLine,
                                             StartLine = startLine,
-                                            StartColumn = lang == "rust" && pattern.Kind == "function"
-                                                ? match.Groups["name"].Index
+                                            StartColumn = lang is "ada" or "cython" or "d" or "julia" or "matlab" or "nim"
+                                                ? lineOffset + match.Groups["name"].Index
+                                                : lang == "rust" && pattern.Kind == "function"
+                                                    ? match.Groups["name"].Index
                                                 : (csharpSingleLineCollapsedMatch
                                                     ? csharpSignatureRawStartColumn
                                                     : absoluteStartColumn),
@@ -2210,6 +2270,11 @@ public static partial class SymbolExtractor
         if (lang == "shell")
             ExpandShellAliasSymbols(fileId, lines, symbols, extractionState);
         PopulateDeclaredContainerQualifiedNames(symbols);
+        if (lang == "nim")
+        {
+            foreach (var symbol in symbols)
+                symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
+        }
         return symbols;
     }
 

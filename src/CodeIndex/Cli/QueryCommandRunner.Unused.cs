@@ -36,7 +36,7 @@ public static partial class QueryCommandRunner
         if (options.SearchCursor.HasValue)
         {
             WriteUsageError(
-                "--cursor for unused must use the `unused:<offset>` cursor returned by a previous unused response.",
+                "--cursor for unused must use the opaque cursor returned by a previous unused response.",
                 GetUsageLineOrThrow("unused"),
                 "Use the `next_cursor` value from `cdidx unused --json`.");
             return CommandExitCodes.UsageError;
@@ -44,15 +44,15 @@ public static partial class QueryCommandRunner
         if (options.OutlineCursorOffset.HasValue)
         {
             WriteUsageError(
-                "--cursor for unused must use the `unused:<offset>` cursor returned by a previous unused response.",
+                "--cursor for unused must use the opaque cursor returned by a previous unused response.",
                 GetUsageLineOrThrow("unused"),
-                "`outline:<offset>` cursors are for `cdidx outline <path>`.");
+                "Outline cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
         if (options.DependencyCycleCursor.HasValue)
         {
             WriteUsageError(
-                "--cursor for unused must use the `unused:<offset>` cursor returned by a previous unused response.",
+                "--cursor for unused must use the opaque cursor returned by a previous unused response.",
                 GetUsageLineOrThrow("unused"),
                 "Dependency-cycle cursors are for `cdidx deps --cycles`.");
             return CommandExitCodes.UsageError;
@@ -84,10 +84,43 @@ public static partial class QueryCommandRunner
             bool? graphSupported = options.Lang != null ? reader.SupportsReferenceLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests);
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests);
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests));
             var applyDefaultSuppressions = ShouldApplyUnusedDefaultSuppressions(options, unusedScope);
+            var cursorComponents = new List<string?>
+            {
+                options.Kind,
+                options.Lang,
+                options.UnusedBucket,
+                options.MinUnusedConfidence,
+                options.UnusedActionable.ToString(CultureInfo.InvariantCulture),
+                options.All.ToString(CultureInfo.InvariantCulture),
+                applyDefaultSuppressions.ToString(CultureInfo.InvariantCulture),
+                unusedScope.ExcludeTests.ToString(CultureInfo.InvariantCulture),
+                unusedScope.AppliedSourceDefaults.ToString(CultureInfo.InvariantCulture),
+                "include_generated",
+                options.IncludeGenerated.ToString(CultureInfo.InvariantCulture),
+                "path",
+            };
+            cursorComponents.AddRange(unusedScope.PathPatterns.Order(StringComparer.Ordinal));
+            cursorComponents.Add("exclude_path");
+            cursorComponents.AddRange(unusedScope.ExcludePaths.Order(StringComparer.Ordinal));
+            cursorComponents.Add("visibility");
+            cursorComponents.AddRange(unusedScope.VisibilityFilters.Order(StringComparer.Ordinal));
+            cursorComponents.Add("exclude_visibility");
+            cursorComponents.AddRange(unusedScope.ExcludeVisibilityFilters.Order(StringComparer.Ordinal));
+            var cursorContext = BuildPaginationCursorContext(reader, "unused", cursorComponents);
+            var cursorValidationError = ValidateScopedOffsetCursor(options, "unused", cursorContext);
+            if (cursorValidationError != null)
+            {
+                WriteUsageError(
+                    cursorValidationError,
+                    GetUsageLineOrThrow("unused"),
+                    "Restart unused pagination without --cursor and use the new next_cursor value.");
+                return CommandExitCodes.UsageError;
+            }
 
             UnusedCountResult CountUnusedSymbolsDetailedForCurrentQuery(Func<UnusedSymbolResult, bool>? resultFilter = null)
             {
@@ -164,6 +197,7 @@ public static partial class QueryCommandRunner
                     if (countSuppression is { Applied: true })
                         payload["default_suppression"] = BuildUnusedDefaultCountSuppressionJson(countSuppression, jsonOptions);
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                    AddHdlGraphContractJsonFields(payload, hdlGraphSignal);
                     var queryContext = BuildUnusedQueryContextJson(options, unusedScope, jsonOptions);
                     if (countSuppression is { Applied: true })
                         queryContext["default_suppression"] = true;
@@ -186,6 +220,7 @@ public static partial class QueryCommandRunner
                     if (countSuppression is { Applied: true })
                         WriteUnusedDefaultCountSuppressionSummary(countSuppression);
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
+                    WriteHdlGraphContractWarningIfNeeded(json: false, hdlGraphSignal);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return CommandExitCodes.Success;
@@ -230,7 +265,7 @@ public static partial class QueryCommandRunner
             var nextOffset = pageOffset + options.Limit;
             var nextCursor = pageableResults.Count > nextOffset
                 && IsUnusedCursorOffsetWithinFetchCap(options.Limit, nextOffset)
-                ? FormatUnusedCursor(nextOffset)
+                ? FormatUnusedCursor(nextOffset, cursorContext)
                 : null;
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal
@@ -247,11 +282,13 @@ public static partial class QueryCommandRunner
                         graphSupported,
                         graphSupportReason,
                         sqlGraphSignal,
+                        hdlGraphSignal,
                         reader._hasReferencesTable,
                         jsonOptions,
                         options,
                         unusedScope,
                         nextCursor: nextCursor,
+                        cursorContext: cursorContext,
                         suppression: suppression));
                 }
                 else if (suppression.Applied && GetUnusedSuppressedCount(suppression) > 0)
@@ -259,6 +296,7 @@ public static partial class QueryCommandRunner
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No unsuppressed unused symbols found", options));
                     WriteUnusedDefaultSuppressionSummary(suppression);
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteHdlGraphContractWarningIfNeeded(json: false, hdlGraphSignal);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 else
@@ -268,6 +306,7 @@ public static partial class QueryCommandRunner
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteHdlGraphContractWarningIfNeeded(json: false, hdlGraphSignal);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return UnusedZeroResultExitCode(options, suppression);
@@ -275,7 +314,7 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, unusedScope, byBucket: byBucket, nextCursor: nextCursor, suppression: suppression));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, hdlGraphSignal, reader._hasReferencesTable, jsonOptions, options, unusedScope, byBucket: byBucket, nextCursor: nextCursor, cursorContext: cursorContext, suppression: suppression));
             }
             else
             {
@@ -305,6 +344,7 @@ public static partial class QueryCommandRunner
                     CommandErrorWriter.WriteStderr($"next_cursor={nextCursor}");
                 WriteUnusedDefaultSuppressionSummary(suppression);
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                WriteHdlGraphContractWarningIfNeeded(json: false, hdlGraphSignal);
             }
             return CommandExitCodes.Success;
 
@@ -705,7 +745,7 @@ public static partial class QueryCommandRunner
         _ => "Unknown unused-symbol bucket.",
     };
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, UnusedAuditScopeFilters? unusedScope = null, bool byBucket = false, string? nextCursor = null, UnusedDefaultSuppressionResult? suppression = null)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, HdlGraphContractSignal hdlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, UnusedAuditScopeFilters? unusedScope = null, bool byBucket = false, string? nextCursor = null, PaginationCursorContext? cursorContext = null, UnusedDefaultSuppressionResult? suppression = null)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -722,6 +762,8 @@ public static partial class QueryCommandRunner
             payload["default_suppression"] = BuildUnusedDefaultSuppressionJson(suppression, jsonOptions);
         if (nextCursor != null)
             payload["next_cursor"] = nextCursor;
+        if (cursorContext?.ResultStableAt != null)
+            payload["result_stable_at"] = cursorContext.Value.ResultStableAt;
         if (queryOptions?.Compact == true)
         {
             payload["compact"] = true;
@@ -749,6 +791,7 @@ public static partial class QueryCommandRunner
         }
 
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        AddHdlGraphContractJsonFields(payload, hdlGraphSignal);
         if (queryOptions != null)
         {
             var queryContext = unusedScope != null

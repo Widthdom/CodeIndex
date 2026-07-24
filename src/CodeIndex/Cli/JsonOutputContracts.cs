@@ -537,10 +537,20 @@ internal sealed record SearchFileGroupedJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("total_matches")] int TotalMatches,
+    [property: JsonPropertyName("matched_count")] int MatchedCount,
+    [property: JsonPropertyName("grouped_match_count")] int GroupedMatchCount,
+    [property: JsonPropertyName("emitted_match_count")] int EmittedMatchCount,
+    [property: JsonPropertyName("omitted_match_count")] int OmittedMatchCount,
     [property: JsonPropertyName("returned_groups")] int ReturnedGroups,
+    [property: JsonPropertyName("total_groups")] int TotalGroups,
     [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("total_files")] int TotalFiles,
     [property: JsonPropertyName("per_file_limit")] int PerFileLimit,
     [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("has_more")] bool HasMore,
+    [property: JsonPropertyName("continuation_action")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ContinuationAction,
     [property: JsonPropertyName("groups")] List<SearchFileGroupJsonResult> Groups);
 
 internal sealed record SearchFileGroupJsonResult(
@@ -812,6 +822,8 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
     public string? SqlGraphContractDegradedReason { get; init; }
+    public bool HdlGraphContractReady { get; init; }
+    public string? HdlGraphContractDegradedReason { get; init; }
     public bool HotspotFamilyReady { get; init; }
     public string? HotspotFamilyDegradedReason { get; init; }
     [JsonPropertyName("csharp_symbol_name_ready")]

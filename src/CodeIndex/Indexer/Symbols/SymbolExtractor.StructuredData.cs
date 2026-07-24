@@ -343,6 +343,8 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
+                if (symbols.Count >= StructuredDataMaxSymbols)
+                    return symbols;
                 if (!TryAddStructuredDataSymbol(fileId, "record", recordPath, lineIndex + 1, lines, null, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
                     break;
 
@@ -352,10 +354,7 @@ public static partial class SymbolExtractor
                     if (symbol.Kind == "extraction_diagnostic")
                         continue;
                     if (symbols.Count >= StructuredDataMaxSymbols)
-                    {
-                        AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_symbol_budget_exceeded", lineIndex + 1, lines, "Structured data symbol extraction exceeded the per-file symbol budget; remaining symbols were truncated.", ref truncated);
                         return symbols;
-                    }
 
                     symbol.Name = recordPath + "." + symbol.Name;
                     symbol.Line = lineIndex + 1;

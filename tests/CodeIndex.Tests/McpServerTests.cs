@@ -96,19 +96,10 @@ public partial class McpServerTests : IDisposable
         var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var faulted = Task.FromException(new InvalidOperationException("boom"));
         var tasks = new List<Task> { pending.Task, faulted };
-        var originalError = Console.Error;
         using var stderr = new StringWriter();
-        Console.SetError(stderr);
+        using var capture = ConsoleCapture.Start(null, stderr);
 
-        int removed;
-        try
-        {
-            removed = McpServer.PruneCompletedRequestTasks(tasks);
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
+        var removed = McpServer.PruneCompletedRequestTasks(tasks);
 
         Assert.Equal(1, removed);
         Assert.Same(pending.Task, Assert.Single(tasks));
@@ -142,24 +133,18 @@ public partial class McpServerTests : IDisposable
         var firstUnfinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondUnfinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var tasks = new List<Task> { firstUnfinished.Task, secondUnfinished.Task };
-        var previousError = Console.Error;
         using var stderr = new StringWriter();
-        Console.SetError(stderr);
 
         try
         {
-            try
+            await ConsoleCapture.CaptureAsync(async cancellationToken =>
             {
                 var drain = _server.DrainInFlightTasksAsync(
                     tasks,
                     TimeSpan.Zero,
                     TimeSpan.Zero);
-                await drain.WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            finally
-            {
-                Console.SetError(previousError);
-            }
+                await drain.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            }, error: stderr);
 
             Assert.Contains(
                 "Transport teardown has 2 in-flight request(s); cancelling after 0ms grace period.",
@@ -4443,16 +4428,11 @@ public sealed class Caller
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         using var writer = new StringWriter();
         using var error = new StringWriter();
-        var previousError = Console.Error;
-        Console.SetError(error);
-        try
-        {
-            await server.ProcessLineAsync("not json", new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
-        }
-        finally
-        {
-            Console.SetError(previousError);
-        }
+        await ConsoleCapture.CaptureAsync(
+            _ => server.ProcessLineAsync(
+                "not json",
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
+            error: error);
 
         Assert.Contains("\"code\":-32700", writer.ToString());
         Assert.Contains("JSON parse error", error.ToString());
@@ -4464,16 +4444,11 @@ public sealed class Caller
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         using var writer = new StringWriter();
         using var error = new StringWriter();
-        var previousError = Console.Error;
-        Console.SetError(error);
-        try
-        {
-            await server.ProcessLineAsync(new string('x', 1_000_001), new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
-        }
-        finally
-        {
-            Console.SetError(previousError);
-        }
+        await ConsoleCapture.CaptureAsync(
+            _ => server.ProcessLineAsync(
+                new string('x', 1_000_001),
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
+            error: error);
 
         Assert.Contains("Message too large", writer.ToString());
         Assert.Contains("Message too large", error.ToString());
@@ -4485,18 +4460,11 @@ public sealed class Caller
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         using var writer = new StringWriter();
         using var error = new StringWriter();
-        var previousError = Console.Error;
-        Console.SetError(error);
-        try
-        {
-            await server.ProcessLineAsync(
+        await ConsoleCapture.CaptureAsync(
+            _ => server.ProcessLineAsync(
                 """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}""",
-                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
-        }
-        finally
-        {
-            Console.SetError(previousError);
-        }
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
+            error: error);
 
         Assert.Contains("Unsupported MCP protocolVersion", writer.ToString());
         Assert.Contains("Rejecting initialize", error.ToString());
@@ -4520,18 +4488,11 @@ public sealed class Caller
                 ["protocolVersion"] = requested,
             },
         };
-        var previousError = Console.Error;
-        Console.SetError(error);
-        try
-        {
-            await server.ProcessLineAsync(
+        await ConsoleCapture.CaptureAsync(
+            _ => server.ProcessLineAsync(
                 request.ToJsonString(),
-                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
-        }
-        finally
-        {
-            Console.SetError(previousError);
-        }
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
+            error: error);
 
         Assert.DoesNotContain(requested, writer.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(requested, error.ToString(), StringComparison.Ordinal);
@@ -4547,18 +4508,11 @@ public sealed class Caller
             new TokenMcpAuthenticator("secret"));
         using var writer = new StringWriter();
         using var error = new StringWriter();
-        var previousError = Console.Error;
-        Console.SetError(error);
-        try
-        {
-            await server.ProcessLineAsync(
+        await ConsoleCapture.CaptureAsync(
+            _ => server.ProcessLineAsync(
                 """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
-                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
-        }
-        finally
-        {
-            Console.SetError(previousError);
-        }
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString()))),
+            error: error);
 
         Assert.Contains("Unauthorized", writer.ToString());
         Assert.Contains("Auth failed", error.ToString());
@@ -4570,16 +4524,9 @@ public sealed class Caller
         var transport = new ShutdownProbeTransport("stdio", _ => throw new IOException("pipe closed"), "not json");
         using var server = new McpServer(_dbPath, "test");
         using var error = new StringWriter();
-        var previousError = Console.Error;
-        Console.SetError(error);
-        try
-        {
-            await server.RunAsync(transport, CancellationToken.None);
-        }
-        finally
-        {
-            Console.SetError(previousError);
-        }
+        await ConsoleCapture.CaptureAsync(
+            cancellationToken => server.RunAsync(transport, cancellationToken),
+            error: error);
 
         var log = error.ToString();
         Assert.Contains("Error writing response", log);
@@ -5511,16 +5458,9 @@ public sealed class Caller
             maxLineUtf8Bytes: 100);
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         using var error = new StringWriter();
-        var previousError = Console.Error;
-        Console.SetError(error);
-        try
-        {
-            await server.RunAsync(transport, CancellationToken.None);
-        }
-        finally
-        {
-            Console.SetError(previousError);
-        }
+        await ConsoleCapture.CaptureAsync(
+            cancellationToken => server.RunAsync(transport, cancellationToken),
+            error: error);
 
         var raw = Encoding.UTF8.GetString(output.ToArray());
         using var response = JsonDocument.Parse(raw);

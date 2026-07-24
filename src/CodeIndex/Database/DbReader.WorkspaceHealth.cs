@@ -24,9 +24,16 @@ public partial class DbReader
                 && !string.Equals(indexCompleteness, "incomplete", StringComparison.OrdinalIgnoreCase);
             var referenceExtractionCapHits = GetReferenceExtractionCapHits();
             var referenceGraphComplete = IsReferenceGraphComplete(referenceExtractionCapHits);
+            var hdlGraphContractReady = !ScopeMayIncludeHdlFiles(
+                lang: null,
+                pathPatterns: null,
+                excludePathPatterns: null,
+                excludeTests: false)
+                || _hdlGraphContractCurrent;
             var graphDataCurrent = _hasReferencesTable
                 && indexComplete
-                && referenceGraphComplete;
+                && referenceGraphComplete
+                && hdlGraphContractReady;
 
             return new WorkspaceIndexHealthSnapshot(
                 freshness.IndexedAt,

@@ -61,7 +61,29 @@ public partial class DbWriter
         JOIN files AS target_file ON target_file.id = s.file_id
         WHERE s.name_folded = dirty_name.name_folded
           AND target_file.lang = dirty_name.lang
+          AND target_file.lang <> 'ambiguous_m'
         GROUP BY target_file.lang, s.name_folded
+        HAVING COUNT(DISTINCT target_file.path || char(31) ||
+                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                              COALESCE(s.name, '')) = 1;
+
+        -- Keep the scoped projection aligned with the full-refresh union-wide
+        -- uniqueness contract for callers whose .m dialect is unresolved.
+        -- .m 方言が未確定な呼出し元について、差分更新でも全件更新と同じ
+        -- 言語横断の一意性契約を維持する。
+        INSERT INTO temp.reference_unique_symbol_families(lang, name_folded, family_key)
+        SELECT 'ambiguous_m',
+               s.name_folded,
+               MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, '')) AS family_key
+        FROM temp.{ReferenceGraphLookupNamesTable} AS dirty_name
+        CROSS JOIN symbols AS s INDEXED BY idx_symbols_name_folded
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE dirty_name.lang = 'ambiguous_m'
+          AND s.name_folded = dirty_name.name_folded
+          AND target_file.lang IN ('matlab', 'objc')
+        GROUP BY s.name_folded
         HAVING COUNT(DISTINCT target_file.path || char(31) ||
                               COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
                               COALESCE(s.name, '')) = 1;
@@ -197,7 +219,10 @@ public partial class DbWriter
         CROSS JOIN symbol_references AS r INDEXED BY idx_symbol_refs_symbol_name_folded
         JOIN files AS source_file ON source_file.id = r.file_id
         WHERE r.symbol_name_folded = dirty_name.name_folded
-          AND source_file.lang = dirty_name.lang;
+          AND (
+              source_file.lang = dirty_name.lang
+              OR (source_file.lang = 'ambiguous_m' AND dirty_name.lang IN ('matlab', 'objc'))
+          );
         """;
 
     private const string MaterializeReferenceGraphLookupNamesSql = $"""
@@ -207,6 +232,19 @@ public partial class DbWriter
         JOIN symbol_references AS r ON r.id = dirty.reference_id
         JOIN files AS source_file ON source_file.id = r.file_id
         WHERE source_file.lang IS NOT NULL
+          AND r.symbol_name_folded IS NOT NULL;
+
+        INSERT OR IGNORE INTO temp.{ReferenceGraphLookupNamesTable}(lang, name_folded)
+        SELECT target_lang.lang, r.symbol_name_folded
+        FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty
+        JOIN symbol_references AS r ON r.id = dirty.reference_id
+        JOIN files AS source_file ON source_file.id = r.file_id
+        CROSS JOIN (
+            SELECT 'matlab' AS lang
+            UNION ALL
+            SELECT 'objc'
+        ) AS target_lang
+        WHERE source_file.lang = 'ambiguous_m'
           AND r.symbol_name_folded IS NOT NULL;
 
         INSERT OR IGNORE INTO temp.{ReferenceGraphLookupNamesTable}(lang, name_folded)

@@ -21,11 +21,14 @@ public static partial class SymbolExtractor
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
     public const int XmlContractVersion = 3;
-    public const int FunctionalLanguageContractVersion = 2;
+    public const int FunctionalLanguageContractVersion = 3;
     public const int DynamicLanguageContractVersion = 2;
     public const int DynamicReferenceGraphContractVersion = 8;
     public const int PrologReferenceGraphContractVersion = 7;
     public const int SystemsLanguageContractVersion = 2;
+    public const int ScientificNativeGraphContractVersion = 4;
+    public const int RepositoryMetadataContractVersion = 2;
+    public const int ApplicationManifestContractVersion = 3;
     private static readonly string[] ExplicitReferenceGraphContractLanguages =
         ["crystal", "groovy", "tcl", "prolog", "ambiguous_pl"];
     private static readonly string[] AdditionalSymbolLanguages =
@@ -45,12 +48,23 @@ public static partial class SymbolExtractor
         "solidity",
         "solution",
         "cuda",
+        "ambiguous_m",
         "dependency_manifest",
         "dependency_lock",
+        "jsonl",
+        "toml",
+        "gitignore",
+        "gitattributes",
+        "editorconfig",
+        "dockerignore",
+        "config",
     ];
 
     private const int SymbolListInitialCapacityLineThreshold = 128;
     private const int SymbolListInitialCapacityMax = 1024;
+    private const string JuliaIdentifierPattern = @"[\p{L}_]\w*";
+    private const string JuliaQualifiedCallableIdentifierPattern =
+        JuliaIdentifierPattern + @"(?:\." + JuliaIdentifierPattern + @")*!?";
 
     private static string[] SplitContentLines(string content) =>
         content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
@@ -84,10 +98,11 @@ public static partial class SymbolExtractor
             "xml" => XmlContractVersion,
             "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
             "crystal" or "groovy" or "tcl" => DynamicReferenceGraphContractVersion,
-            "julia" => DynamicLanguageContractVersion,
             "prolog" or "ambiguous_pl" => PrologReferenceGraphContractVersion,
-            "ada" or "d" or "nim" => SystemsLanguageContractVersion,
-            "app_manifest" or "cmake" or "dependency_lock" or "dependency_manifest" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
+            "ada" or "ambiguous_m" or "cython" or "d" or "julia" or "matlab" or "nim" or "objc" => ScientificNativeGraphContractVersion,
+            "config" or "dockerignore" or "editorconfig" or "gitattributes" or "gitignore" or "jsonl" or "toml" => RepositoryMetadataContractVersion,
+            "app_manifest" => ApplicationManifestContractVersion,
+            "cmake" or "dependency_lock" or "dependency_manifest" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
     }
@@ -495,8 +510,11 @@ public static partial class SymbolExtractor
         RubyEnd,
         FortranEnd,
         ElixirEnd,
+        ScientificEnd,
+        JuliaShortFunction,
         VisualBasicEnd,
         PascalEnd,
+        AdaEnd,
         SmalltalkMethod,
         SqlProcBody,
     }
@@ -1648,12 +1666,12 @@ public static partial class SymbolExtractor
         ],
         ["julia"] =
         [
-            new("namespace", new Regex(@"^\s*(?:baremodule|module)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("struct",   new Regex(@"^\s*(?:mutable\s+)?struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("type",     new Regex(@"^\s*(?:abstract|primitive)\s+type\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("function", new Regex(@"^\s*function\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("function", new Regex(@"^\s*(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\([^)\r\n]*\)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*(?:baremodule|module)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("struct",   new Regex(@"^\s*(?:mutable\s+)?struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("type",     new Regex(@"^\s*(?:abstract|primitive)\s+type\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("function", new Regex(@"^\s*function\s+(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("function", new Regex(@"^\s*(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*\([^)\r\n]*\)\s*(?:where\s*(?:\{[^}\r\n]*\}|[A-Za-z_]\w*)\s*)?=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.JuliaShortFunction),
             new("property", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:using|import)\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
@@ -1667,10 +1685,10 @@ public static partial class SymbolExtractor
         ],
         ["ada"] =
         [
-            new("namespace", new Regex(@"^\s*package\s+(?:body\s+)?(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
+            new("namespace", new Regex(@"^\s*package\s+(?:body\s+)?(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.AdaEnd),
             new("type",      new Regex(@"^\s*(?:subtype|type)\s+(?<name>[A-Za-z]\w*)\s+is\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("type",      new Regex(@"^\s*(?:task|protected)\s+(?:type\s+)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
-            new("function",  new Regex(@"^\s*(?:(?:overriding|not\s+overriding)\s+)?(?:function|procedure)\s+(?:(?:[A-Za-z]\w*)\.)*(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.PascalEnd),
+            new("type",      new Regex(@"^\s*(?:task|protected)\s+(?:type\s+)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.AdaEnd),
+            new("function",  new Regex(@"^\s*(?:(?:overriding|not\s+overriding)\s+)?(?:function|procedure)\s+(?:(?:[A-Za-z]\w*)\.)*(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.AdaEnd),
             new("import",    new Regex(@"^\s*with\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["d"] =
@@ -1720,8 +1738,8 @@ public static partial class SymbolExtractor
         ],
         ["matlab"] =
         [
-            new("class", new Regex(@"^\s*classdef\s*(?:\([^)]*\)\s*)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*function\s+(?:(?:\[[^\]]+\]|[A-Za-z]\w*)\s*=\s*)?(?<name>[A-Za-z]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class", new Regex(@"^\s*classdef\s*(?:\([^)]*\)\s*)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("function", new Regex(@"^\s*function\s+(?:(?:\[[^\]]+\]|[A-Za-z]\w*)\s*=\s*)?(?<name>[A-Za-z]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
             new("import", new Regex(@"^\s*import\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z*]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["prolog"] =
@@ -4787,7 +4805,8 @@ public static partial class SymbolExtractor
             var signature = prior.Signature?.TrimStart();
             if (signature != null
                 && (signature.StartsWith("declare ", StringComparison.Ordinal)
-                    || CSharpPartialFunctionDeclarationSignatureRegex.IsMatch(signature)))
+                    || CSharpPartialFunctionDeclarationSignatureRegex.IsMatch(signature)
+                    || IsAdaForwardDeclarationPair(signature, symbol.Signature)))
             {
                 break;
             }
@@ -4795,6 +4814,28 @@ public static partial class SymbolExtractor
             extractionState.Remove(prior);
             symbols.RemoveAt(index);
         }
+    }
+
+    private static bool IsAdaForwardDeclarationPair(
+        string declarationSignature,
+        string? implementationSignature)
+    {
+        if (implementationSignature == null
+            || !AdaRoutineBodySignatureRegex.IsMatch(implementationSignature))
+        {
+            return false;
+        }
+
+        var trimmed = declarationSignature.Trim();
+        if (!trimmed.EndsWith(';'))
+            return false;
+
+        return trimmed.StartsWith("procedure ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("function ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("overriding procedure ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("overriding function ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("not overriding procedure ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("not overriding function ", StringComparison.OrdinalIgnoreCase);
     }
 
     // Some compact same-line C# fixtures can legitimately contain two distinct siblings with
@@ -4819,9 +4860,16 @@ public static partial class SymbolExtractor
 
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle) =>
-        ResolveRange(lines, startIndex, bodyStyle, null, 0);
+        ResolveRange(lines, startIndex, bodyStyle, null, 0, null, null);
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, string? lang = null, int startColumn = 0)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(
+        string[] lines,
+        int startIndex,
+        BodyStyle bodyStyle,
+        string? lang = null,
+        int startColumn = 0,
+        string[]? scientificBodyScannerLines = null,
+        bool[]? matlabExplicitOuterClosureByLine = null)
     {
         return bodyStyle switch
         {
@@ -4834,8 +4882,17 @@ public static partial class SymbolExtractor
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.FortranEnd => FindFortranRange(lines, startIndex),
             BodyStyle.ElixirEnd => FindElixirRange(lines, startIndex),
+            BodyStyle.ScientificEnd when lang is "julia" or "matlab" => FindScientificEndRange(
+                  scientificBodyScannerLines ?? PrepareScientificBodyScannerLines(lines, lang),
+                  startIndex,
+                  lang,
+                  matlabExplicitOuterClosureByLine: matlabExplicitOuterClosureByLine),
+            BodyStyle.JuliaShortFunction when lang == "julia" => FindJuliaShortFunctionRange(
+                scientificBodyScannerLines ?? PrepareScientificBodyScannerLines(lines, lang),
+                startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
             BodyStyle.PascalEnd => FindPascalRange(lines, startIndex),
+            BodyStyle.AdaEnd => FindAdaRange(lines, startIndex),
             BodyStyle.SmalltalkMethod => FindSmalltalkMethodRange(lines, startIndex),
             BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),

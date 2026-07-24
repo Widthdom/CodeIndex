@@ -39,6 +39,12 @@ internal sealed class LspServer : IDisposable
     internal const int MaxDocumentSymbolDetailChars = 512;
     internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
     internal static int? DocumentSymbolResponseBytesForTesting { get; set; }
+    private static readonly AsyncLocal<Action<string>?> ScopedPositionFileLengthCheckedForTesting = new();
+    internal static Action<string>? PositionFileLengthCheckedForTesting
+    {
+        get => ScopedPositionFileLengthCheckedForTesting.Value;
+        set => ScopedPositionFileLengthCheckedForTesting.Value = value;
+    }
     internal const int MaxSymbolProgressChunkItems = 100;
     internal const int MaxSymbolProgressChunkBytes = 64 * 1024;
     private const int MaxPendingLspMessages = 16;
@@ -2674,51 +2680,180 @@ internal sealed class LspServer : IDisposable
     private bool TryReadAllPositionLines(string path, out IReadOnlyList<string?> sourceLines)
     {
         sourceLines = [];
+        if (_liveDocumentStore.TryGetText(Path.GetFullPath(path), out var liveText))
+        {
+            if (Encoding.UTF8.GetByteCount(liveText) > MaxPositionDocumentBytes)
+                return false;
+            sourceLines = SplitPositionLines(liveText);
+            return true;
+        }
+
+        return TryReadAllPositionLinesFromFile(path, out sourceLines, out _);
+    }
+
+    internal static bool TryReadAllPositionLinesFromFile(
+        string path,
+        out IReadOnlyList<string?> sourceLines,
+        out string? failureReason)
+    {
+        sourceLines = [];
+        failureReason = null;
         try
         {
-            string text;
-            if (_liveDocumentStore.TryGetText(Path.GetFullPath(path), out var liveText))
+            using var stream = BoundedFile.OpenReadForLengthCheckedText(path);
+            if (stream.Length > MaxPositionDocumentBytes)
             {
-                if (Encoding.UTF8.GetByteCount(liveText) > MaxPositionDocumentBytes)
-                    return false;
-                text = liveText;
-            }
-            else
-            {
-                using var stream = BoundedFile.OpenReadForLengthCheckedText(path);
-                if (stream.Length > MaxPositionDocumentBytes)
-                    return false;
-
-                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                text = reader.ReadToEnd();
-                if (stream.Position > MaxPositionDocumentBytes)
-                    return false;
+                failureReason = FailurePositionFileTooLarge;
+                return false;
             }
 
-            var lines = new List<string?>();
-            var lineStart = 0;
-            for (var index = 0; index <= text.Length; index++)
-            {
-                var atEnd = index == text.Length;
-                if (!atEnd && text[index] is not ('\r' or '\n'))
-                    continue;
-
-                var length = index - lineStart;
-                lines.Add(length <= MaxPositionLineChars ? text.Substring(lineStart, length) : null);
-                if (atEnd)
-                    break;
-
-                if (text[index] == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
-                    index++;
-                lineStart = index + 1;
-            }
-
-            sourceLines = lines;
+            PositionFileLengthCheckedForTesting?.Invoke(path);
+            using var boundedStream = new PositionFileReadStream(stream, MaxPositionDocumentBytes);
+            using var reader = new StreamReader(
+                boundedStream,
+                Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true,
+                bufferSize: BoundedFile.SmallReadBufferSize);
+            sourceLines = ReadPositionLines(reader);
             return true;
+        }
+        catch (PositionFileTooLargeException)
+        {
+            failureReason = FailurePositionFileTooLarge;
+            return false;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
         {
+            failureReason = FailurePositionFileUnreadable;
             return false;
+        }
+    }
+
+    private static IReadOnlyList<string?> ReadPositionLines(TextReader reader)
+    {
+        var lines = new List<string?>();
+        var line = new StringBuilder();
+        var lineLength = 0;
+        var lineTooLong = false;
+        var previousWasCarriageReturn = false;
+        var buffer = new char[4096];
+        while (true)
+        {
+            var read = reader.Read(buffer, 0, buffer.Length);
+            if (read == 0)
+                break;
+
+            for (var index = 0; index < read; index++)
+            {
+                var value = buffer[index];
+                if (previousWasCarriageReturn)
+                {
+                    previousWasCarriageReturn = false;
+                    if (value == '\n')
+                        continue;
+                }
+
+                if (value is '\r' or '\n')
+                {
+                    lines.Add(lineTooLong ? null : line.ToString());
+                    line.Clear();
+                    lineLength = 0;
+                    lineTooLong = false;
+                    previousWasCarriageReturn = value == '\r';
+                    continue;
+                }
+
+                lineLength++;
+                if (lineLength <= MaxPositionLineChars)
+                    line.Append(value);
+                else if (!lineTooLong)
+                {
+                    line.Clear();
+                    lineTooLong = true;
+                }
+            }
+        }
+
+        lines.Add(lineTooLong ? null : line.ToString());
+        return lines;
+    }
+
+    private static IReadOnlyList<string?> SplitPositionLines(string text)
+    {
+        using var reader = new StringReader(text);
+        return ReadPositionLines(reader);
+    }
+
+    private sealed class PositionFileTooLargeException : IOException
+    {
+    }
+
+    private sealed class PositionFileReadStream(Stream inner, long maxBytes) : Stream
+    {
+        private long _remaining = maxBytes;
+        private bool _disposed;
+
+        public override bool CanRead => !_disposed && inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_remaining > 0)
+            {
+                var read = inner.Read(buffer, offset, (int)Math.Min(count, _remaining));
+                _remaining -= read;
+                return read;
+            }
+
+            return ProbeForOverflow();
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_remaining > 0)
+            {
+                var read = inner.Read(buffer[..(int)Math.Min(buffer.Length, _remaining)]);
+                _remaining -= read;
+                return read;
+            }
+
+            return ProbeForOverflow();
+        }
+
+        private int ProbeForOverflow()
+        {
+            Span<byte> probe = stackalloc byte[1];
+            if (inner.Read(probe) != 0)
+                throw new PositionFileTooLargeException();
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            _disposed = true;
+            base.Dispose(disposing);
         }
     }
 

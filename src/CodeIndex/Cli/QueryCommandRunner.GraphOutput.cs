@@ -19,7 +19,7 @@ public static partial class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "capture", "consumes_hook", "dependency", "friend", "generic_type_argument", "import", "instantiate", "project_reference", "razor_event_binding", "subscribe", "type_reference", "type_tag", "unsubscribe"];
+        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "binding", "call", "capture", "consumes_hook", "dependency", "friend", "generic_type_argument", "import", "instantiate", "project_reference", "razor_event_binding", "resource_reference", "subscribe", "type_reference", "type_tag", "unsubscribe"];
 
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
@@ -82,19 +82,23 @@ public static partial class QueryCommandRunner
     // - `type_tag`: JavaScript / TypeScript の discriminant 比較は narrowing metadata であり、
     //   実行時呼び出しではない。
     // - `import`: import/include dependency edges are structural, not call-graph edges.
+    // - `binding` / `resource_reference`: shader binding metadata and resource-use rows are
+    //   declaration/use metadata, not invocation edges.
     // CLI 境界で弾き、正しい列挙パスである `references --kind <kind>` に誘導する。
     private static readonly HashSet<string> NonCallGraphReferenceKinds = new(StringComparer.Ordinal)
     {
-        "attribute", "annotation", "type_reference", "type_tag", "import",
+        "attribute", "annotation", "type_reference", "type_tag", "import", "binding", "resource_reference",
     };
 
     /// <summary>
-    /// Reject non-call-graph reference kinds (`attribute` / `annotation` / `type_reference` / `type_tag` / `import`) on
+    /// Reject non-call-graph reference kinds (`attribute` / `annotation` / `type_reference` / `type_tag` /
+    /// `import` / `binding` / `resource_reference`) on
     /// commands (`callers` / `callees`) whose data model cannot answer those queries correctly.
     /// Returns true if the kind was rejected; the caller should then return
     /// `CommandExitCodes.UsageError`.
     /// `callers` / `callees` のようにデータモデル的に metadata / 型位置参照に答えられない
-    /// コマンドで `--kind attribute` / `--kind annotation` / `--kind type_reference` / `--kind type_tag` / `--kind import` を弾く。
+    /// コマンドで `--kind attribute` / `--kind annotation` / `--kind type_reference` /
+    /// `--kind type_tag` / `--kind import` / `--kind binding` / `--kind resource_reference` を弾く。
     /// 弾いた場合 true を返すので、呼び出し側は `CommandExitCodes.UsageError` を返すこと。
     /// </summary>
     private static bool TryRejectNonCallGraphKindForGraphCommand(string command, string? kind)
@@ -108,6 +112,8 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"Error: '--kind type_tag' is not supported on '{command}'. JavaScript/TypeScript discriminant tags are narrowing metadata, not runtime calls, so `{command} --kind type_tag` cannot return accurate call-graph rows.");
         else if (kind == "import")
             CommandErrorWriter.WriteStderr($"Error: '--kind import' is not supported on '{command}'. Import references are structural dependency edges, not runtime calls, so `{command} --kind import` cannot return accurate call-graph rows.");
+        else if (kind is "binding" or "resource_reference")
+            CommandErrorWriter.WriteStderr($"Error: '--kind {kind}' is not supported on '{command}'. Shader bindings and resource uses are declaration/use metadata, not runtime calls, so `{command} --kind {kind}` cannot return accurate call-graph rows.");
         else
             CommandErrorWriter.WriteStderr($"Error: '--kind {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol rather than the annotated target, so `{command} --kind {kind}` cannot return accurate rows (file-level targets such as `[assembly: ...]` drop entirely).");
         CommandErrorWriter.WriteStderr($"Hint: use `cdidx references <name> --kind {kind}` instead.");
@@ -124,9 +130,13 @@ public static partial class QueryCommandRunner
         JsonObject payload,
         DbReader reader,
         JsonSerializerOptions jsonOptions,
-        SqlGraphContractSignal sqlGraphSignal)
+        SqlGraphContractSignal sqlGraphSignal,
+        HdlGraphContractSignal? hdlGraphSignal = null)
     {
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        AddHdlGraphContractJsonFields(
+            payload,
+            hdlGraphSignal ?? reader.GetHdlGraphContractSignal());
         AddReferenceGraphCompletenessJsonFields(payload, reader, jsonOptions);
     }
 

@@ -296,6 +296,67 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Symbols_TrailingQuietFlagsPreserveResultStdout_Issue4748()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_program_symbols_quiet_4748");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "class App { void Alpha() {} void Beta() {} }\n");
+
+            var outputModes = new[]
+            {
+                Array.Empty<string>(),
+                new[] { "--json" },
+                new[] { "--json=array" },
+            };
+            var quietFlags = new[] { "--quiet", "-q", "--silent" };
+
+            foreach (var outputMode in outputModes)
+            {
+                var baselineArgs = new List<string>
+                {
+                    "symbols",
+                    "--lang",
+                    "csharp",
+                    "--exclude-tests",
+                    "--limit",
+                    "5",
+                    "--db",
+                    dbPath,
+                };
+                baselineArgs.AddRange(outputMode);
+
+                var (baselineExitCode, baselineStdout, baselineStderr) = RunCliInSubprocess(baselineArgs.ToArray());
+
+                Assert.Equal(CommandExitCodes.Success, baselineExitCode);
+                Assert.NotEqual(string.Empty, baselineStdout);
+                if (outputMode.Length == 0)
+                    Assert.NotEqual(string.Empty, baselineStderr);
+
+                foreach (var quietFlag in quietFlags)
+                {
+                    var quietArgs = new List<string>(baselineArgs) { quietFlag };
+
+                    var (quietExitCode, quietStdout, quietStderr) = RunCliInSubprocess(quietArgs.ToArray());
+
+                    Assert.Equal(CommandExitCodes.Success, quietExitCode);
+                    Assert.Equal(baselineStdout, quietStdout);
+                    Assert.Equal(string.Empty, quietStderr);
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeFact]
     public void QueryQuietEnvironment_SuppressesVerboseStderr()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_program_quiet_env");
@@ -486,7 +547,7 @@ public class ProgramCliTests
         Assert.Contains("Usage:", stdout);
         Assert.Contains(expectedUsage, stdout);
         Assert.Contains("Run `cdidx --help`", stdout);
-        if (command is "mcp" or "lsp" or "completions" or "references" or "callers" or "callees" or "backfill-fold" or "excerpt" or "inspect" or "status" or "symbols" or "search" or "find" or "map")
+        if (command is "index" or "mcp" or "lsp" or "completions" or "references" or "callers" or "callees" or "backfill-fold" or "excerpt" or "inspect" or "status" or "symbols" or "search" or "find" or "map")
         {
             Assert.Contains("Notes:", stdout);
             if (command is "mcp" or "completions")

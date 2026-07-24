@@ -27,13 +27,19 @@ public static partial class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "crystal", "groovy", "tcl", "perl", "prolog", "ambiguous_pl",
-        "c", "cpp", "php", "swift",
+        "c", "cpp",
+        "cuda", "glsl", "hlsl", "metal", "wgsl",
+        "php", "swift",
         "dart", "scala", "elixir", "lua", "commonlisp", "racket", "vb", "fsharp", "sql", "cobol", "batch",
         "assembly",
         "r", "powershell", "shell", "haskell", "solidity",
+        "clojure", "erlang", "ocaml", "raku",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile", "cmake", "justfile", "msbuild",
-        "solution", "dependency_manifest", "dependency_lock", "json",
-        "zig", "css", "sass", "stylus", "xml", "yaml", "graphql", "html", "markdown", "fortran", "pascal", "objc", "smalltalk"
+        "solution", "dependency_manifest", "dependency_lock", "json", "jsonl", "toml",
+        "gitignore", "gitattributes", "editorconfig", "dockerignore", "config", "app_manifest",
+        "zig", "css", "sass", "stylus", "xml", "yaml", "graphql", "html", "markdown", "fortran", "pascal", "objc", "smalltalk",
+        "ada", "cython", "d", "julia", "matlab", "nim", "ambiguous_m",
+        "verilog", "systemverilog", "vhdl",
     ];
 
     private static readonly IReadOnlyDictionary<string, IReferenceExtractor> Extractors =

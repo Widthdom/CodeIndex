@@ -55,6 +55,12 @@ public partial class DbReader
         var csharpMetadataTargetDegradedReason = csharpMetadataTargetReady
             ? null
             : _csharpMetadataTargetDegradedReason;
+        var hdlGraphContractReady = !ScopeMayIncludeHdlFiles(
+            lang: null,
+            pathPatterns: null,
+            excludePathPatterns: null,
+            excludeTests: false)
+            || _hdlGraphContractCurrent;
         var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
         var languageReadiness = GetLanguageReadiness();
@@ -191,7 +197,10 @@ public partial class DbReader
             Languages = langs,
             SymbolsByLanguage = symbolsByLanguage.Count > 0 ? symbolsByLanguage : null,
             GraphTableAvailable = _hasReferencesTable,
-            GraphDataCurrent = _hasReferencesTable && indexComplete && referenceGraphComplete,
+            GraphDataCurrent = _hasReferencesTable
+                && indexComplete
+                && referenceGraphComplete
+                && hdlGraphContractReady,
             ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
             ReferenceGraphComplete = referenceGraphComplete,
             ReferenceGraphIncompleteReasons = referenceGraphComplete

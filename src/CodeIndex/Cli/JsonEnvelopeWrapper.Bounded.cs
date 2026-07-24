@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
 
@@ -18,41 +19,47 @@ internal static partial class JsonEnvelopeWrapper
 {
     private const int DefaultPageLimit = 20;
     private const int MaxPageWindow = MaxRawJsonItems;
-    private const string ResponseCursorPrefix = "response:v1:";
+    private const string LegacyResponseCursorPrefix = "response:v1:";
+    private const string ResponseCursorPrefix = "response:v2:";
     private static readonly AsyncLocal<BoundedExecutionContext?> BoundedExecution = new();
 
     private static readonly HashSet<string> BoundedResponseCommands = new(StringComparer.Ordinal)
     {
-        "definition", "find", "status", "hotspots", "references", "callers", "callees", "impact", "map",
+        "search", "definition", "find", "status", "hotspots", "references", "callers", "callees",
+        "symbols", "files", "languages", "impact", "map",
     };
 
     private static readonly HashSet<string> AutoWrapByteBudgetCommands = new(StringComparer.Ordinal)
     {
-        "find", "status", "references", "callers", "callees",
+        "find", "status", "references", "callers", "callees", "languages",
     };
 
     private static readonly HashSet<string> AutoWrapCompactCommands = new(StringComparer.Ordinal)
     {
-        "definition", "find", "status", "hotspots", "references", "callers", "callees", "impact", "map",
+        "search", "definition", "find", "status", "hotspots", "references", "callers", "callees",
+        "symbols", "files", "impact", "map",
     };
 
     private static readonly HashSet<string> LegacyLocationCompactCommands = new(StringComparer.Ordinal)
     {
-        "definition", "find", "references", "callers", "callees",
+        "search", "definition", "find", "references", "callers", "callees", "symbols", "files",
     };
 
     private static readonly HashSet<string> PageableResponseCommands = new(StringComparer.Ordinal)
     {
-        "definition", "find", "hotspots", "references", "callers", "callees", "impact", "map",
+        "search", "definition", "find", "hotspots", "references", "callers", "callees",
+        "symbols", "files", "languages", "impact", "map",
     };
 
     private static readonly HashSet<string> CountableResponseCommands = new(StringComparer.Ordinal)
     {
-        "definition", "find", "hotspots", "references", "callers", "callees", "impact",
+        "search", "definition", "find", "hotspots", "references", "callers", "callees",
+        "symbols", "files", "languages", "impact",
     };
 
     private static readonly Dictionary<string, string[]> CompactFieldsByCommand = new(StringComparer.Ordinal)
     {
+        ["search"] = ["file", "line"],
         ["definition"] = ["file", "line", "column"],
         ["find"] = ["file", "line", "column"],
         ["references"] = ["file", "line", "column"],
@@ -60,6 +67,9 @@ internal static partial class JsonEnvelopeWrapper
         ["callees"] = ["file", "line", "column"],
         ["hotspots"] = ["name", "kind", "path", "line", "reference_count", "reference_score", "ranking_score"],
         ["impact"] = ["path", "caller_name", "callee_name", "depth", "first_line", "reference_count", "result_kind"],
+        ["symbols"] = ["path", "line", "kind", "name"],
+        ["files"] = ["path", "lang", "lines"],
+        ["languages"] = ["lang", "extensions", "symbol_extraction", "reference_extraction", "graph_queries"],
         ["status"] = ["api_version", "files", "chunks", "symbols", "references", "indexed_at", "git_head", "git_is_dirty", "head_freshness", "version", "graph_table_available", "hotspot_family_ready", "summary"],
         ["map"] = ["api_version", "file_count", "total_lines", "total_symbols", "total_references", "indexed_at", "git_head", "git_is_dirty", "head_freshness", "graph_table_available", "sections"],
     };
@@ -68,8 +78,16 @@ internal static partial class JsonEnvelopeWrapper
     {
         if (!BoundedResponseCommands.Contains(command))
             return false;
+        if (command == "search" && IsSearchAggregateResponseRequest(args))
+            return false;
         if (HasArgument(args, "--fields") || HasArgument(args, "--cursor"))
             return true;
+        if (command == "languages"
+            && HasJsonOutputSelection(args)
+            && (HasArgument(args, "--limit") || HasArgument(args, "--top")))
+        {
+            return true;
+        }
         if (AutoWrapByteBudgetCommands.Contains(command) && HasArgument(args, "--max-json-bytes"))
             return true;
         return AutoWrapCompactCommands.Contains(command) && HasCompactOutputSelection(args);
@@ -79,12 +97,32 @@ internal static partial class JsonEnvelopeWrapper
     {
         if (!BoundedResponseCommands.Contains(command))
             return false;
+        if (command == "search" && IsSearchAggregateResponseRequest(args))
+            return false;
 
         return HasArgument(args, "--fields")
                || HasArgument(args, "--cursor")
-               || (HasEnvelopeFlag(args) && HasArgument(args, "--max-json-bytes"))
+               || (command == "search" && HasEnvelopeFlag(args) && HasJsonArrayOutputSelection(args))
+               || (command != "search" && HasEnvelopeFlag(args) && HasArgument(args, "--max-json-bytes"))
                || ShouldAutoWrapBoundedResponse(command, args);
     }
+
+    private static bool IsSearchAggregateResponseRequest(string[] args)
+        => HasArgument(args, "--recipe")
+           || HasArgument(args, "--list-recipes")
+           || HasArgument(args, "--named-query")
+           || HasArgument(args, "--count")
+           || HasArgument(args, "--group-by")
+           || HasArgument(args, "--unique")
+           || HasArgument(args, "--count-by")
+           || HasArgument(args, "--summary-only");
+
+    private static bool HasJsonOutputSelection(string[] args)
+        => args.Any(arg => string.Equals(arg, "--json", StringComparison.Ordinal)
+                           || arg.StartsWith("--json=", StringComparison.Ordinal));
+
+    private static bool HasJsonArrayOutputSelection(string[] args)
+        => args.Any(arg => string.Equals(arg, "--json=array", StringComparison.OrdinalIgnoreCase));
 
     private static bool HasCompactOutputSelection(string[] args)
     {
@@ -117,17 +155,22 @@ internal static partial class JsonEnvelopeWrapper
             return WriteBoundedResponseUsageError(mapProjectionError, "Remove the conflicting map filter, or select a collection enabled by --sections.");
 
         var queryNormalized = ExtractQueryArg(args);
-        var dbPathExplicit = TryExtractDbPath(args, out var explicitDbPath);
-        var resolvedDbPath = string.IsNullOrWhiteSpace(explicitDbPath)
-            ? Path.Combine(".cdidx", "codeindex.db")
-            : explicitDbPath!;
-        var fingerprint = BuildResponseFingerprint(command, args);
-        if (controls.CursorFingerprint is not null
-            && !string.Equals(controls.CursorFingerprint, fingerprint, StringComparison.Ordinal))
+        var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
+        var queryFingerprint = BuildResponseFingerprint(command, args);
+        var snapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
+        if (controls.CursorQueryFingerprint is not null
+            && !string.Equals(controls.CursorQueryFingerprint, queryFingerprint, StringComparison.Ordinal))
         {
             return WriteBoundedResponseUsageError(
                 "--cursor does not match this command, query, or filter set.",
                 "Use next_cursor from the preceding page without changing query, filter, or sort arguments.");
+        }
+        if (controls.CursorGenerationFingerprint is not null
+            && !string.Equals(controls.CursorGenerationFingerprint, snapshot.GenerationFingerprint, StringComparison.Ordinal))
+        {
+            return WriteBoundedResponseUsageError(
+                "--cursor is stale because the index generation changed.",
+                "Restart pagination without --cursor and use the next_cursor returned by the refreshed index.");
         }
         if (controls.Offset > MaxPageWindow - controls.PageLimit)
         {
@@ -141,10 +184,19 @@ internal static partial class JsonEnvelopeWrapper
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int exitCode;
         JsonEnvelopeCaptureLimitExceededException? captureLimitExceeded = null;
+        BoundedExecutionContext? executionContext = null;
         try
         {
             using var outputScope = ScopedConsoleOutput.Redirect(captured);
-            using var executionScope = EnterBoundedExecution(command, controls.Offset, controls.PageLimit, controls.Fields, controls.Compact);
+            executionContext = new BoundedExecutionContext(
+                command,
+                controls.Offset,
+                controls.PageLimit,
+                controls.Fields,
+                controls.Compact,
+                controls.ResumePath,
+                controls.ResumeLine);
+            using var executionScope = EnterBoundedExecution(executionContext);
             exitCode = runInner(innerArgs);
         }
         catch (JsonEnvelopeCaptureLimitExceededException ex)
@@ -190,6 +242,7 @@ internal static partial class JsonEnvelopeWrapper
             return WriteBoundedParseError(command, queryNormalized, resolvedDbPath, dbPathExplicit, appVersion, stopwatch.Elapsed.TotalMilliseconds, jsonOptions, $"Bounded response raw JSON {ex.BudgetName} exceeded {ex.MaxValue}.", "Reduce --limit or narrow the query.", ex.JsonPropertyName, ex.MaxValue, controls.MaxJsonBytes);
         }
 
+        var commandError = TakeCommandError(rawResults, exitCode);
         PromoteEmptyLegacyCompactPayload(command, controls, rawResults, streamControlRecords);
         var extraction = ExtractResponseItems(command, rawResults, controls);
         var availableItems = extraction.Items;
@@ -198,9 +251,20 @@ internal static partial class JsonEnvelopeWrapper
             .Select(item => ProjectResponseItem(item, controls.EffectiveFields(command, extraction.PrimaryCollection)))
             .ToList();
 
-        var count = ResolveTotalCount(command, args, runInner, extraction, availableItems.Count, controls.Offset, streamTerminal);
+        var count = executionContext?.ReportedTotalCount is { } reportedTotalCount
+            ? new ResponseCount(
+                reportedTotalCount,
+                executionContext.ReportedTotalCountAuthoritative)
+            : ResolveTotalCount(command, args, runInner, extraction, availableItems.Count, controls.Offset, streamTerminal);
         var totalCount = Math.Max(count.TotalCount, controls.Offset + pageItems.Count);
         var totalAuthoritative = count.Authoritative;
+        var completedSnapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
+        if (!string.Equals(snapshot.GenerationFingerprint, completedSnapshot.GenerationFingerprint, StringComparison.Ordinal))
+        {
+            return WriteBoundedResponseUsageError(
+                "The index generation changed while this page was being read.",
+                "Restart pagination without --cursor after the active index refresh completes.");
+        }
         var envelope = BuildBoundedEnvelopeWithinBudget(
             command,
             queryNormalized,
@@ -210,11 +274,13 @@ internal static partial class JsonEnvelopeWrapper
             stopwatch.Elapsed.TotalMilliseconds,
             pageItems,
             controls,
-            fingerprint,
+            queryFingerprint,
+            snapshot,
             totalCount,
             totalAuthoritative,
             exitCode,
             extraction,
+            commandError,
             streamTerminal,
             streamControlRecords,
             jsonOptions,
@@ -241,11 +307,13 @@ internal static partial class JsonEnvelopeWrapper
         double elapsedMs,
         IReadOnlyList<JsonNode?> pageItems,
         BoundedResponseControls controls,
-        string fingerprint,
+        string queryFingerprint,
+        ResponseSnapshot snapshot,
         int totalCount,
         bool totalAuthoritative,
         int exitCode,
         ResponseExtraction extraction,
+        JsonObject? commandError,
         JsonObject? streamTerminal,
         JsonArray streamControlRecords,
         JsonSerializerOptions jsonOptions,
@@ -268,12 +336,35 @@ internal static partial class JsonEnvelopeWrapper
                 elapsedMs,
                 results,
                 exitCode,
+                error: commandError is null ? null : (JsonObject)commandError.DeepClone(),
                 streamTerminal: streamTerminal,
                 streamControlRecords: streamControlRecords);
             var metadata = (JsonObject)envelope["metadata"]!;
+            metadata["result_stable_at"] = snapshot.ResultStableAt;
+            if (commandError is not null)
+            {
+                metadata["returned_count"] = 0;
+                metadata["total_count"] = 0;
+                metadata["total_count_authoritative"] = true;
+                metadata["omitted_count"] = 0;
+                if (controls.Fields is { Count: > 0 })
+                {
+                    var errorFields = new JsonArray();
+                    foreach (var field in controls.Fields)
+                        errorFields.Add(field);
+                    metadata["fields"] = errorFields;
+                }
+                if (controls.MaxJsonBytes.HasValue)
+                    metadata["max_json_bytes"] = controls.MaxJsonBytes.Value;
+                return envelope;
+            }
             var nextOffset = controls.Offset + count;
             var paginationWindowExhausted = nextOffset < totalCount && nextOffset >= MaxPageWindow;
-            var hasMore = count > 0 && nextOffset < totalCount && !paginationWindowExhausted;
+            var scanCursor = ReadString(streamTerminal, "next_cursor");
+            var emittedAllCapturedRows = count == pageItems.Count;
+            var selectedScanCursor = emittedAllCapturedRows ? scanCursor : null;
+            var hasMore = selectedScanCursor is not null
+                          || count > 0 && nextOffset < totalCount && !paginationWindowExhausted;
             metadata["result_count"] = count;
             metadata["returned_count"] = count;
             metadata["total_count"] = totalCount;
@@ -283,10 +374,11 @@ internal static partial class JsonEnvelopeWrapper
             metadata["cursor_offset"] = controls.Offset;
             metadata["page_limit"] = controls.PageLimit;
             metadata["has_more"] = hasMore;
-            metadata["next_cursor"] = hasMore && count > 0
-                ? FormatResponseCursor(nextOffset, fingerprint)
-                : null;
-            metadata["truncated"] = totalCount > count;
+            metadata["next_cursor"] = selectedScanCursor
+                ?? (hasMore && count > 0
+                    ? FormatResponseCursor(nextOffset, queryFingerprint, snapshot.GenerationFingerprint)
+                    : null);
+            metadata["truncated"] = scanCursor is not null || totalCount > count;
             metadata["pagination_window_limit"] = MaxPageWindow;
             metadata["pagination_window_exhausted"] = paginationWindowExhausted;
             if (controls.Compact)
@@ -324,7 +416,9 @@ internal static partial class JsonEnvelopeWrapper
                     nextOffset,
                     hasMore,
                     paginationWindowExhausted,
-                    fingerprint);
+                    queryFingerprint,
+                    snapshot,
+                    extraction.PrimaryCollection);
             }
             if (controls.Compact
                 && command == "map"
@@ -377,6 +471,26 @@ internal static partial class JsonEnvelopeWrapper
     private static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
         => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine) <= maxJsonBytes;
 
+    private static JsonObject? TakeCommandError(JsonArray rawResults, int exitCode)
+    {
+        if (exitCode == CommandExitCodes.Success
+            || rawResults.Count != 1
+            || rawResults[0] is not JsonObject candidate
+            || candidate["status"] is not JsonValue status
+            || !status.TryGetValue<string>(out var statusText)
+            || !string.Equals(statusText, "error", StringComparison.Ordinal)
+            || candidate["error_code"] is null)
+        {
+            return null;
+        }
+
+        var error = (JsonObject)candidate.DeepClone();
+        error.Remove("status");
+        error.Remove("api_version");
+        rawResults.Clear();
+        return error;
+    }
+
     private static void PromoteEmptyLegacyCompactPayload(
         string command,
         BoundedResponseControls controls,
@@ -408,12 +522,18 @@ internal static partial class JsonEnvelopeWrapper
         int nextOffset,
         bool hasMore,
         bool paginationWindowExhausted,
-        string fingerprint)
+        string queryFingerprint,
+        ResponseSnapshot snapshot,
+        string? primaryCollection)
     {
         var compatible = (JsonObject)sourcePayload.DeepClone();
-        compatible["results"] = results.DeepClone();
+        var collectionName = primaryCollection ?? "results";
+        compatible[collectionName] = results.DeepClone();
         compatible["metadata"] = envelope["metadata"]!.DeepClone();
-        compatible["count"] = returnedCount;
+        if (collectionName == "results")
+            compatible["count"] = returnedCount;
+        else
+            compatible["emitted_count"] = returnedCount;
         compatible["returned_count"] = returnedCount;
         compatible["total_count"] = totalCount;
         compatible["total_count_authoritative"] = totalAuthoritative;
@@ -423,8 +543,9 @@ internal static partial class JsonEnvelopeWrapper
         compatible["page_limit"] = controls.PageLimit;
         compatible["has_more"] = hasMore;
         compatible["next_cursor"] = hasMore && returnedCount > 0
-            ? FormatResponseCursor(nextOffset, fingerprint)
+            ? FormatResponseCursor(nextOffset, queryFingerprint, snapshot.GenerationFingerprint)
             : null;
+        compatible["result_stable_at"] = snapshot.ResultStableAt;
         compatible["truncated"] = totalCount > returnedCount;
         compatible["pagination_window_limit"] = MaxPageWindow;
         compatible["pagination_window_exhausted"] = paginationWindowExhausted;
@@ -465,6 +586,12 @@ internal static partial class JsonEnvelopeWrapper
         }
         if (command == "hotspots" && rawResults.FirstOrDefault() is JsonObject hotspotsPayload)
             return ExtractNestedCollection(hotspotsPayload, "hotspots");
+        if (command == "symbols" && rawResults.FirstOrDefault() is JsonObject symbolsPayload)
+            return ExtractNestedCollection(symbolsPayload, "symbols");
+        if (command == "files" && rawResults.FirstOrDefault() is JsonObject filesPayload)
+            return ExtractNestedCollection(filesPayload, "files");
+        if (command == "languages" && rawResults.FirstOrDefault() is JsonObject languagesPayload)
+            return ExtractNestedCollection(languagesPayload, "languages");
         if (command == "impact" && rawResults.FirstOrDefault() is JsonObject impactPayload)
         {
             var requestedCollection = SelectRequestedCollection(controls.Fields, "callers", "file_impacts", "definitions");
@@ -494,6 +621,14 @@ internal static partial class JsonEnvelopeWrapper
                     null,
                     mapPayload);
             }
+        }
+        if (rawResults.Count == 1 && rawResults[0] is JsonArray arrayPayload)
+        {
+            return new ResponseExtraction(
+                new JsonArray(arrayPayload.Select(item => item?.DeepClone()).ToArray()),
+                "results",
+                null,
+                null);
         }
 
         var rows = new JsonArray();
@@ -606,12 +741,17 @@ internal static partial class JsonEnvelopeWrapper
             if (TryReadInt(extraction.SourcePayload, "definition_count", out var definitionCount))
                 return new ResponseCount(definitionCount, true);
         }
+        ResponseCount? terminalCount = null;
         if (streamTerminal is not null
             && TryReadInt(streamTerminal, "total_count", out var terminalTotal)
             && TryReadBool(streamTerminal, "total_count_authoritative", out var terminalAuthoritative))
-            return new ResponseCount(terminalTotal, terminalAuthoritative);
+        {
+            terminalCount = new ResponseCount(terminalTotal, terminalAuthoritative);
+            if (terminalAuthoritative)
+                return terminalCount.Value;
+        }
         if (!CountableResponseCommands.Contains(command))
-            return new ResponseCount(offset + availableCount, false);
+            return terminalCount ?? new ResponseCount(offset + availableCount, false);
 
         var countArgs = PrepareCountArgs(command, args);
         using var captured = new BoundedStringWriter(MaxRawJsonItemChars);
@@ -623,14 +763,14 @@ internal static partial class JsonEnvelopeWrapper
         }
         catch
         {
-            return new ResponseCount(offset + availableCount, false);
+            return terminalCount ?? new ResponseCount(offset + availableCount, false);
         }
         try
         {
             var countItems = ParseRawJsonItems(command, captured.ToString(), out _, out _);
             var countPayload = countItems.OfType<JsonObject>().FirstOrDefault(obj => obj.ContainsKey("count"));
             if (countPayload is null || !TryReadInt(countPayload, "count", out var total))
-                return new ResponseCount(offset + availableCount, false);
+                return terminalCount ?? new ResponseCount(offset + availableCount, false);
             var authoritative = TryReadBool(countPayload, "authoritative_count", out var explicitAuthority)
                 ? explicitAuthority
                 : countExitCode == CommandExitCodes.Success
@@ -641,7 +781,7 @@ internal static partial class JsonEnvelopeWrapper
         }
         catch
         {
-            return new ResponseCount(offset + availableCount, false);
+            return terminalCount ?? new ResponseCount(offset + availableCount, false);
         }
     }
 
@@ -661,6 +801,11 @@ internal static partial class JsonEnvelopeWrapper
 
     private static bool ReadOptionalBool(JsonObject obj, string propertyName, bool defaultValue = false)
         => TryReadBool(obj, propertyName, out var value) ? value : defaultValue;
+
+    private static string? ReadString(JsonObject? obj, string propertyName)
+        => obj?[propertyName] is JsonValue value && value.TryGetValue<string>(out var text)
+            ? text
+            : null;
 
     private static string[] PrepareBoundedInnerArgs(string command, string[] args, BoundedResponseControls controls)
     {
@@ -861,14 +1006,33 @@ internal static partial class JsonEnvelopeWrapper
         }
 
         var offset = 0;
-        string? cursorFingerprint = null;
-        if (cursor is not null && !TryParseResponseCursor(cursor, out offset, out cursorFingerprint))
+        string? cursorQueryFingerprint = null;
+        string? cursorGenerationFingerprint = null;
+        string? resumePath = null;
+        int? resumeLine = null;
+        if (cursor is not null
+            && !TryParseResponseCursor(
+                cursor,
+                out offset,
+                out cursorQueryFingerprint,
+                out cursorGenerationFingerprint,
+                out resumePath,
+                out resumeLine))
         {
             controls = default!;
-            error = "--cursor must be a response:v1:<offset>:<fingerprint> cursor returned as next_cursor.";
+            error = "--cursor must be an opaque response:v2 cursor returned as next_cursor.";
             return false;
         }
-        controls = new BoundedResponseControls(fields, compact, maxJsonBytes, pageLimit, offset, cursorFingerprint);
+        controls = new BoundedResponseControls(
+            fields,
+            compact,
+            maxJsonBytes,
+            pageLimit,
+            offset,
+            cursorQueryFingerprint,
+            cursorGenerationFingerprint,
+            resumePath,
+            resumeLine);
         return true;
     }
 
@@ -928,29 +1092,119 @@ internal static partial class JsonEnvelopeWrapper
     {
         var normalized = StripResponseOptions(args, stripLimit: true);
         normalized.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
+        normalized.RemoveAll(arg => arg is "--allow-partial" or "--results-only" or "--verbose" or "--profile");
+        RemoveOptionWithValue(normalized, "--line-scan-limit");
         var input = command + "\0" + string.Join('\0', normalized);
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(input));
         return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
     }
 
-    private static string FormatResponseCursor(int offset, string fingerprint)
-        => $"{ResponseCursorPrefix}{offset.ToString(CultureInfo.InvariantCulture)}:{fingerprint}";
+    private static void RemoveOptionWithValue(List<string> args, string option)
+    {
+        for (var i = args.Count - 1; i >= 0; i--)
+        {
+            if (args[i].StartsWith(option + "=", StringComparison.Ordinal))
+            {
+                args.RemoveAt(i);
+                continue;
+            }
+            if (!string.Equals(args[i], option, StringComparison.Ordinal))
+                continue;
+            args.RemoveAt(i);
+            if (i < args.Count)
+                args.RemoveAt(i);
+        }
+    }
 
-    private static bool TryParseResponseCursor(string cursor, out int offset, out string? fingerprint)
+    private static string FormatResponseCursor(
+        int offset,
+        string queryFingerprint,
+        string generationFingerprint,
+        string? resumePath = null,
+        int? resumeLine = null)
+    {
+        var payload = new JsonObject
+        {
+            ["offset"] = offset,
+            ["query"] = queryFingerprint,
+            ["generation"] = generationFingerprint,
+        };
+        if (resumePath is not null)
+            payload["resume_path"] = resumePath;
+        if (resumeLine.HasValue)
+            payload["resume_line"] = resumeLine.Value;
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload.ToJsonString()))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return ResponseCursorPrefix + encoded;
+    }
+
+    private static bool TryParseResponseCursor(
+        string cursor,
+        out int offset,
+        out string? queryFingerprint,
+        out string? generationFingerprint,
+        out string? resumePath,
+        out int? resumeLine)
     {
         offset = 0;
-        fingerprint = null;
-        if (!cursor.StartsWith(ResponseCursorPrefix, StringComparison.Ordinal))
+        queryFingerprint = null;
+        generationFingerprint = null;
+        resumePath = null;
+        resumeLine = null;
+        if (cursor.StartsWith(LegacyResponseCursorPrefix, StringComparison.Ordinal))
+        {
+            var remainder = cursor[LegacyResponseCursorPrefix.Length..];
+            var separator = remainder.IndexOf(':');
+            if (separator <= 0 || separator == remainder.Length - 1)
+                return false;
+            if (!int.TryParse(remainder[..separator], NumberStyles.None, CultureInfo.InvariantCulture, out offset) || offset < 0)
+                return false;
+            queryFingerprint = remainder[(separator + 1)..];
+            return IsCursorFingerprint(queryFingerprint);
+        }
+        if (!cursor.StartsWith(ResponseCursorPrefix, StringComparison.Ordinal)
+            || cursor.Length > 16_384)
+        {
             return false;
-        var remainder = cursor[ResponseCursorPrefix.Length..];
-        var separator = remainder.IndexOf(':');
-        if (separator <= 0 || separator == remainder.Length - 1)
+        }
+
+        var encoded = cursor[ResponseCursorPrefix.Length..]
+            .Replace('-', '+')
+            .Replace('_', '/');
+        var paddingLength = (4 - encoded.Length % 4) % 4;
+        if (paddingLength > 0)
+            encoded += new string('=', paddingLength);
+        JsonObject? payload;
+        try
+        {
+            payload = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded))) as JsonObject;
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
             return false;
-        if (!int.TryParse(remainder[..separator], NumberStyles.None, CultureInfo.InvariantCulture, out offset) || offset < 0)
+        }
+        if (payload is null
+            || !TryReadInt(payload, "offset", out offset)
+            || offset < 0)
+        {
             return false;
-        fingerprint = remainder[(separator + 1)..];
-        return fingerprint.Length == 16 && fingerprint.All(Uri.IsHexDigit);
+        }
+        queryFingerprint = ReadString(payload, "query");
+        generationFingerprint = ReadString(payload, "generation");
+        resumePath = ReadString(payload, "resume_path");
+        if (payload["resume_line"] is JsonValue resumeValue && resumeValue.TryGetValue<int>(out var parsedResumeLine))
+            resumeLine = parsedResumeLine;
+        return IsCursorFingerprint(queryFingerprint)
+               && IsCursorFingerprint(generationFingerprint)
+               && (resumePath is null || resumePath.Length <= 4096)
+               && (!resumeLine.HasValue || resumeLine.Value > 0)
+               && (resumePath is null) == !resumeLine.HasValue;
     }
+
+    private static bool IsCursorFingerprint(string? fingerprint)
+        => fingerprint is { Length: 16 } && fingerprint.All(Uri.IsHexDigit);
 
     private static int WriteBoundedResponseUsageError(string message, string hint)
     {
@@ -1026,11 +1280,19 @@ internal static partial class JsonEnvelopeWrapper
         int? MaxJsonBytes,
         int PageLimit,
         int Offset,
-        string? CursorFingerprint)
+        string? CursorQueryFingerprint,
+        string? CursorGenerationFingerprint,
+        string? ResumePath,
+        int? ResumeLine)
     {
         public IReadOnlyList<string>? EffectiveFields(string command, string? primaryCollection)
         {
-            var selected = Fields ?? (CompactFieldsByCommand.TryGetValue(command, out var defaults) ? defaults : null);
+            var preserveFullDiscoveryRows = command is "search" or "languages";
+            var selected = Fields
+                           ?? ((!preserveFullDiscoveryRows || Compact)
+                               && CompactFieldsByCommand.TryGetValue(command, out var defaults)
+                               ? defaults
+                               : null);
             if (selected is null || primaryCollection is null)
                 return selected;
             var dotted = selected
@@ -1053,6 +1315,69 @@ internal static partial class JsonEnvelopeWrapper
 
     private readonly record struct ResponseCount(int TotalCount, bool Authoritative);
 
+    private readonly record struct ResponseSnapshot(
+        string GenerationFingerprint,
+        string? ResultStableAt);
+
+    private static ResponseSnapshot SafeReadResponseSnapshot(
+        string dbPath,
+        bool dbPathExplicit,
+        string appVersion)
+    {
+        try
+        {
+            if (!dbPathExplicit
+                && !dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+                && !File.Exists(dbPath))
+            {
+                return BuildFallbackResponseSnapshot(appVersion);
+            }
+
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            if (!db.TryValidateIsCodeIndexDb(out _))
+                return BuildFallbackResponseSnapshot(appVersion);
+            return BuildResponseSnapshot(new DbReader(db));
+        }
+        catch
+        {
+            return BuildFallbackResponseSnapshot(appVersion);
+        }
+    }
+
+    private static ResponseSnapshot BuildResponseSnapshot(DbReader reader)
+    {
+        var generation = reader.GetPaginationGeneration();
+        return new(
+            BuildResponseValueFingerprint(generation.Identity),
+            generation.StableAt);
+    }
+
+    private static ResponseSnapshot BuildFallbackResponseSnapshot(string appVersion)
+        => new(BuildResponseValueFingerprint("catalog\0" + appVersion), null);
+
+    private static string BuildResponseValueFingerprint(string value)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
+    }
+
+    internal static (string Cursor, string? ResultStableAt) BuildFindResumeCursor(
+        string[] args,
+        DbReader reader,
+        string resumePath,
+        int resumeLine)
+    {
+        var snapshot = BuildResponseSnapshot(reader);
+        return (
+            FormatResponseCursor(
+                offset: 0,
+                BuildResponseFingerprint("find", args),
+                snapshot.GenerationFingerprint,
+                resumePath,
+                resumeLine),
+            snapshot.ResultStableAt);
+    }
+
     internal static int GetBoundedResponseOffset(string command)
     {
         var execution = BoundedExecution.Value;
@@ -1060,6 +1385,39 @@ internal static partial class JsonEnvelopeWrapper
                && string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal)
             ? execution.Offset
             : 0;
+    }
+
+    internal static (string? Path, int? Line) GetBoundedFindResume()
+    {
+        var execution = BoundedExecution.Value;
+        return execution is not null && string.Equals(execution.Command, "find", StringComparison.Ordinal)
+            ? (execution.ResumePath, execution.ResumeLine)
+            : (null, null);
+    }
+
+    internal static int? GetBoundedResponseLimit(string command)
+    {
+        var execution = BoundedExecution.Value;
+        return execution is not null
+               && string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal)
+            ? execution.Limit
+            : null;
+    }
+
+    internal static void ReportBoundedResponseTotal(
+        string command,
+        int totalCount,
+        bool authoritative)
+    {
+        var execution = BoundedExecution.Value;
+        if (execution is null
+            || !string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        execution.ReportedTotalCount = Math.Max(0, totalCount);
+        execution.ReportedTotalCountAuthoritative = authoritative;
     }
 
     internal static string? GetBoundedMapCollection()
@@ -1095,15 +1453,10 @@ internal static partial class JsonEnvelopeWrapper
             : null;
     }
 
-    private static IDisposable EnterBoundedExecution(
-        string command,
-        int offset,
-        int limit,
-        IReadOnlyList<string>? fields,
-        bool compact)
+    private static IDisposable EnterBoundedExecution(BoundedExecutionContext execution)
     {
         var previous = BoundedExecution.Value;
-        BoundedExecution.Value = new BoundedExecutionContext(command, offset, limit, fields, compact);
+        BoundedExecution.Value = execution;
         return new BoundedExecutionScope(previous);
     }
 
@@ -1112,7 +1465,13 @@ internal static partial class JsonEnvelopeWrapper
         int Offset,
         int Limit,
         IReadOnlyList<string>? Fields,
-        bool Compact);
+        bool Compact,
+        string? ResumePath,
+        int? ResumeLine)
+    {
+        public int? ReportedTotalCount { get; set; }
+        public bool ReportedTotalCountAuthoritative { get; set; }
+    }
 
     private sealed class BoundedExecutionScope(BoundedExecutionContext? previous) : IDisposable
     {

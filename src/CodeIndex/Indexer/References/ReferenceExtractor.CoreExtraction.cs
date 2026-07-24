@@ -20,6 +20,12 @@ public static partial class ReferenceExtractor
         var isJsxFile = IsJsxFilePath(path);
         var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
 
+        if (language == "ambiguous_m")
+            return ExtractAmbiguousMReferences(request);
+
+        if (language is "clojure" or "erlang" or "ocaml" or "raku")
+            return ExtractFunctionalLanguageReferences(request);
+
         if (TryExtractStructuralMetadataReferences(
             fileId,
             language,
@@ -56,6 +62,9 @@ public static partial class ReferenceExtractor
         var csharpLinesInsideBlockComment = preparedInput.CSharpLinesInsideBlockComment;
         var referenceStructuralLines = preparedInput.ReferenceStructuralLines;
         var preparedLines = preparedInput.PreparedLines;
+        var scientificNativeDependencyLimit = ScientificNativeReferenceExtractor.Supports(language)
+            ? GetSafetyLimits().MaxNamesPerLine
+            : 0;
         var goImportBlockLines = preparedInput.GoImportBlockLines;
         var luaReferenceLines = preparedInput.LuaReferenceLines;
         var luaPreparedLines = preparedInput.LuaPreparedLines;
@@ -88,6 +97,11 @@ public static partial class ReferenceExtractor
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols, request.ReportDiagnostic);
+        var scientificDefinitionNameIndicesByLine = BuildScientificDefinitionNameIndicesByLine(
+            language,
+            lines,
+            symbols,
+            definitionNamesByLine);
         var allDefinitionNames = language == "stylus"
             ? BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic)
             : null;
@@ -1114,6 +1128,12 @@ public static partial class ReferenceExtractor
             : null;
         var sassStylusPreparedInBlockComment = false;
         var sassStylusOriginalInBlockComment = false;
+        var shaderState = ShaderReferenceExtractor.CreateState(
+            language,
+            preparedLines,
+            symbols,
+            workspaceSymbols,
+            request.ReportDiagnostic);
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1350,6 +1370,10 @@ public static partial class ReferenceExtractor
             var definitionNames = definitionNamesByLine.TryGetValue(lineNumber, out var namesOnLine)
                 ? namesOnLine
                 : null;
+            Dictionary<string, HashSet<int>>? scientificDefinitionNameIndices = null;
+            scientificDefinitionNameIndicesByLine?.TryGetValue(
+                lineNumber,
+                out scientificDefinitionNameIndices);
             Dictionary<string, int>? definitionNameIndices = null;
             List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
             if (language == "sql")
@@ -1478,6 +1502,20 @@ public static partial class ReferenceExtractor
                 return ResolveContainerForCall(column);
             }
 
+            if (shaderState is not null)
+            {
+                ShaderReferenceExtractor.EmitLineReferences(
+                    shaderState,
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
+
             if (isJsxFile && (language is "javascript" or "typescript"))
             {
                 var jsxTypeArgumentSkipUntil = -1;
@@ -1583,6 +1621,35 @@ public static partial class ReferenceExtractor
                         && preparedLine.IndexOf(rawName, StringComparison.Ordinal) == callIndex)
                     {
                         return true;
+                    }
+                }
+
+                if (scientificDefinitionNameIndices != null
+                    && scientificDefinitionNameIndices.TryGetValue(
+                        resolvedName,
+                        out var scientificDefinitionIndices))
+                {
+                    return scientificDefinitionIndices.Contains(callIndex);
+                }
+
+                if (language == "julia")
+                {
+                    var targetQualifier =
+                        ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                            language,
+                            preparedLine,
+                            callIndex);
+                    if (targetQualifier != null)
+                    {
+                        var qualifiedName = $"{targetQualifier}.{resolvedName}";
+                        var qualifiedDefinitionIndex =
+                            preparedLine.IndexOf(qualifiedName, StringComparison.Ordinal);
+                        if (qualifiedDefinitionIndex >= 0
+                            && callIndex == qualifiedDefinitionIndex + targetQualifier.Length + 1
+                            && definitionNames.Contains(qualifiedName))
+                        {
+                            return true;
+                        }
                     }
                 }
 
@@ -2274,7 +2341,15 @@ public static partial class ReferenceExtractor
             }
 
             void AddCallLikeReference(string name, int callIndex) =>
-                _ = TryAddCallLikeReference(name, callIndex);
+                _ = TryAddCallLikeReference(
+                    name,
+                    callIndex,
+                    ScientificNativeReferenceExtractor.Supports(language)
+                        ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                            language,
+                            preparedLine,
+                            callIndex)
+                        : null);
 
             void AddPowerShellParameterReference(string name, int callIndex)
             {
@@ -2282,7 +2357,10 @@ public static partial class ReferenceExtractor
                 AddReference(references, seen, fileId, name, callIndex, "parameter", context, lineNumber, callContainer, language);
             }
 
-            bool TryAddCallLikeReference(string name, int callIndex)
+            bool TryAddCallLikeReference(
+                string name,
+                int callIndex,
+                string? targetQualifier = null)
             {
                 var normalizedName = language == "fsharp" && FSharpReferenceExtractor.IsOperatorCallName(name)
                     ? $"operator {name}"
@@ -2302,6 +2380,8 @@ public static partial class ReferenceExtractor
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
                     return false;
                 if (language == "rust" && RustReferenceExtractor.IsDeriveAttributeCallSite(preparedLine, normalizedName, callIndex))
+                    return false;
+                if (language == "wgsl" && name.StartsWith('@'))
                     return false;
                 if (language == "kotlin" && KotlinReferenceExtractor.IsInfixFunctionDeclarationSite(preparedLine, callIndex))
                     return false;
@@ -2379,7 +2459,18 @@ public static partial class ReferenceExtractor
                 }
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        normalizedName,
+                        callIndex,
+                        "instantiate",
+                        context,
+                        lineNumber,
+                        callContainer,
+                        language,
+                        targetQualifier);
                     return true;
                 }
                 if (language == "rust"
@@ -2446,7 +2537,18 @@ public static partial class ReferenceExtractor
                     return true;
                 }
 
-                AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
+                AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    normalizedName,
+                    callIndex,
+                    "call",
+                    context,
+                    lineNumber,
+                    callContainer,
+                    ScientificNativeReferenceExtractor.Supports(language) ? language : null,
+                    targetQualifier: targetQualifier);
                 return true;
 
                 bool TryGetKnownPythonTypeCall(string candidate, out string canonicalName)
@@ -2542,6 +2644,26 @@ public static partial class ReferenceExtractor
             }
             else
             {
+                IReadOnlyList<ScientificNativeReferenceExtractor.DTemplateArgumentCallSpan>?
+                    dTemplateArgumentCallSpans = null;
+                if (ScientificNativeReferenceExtractor.Supports(language))
+                {
+                    dTemplateArgumentCallSpans = ScientificNativeReferenceExtractor.EmitReferences(
+                        language,
+                        preparedLine,
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        AddCallLikeReference,
+                        scientificNativeDependencyLimit,
+                        request.ReportDiagnostic);
+                }
+
+                var dTemplateArgumentCallSpanIndex = 0;
                 if (language is not ("tcl" or "prolog"))
                 {
                     foreach (Match match in CallRegex.Matches(callScanLine))
@@ -2550,6 +2672,20 @@ public static partial class ReferenceExtractor
                         var callIndex = match.Groups["name"].Index;
                         if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
                             continue;
+                        if (language == "d"
+                            && ScientificNativeReferenceExtractor.IsDTemplateArgumentCall(
+                                dTemplateArgumentCallSpans,
+                                ref dTemplateArgumentCallSpanIndex,
+                                callIndex))
+                        {
+                            continue;
+                        }
+                        if (language == "ada"
+                            && callIndex > 0
+                            && preparedLine[callIndex - 1] == '\'')
+                        {
+                            continue;
+                        }
                         if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
                             continue;
                         if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
@@ -2571,7 +2707,15 @@ public static partial class ReferenceExtractor
                             continue;
                         }
                         GetMatchedCallIndices().Add(callIndex);
-                        if (TryAddCallLikeReference(name, callIndex))
+                        if (TryAddCallLikeReference(
+                                name,
+                                callIndex,
+                                ScientificNativeReferenceExtractor.Supports(language)
+                                    ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                                        language,
+                                        preparedLine,
+                                        callIndex)
+                                    : null))
                         {
                             EmitGenericInvocationTypeArgumentReferences(
                                 language,
@@ -3459,5 +3603,75 @@ public static partial class ReferenceExtractor
         return references;
     }
 
+    private static List<ReferenceRecord> ExtractAmbiguousMReferences(ReferenceExtractionContext request)
+    {
+        if (string.IsNullOrEmpty(request.Content)
+            || (request.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(request.Content))
+            || (request.ConflictMarkerLine ?? FileIndexer.GetConflictMarkerLine(request.Content)) > 0)
+        {
+            return [];
+        }
+
+        var normalizedContent = request.ContentIsNormalized
+            ? request.Content
+            : FileIndexer.NormalizeContentForPrepass(request.Content);
+        var originalLines = SplitContentLines(normalizedContent);
+        var matlabContent = AmbiguousMContentMasker.MaskComments(
+            normalizedContent,
+            maskMatlabComments: true,
+            maskObjectiveCComments: true);
+        var objectiveCContent = AmbiguousMContentMasker.MaskComments(
+            normalizedContent,
+            maskMatlabComments: true,
+            maskObjectiveCComments: true,
+            preserveObjectiveCModuloExpressions: true);
+        var matlabReferences = ExtractCore(request with
+        {
+            Language = "matlab",
+            Content = matlabContent,
+            RequestedLanguage = "ambiguous_m",
+            ContentIsNormalized = true,
+            HasOversizeLine = false,
+            ConflictMarkerLine = 0,
+        });
+        var objectiveCReferences = ExtractCore(request with
+        {
+            Language = "objc",
+            Content = objectiveCContent,
+            RequestedLanguage = "ambiguous_m",
+            ContentIsNormalized = true,
+            HasOversizeLine = false,
+            ConflictMarkerLine = 0,
+        });
+        var merged = CreateReferenceList(
+            request.MaxReferenceCount,
+            Math.Min(matlabReferences.Count + objectiveCReferences.Count, ReferenceListInitialCapacityMax));
+        var seen = new ReferenceDedupeSet(merged.Capacity);
+
+        AddUnique(matlabReferences);
+        AddUnique(objectiveCReferences);
+        return merged;
+
+        void AddUnique(IReadOnlyList<ReferenceRecord> candidates)
+        {
+            for (var index = 0; index < candidates.Count && !ReferenceLimitReached(merged); index++)
+            {
+                var candidate = candidates[index];
+                if (candidate.Line > 0 && candidate.Line <= originalLines.Length)
+                    candidate.Context = originalLines[candidate.Line - 1].Trim();
+                var key = CreateReferenceDedupeKey(
+                    candidate.FileId,
+                    "ambiguous_m",
+                    candidate.Line,
+                    candidate.Column,
+                    candidate.ReferenceKind,
+                    candidate.SymbolName,
+                    candidate.ContainerKind,
+                    candidate.ContainerName);
+                if (seen.Add(key))
+                    TryAddReference(merged, candidate);
+            }
+        }
+    }
 
 }

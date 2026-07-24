@@ -12591,10 +12591,17 @@ public partial class SymbolExtractorTests
         Assert.Equal(SymbolExtractor.DynamicReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("groovy"));
         Assert.Equal(SymbolExtractor.DynamicReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("tcl"));
         Assert.True(SymbolExtractor.DynamicReferenceGraphContractVersion > SymbolExtractor.DynamicLanguageContractVersion);
-        Assert.Equal(SymbolExtractor.DynamicLanguageContractVersion, SymbolExtractor.GetContractVersion("julia"));
         Assert.Equal(SymbolExtractor.PrologReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("prolog"));
         Assert.Equal(SymbolExtractor.PrologReferenceGraphContractVersion, SymbolExtractor.GetContractVersion("ambiguous_pl"));
         Assert.True(SymbolExtractor.PrologReferenceGraphContractVersion > SymbolExtractor.DefaultContractVersion);
+        foreach (var language in new[] { "ada", "ambiguous_m", "cython", "d", "julia", "matlab", "nim", "objc" })
+        {
+            Assert.Equal(
+                SymbolExtractor.ScientificNativeGraphContractVersion,
+                SymbolExtractor.GetContractVersion(language));
+        }
+        Assert.True(SymbolExtractor.ScientificNativeGraphContractVersion > SymbolExtractor.DynamicLanguageContractVersion);
+        Assert.True(SymbolExtractor.ScientificNativeGraphContractVersion > SymbolExtractor.SystemsLanguageContractVersion);
     }
 
     [Fact]

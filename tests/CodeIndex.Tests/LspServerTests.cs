@@ -22,6 +22,53 @@ public class LspServerTests
     }
 
     [Fact]
+    public void TryReadAllPositionLinesFromFile_PreservesUtf8AndRejectsGrowthAfterLengthCheck_Issue4750()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_growing_position_file");
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        try
+        {
+            var unicodePath = Path.Combine(projectRoot, "unicode.cs");
+            var unicodeText = new string('x', BoundedFile.SmallReadBufferSize - 1) + "日本語\r\n次の行\n";
+            File.WriteAllText(unicodePath, unicodeText, utf8);
+
+            Assert.True(LspServer.TryReadAllPositionLinesFromFile(
+                unicodePath,
+                out var unicodeLines,
+                out var unicodeFailureReason));
+            Assert.Null(unicodeFailureReason);
+            Assert.Equal(
+                new string?[] { new string('x', BoundedFile.SmallReadBufferSize - 1) + "日本語", "次の行", string.Empty },
+                unicodeLines);
+
+            const string prefix = "日本語\n";
+            var growingPath = Path.Combine(projectRoot, "growing.cs");
+            var initialText = prefix + new string(
+                'x',
+                LspServer.MaxPositionDocumentBytes - 1 - utf8.GetByteCount(prefix));
+            File.WriteAllText(growingPath, initialText, utf8);
+            Assert.Equal(LspServer.MaxPositionDocumentBytes - 1, new FileInfo(growingPath).Length);
+            LspServer.PositionFileLengthCheckedForTesting = checkedPath =>
+            {
+                if (checkedPath == growingPath)
+                    File.AppendAllText(checkedPath, "界", utf8);
+            };
+
+            Assert.False(LspServer.TryReadAllPositionLinesFromFile(
+                growingPath,
+                out var growingLines,
+                out var growingFailureReason));
+            Assert.Empty(growingLines);
+            Assert.Equal("position_file_too_large", growingFailureReason);
+        }
+        finally
+        {
+            LspServer.PositionFileLengthCheckedForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void TryReadMessage_ReadsContentLengthFramedPayload()
     {
         const string payload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}";
@@ -1446,6 +1493,8 @@ public class LspServerTests
     public async Task RunAsync_ServerBusyBackpressureRetainsEveryRejectedResponse_Issue4721()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_busy_response_backpressure");
+        using var requestEntered = new ManualResetEventSlim();
+        using var requestRelease = new ManualResetEventSlim();
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1454,8 +1503,8 @@ public class LspServerTests
             {
                 BeforeSymbolRequestForTesting = cancellationToken =>
                 {
-                    cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
-                    cancellationToken.ThrowIfCancellationRequested();
+                    requestEntered.Set();
+                    requestRelease.Wait(cancellationToken);
                 },
             };
             var frames = new StringBuilder();
@@ -1473,16 +1522,21 @@ public class LspServerTests
                     @params = new { },
                 })));
             }
-            frames.Append(Frame(
+            const string cancel =
                 """
                 {"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"active-backpressure-4721"}}
-                """));
-            using var input = new MemoryStream(Encoding.UTF8.GetBytes(frames.ToString()));
+                """;
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(frames.ToString()),
+                Encoding.UTF8.GetBytes(Frame(cancel)));
             using var output = new FirstWriteGateMemoryStream();
 
             var runTask = server.RunAsync(input, output);
 
+            Assert.True(requestEntered.Wait(TimeSpan.FromSeconds(5)));
             await output.WaitForBlockedWriteAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(runTask.IsCompleted);
+            input.ReleaseSuffix();
             output.ReleaseWrites();
             Assert.Equal(CommandExitCodes.Success, await runTask.WaitAsync(TimeSpan.FromSeconds(5)));
 
@@ -1504,6 +1558,7 @@ public class LspServerTests
         }
         finally
         {
+            requestRelease.Set();
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

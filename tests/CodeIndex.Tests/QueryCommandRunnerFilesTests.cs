@@ -3953,7 +3953,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunFiles_ExcludeTestsAppliesProductionSourceDefaults_Issue3918()
+    public void RunFilesAndMap_ExcludeTestsApplyTheSameSourceScope_Issues3918_4754()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_exclude_tests_source_3918");
         try
@@ -3964,17 +3964,42 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App {}\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "tests/AppTests.cs", "csharp", "class AppTests {}\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
-                ["--db", dbPath, "--json=array", "--exclude-tests", "--limit", "10"],
-                _jsonOptions));
+            var scopes = new[]
+            {
+                (AdditionalArgs: Array.Empty<string>(), ExpectedPath: "src/App.cs"),
+                (AdditionalArgs: new[] { "--path", ".agent_harness/**" }, ExpectedPath: ".agent_harness/command_guard_core.py")
+            };
 
-            using var document = ParseJsonOutput(stdout);
-            var files = document.RootElement.EnumerateArray().ToArray();
-            var file = Assert.Single(files);
+            foreach (var scope in scopes)
+            {
+                var filesArgs = new[] { "--db", dbPath, "--json=array", "--exclude-tests", "--limit", "10" }
+                    .Concat(scope.AdditionalArgs)
+                    .ToArray();
+                var (filesExitCode, filesStdout, filesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                    filesArgs,
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("src/App.cs", file.GetProperty("path").GetString());
+                using var filesDocument = ParseJsonOutput(filesStdout);
+                var files = filesDocument.RootElement.EnumerateArray().ToArray();
+                var file = Assert.Single(files);
+
+                Assert.Equal(CommandExitCodes.Success, filesExitCode);
+                Assert.Equal(string.Empty, filesStderr);
+                Assert.Equal(scope.ExpectedPath, file.GetProperty("path").GetString());
+
+                var mapArgs = new[] { "--db", dbPath, "--json", "--sections", "summary", "--exclude-tests" }
+                    .Concat(scope.AdditionalArgs)
+                    .ToArray();
+                var (mapExitCode, mapStdout, mapStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                    mapArgs,
+                    _jsonOptions));
+
+                using var mapDocument = ParseJsonOutput(mapStdout);
+
+                Assert.Equal(CommandExitCodes.Success, mapExitCode);
+                Assert.Equal(string.Empty, mapStderr);
+                Assert.Equal(files.Length, mapDocument.RootElement.GetProperty("file_count").GetInt32());
+            }
         }
         finally
         {

@@ -10,6 +10,107 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunReferences_ConfigLanguageSelectsRulesReferences_Issue4740()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_config_language");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "rules/policy.rules",
+                "config",
+                """prefix_rule(include = ["rules/common.rules"], decision = "allow")""");
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["rules/common.rules", "--db", dbPath, "--json", "--lang", "config", "--exact-name"],
+                _jsonOptions));
+            var rows = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var row = Assert.Single(rows);
+            Assert.Equal("config", row.GetProperty("lang").GetString());
+            Assert.Equal("rules/common.rules", row.GetProperty("symbol_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GraphQueries_ReportMissingHdlGraphContractWithoutExactMode_Issue4742()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hdl_graph_contract_queries");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "top.v",
+                "verilog",
+                """
+                module child;
+                endmodule
+                module top;
+                    child u_child();
+                endmodule
+                """);
+            MarkGraphAndFoldReady(dbPath);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM symbol_references;
+                    DELETE FROM codeindex_meta WHERE key = 'hdl_graph_contract_version';
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var queryResults = new[]
+            {
+                CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    ["child", "--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunCallers(
+                    ["child", "--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunCallees(
+                    ["child", "--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunImpact(
+                    ["child", "--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunUnused(
+                    ["--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunDeps(
+                    ["--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+            };
+
+            foreach (var (exitCode, stdout, _) in queryResults)
+            {
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+                Assert.True(json.GetProperty("degraded").GetBoolean());
+                Assert.False(json.GetProperty("hdl_graph_contract_ready").GetBoolean());
+                Assert.Contains(
+                    "hdl_graph_contract_ready=false",
+                    json.GetProperty("hdl_graph_contract_degraded_reason").GetString(),
+                    StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_AllowsExcludePathValueThatLooksLikePreviewOption()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_preview_like_exclude_path_value");
@@ -1555,12 +1656,12 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["MissingSymbol", "--db", dbPath, "--lang", "toml"],
+                ["MissingSymbol", "--db", dbPath, "--lang", "text"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No references found.", stderr);
-            Assert.Contains("call-graph queries are not indexed for 'toml'", stderr);
+            Assert.Contains("call-graph queries are not indexed for 'text'", stderr);
         }
         finally
         {
@@ -2071,6 +2172,91 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
             Assert.False(json.TryGetProperty("graph_degraded", out _));
             Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_ReturnsPersistedHdlGraphEdges_Issue4742()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_hdl_references");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var fixtures = new[]
+            {
+                (
+                    Path: "src/top.v",
+                    Language: "verilog",
+                    Content: """
+                        module fifo;
+                        endmodule
+                        module verilog_top;
+                            fifo u_fifo ();
+                        endmodule
+                        """,
+                    SymbolName: "fifo",
+                    ReferenceKind: "instantiate",
+                    ContainerName: "verilog_top"),
+                (
+                    Path: "src/top.sv",
+                    Language: "systemverilog",
+                    Content: """
+                        package util_pkg;
+                        endpackage
+                        module systemverilog_top;
+                            import util_pkg::*;
+                        endmodule
+                        """,
+                    SymbolName: "util_pkg",
+                    ReferenceKind: "import",
+                    ContainerName: "systemverilog_top"),
+                (
+                    Path: "src/top.vhd",
+                    Language: "vhdl",
+                    Content: """
+                        entity Child is
+                        end Child;
+                        entity VhdlTop is
+                        end VhdlTop;
+                        architecture structural of VhdlTop is
+                        begin
+                            u_child : entity work.Child;
+                        end structural;
+                        """,
+                    SymbolName: "Child",
+                    ReferenceKind: "instantiate",
+                    ContainerName: "structural"),
+            };
+
+            foreach (var fixture in fixtures)
+                TestProjectHelper.InsertIndexedFile(dbPath, fixture.Path, fixture.Language, fixture.Content);
+            MarkGraphAndFoldReady(dbPath);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                new DbWriter(db).MarkHdlGraphContractReady();
+
+            foreach (var fixture in fixtures)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    [fixture.SymbolName, "--db", dbPath, "--json", "--lang", fixture.Language, "--exact"],
+                    _jsonOptions));
+
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(fixture.Path, json.GetProperty("path").GetString());
+                Assert.Equal(fixture.Language, json.GetProperty("lang").GetString());
+                Assert.Equal(fixture.SymbolName, json.GetProperty("symbol_name").GetString());
+                Assert.Equal(fixture.ReferenceKind, json.GetProperty("reference_kind").GetString());
+                Assert.Equal(fixture.ContainerName, json.GetProperty("container_name").GetString());
+                Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+                Assert.False(json.TryGetProperty("graph_degraded", out _));
+            }
         }
         finally
         {

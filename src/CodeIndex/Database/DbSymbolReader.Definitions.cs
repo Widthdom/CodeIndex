@@ -335,8 +335,8 @@ public partial class DbReader
                         : " AND ((s.container_qualified_name = @queryRustContainer COLLATE NOCASE OR s.container_name = @queryRustContainer COLLATE NOCASE) AND s.name = @queryRustLeaf COLLATE NOCASE)"
                     : _foldReady
                         ? allowLeafFallback
-                            ? " AND (s.name_folded = @query OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
-                            : $" AND (s.name_folded = @query OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
+                            ? $" AND ({BuildPersistedFoldedNameMatchSql("s.name_folded", "@query")} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
+                            : $" AND ({BuildPersistedFoldedNameMatchSql("s.name_folded", "@query")} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
                             ? " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
                             : $" AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
@@ -367,9 +367,12 @@ public partial class DbReader
             var paramValue = !exact
                 ? $"%{EscapeLikeQuery(normalizedQuery)}%"
                 : _foldReady
-                    ? NameFold.Fold(normalizedQuery) ?? normalizedQuery
+                    ? FoldNameForLanguage(normalizedQuery, lang)
                     : normalizedQuery;
-            SqliteCommandPolicy.Add(cmd, "@query", paramValue);
+            if (exact && _foldReady)
+                AddPersistedFoldedNameQueryParameters(cmd, "@query", normalizedQuery, lang);
+            else
+                SqliteCommandPolicy.Add(cmd, "@query", paramValue);
             SqliteCommandPolicy.Add(cmd, "@queryNormalized", SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
             SqliteCommandPolicy.Add(cmd, "@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(normalizedQuery)) ?? SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
             SqliteCommandPolicy.Add(cmd, "@queryLeaf", SqlNameResolver.GetLeafName(normalizedQuery));

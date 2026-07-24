@@ -1655,6 +1655,7 @@ public partial class QueryCommandRunnerTests
     [InlineData("gnu octave", "matlab")]
     [InlineData("swi-prolog", "prolog")]
     [InlineData("swipl", "prolog")]
+    [InlineData("config", "config")]
     public void NormalizeQueryLanguage_MapsCommonAliasesToCanonicalLanguages(string input, string expected)
     {
         Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));
@@ -2709,7 +2710,7 @@ public partial class QueryCommandRunnerTests
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_format_count_issue4316");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.pl", "prolog", "main :- true.\n");
 
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
             QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
@@ -2728,6 +2729,35 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("missing-any", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
         Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("missing_any").GetInt32());
         Assert.False(root.TryGetProperty("languages", out _));
+    }
+
+    [Fact]
+    public void RunLanguages_FormatCountIgnoresRowLimit_Issue4730()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_count_limit_issue4730");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
+
+        var (baselineExitCode, baselineStdout, baselineStderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--format", "count"], _jsonOptions));
+        var (limitedExitCode, limitedStdout, limitedStderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--format", "count", "--limit", "1"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, baselineExitCode);
+        Assert.Equal(CommandExitCodes.Success, limitedExitCode);
+        Assert.Equal(string.Empty, baselineStderr);
+        Assert.Equal(string.Empty, limitedStderr);
+        using var baselineDocument = ParseJsonOutput(baselineStdout);
+        using var limitedDocument = ParseJsonOutput(limitedStdout);
+        var baseline = baselineDocument.RootElement;
+        var limited = limitedDocument.RootElement;
+
+        Assert.Equal(2, baseline.GetProperty("count").GetInt32());
+        Assert.Equal(baseline.GetProperty("count").GetInt32(), limited.GetProperty("count").GetInt32());
+        Assert.Equal(
+            baseline.GetProperty("capability_counts").GetRawText(),
+            limited.GetProperty("capability_counts").GetRawText());
     }
 
     [Fact]
@@ -2761,15 +2791,15 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
-        var adaGuidance = languages["ada"].GetProperty("unsupported_guidance").EnumerateArray().ToList();
+        var prologGuidance = languages["prolog"].GetProperty("unsupported_guidance").EnumerateArray().ToList();
 
-        var referenceGuidance = adaGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "references");
-        Assert.Contains("Reference extraction is not advertised for 'ada'", referenceGuidance.GetProperty("message").GetString());
+        var referenceGuidance = prologGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "references");
+        Assert.Contains("Reference extraction is not advertised for 'prolog'", referenceGuidance.GetProperty("message").GetString());
         var referenceCommands = referenceGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
         Assert.Contains("search", referenceCommands);
         Assert.Contains("definition", referenceCommands);
 
-        var graphGuidance = adaGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "graph");
+        var graphGuidance = prologGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "graph");
         Assert.Contains("empty callers, callees, or impact results are not authoritative", graphGuidance.GetProperty("message").GetString());
         var graphCommands = graphGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
         Assert.Contains("search", graphCommands);
@@ -2855,7 +2885,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsCythonAndCudaSymbolExtraction_Issue3530()
+    public void RunLanguages_JsonReportsCythonAndCudaReferences_Issues4737And4738()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
@@ -2868,15 +2898,17 @@ public partial class QueryCommandRunnerTests
         var cuda = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "cuda");
 
         Assert.True(cython.GetProperty("symbol_extraction").GetBoolean());
-        Assert.False(cython.GetProperty("reference_extraction").GetBoolean());
-        Assert.False(cython.GetProperty("graph_queries").GetBoolean());
+        Assert.True(cython.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(cython.GetProperty("graph_queries").GetBoolean());
         Assert.True(cuda.GetProperty("symbol_extraction").GetBoolean());
-        Assert.False(cuda.GetProperty("reference_extraction").GetBoolean());
-        Assert.False(cuda.GetProperty("graph_queries").GetBoolean());
+        Assert.True(cuda.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(cuda.GetProperty("graph_queries").GetBoolean());
+        Assert.Empty(cuda.GetProperty("capability_gaps").EnumerateArray());
+        Assert.Empty(cuda.GetProperty("unsupported_guidance").EnumerateArray());
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsHdlSymbolExtraction_Issue3532()
+    public void RunLanguages_JsonReportsHdlGraphExtraction_Issue3532_Issue4742()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
@@ -2889,13 +2921,13 @@ public partial class QueryCommandRunnerTests
         {
             var entry = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == language);
             Assert.True(entry.GetProperty("symbol_extraction").GetBoolean());
-            Assert.False(entry.GetProperty("reference_extraction").GetBoolean());
-            Assert.False(entry.GetProperty("graph_queries").GetBoolean());
+            Assert.True(entry.GetProperty("reference_extraction").GetBoolean());
+            Assert.True(entry.GetProperty("graph_queries").GetBoolean());
         }
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsShaderSymbolExtraction_Issue3533()
+    public void RunLanguages_JsonReportsShaderReferenceExtraction_Issue4737()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
@@ -2908,8 +2940,10 @@ public partial class QueryCommandRunnerTests
         {
             var entry = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == language);
             Assert.True(entry.GetProperty("symbol_extraction").GetBoolean());
-            Assert.False(entry.GetProperty("reference_extraction").GetBoolean());
-            Assert.False(entry.GetProperty("graph_queries").GetBoolean());
+            Assert.True(entry.GetProperty("reference_extraction").GetBoolean());
+            Assert.True(entry.GetProperty("graph_queries").GetBoolean());
+            Assert.Empty(entry.GetProperty("capability_gaps").EnumerateArray());
+            Assert.Empty(entry.GetProperty("unsupported_guidance").EnumerateArray());
         }
     }
 
@@ -3145,7 +3179,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsMatlabSymbolOnlyAndPrologGraphCapabilities_Issues4612And4746()
+    public void RunLanguages_JsonReportsScientificNativeAndPrologReferenceCapabilities_Issues4738And4746()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
@@ -3155,16 +3189,19 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
-        Assert.True(languages["matlab"].GetProperty("symbol_extraction").GetBoolean());
-        Assert.False(languages["matlab"].GetProperty("reference_extraction").GetBoolean());
-        Assert.False(languages["matlab"].GetProperty("graph_queries").GetBoolean());
-        Assert.True(languages["prolog"].GetProperty("symbol_extraction").GetBoolean());
-        Assert.True(languages["prolog"].GetProperty("reference_extraction").GetBoolean());
-        Assert.True(languages["prolog"].GetProperty("graph_queries").GetBoolean());
-        Assert.True(languages["ambiguous_pl"].GetProperty("symbol_extraction").GetBoolean());
-        Assert.True(languages["ambiguous_pl"].GetProperty("reference_extraction").GetBoolean());
-        Assert.True(languages["ambiguous_pl"].GetProperty("graph_queries").GetBoolean());
+        foreach (var language in new[] { "ada", "ambiguous_m", "cython", "d", "julia", "matlab", "nim" })
+        {
+            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean());
+            Assert.True(languages[language].GetProperty("reference_extraction").GetBoolean());
+            Assert.True(languages[language].GetProperty("graph_queries").GetBoolean());
+        }
 
+        foreach (var language in new[] { "prolog", "ambiguous_pl" })
+        {
+            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean());
+            Assert.True(languages[language].GetProperty("reference_extraction").GetBoolean());
+            Assert.True(languages[language].GetProperty("graph_queries").GetBoolean());
+        }
         Assert.Contains(".m", languages["ambiguous_m"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains(".pl", languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
     }
@@ -3284,13 +3321,11 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
+    public void RunLanguages_Json_ExtractorBucketsAdvertiseAccurateGraphSupport_Issue4743()
     {
-        // Languages that have conservative symbol extractors but no dedicated reference
-        // extractors must advertise symbol_extraction=true while keeping graph/reference
-        // support disabled.
-        // 保守的な symbol extractor はあるが専用の reference extractor がない言語は、
-        // symbol_extraction=true としつつ graph/reference 対応を無効のまま広告する。
+        // Every extractor bucket must advertise the graph support implemented by its
+        // dedicated reference extractor.
+        // 各 extractor bucket は専用 reference extractor の実装どおりに graph 対応を広告する。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -3299,21 +3334,17 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var symbolOnly in new[] { "ada", "clojure", "d", "erlang", "julia", "nim", "ocaml", "raku" })
+        foreach (var functionalGraphLanguage in new[] { "clojure", "erlang", "ocaml", "raku" })
         {
-            Assert.True(languages.ContainsKey(symbolOnly), $"expected '{symbolOnly}' to be listed");
-            var entry = languages[symbolOnly];
+            Assert.True(languages.ContainsKey(functionalGraphLanguage), $"expected '{functionalGraphLanguage}' to be listed");
+            var entry = languages[functionalGraphLanguage];
             Assert.True(entry.GetProperty("symbol_extraction").GetBoolean(),
-                $"{symbolOnly} must advertise symbol_extraction=true");
-            Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
-                $"{symbolOnly} must advertise reference_extraction=false");
-            Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
-                $"{symbolOnly} must advertise graph_queries=false");
-
-            var gaps = entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()).ToList();
-            Assert.DoesNotContain("missing-symbols", gaps);
-            Assert.Contains("missing-references", gaps);
-            Assert.Contains("missing-graph", gaps);
+                $"{functionalGraphLanguage} must advertise symbol_extraction=true");
+            Assert.True(entry.GetProperty("reference_extraction").GetBoolean(),
+                $"{functionalGraphLanguage} must advertise reference_extraction=true");
+            Assert.True(entry.GetProperty("graph_queries").GetBoolean(),
+                $"{functionalGraphLanguage} must advertise graph_queries=true");
+            Assert.Empty(entry.GetProperty("capability_gaps").EnumerateArray());
         }
 
         var yamlAliases = languages["yaml"].GetProperty("aliases").EnumerateArray()
@@ -3393,6 +3424,28 @@ public partial class QueryCommandRunnerTests
             Assert.True(languages[markupSchema].GetProperty("graph_queries").GetBoolean(),
                 $"{markupSchema} must advertise graph_queries=true");
             Assert.Empty(languages[markupSchema].GetProperty("capability_gaps").EnumerateArray());
+        }
+
+        foreach (var repositoryMetadata in new[]
+                 {
+                     "toml",
+                     "jsonl",
+                     "gitignore",
+                     "gitattributes",
+                     "editorconfig",
+                     "dockerignore",
+                     "config",
+                     "app_manifest",
+                 })
+        {
+            Assert.True(languages.ContainsKey(repositoryMetadata), $"expected '{repositoryMetadata}' to be listed");
+            Assert.True(languages[repositoryMetadata].GetProperty("symbol_extraction").GetBoolean(),
+                $"{repositoryMetadata} must advertise symbol_extraction=true");
+            Assert.True(languages[repositoryMetadata].GetProperty("reference_extraction").GetBoolean(),
+                $"{repositoryMetadata} must advertise reference_extraction=true");
+            Assert.True(languages[repositoryMetadata].GetProperty("graph_queries").GetBoolean(),
+                $"{repositoryMetadata} must advertise graph_queries=true");
+            Assert.Empty(languages[repositoryMetadata].GetProperty("capability_gaps").EnumerateArray());
         }
 
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
@@ -4079,11 +4132,15 @@ public partial class QueryCommandRunnerTests
     [InlineData("callers", "type_reference")]
     [InlineData("callers", "type_tag")]
     [InlineData("callers", "import")]
+    [InlineData("callers", "binding")]
+    [InlineData("callers", "resource_reference")]
     [InlineData("callees", "attribute")]
     [InlineData("callees", "annotation")]
     [InlineData("callees", "type_reference")]
     [InlineData("callees", "type_tag")]
     [InlineData("callees", "import")]
+    [InlineData("callees", "binding")]
+    [InlineData("callees", "resource_reference")]
     public void RunCallersCallees_RejectNonCallGraphKind_WithUsageError(string command, string kind)
     {
         // issue #293 + issue #444: `callers` / `callees` must reject non-call-graph reference
@@ -4095,9 +4152,10 @@ public partial class QueryCommandRunnerTests
         // (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) and
         // are not runtime calls, so `callers Foo --kind type_reference` would misreport type
         // mentions as caller edges. `type_tag` rows describe JavaScript/TypeScript discriminant
-        // narrowing rather than runtime calls. `import` rows are structural dependency edges rather
-        // than runtime calls, so callers/callees cannot answer them as graph edges. The correct path
-        // for these kinds is `references <name> --kind attribute|annotation|type_reference|type_tag|import`.
+        // narrowing rather than runtime calls. `import` rows are structural dependency edges and
+        // shader `binding` / `resource_reference` rows are declaration/use metadata rather than
+        // runtime calls, so callers/callees cannot answer them as graph edges. The correct path for
+        // these kinds is `references <name> --kind <kind>`.
         // issue #293 + issue #444 補足: `callers` / `callees` は CLI 境界で非 call-graph な
         // reference kind を必ず弾く。metadata (`attribute` / `annotation`) 行は注釈対象ではなく
         // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
@@ -4106,9 +4164,10 @@ public partial class QueryCommandRunnerTests
         // 宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な
         // 型言及であり実行時呼び出しではないので、`callers Foo --kind type_reference` は型言及を
         // caller edge として誤って返す。`type_tag` 行も JavaScript / TypeScript の discriminant
-        // narrowing を表し runtime call ではない。`import` 行は構造的な dependency edge なので
+        // narrowing を表し runtime call ではない。`import` 行は構造的な dependency edge、
+        // shader の `binding` / `resource_reference` 行は宣言 / 利用 metadata なので、
         // callers/callees では graph edge として答えられない。正しい経路は
-        // `references <name> --kind attribute|annotation|type_reference|type_tag|import`。
+        // `references <name> --kind <kind>`。
         using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_{command}_reject_kind_{kind}");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
@@ -4951,7 +5010,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, outlineExitCode);
             Assert.Contains("outline --cursor must use an outline pagination cursor", outlineStderr, StringComparison.Ordinal);
             Assert.Equal(CommandExitCodes.UsageError, unusedExitCode);
-            Assert.Contains("cursor for unused must use the `unused:<offset>` cursor", unusedStderr, StringComparison.Ordinal);
+            Assert.Contains("cursor for unused must use the opaque cursor returned by a previous unused response", unusedStderr, StringComparison.Ordinal);
         }
         finally
         {
