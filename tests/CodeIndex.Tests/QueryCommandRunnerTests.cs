@@ -1655,6 +1655,7 @@ public partial class QueryCommandRunnerTests
     [InlineData("gnu octave", "matlab")]
     [InlineData("swi-prolog", "prolog")]
     [InlineData("swipl", "prolog")]
+    [InlineData("config", "config")]
     public void NormalizeQueryLanguage_MapsCommonAliasesToCanonicalLanguages(string input, string expected)
     {
         Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));

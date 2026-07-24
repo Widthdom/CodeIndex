@@ -139,7 +139,7 @@ public static partial class SymbolExtractor
                 if (trimmed[0] == '#')
                     continue;
 
-                if (TryGetConfigRuleName(trimmed, out var configRuleName))
+                if (TryGetConfigRule(trimmed, out var configRuleName, out var inlineArguments))
                 {
                     containerName = $"{configRuleName}[{configRuleIndex++}]";
                     containerKind = "rule";
@@ -156,6 +156,39 @@ public static partial class SymbolExtractor
                         ref truncated))
                     {
                         break;
+                    }
+
+                    if (inlineArguments != null)
+                    {
+                        foreach (var argument in EnumerateConfigRuleArguments(inlineArguments))
+                        {
+                            if (!TryGetMetadataAssignment(
+                                argument,
+                                allowColon: false,
+                                out var argumentKey,
+                                out _))
+                            {
+                                continue;
+                            }
+
+                            if (!TryAddRepositoryMetadataSymbol(
+                                fileId,
+                                "property",
+                                $"{containerName}.{argumentKey}",
+                                lineNumber,
+                                lines,
+                                containerName,
+                                containerKind,
+                                "config_key",
+                                symbols,
+                                ref truncated))
+                            {
+                                return symbols;
+                            }
+                        }
+
+                        containerName = null;
+                        containerKind = null;
                     }
                     continue;
                 }
@@ -261,7 +294,7 @@ public static partial class SymbolExtractor
         return true;
     }
 
-    private static bool TryGetGitAttributesTokens(
+    internal static bool TryGetGitAttributesTokens(
         ReadOnlySpan<char> trimmed,
         out string pattern,
         out string[] attributes)
@@ -271,14 +304,111 @@ public static partial class SymbolExtractor
         if (trimmed.IsEmpty || trimmed[0] == '#')
             return false;
 
-        var tokens = trimmed.ToString().Split(
+        var patternEnd = 0;
+        if (trimmed[0] == '"')
+        {
+            var builder = new System.Text.StringBuilder(trimmed.Length);
+            for (var index = 1; index < trimmed.Length; index++)
+            {
+                var character = trimmed[index];
+                if (character == '\\')
+                {
+                    if (++index >= trimmed.Length
+                        || !TryAppendGitAttributesEscape(trimmed, ref index, builder))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
+                if (character == '"')
+                {
+                    patternEnd = index + 1;
+                    break;
+                }
+
+                builder.Append(character);
+            }
+
+            if (patternEnd == 0
+                || builder.Length == 0
+                || builder.ToString().Any(char.IsControl))
+            {
+                return false;
+            }
+            pattern = builder.ToString();
+        }
+        else
+        {
+            while (patternEnd < trimmed.Length && !char.IsWhiteSpace(trimmed[patternEnd]))
+                patternEnd++;
+            if (patternEnd == 0)
+                return false;
+            pattern = trimmed[..patternEnd].ToString();
+        }
+
+        var tokens = trimmed[patternEnd..].ToString().Split(
             [' ', '\t'],
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (tokens.Length < 2)
+        if (tokens.Length == 0)
             return false;
 
-        pattern = tokens[0];
-        attributes = tokens[1..];
+        attributes = tokens;
+        return true;
+    }
+
+    private static bool TryAppendGitAttributesEscape(
+        ReadOnlySpan<char> value,
+        ref int index,
+        System.Text.StringBuilder builder)
+    {
+        var escaped = value[index];
+        switch (escaped)
+        {
+            case '\\':
+            case '"':
+                builder.Append(escaped);
+                return true;
+            case 'a':
+                builder.Append('\a');
+                return true;
+            case 'b':
+                builder.Append('\b');
+                return true;
+            case 't':
+                builder.Append('\t');
+                return true;
+            case 'n':
+                builder.Append('\n');
+                return true;
+            case 'v':
+                builder.Append('\v');
+                return true;
+            case 'f':
+                builder.Append('\f');
+                return true;
+            case 'r':
+                builder.Append('\r');
+                return true;
+        }
+
+        if (escaped is < '0' or > '7')
+            return false;
+
+        var octalValue = escaped - '0';
+        var digitCount = 1;
+        while (digitCount < 3
+               && index + 1 < value.Length
+               && value[index + 1] is >= '0' and <= '7')
+        {
+            octalValue = octalValue * 8 + value[++index] - '0';
+            digitCount++;
+        }
+
+        if (octalValue > byte.MaxValue)
+            return false;
+
+        builder.Append((char)octalValue);
         return true;
     }
 
@@ -333,11 +463,15 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool TryGetConfigRuleName(ReadOnlySpan<char> trimmed, out string ruleName)
+    private static bool TryGetConfigRule(
+        ReadOnlySpan<char> trimmed,
+        out string ruleName,
+        out string? inlineArguments)
     {
         ruleName = string.Empty;
+        inlineArguments = null;
         var openParen = trimmed.IndexOf('(');
-        if (openParen <= 0 || !trimmed[(openParen + 1)..].Trim().IsEmpty)
+        if (openParen <= 0)
             return false;
 
         var name = trimmed[..openParen].Trim();
@@ -350,8 +484,105 @@ public static partial class SymbolExtractor
                 return false;
         }
 
+        var arguments = trimmed[(openParen + 1)..].Trim();
+        if (!arguments.IsEmpty)
+        {
+            var quote = '\0';
+            var escaped = false;
+            var nestedParentheses = 0;
+            var closingIndex = -1;
+            for (var index = 0; index < arguments.Length; index++)
+            {
+                var character = arguments[index];
+                if (quote != '\0')
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                        continue;
+                    }
+
+                    if (character == '\\' && quote == '"')
+                        escaped = true;
+                    else if (character == quote)
+                        quote = '\0';
+                    continue;
+                }
+
+                if (character is '"' or '\'')
+                {
+                    quote = character;
+                    continue;
+                }
+
+                if (character == '(')
+                    nestedParentheses++;
+                else if (character == ')' && nestedParentheses > 0)
+                    nestedParentheses--;
+                else if (character == ')')
+                {
+                    closingIndex = index;
+                    break;
+                }
+            }
+
+            if (closingIndex < 0)
+                return false;
+
+            var remainder = arguments[(closingIndex + 1)..].Trim();
+            if (!remainder.IsEmpty && remainder[0] != '#')
+                return false;
+
+            inlineArguments = arguments[..closingIndex].Trim().ToString();
+        }
+
         ruleName = name.ToString();
         return true;
+    }
+
+    private static IEnumerable<string> EnumerateConfigRuleArguments(string arguments)
+    {
+        var start = 0;
+        var quote = '\0';
+        var escaped = false;
+        var collectionDepth = 0;
+        for (var index = 0; index < arguments.Length; index++)
+        {
+            var character = arguments[index];
+            if (quote != '\0')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (character == '\\' && quote == '"')
+                    escaped = true;
+                else if (character == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (character is '"' or '\'')
+            {
+                quote = character;
+                continue;
+            }
+
+            if (character is '[' or '{' or '(')
+                collectionDepth++;
+            else if (character is (']' or '}' or ')') && collectionDepth > 0)
+                collectionDepth--;
+            else if (character == ',' && collectionDepth == 0)
+            {
+                yield return arguments[start..index].Trim();
+                start = index + 1;
+            }
+        }
+
+        if (start < arguments.Length)
+            yield return arguments[start..].Trim();
     }
 
     internal static bool TryGetMetadataAssignment(

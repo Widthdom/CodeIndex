@@ -60,6 +60,23 @@ public partial class SymbolExtractorTests
         Assert.All(
             configSymbols.Where(symbol => symbol.Kind == "property"),
             symbol => Assert.Equal("rule", symbol.ContainerKind));
+
+        const string inlineRules = """
+            prefix_rule(pattern = ["rg"], decision = "forbidden")
+            """;
+        var inlineConfigSymbols = SymbolExtractor.Extract(1, "config", inlineRules);
+        AssertSymbolsContain(inlineConfigSymbols, "rule", "prefix_rule[0]");
+        AssertSymbolsContain(
+            inlineConfigSymbols,
+            "property",
+            "prefix_rule[0].pattern",
+            "prefix_rule[0].decision");
+
+        var quotedAttributesSymbols = SymbolExtractor.Extract(
+            1,
+            "gitattributes",
+            "\"docs/My File.md\" linguist-documentation\n[attr]binary -diff\n");
+        AssertSymbolsContain(quotedAttributesSymbols, "rule", "docs/My File.md", "[attr]binary");
     }
 
     [Fact]

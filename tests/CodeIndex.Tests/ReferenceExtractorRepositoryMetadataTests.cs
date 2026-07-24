@@ -55,6 +55,69 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TomlMultilineArrays_IndexesPathsWithoutCollectionLiteralEdges_Issue4740()
+    {
+        const string content = """
+            includes = [
+              "config/first.toml",
+              "config/second.toml",
+            ]
+            empty = []
+            numeric = [1, 2]
+            """;
+        var symbols = SymbolExtractor.Extract(1, "toml", content);
+        var references = ReferenceExtractor.Extract(1, "toml", content, symbols);
+
+        AssertReferencesContain(
+            references,
+            "project_reference",
+            containerName: "includes",
+            "config/first.toml",
+            "config/second.toml");
+        Assert.DoesNotContain(
+            references,
+            reference => reference.SymbolName is "[" or "[]" or "[1, 2]");
+    }
+
+    [Fact]
+    public void Extract_InlineConfigRule_UsesTheRuleAsTheReferenceContainer_Issue4740()
+    {
+        const string content = """
+            prefix_rule(include = ["rules/common.rules"], decision = "allow")
+            """;
+        var symbols = SymbolExtractor.Extract(1, "config", content);
+        var references = ReferenceExtractor.Extract(1, "config", content, symbols);
+
+        var reference = Assert.Single(references);
+        Assert.Equal("rules/common.rules", reference.SymbolName);
+        Assert.Equal("prefix_rule[0]", reference.ContainerName);
+        Assert.Equal("rule", reference.ContainerKind);
+    }
+
+    [Fact]
+    public void Extract_GitAttributes_HandlesQuotedPatternsAndSuppressesAttributeMacros_Issue4740()
+    {
+        const string content = """
+            "docs/My File.md" linguist-documentation
+            "docs/My\040Other.md" linguist-documentation
+            [attr]binary -diff
+            """;
+        var symbols = SymbolExtractor.Extract(1, "gitattributes", content);
+        var references = ReferenceExtractor.Extract(1, "gitattributes", content, symbols);
+
+        Assert.Equal(2, references.Count);
+        Assert.Contains(
+            references,
+            reference => reference.SymbolName == "docs/My File.md"
+                && reference.ContainerName == "docs/My File.md");
+        Assert.Contains(
+            references,
+            reference => reference.SymbolName == "docs/My Other.md"
+                && reference.ContainerName == "docs/My Other.md");
+        Assert.DoesNotContain(references, item => item.SymbolName.StartsWith("[attr]", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_ApplicationManifest_IndexesDependenciesAndLocalPaths_Issue4740()
     {
         const string content = """

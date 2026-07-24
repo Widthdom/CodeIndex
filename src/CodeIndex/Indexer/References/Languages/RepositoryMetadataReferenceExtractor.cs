@@ -6,6 +6,7 @@ namespace CodeIndex.Indexer;
 
 internal static class RepositoryMetadataReferenceExtractor
 {
+    private const int MaxMetadataArrayContinuationLines = 256;
     private readonly record struct QuotedMetadataValue(string RawValue, char Quote);
 
     internal static List<ReferenceRecord> Extract(
@@ -19,7 +20,10 @@ internal static class RepositoryMetadataReferenceExtractor
         var seen = new ReferenceDedupeSet();
         var containers = BuildLineContainerMap(
             symbols,
-            preferredKind: language == "gitattributes" ? "rule" : null);
+            preferredKind: language is "gitattributes" or "config" ? "rule" : null);
+        var pendingArrayDepth = 0;
+        var pendingArrayLineCount = 0;
+        SymbolRecord? pendingArrayContainer = null;
 
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
@@ -30,6 +34,32 @@ internal static class RepositoryMetadataReferenceExtractor
 
             var lineNumber = lineIndex + 1;
             containers.TryGetValue(lineNumber, out var container);
+            if (pendingArrayDepth > 0)
+            {
+                AddAssignmentPathReferences(
+                    references,
+                    seen,
+                    fileId,
+                    line,
+                    line,
+                    lineNumber,
+                    pendingArrayContainer,
+                    language);
+                UpdateMetadataArrayDepth(line, ref pendingArrayDepth);
+                pendingArrayLineCount++;
+                if (pendingArrayDepth <= 0
+                    || pendingArrayLineCount >= MaxMetadataArrayContinuationLines)
+                {
+                    pendingArrayDepth = 0;
+                    pendingArrayLineCount = 0;
+                    pendingArrayContainer = null;
+                }
+
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
+                continue;
+            }
+
             if (language is "gitignore" or "dockerignore")
             {
                 if (!TryNormalizeIgnorePattern(trimmed, out var pattern, out var sourceIndex))
@@ -49,20 +79,20 @@ internal static class RepositoryMetadataReferenceExtractor
             }
             else if (language == "gitattributes")
             {
-                if (trimmed[0] == '#')
+                if (!SymbolExtractor.TryGetGitAttributesTokens(
+                    trimmed,
+                    out var rawPattern,
+                    out _)
+                    || rawPattern.StartsWith("[attr]", StringComparison.Ordinal))
+                {
                     continue;
+                }
 
-                var patternLength = 0;
-                while (patternLength < trimmed.Length && !char.IsWhiteSpace(trimmed[patternLength]))
-                    patternLength++;
-                if (patternLength == 0 || patternLength == trimmed.Length)
-                    continue;
-
-                var rawPattern = trimmed[..patternLength].ToString();
                 if (!TryNormalizeRepositoryPath(
                     rawPattern,
                     allowBarePattern: true,
                     allowRootAnchoredPattern: true,
+                    allowWhitespace: true,
                     out var pattern))
                     continue;
 
@@ -89,6 +119,11 @@ internal static class RepositoryMetadataReferenceExtractor
                     lineNumber,
                     container,
                     language);
+                if (TryGetOpenMetadataArrayDepth(value, out pendingArrayDepth))
+                {
+                    pendingArrayLineCount = 0;
+                    pendingArrayContainer = container;
+                }
             }
 
             if (ReferenceExtractor.ReferenceLimitReached(references))
@@ -229,16 +264,15 @@ internal static class RepositoryMetadataReferenceExtractor
         var referenceValue = valueSpan.ToString();
 
         var candidates = EnumerateQuotedValues(referenceValue);
-        var foundQuotedValue = false;
         foreach (var candidate in candidates)
         {
-            foundQuotedValue = true;
             if (!TryDecodeQuotedPathCandidate(candidate, out var decodedCandidate))
                 continue;
             if (!TryNormalizeRepositoryPath(
                 decodedCandidate,
                 allowBarePattern: false,
                 allowRootAnchoredPattern: false,
+                allowWhitespace: false,
                 out var normalized))
                 continue;
 
@@ -256,29 +290,49 @@ internal static class RepositoryMetadataReferenceExtractor
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 return;
         }
+    }
 
-        if (foundQuotedValue)
-            return;
+    private static bool TryGetOpenMetadataArrayDepth(string value, out int depth)
+    {
+        depth = 0;
+        var valueSpan = value.AsSpan().TrimStart();
+        if (valueSpan.IsEmpty || valueSpan[0] != '[')
+            return false;
 
-        var candidateValue = valueSpan.Trim().ToString();
-        if (!TryNormalizeRepositoryPath(
-            candidateValue,
-            allowBarePattern: false,
-            allowRootAnchoredPattern: false,
-            out var normalizedValue))
-            return;
+        UpdateMetadataArrayDepth(value, ref depth);
+        return depth > 0;
+    }
 
-        var index = context.IndexOf(candidateValue, StringComparison.Ordinal);
-        AddPathReference(
-            references,
-            seen,
-            fileId,
-            normalizedValue,
-            Math.Max(0, index),
-            context,
-            lineNumber,
-            container,
-            language);
+    private static void UpdateMetadataArrayDepth(string value, ref int depth)
+    {
+        var quote = '\0';
+        var escaped = false;
+        foreach (var character in value)
+        {
+            if (quote != '\0')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (character == '\\' && quote == '"')
+                    escaped = true;
+                else if (character == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (character is '"' or '\'')
+                quote = character;
+            else if (character == '#')
+                break;
+            else if (character == '[')
+                depth++;
+            else if (character == ']')
+                depth--;
+        }
     }
 
     private static IEnumerable<QuotedMetadataValue> EnumerateQuotedValues(string value)
@@ -404,6 +458,7 @@ internal static class RepositoryMetadataReferenceExtractor
             trimmed.TrimEnd().ToString(),
             allowBarePattern: true,
             allowRootAnchoredPattern: true,
+            allowWhitespace: false,
             out pattern);
     }
 
@@ -422,6 +477,7 @@ internal static class RepositoryMetadataReferenceExtractor
             candidate,
             allowBarePattern: true,
             allowRootAnchoredPattern: true,
+            allowWhitespace: false,
             out pattern);
     }
 
@@ -429,6 +485,7 @@ internal static class RepositoryMetadataReferenceExtractor
         string candidate,
         bool allowBarePattern,
         bool allowRootAnchoredPattern,
+        bool allowWhitespace,
         out string normalized)
     {
         normalized = string.Empty;
@@ -436,7 +493,8 @@ internal static class RepositoryMetadataReferenceExtractor
         if (value.Length == 0
             || value.Length > SymbolExtractor.StructuredDataMaxPathLength
             || value.Contains("://", StringComparison.Ordinal)
-            || value.Any(char.IsWhiteSpace))
+            || !allowWhitespace && value.Any(char.IsWhiteSpace)
+            || value.Any(char.IsControl))
         {
             return false;
         }
@@ -535,6 +593,7 @@ internal static class RepositoryMetadataReferenceExtractor
                 path,
                 allowBarePattern: true,
                 allowRootAnchoredPattern: false,
+                allowWhitespace: false,
                 out var normalized))
         {
             return;
