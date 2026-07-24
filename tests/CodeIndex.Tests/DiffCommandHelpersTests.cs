@@ -3,6 +3,7 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
+[Collection("Console sensitive")]
 public sealed class DiffCommandHelpersTests
 {
     [Fact]

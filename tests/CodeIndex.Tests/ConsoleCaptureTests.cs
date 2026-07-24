@@ -6,12 +6,30 @@ namespace CodeIndex.Tests;
 public class ConsoleCaptureTests
 {
     [Fact]
-    public void ConsoleSensitiveCollection_AssignsImportCancellationAndDisablesParallelization_Issues4650_4798()
+    public void ConsoleSensitiveCollection_AssignsGlobalCaptureClassesAndDisablesParallelization_Issues4650_4798()
     {
-        var attribute = Assert.Single(
-            typeof(ExportImportCommandRunnerCancellationTests).CustomAttributes,
-            static candidate => candidate.AttributeType == typeof(CollectionAttribute));
-        var collectionName = Assert.Single(attribute.ConstructorArguments);
+        Type[] consoleSensitiveTypes =
+        [
+            typeof(AuditLogSinkTests),
+            typeof(CliFlagSchemaTests),
+            typeof(CommandErrorWriterTests),
+            typeof(DiffCommandHelpersTests),
+            typeof(ExportImportCommandRunnerCancellationTests),
+            typeof(LicensePolicyTests),
+            typeof(ProgramCliTests),
+            typeof(SymbolExtractorTests),
+            typeof(TestTelemetryTests),
+        ];
+
+        foreach (var type in consoleSensitiveTypes)
+        {
+            var attribute = Assert.Single(
+                type.CustomAttributes,
+                static candidate => candidate.AttributeType == typeof(CollectionAttribute));
+            var collectionName = Assert.Single(attribute.ConstructorArguments);
+            Assert.Equal("Console sensitive", collectionName.Value);
+        }
+
         var definition = Assert.Single(
             typeof(ConsoleSensitiveCollection).CustomAttributes,
             static candidate => candidate.AttributeType == typeof(CollectionDefinitionAttribute));
@@ -19,7 +37,6 @@ public class ConsoleCaptureTests
             definition.NamedArguments,
             static candidate => candidate.MemberName == nameof(CollectionDefinitionAttribute.DisableParallelization));
 
-        Assert.Equal("Console sensitive", collectionName.Value);
         Assert.True(Assert.IsType<bool>(disableParallelization.TypedValue.Value));
     }
 

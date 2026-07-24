@@ -6,6 +6,7 @@ namespace CodeIndex.Tests;
 /// Guards licensing and distribution metadata from silently drifting back to
 /// permissive productization defaults.
 /// </summary>
+[Collection("Console sensitive")]
 public class LicensePolicyTests
 {
     private static readonly string[] CanonicalLegalNoticeFiles =
