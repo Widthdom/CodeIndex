@@ -74,6 +74,7 @@ public partial class McpServer
                 : [];
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
@@ -143,6 +144,7 @@ public partial class McpServer
                 payload["files"] = fileResults.Count;
             AddHotspotFamilySignal(payload, hotspotSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
+            AddHdlGraphContractSignal(payload, hdlGraphSignal);
             var summary = visibleCount > 0
                 ? $"Found {ConsoleUi.Counted(visibleCount, $"{groupBy} hotspot")}."
                 : "No symbol hotspots found.";

@@ -31,6 +31,11 @@ public readonly record struct SqlGraphContractSignal(
     bool Relevant,
     string? DegradedReason);
 
+public readonly record struct HdlGraphContractSignal(
+    bool Ready,
+    bool Relevant,
+    string? DegradedReason);
+
 internal readonly record struct IndexedFileSnapshot(string Path, string? Checksum, int? Lines);
 
 /// <summary>
@@ -185,6 +190,7 @@ public partial class DbReader : IDisposable
     internal readonly bool _csharpMetadataTargetReady;
     internal readonly string? _csharpMetadataTargetDegradedReason;
     internal readonly bool _sqlGraphContractCurrent;
+    internal readonly bool _hdlGraphContractCurrent;
     internal readonly bool _referenceIdentityContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
@@ -613,6 +619,10 @@ public partial class DbReader : IDisposable
             TryGetMetaString(_conn, DbContext.SqlGraphContractVersionMetaKey),
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
+        _hdlGraphContractCurrent = string.Equals(
+            TryGetMetaString(_conn, DbContext.HdlGraphContractVersionMetaKey),
+            DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
         _referenceIdentityContractCurrent = _referenceColumns.Contains("resolution_state")
             && HasTable("symbol_reference_candidates")
             && string.Equals(
@@ -724,6 +734,7 @@ public partial class DbReader : IDisposable
         AppendIfStoredGreater(conn, DbContext.TypeScriptAugmentationVersionMetaKey, DbContext.TypeScriptAugmentationVersion, "typescript_augmentation_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.CSharpSymbolNameContractVersionMetaKey, DbContext.CSharpSymbolNameContractVersion, "csharp_symbol_name_contract_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.SqlGraphContractVersionMetaKey, DbContext.SqlGraphContractVersion, "sql_graph_contract_version", newerContracts);
+        AppendIfStoredGreater(conn, DbContext.HdlGraphContractVersionMetaKey, DbContext.HdlGraphContractVersion, "hdl_graph_contract_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.ReferenceIdentityContractVersionMetaKey, DbContext.ReferenceIdentityContractVersion, "reference_identity_contract_version", newerContracts);
         AppendIfStoredGreater(conn, "fold_key_version", NameFold.Version, "fold_key_version", newerContracts);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
@@ -1228,6 +1239,27 @@ public partial class DbReader : IDisposable
             DegradedReason: signal.DegradedReason);
     }
 
+    private ExactQuerySignal? GetHdlGraphContractExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        var signal = GetHdlGraphContractSignal(
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests);
+        if (!signal.Relevant || signal.Ready)
+            return null;
+
+        return new(
+            ExactIndexAvailable: false,
+            HasMissingIndex: false,
+            HasMissingTable: false,
+            DegradedReason: signal.DegradedReason);
+    }
+
     private bool ScopeMayIncludeCSharpFiles(
         string? lang,
         IReadOnlyList<string>? pathPatterns,
@@ -1271,6 +1303,30 @@ public partial class DbReader : IDisposable
         return cmd.ExecuteScalar() != null;
     }
 
+    internal bool ScopeMayIncludeHdlFiles(
+        string? lang,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        if (lang != null
+            && !string.Equals(lang, "verilog", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(lang, "systemverilog", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(lang, "vhdl", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        using var cmd = _conn.CreateCommand();
+        var sql = "SELECT 1 FROM files f WHERE f.lang IN ('verilog', 'systemverilog', 'vhdl')";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        return cmd.ExecuteScalar() != null;
+    }
+
     internal SqlGraphContractSignal GetSqlGraphContractSignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
@@ -1287,6 +1343,24 @@ public partial class DbReader : IDisposable
             Ready: false,
             Relevant: true,
             DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason());
+    }
+
+    internal HdlGraphContractSignal GetHdlGraphContractSignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        if (!ScopeMayIncludeHdlFiles(lang, pathPatterns, excludePathPatterns, excludeTests))
+            return new HdlGraphContractSignal(Ready: true, Relevant: false, DegradedReason: null);
+
+        if (_hdlGraphContractCurrent)
+            return new HdlGraphContractSignal(Ready: true, Relevant: true, DegradedReason: null);
+
+        return new HdlGraphContractSignal(
+            Ready: false,
+            Relevant: true,
+            DegradedReason: "hdl_graph_contract_ready=false (Verilog/SystemVerilog/VHDL reference rows are stale; run `cdidx index .`)");
     }
 
     private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
@@ -1340,7 +1414,8 @@ public partial class DbReader : IDisposable
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null,
+            GetHdlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetCallersExactQuerySignal(
         string? lang = null,
@@ -1352,7 +1427,8 @@ public partial class DbReader : IDisposable
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null,
+            GetHdlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetCalleesExactQuerySignal(
         string? lang = null,
@@ -1364,7 +1440,8 @@ public partial class DbReader : IDisposable
             BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null,
+            GetHdlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(
         bool includeGraphSignal = true,
@@ -1377,7 +1454,8 @@ public partial class DbReader : IDisposable
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
             includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null,
-            includeGraphSignal && includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
+            includeGraphSignal && includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null,
+            includeGraphSignal ? GetHdlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
     }
 
     internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)

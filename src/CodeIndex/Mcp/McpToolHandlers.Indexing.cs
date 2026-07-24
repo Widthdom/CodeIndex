@@ -214,6 +214,7 @@ public partial class McpServer
             DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey,
             csharpMetadataTargetVersionMetaKey,
             DbContext.SqlGraphContractVersionMetaKey,
+            DbContext.HdlGraphContractVersionMetaKey,
             DbContext.SymbolsOnlyGraphOmittedMetaKey,
             DbContext.IndexCompletenessMetaKey,
             DbContext.IndexedProjectRootMetaKey,
@@ -230,6 +231,7 @@ public partial class McpServer
                 : (bool?)null;
         var priorMetadataTargetCsharp = priorMeta[csharpMetadataTargetVersionMetaKey];
         var priorSqlGraphContractVersion = priorMeta[DbContext.SqlGraphContractVersionMetaKey];
+        var priorHdlGraphContractVersion = priorMeta[DbContext.HdlGraphContractVersionMetaKey];
         var priorSymbolsOnlyGraphOmitted = string.Equals(
             priorMeta[DbContext.SymbolsOnlyGraphOmittedMetaKey],
             "true",
@@ -291,6 +293,8 @@ public partial class McpServer
         var csharpMetadataTargetsNeedRefresh = priorMetadataTargetCsharp != currentMetadataTargetVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var currentHdlGraphContractVersion = DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var hdlGraphContractMatchesCurrent = priorHdlGraphContractVersion == currentHdlGraphContractVersion;
         var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
@@ -1032,6 +1036,7 @@ public partial class McpServer
                 && (target.Language != "csharp" || csharpSymbolNameContractMatchesCurrent)
                 && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                 && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
+                && (target.Language is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent)
                 && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
             if (!allowStatReuse)
                 return null;
@@ -1586,6 +1591,7 @@ public partial class McpServer
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
+                        && (record.Lang is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent)
                         && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                 if (existingId != null)
                 {
@@ -2045,6 +2051,7 @@ public partial class McpServer
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
             writer.MarkIndexReaderContractsReady(symbolsOnlyGraphOmitted: false);
+            writer.MarkHdlGraphContractReady();
             if (csharpSourceEvidenceComplete && !preservePriorPositiveCSharpSourceNoOp)
                 writer.SetCSharpStaticInterfaceSourceEvidence(csharpSourceEvidenceForStamp);
             if (!mutualRecursionRefreshNeeded && referenceIdentityContractMatchedBeforeMutation)

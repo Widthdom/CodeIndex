@@ -2879,7 +2879,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsHdlSymbolExtraction_Issue3532()
+    public void RunLanguages_JsonReportsHdlGraphExtraction_Issue3532_Issue4742()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
@@ -2892,8 +2892,8 @@ public partial class QueryCommandRunnerTests
         {
             var entry = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == language);
             Assert.True(entry.GetProperty("symbol_extraction").GetBoolean());
-            Assert.False(entry.GetProperty("reference_extraction").GetBoolean());
-            Assert.False(entry.GetProperty("graph_queries").GetBoolean());
+            Assert.True(entry.GetProperty("reference_extraction").GetBoolean());
+            Assert.True(entry.GetProperty("graph_queries").GetBoolean());
         }
     }
 
