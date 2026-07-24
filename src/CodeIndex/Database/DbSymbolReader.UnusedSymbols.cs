@@ -2748,6 +2748,8 @@ public partial class DbReader
             AddUnusedSurfaceTag(tags, "reflection_or_config_suspect");
         if (IsMarkdownHeadingSymbol(candidate, kind))
             AddUnusedSurfaceTag(tags, "documentation_heading");
+        if (IsMarkdownFenceSymbol(candidate, kind))
+            AddUnusedSurfaceTag(tags, "markdown_fence_language_marker");
         if (IsGeneratedSurface(candidate))
             AddUnusedSurfaceTag(tags, "generated_surface");
         if (IsSourceGeneratedJsonContext(candidate))
@@ -2782,6 +2784,20 @@ public partial class DbReader
                 || string.Equals(candidate.Lang, "md", StringComparison.OrdinalIgnoreCase))
             && (kind.Contains("heading", StringComparison.OrdinalIgnoreCase)
                 || kind.Contains("header", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsMarkdownFenceSymbol(UnusedCandidateSymbol candidate, string kind)
+    {
+        if ((!string.Equals(candidate.Lang, "markdown", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(candidate.Lang, "md", StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(kind, "code", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var signature = candidate.Signature?.TrimStart();
+        return signature?.StartsWith("```", StringComparison.Ordinal) == true
+            || signature?.StartsWith("~~~", StringComparison.Ordinal) == true;
     }
 
     private static bool IsGeneratedSurface(UnusedCandidateSymbol candidate)
@@ -2990,6 +3006,9 @@ public partial class DbReader
 
         if (HasUnusedSurfaceTag(surfaceTags, "documentation_heading") || IsMarkdownHeadingSymbol(candidate, kind))
             return CreateUnusedContractDomain(UnusedContractDomainDocumentation, tags, "documentation_heading");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "markdown_fence_language_marker") || IsMarkdownFenceSymbol(candidate, kind))
+            return CreateUnusedContractDomain(UnusedContractDomainDocumentation, tags, "markdown_fence_language_marker");
 
         if (IsUnusedTestContractSurface(candidate))
             return CreateUnusedContractDomain(UnusedContractDomainTest, tags, "test_surface");

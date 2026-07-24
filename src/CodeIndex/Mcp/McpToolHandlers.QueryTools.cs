@@ -2787,6 +2787,13 @@ public partial class McpServer
     {
         var adjustments = new ArgumentAdjustmentCollector();
         var limit = ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
+        var requestedGraphBudget = ReadOptionalIntArgument(args, "graphBudget");
+        var graphBudget = Math.Clamp(
+            requestedGraphBudget ?? QueryCommandRunner.DefaultDependencyCycleGraphBudget,
+            1,
+            QueryCommandRunner.MaxDependencyCycleGraphBudget);
+        if (requestedGraphBudget.HasValue && requestedGraphBudget.Value != graphBudget)
+            adjustments.AddClamped("graphBudget", requestedGraphBudget.Value, graphBudget, 1, QueryCommandRunner.MaxDependencyCycleGraphBudget);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -2795,37 +2802,68 @@ public partial class McpServer
         var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
         var cyclesOnly = args?["cycles"]?.GetValue<bool>() ?? false;
         var format = args?["format"]?.GetValue<string>()?.ToLowerInvariant() ?? "edgelist";
+        var cursorValue = args?["cursor"]?.GetValue<string>();
+        if (requestedGraphBudget.HasValue && !cyclesOnly)
+            return CreateToolErrorResponse(id, "'graphBudget' requires 'cycles=true'.");
+        if (cursorValue != null && !cyclesOnly)
+            return CreateToolErrorResponse(id, "'cursor' requires 'cycles=true'.");
+        if (cursorValue != null && !QueryCommandRunner.TryParseDependencyCycleCursor(cursorValue, out _))
+            return CreateToolErrorResponse(id, "'cursor' must be an opaque dependency-cycle next_cursor returned by deps.");
+
+        var cursorOptions = new QueryCommandOptions
+        {
+            Lang = lang,
+            PathPatterns = pathPatterns?.ToList() ?? [],
+            ExcludePaths = excludePaths,
+            ExcludeTests = excludeTests,
+            IncludeGenerated = includeGenerated,
+            DependencyCycleGraphBudget = graphBudget,
+        };
+        var cursorBaseFingerprint = QueryCommandRunner.BuildDependencyCycleCursorFingerprint(cursorOptions, reverse);
+        var cursor = cursorValue == null
+            ? (DependencyCycleCursor?)null
+            : QueryCommandRunner.TryParseDependencyCycleCursor(cursorValue, out var parsedCursor)
+                ? parsedCursor
+                : null;
+        var pageOffset = cursor?.Offset ?? 0;
 
         return WithDbReader(id, args, reader =>
         {
-            var cycleCandidateLimit = QueryCommandRunner.GetDependencyCycleGraphLimit(limit);
             var cycleCandidateRowCount = 0;
             var results = cyclesOnly
                 ? reader.GetFileDependencyCycleCandidates(
-                    checked(cycleCandidateLimit + 1),
+                    checked(graphBudget + 1),
                     out cycleCandidateRowCount,
                     lang,
                     pathPatterns,
                     excludePaths,
                     excludeTests,
-                    reverse)
+                    reverse,
+                    reader.Cancellation)
                 : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
-            var cycleCandidateRowsRead = cyclesOnly ? cycleCandidateRowCount : 0;
-            var cycleCandidates = cyclesOnly ? results.Take(cycleCandidateLimit).ToList() : results;
+            var cycleCandidates = cyclesOnly ? results.Take(graphBudget).ToList() : results;
+            var cursorFingerprint = QueryCommandRunner.BuildDependencyCycleGraphFingerprint(
+                cursorBaseFingerprint,
+                cycleCandidates,
+                cycleCandidateRowCount);
+            if (cursor is { } suppliedCursor
+                && !string.Equals(suppliedCursor.Fingerprint, cursorFingerprint, StringComparison.Ordinal))
+                return CreateToolErrorResponse(id, "'cursor' does not match the current deps filters, graphBudget, or indexed graph.");
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
-            List<List<string>> cycles = [];
-            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(cycleCandidates, out cycles) : results;
-            var cycleCandidateTruncated = cyclesOnly && cycleCandidateRowsRead > cycleCandidateLimit;
-            var cycleDisplayTruncated = cyclesOnly && cycles.Count > limit;
-            if (cyclesOnly)
-            {
-                cycles = cycles.Take(limit).ToList();
-                var cycleNodes = cycles.SelectMany(static cycle => cycle).ToHashSet(StringComparer.Ordinal);
-                outputEdges = outputEdges
-                    .Where(edge => cycleNodes.Count == 0 || (cycleNodes.Contains(edge.SourcePath) && cycleNodes.Contains(edge.TargetPath)))
-                    .Take(limit)
-                    .ToList();
-            }
+            var cycleAnalysis = cyclesOnly
+                ? QueryCommandRunner.AnalyzeDependencyCycles(
+                    cycleCandidates,
+                    graphBudget,
+                    cycleCandidateRowCount,
+                    limit,
+                    pageOffset,
+                    cursorFingerprint,
+                    reader.Cancellation)
+                : null;
+            if (cursor.HasValue && cycleAnalysis != null && pageOffset >= cycleAnalysis.TotalCycleCount)
+                return CreateToolErrorResponse(id, "'cursor' points beyond the available dependency-cycle result set.");
+            var cycles = cycleAnalysis?.Cycles ?? [];
+            var outputEdges = cycleAnalysis?.Edges ?? results;
             var sqlGraphSignalPaths = cyclesOnly
                 ? cycles.Count > 0
                     ? cycles.SelectMany(static cycle => cycle)
@@ -2840,38 +2878,13 @@ public partial class McpServer
                     lang);
             var payload = new JsonObject { ["count"] = cyclesOnly ? cycles.Count : results.Count };
             if (cyclesOnly)
-                payload["cycles"] = QueryCommandRunner.BuildDependencyCyclesJson(cycles);
+                payload["cycles"] = QueryCommandRunner.BuildDependencyCyclesJson(cycleAnalysis!.Components, cycleAnalysis.PageOffset);
             else if (format == "json-graph")
                 payload["graph"] = BuildJsonGraphPayload(outputEdges);
             else
                 payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, _jsonOptions);
             if (cyclesOnly)
-            {
-                var truncatedReason = cycleCandidateTruncated
-                    ? "candidate_edge_limit"
-                    : cycleDisplayTruncated
-                        ? "display_limit"
-                        : null;
-                var terminationReason = truncatedReason switch
-                {
-                    "candidate_edge_limit" => "candidate_limit_reached",
-                    "display_limit" => "display_limit_reached",
-                    _ => "completed",
-                };
-                QueryCommandRunner.AddDependencyCycleAnalysisJsonFields(
-                    payload,
-                    cycleCandidateTruncated || cycleDisplayTruncated,
-                    terminationReason,
-                    truncatedReason,
-                    Math.Min(cycleCandidateRowsRead, cycleCandidateLimit),
-                    cycleCandidateLimit,
-                    limit,
-                    QueryCommandRunner.DependencyCycleDetectionMode,
-                    QueryCommandRunner.BuildMcpDependencyCycleNextStepFlagsJson(
-                        truncatedReason,
-                        cycleCandidateLimit,
-                        limit));
-            }
+                QueryCommandRunner.AddDependencyCycleAnalysisJsonFields(payload, cycleAnalysis!, mcpArguments: true);
             payload["format"] = format;
             payload["includeGenerated"] = includeGenerated;
             payload["generated_code_filter_supported"] = true;

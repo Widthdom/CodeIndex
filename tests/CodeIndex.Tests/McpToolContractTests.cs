@@ -109,7 +109,7 @@ public class McpToolContractTests
         var depsProperties = GetAdvertisedToolSchemas()["deps"];
         var allowed = GetAllowedToolArguments("deps");
 
-        foreach (var argumentName in new[] { "reverse", "format", "cycles", "includeGenerated" })
+        foreach (var argumentName in new[] { "reverse", "format", "cycles", "graphBudget", "cursor", "includeGenerated" })
         {
             Assert.True(depsProperties.ContainsKey(argumentName));
             Assert.Contains(argumentName, allowed);
@@ -120,10 +120,14 @@ public class McpToolContractTests
         Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["reverse"]));
         Assert.Equal("string", ExpectedTypeFromSchema(depsProperties["format"]));
         Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["cycles"]));
+        Assert.Equal("integer", ExpectedTypeFromSchema(depsProperties["graphBudget"]));
+        Assert.Equal("string", ExpectedTypeFromSchema(depsProperties["cursor"]));
         Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["includeGenerated"]));
         Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "reverse"));
         Assert.Equal((true, "string"), TryGetExpectedJsonType("deps", "format"));
         Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "cycles"));
+        Assert.Equal((true, "integer"), TryGetExpectedJsonType("deps", "graphBudget"));
+        Assert.Equal((true, "string"), TryGetExpectedJsonType("deps", "cursor"));
         Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "includeGenerated"));
     }
 

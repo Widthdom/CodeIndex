@@ -1668,6 +1668,84 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_MarkdownFenceLanguagesAreSuppressedByDefaultAndAvailableWithAll_Issue4728()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_markdown_fence_languages");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "guide.md"), """
+                ```bash
+                echo ok
+                ```
+
+                ```md
+                # Example heading
+                ```
+
+                ~~~python
+                print("ok")
+                ~~~
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+
+            var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "markdown", "--limit", "20"],
+                _jsonOptions));
+
+            Assert.True(indexExitCode == CommandExitCodes.Success, indexStderr);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, defaultExitCode);
+            Assert.Equal(string.Empty, defaultStderr);
+            using var defaultDocument = ParseJsonOutput(defaultStdout);
+            var defaultJson = defaultDocument.RootElement;
+            var suppression = defaultJson.GetProperty("default_suppression");
+            Assert.Equal(0, defaultJson.GetProperty("count").GetInt32());
+            Assert.Empty(defaultJson.GetProperty("symbols").EnumerateArray());
+            Assert.True(suppression.GetProperty("applied").GetBoolean());
+            Assert.Equal(3, suppression.GetProperty("suppressed_count").GetInt32());
+            Assert.Equal(
+                3,
+                suppression.GetProperty("suppressed_contract_domain_counts")
+                    .GetProperty("documentation_surface")
+                    .GetInt32());
+
+            var (allExitCode, allStdout, allStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--lang", "markdown", "--limit", "20"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, allExitCode);
+            Assert.Equal(string.Empty, allStderr);
+            using var allDocument = ParseJsonOutput(allStdout);
+            var allJson = allDocument.RootElement;
+            var symbols = allJson.GetProperty("symbols").EnumerateArray().ToList();
+            Assert.Equal(["bash", "md", "python"], symbols.Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.Contains(
+                "documentation syntax",
+                allJson.GetProperty("bucket_taxonomy")
+                    .GetProperty("reflection_or_config_suspect")
+                    .GetProperty("description")
+                    .GetString());
+            Assert.All(symbols, symbol =>
+            {
+                Assert.Equal("code", symbol.GetProperty("kind").GetString());
+                Assert.Equal("documentation_surface", symbol.GetProperty("unused_contract_domain").GetString());
+                Assert.Contains(
+                    symbol.GetProperty("unused_reason_tags").EnumerateArray(),
+                    tag => tag.GetString() == "markdown_fence_language_marker");
+            });
+            Assert.False(allJson.TryGetProperty("default_suppression", out _));
+            Assert.True(allJson.GetProperty("query_context").GetProperty("all").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_DefaultJsonReportsFullSuppressionTotalsBeyondFetchedWindow_Issue4120()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();

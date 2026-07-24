@@ -1,3 +1,7 @@
+using System.Buffers;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
@@ -491,6 +495,34 @@ public static partial class QueryCommandRunner
                 "Use `cdidx deps --json --summary-only --path <glob>` for a compact summary, or remove --summary-only for json-graph output.");
             return CommandExitCodes.UsageError;
         }
+        if (options.SearchCursor != null || options.UnusedCursorOffset.HasValue || options.OutlineCursorOffset.HasValue)
+        {
+            WriteUsageError(
+                "deps accepts only dependency-cycle cursors returned by a previous `deps --cycles` response.",
+                GetUsageLineOrThrow("deps"),
+                "Use the opaque `next_cursor` value without modification.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.DependencyCycleCursor.HasValue && !options.DependencyCycles)
+        {
+            WriteUsageError(
+                "deps --cursor requires --cycles.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --cycles --json --cursor <next_cursor>`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (!options.DependencyCycles
+            && cmdArgs.Any(static arg => arg == "--graph-budget" || arg.StartsWith("--graph-budget=", StringComparison.Ordinal)))
+        {
+            WriteUsageError(
+                "deps --graph-budget requires --cycles.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --cycles --graph-budget <n>`.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var reverse = cmdArgs.Any(static arg => arg == "--reverse");
+        var cycleCursorBaseFingerprint = BuildDependencyCycleCursorFingerprint(options, reverse);
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -514,11 +546,11 @@ public static partial class QueryCommandRunner
                 }
             }
 
-            var reverse = cmdArgs.Any(a => a == "--reverse");
             List<FileDependencyResult> results;
             List<FileDependencyResult> cycleCandidates;
             var cycleCandidateRowCount = 0;
-            var cycleCandidateLimit = GetDependencyCycleGraphLimit(options.Limit);
+            var cycleGraphBudget = options.DependencyCycleGraphBudget;
+            var cyclePageOffset = options.DependencyCycleCursor?.Offset ?? 0;
             var machineReadable = DepsEmitsJson(options, depsFormat);
             if (options.DependencyCycles)
             {
@@ -527,10 +559,10 @@ public static partial class QueryCommandRunner
                     reader,
                     options,
                     reverse,
-                    checked(cycleCandidateLimit + 1),
+                    checked(cycleGraphBudget + 1),
                     out cycleCandidateRowCount,
                     cancellationToken);
-                results = cycleCandidates.Take(cycleCandidateLimit).ToList();
+                results = cycleCandidates.Take(cycleGraphBudget).ToList();
                 cycleCandidates = results;
             }
             else
@@ -547,12 +579,32 @@ public static partial class QueryCommandRunner
                 var zeroSymbolFilter = ApplyDependencySymbolFilters([], options).Summary;
                 if (options.DependencyCycles)
                 {
+                    var zeroCursorFingerprint = BuildDependencyCycleGraphFingerprint(
+                        cycleCursorBaseFingerprint,
+                        [],
+                        cycleCandidateRowCount);
+                    if (options.DependencyCycleCursor is { } suppliedCursor
+                        && !string.Equals(suppliedCursor.Fingerprint, zeroCursorFingerprint, StringComparison.Ordinal))
+                    {
+                        WriteDependencyCycleCursorMismatchError();
+                        return CommandExitCodes.UsageError;
+                    }
                     var zeroAnalysis = AnalyzeDependencyCycles(
                         [],
-                        cycleCandidateLimit,
+                        cycleGraphBudget,
                         cycleCandidateRowCount,
                         options.Limit,
+                        cyclePageOffset,
+                        zeroCursorFingerprint,
                         cancellationToken);
+                    if (options.DependencyCycleCursor.HasValue)
+                    {
+                        WriteUsageError(
+                            "deps --cursor points beyond the available dependency-cycle result set.",
+                            GetUsageLineOrThrow("deps"),
+                            "Start a new dependency-cycle query without --cursor.");
+                        return CommandExitCodes.UsageError;
+                    }
                     if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
                     {
                         var writeExitCode = WriteDependencyGraph(
@@ -636,16 +688,36 @@ public static partial class QueryCommandRunner
             if (options.DependencyCycles)
             {
                 symbolFilter = ApplyDependencySymbolFilters(cycleCandidates, options);
+                var cycleCursorFingerprint = BuildDependencyCycleGraphFingerprint(
+                    cycleCursorBaseFingerprint,
+                    symbolFilter.Edges,
+                    cycleCandidateRowCount);
+                if (options.DependencyCycleCursor is { } suppliedCursor
+                    && !string.Equals(suppliedCursor.Fingerprint, cycleCursorFingerprint, StringComparison.Ordinal))
+                {
+                    WriteDependencyCycleCursorMismatchError();
+                    return CommandExitCodes.UsageError;
+                }
                 WriteGraphLiveness("deps", "analyze_cycles", options, depsFormat, rows: symbolFilter.Edges.Count, machineReadable: machineReadable);
                 var analysis = AnalyzeDependencyCycles(
                     symbolFilter.Edges,
-                    cycleCandidateLimit,
+                    cycleGraphBudget,
                     cycleCandidateRowCount,
                     options.Limit,
+                    cyclePageOffset,
+                    cycleCursorFingerprint,
                     cancellationToken);
                 outputEdges = analysis.Edges;
                 cycles = analysis.Cycles;
                 dependencyCycleAnalysis = analysis;
+                if (options.DependencyCycleCursor.HasValue && cyclePageOffset >= analysis.TotalCycleCount)
+                {
+                    WriteUsageError(
+                        "deps --cursor points beyond the available dependency-cycle result set.",
+                        GetUsageLineOrThrow("deps"),
+                        "Start a new dependency-cycle query without --cursor.");
+                    return CommandExitCodes.UsageError;
+                }
             }
             else
             {
@@ -746,7 +818,9 @@ public static partial class QueryCommandRunner
                 if (options.DependencyCycles)
                 {
                     if (!options.SummaryOnly)
-                        payload["cycles"] = BuildDependencyCyclesJson(cycles);
+                        payload["cycles"] = dependencyCycleAnalysis == null
+                            ? new JsonArray()
+                            : BuildDependencyCyclesJson(dependencyCycleAnalysis.Components, dependencyCycleAnalysis.PageOffset);
                     if (dependencyCycleAnalysis != null)
                         AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
                 }
@@ -784,6 +858,12 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         }, cancellationToken: cancellationToken);
     }
+
+    private static void WriteDependencyCycleCursorMismatchError()
+        => WriteUsageError(
+            "deps --cursor does not match the current dependency-cycle filters, graph budget, or indexed graph.",
+            GetUsageLineOrThrow("deps"),
+            "Reuse the same filters and --graph-budget without reindexing, or start a new query without --cursor.");
 
     private static bool TryExtractDepsFormat(string[] args, out string format, out string[] parseArgs, out string? error)
     {
@@ -851,208 +931,300 @@ public static partial class QueryCommandRunner
         }
     }
 
-    internal static List<FileDependencyResult> FilterCycleEdges(List<FileDependencyResult> results, out List<List<string>> cycles)
-        => FilterCycleEdges(results, out cycles, CancellationToken.None);
+    internal const string DependencyCycleRankingMode = "reference_count_desc_internal_edge_count_desc_length_desc_path";
+    private const string DependencyCycleCursorPrefix = "deps-cycle:v1:";
+    private const int MaxDependencyCycleCursorLength = 256;
 
-    private static List<FileDependencyResult> FilterCycleEdges(IReadOnlyList<FileDependencyResult> results, out List<List<string>> cycles, CancellationToken cancellationToken)
+    internal static List<FileDependencyResult> FilterCycleEdges(List<FileDependencyResult> results, out List<List<string>> cycles)
     {
-        cycles = FindDependencyCycles(results, cancellationToken);
-        if (cycles.Count == 0)
-            return [];
-        var cycleNodes = cycles.SelectMany(cycle => cycle).ToHashSet(StringComparer.Ordinal);
-        return results
-            .Where(edge => cycleNodes.Contains(edge.SourcePath) && cycleNodes.Contains(edge.TargetPath))
-            .ToList();
+        var components = FindRankedDependencyCycles(results, CancellationToken.None);
+        cycles = components.Select(static component => component.Nodes).ToList();
+        return FilterEdgesToComponents(results, components);
     }
 
     internal static List<List<string>> FindDependencyCycles(IReadOnlyList<FileDependencyResult> edges)
-        => FindDependencyCycles(edges, CancellationToken.None);
+        => FindRankedDependencyCycles(edges, CancellationToken.None)
+            .Select(static component => component.Nodes)
+            .ToList();
 
-    private static List<List<string>> FindDependencyCycles(IReadOnlyList<FileDependencyResult> edges, CancellationToken cancellationToken)
+    private static List<DependencyCycleComponent> FindRankedDependencyCycles(
+        IReadOnlyList<FileDependencyResult> edges,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var adjacency = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var adjacencySets = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var reverseSets = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var edge in edges)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!adjacency.TryGetValue(edge.SourcePath, out var targets))
-                adjacency[edge.SourcePath] = targets = [];
+            if (!adjacencySets.TryGetValue(edge.SourcePath, out var targets))
+                adjacencySets[edge.SourcePath] = targets = new HashSet<string>(StringComparer.Ordinal);
             targets.Add(edge.TargetPath);
-            adjacency.TryAdd(edge.TargetPath, []);
+            adjacencySets.TryAdd(edge.TargetPath, new HashSet<string>(StringComparer.Ordinal));
+
+            if (!reverseSets.TryGetValue(edge.TargetPath, out var sources))
+                reverseSets[edge.TargetPath] = sources = new HashSet<string>(StringComparer.Ordinal);
+            sources.Add(edge.SourcePath);
+            reverseSets.TryAdd(edge.SourcePath, new HashSet<string>(StringComparer.Ordinal));
         }
 
-        var index = 0;
-        var stack = new Stack<string>();
-        var onStack = new HashSet<string>(StringComparer.Ordinal);
-        var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
-        var lowLinks = new Dictionary<string, int>(StringComparer.Ordinal);
-        var cycles = new List<List<string>>();
-
-        void Visit(string node)
+        var adjacency = adjacencySets.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.OrderBy(static path => path, StringComparer.Ordinal).ToArray(),
+            StringComparer.Ordinal);
+        var reverse = reverseSets.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.OrderBy(static path => path, StringComparer.Ordinal).ToArray(),
+            StringComparer.Ordinal);
+        var nodes = adjacency.Keys.OrderBy(static path => path, StringComparer.Ordinal).ToArray();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var finishOrder = new List<string>(nodes.Length);
+        foreach (var root in nodes)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            indexes[node] = index;
-            lowLinks[node] = index;
-            index++;
-            stack.Push(node);
-            onStack.Add(node);
+            if (!visited.Add(root))
+                continue;
 
-            foreach (var target in adjacency[node])
+            var stack = new Stack<(string Node, int NextTarget)>();
+            stack.Push((root, 0));
+            while (stack.Count > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!indexes.ContainsKey(target))
+                var frame = stack.Pop();
+                var targets = adjacency[frame.Node];
+                if (frame.NextTarget < targets.Length)
                 {
-                    Visit(target);
-                    lowLinks[node] = Math.Min(lowLinks[node], lowLinks[target]);
+                    stack.Push((frame.Node, frame.NextTarget + 1));
+                    var target = targets[frame.NextTarget];
+                    if (visited.Add(target))
+                        stack.Push((target, 0));
+                    continue;
                 }
-                else if (onStack.Contains(target))
+
+                finishOrder.Add(frame.Node);
+            }
+        }
+
+        var assigned = new HashSet<string>(StringComparer.Ordinal);
+        var cycleNodes = new List<List<string>>();
+        for (var i = finishOrder.Count - 1; i >= 0; i--)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var root = finishOrder[i];
+            if (!assigned.Add(root))
+                continue;
+
+            var component = new List<string>();
+            var stack = new Stack<string>();
+            stack.Push(root);
+            while (stack.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var node = stack.Pop();
+                component.Add(node);
+                var sources = reverse[node];
+                for (var sourceIndex = sources.Length - 1; sourceIndex >= 0; sourceIndex--)
                 {
-                    lowLinks[node] = Math.Min(lowLinks[node], indexes[target]);
+                    var source = sources[sourceIndex];
+                    if (assigned.Add(source))
+                        stack.Push(source);
                 }
             }
 
-            if (lowLinks[node] != indexes[node])
-                return;
-
-            var component = new List<string>();
-            string popped;
-            do
-            {
-                popped = stack.Pop();
-                onStack.Remove(popped);
-                component.Add(popped);
-            } while (!string.Equals(popped, node, StringComparison.Ordinal));
-
-            var selfCycle = component.Count == 1 && adjacency[component[0]].Contains(component[0], StringComparer.Ordinal);
+            component.Sort(StringComparer.Ordinal);
+            var selfCycle = component.Count == 1 && adjacencySets[component[0]].Contains(component[0]);
             if (component.Count > 1 || selfCycle)
-                cycles.Add(component.OrderBy(path => path, StringComparer.Ordinal).ToList());
+                cycleNodes.Add(component);
         }
 
-        foreach (var node in adjacency.Keys.OrderBy(path => path, StringComparer.Ordinal).ToList())
+        if (cycleNodes.Count == 0)
+            return [];
+
+        var nodeToComponent = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var componentIndex = 0; componentIndex < cycleNodes.Count; componentIndex++)
+            foreach (var node in cycleNodes[componentIndex])
+                nodeToComponent[node] = componentIndex;
+        var internalEdgeCounts = new int[cycleNodes.Count];
+        var referenceCounts = new long[cycleNodes.Count];
+        foreach (var edge in edges)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!indexes.ContainsKey(node))
-                Visit(node);
+            if (!nodeToComponent.TryGetValue(edge.SourcePath, out var sourceComponent)
+                || !nodeToComponent.TryGetValue(edge.TargetPath, out var targetComponent)
+                || sourceComponent != targetComponent)
+                continue;
+            internalEdgeCounts[sourceComponent]++;
+            referenceCounts[sourceComponent] += edge.ReferenceCount;
         }
 
-        return cycles;
+        return cycleNodes
+            .Select((component, componentIndex) => new DependencyCycleComponent(
+                component,
+                internalEdgeCounts[componentIndex],
+                referenceCounts[componentIndex]))
+            .OrderByDescending(static component => component.ReferenceCount)
+            .ThenByDescending(static component => component.InternalEdgeCount)
+            .ThenByDescending(static component => component.Nodes.Count)
+            .ThenBy(static component => component.Nodes[0], StringComparer.Ordinal)
+            .ToList();
     }
 
-    internal static JsonArray BuildDependencyCyclesJson(IReadOnlyList<List<string>> cycles)
+    private static List<FileDependencyResult> FilterEdgesToComponents(
+        IReadOnlyList<FileDependencyResult> edges,
+        IReadOnlyList<DependencyCycleComponent> components)
+    {
+        if (components.Count == 0)
+            return [];
+        var nodeToComponent = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var componentIndex = 0; componentIndex < components.Count; componentIndex++)
+            foreach (var node in components[componentIndex].Nodes)
+                nodeToComponent[node] = componentIndex;
+        return edges
+            .Where(edge => nodeToComponent.TryGetValue(edge.SourcePath, out var sourceComponent)
+                           && nodeToComponent.TryGetValue(edge.TargetPath, out var targetComponent)
+                           && sourceComponent == targetComponent)
+            .ToList();
+    }
+
+    internal static JsonArray BuildDependencyCyclesJson(
+        IReadOnlyList<DependencyCycleComponent> components,
+        int pageOffset)
     {
         var array = new JsonArray();
-        foreach (var cycle in cycles)
+        for (var i = 0; i < components.Count; i++)
         {
+            var component = components[i];
             array.Add(new JsonObject
             {
-                ["length"] = cycle.Count,
-                ["nodes"] = new JsonArray(cycle.Select(node => JsonValue.Create(node)).ToArray<JsonNode?>())
+                ["rank"] = pageOffset + i + 1,
+                ["length"] = component.Nodes.Count,
+                ["internal_edge_count"] = component.InternalEdgeCount,
+                ["reference_count"] = component.ReferenceCount,
+                ["nodes"] = new JsonArray(component.Nodes.Select(node => JsonValue.Create(node)).ToArray<JsonNode?>())
             });
         }
         return array;
     }
 
-    private sealed record DependencyCycleAnalysis(
+    internal static JsonArray BuildDependencyCyclesJson(IReadOnlyList<List<string>> cycles)
+        => BuildDependencyCyclesJson(
+            cycles.Select(static cycle => new DependencyCycleComponent(cycle, 0, 0)).ToList(),
+            pageOffset: 0);
+
+    internal sealed record DependencyCycleComponent(
+        List<string> Nodes,
+        int InternalEdgeCount,
+        long ReferenceCount);
+
+    internal sealed record DependencyCycleAnalysis(
         List<FileDependencyResult> Edges,
-        List<List<string>> Cycles,
+        List<DependencyCycleComponent> Components,
         bool Truncated,
         string TerminationReason,
         string? TruncatedReason,
-        int CandidateEdgeCount,
-        int CandidateEdgeLimit,
-        int DisplayLimit,
-        string DetectionMode);
+        int GraphEdgeCount,
+        int GraphEdgeBudget,
+        bool AnalysisComplete,
+        int TotalCycleCount,
+        bool TotalCycleCountAuthoritative,
+        int PageOffset,
+        int PageLimit,
+        bool HasMore,
+        string? NextCursor,
+        string DetectionMode,
+        string RankingMode)
+    {
+        public List<List<string>> Cycles => Components.Select(static component => component.Nodes).ToList();
+    }
 
-    private static DependencyCycleAnalysis AnalyzeDependencyCycles(
-        IReadOnlyList<FileDependencyResult> candidateEdges,
-        int candidateEdgeLimit,
-        int candidateRowCount,
+    internal static DependencyCycleAnalysis AnalyzeDependencyCycles(
+        IReadOnlyList<FileDependencyResult> graphEdges,
+        int graphEdgeBudget,
+        int graphRowCount,
         int displayLimit,
+        int pageOffset,
+        string cursorFingerprint,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var edges = FilterCycleEdges(candidateEdges, out var allCycles, cancellationToken);
-        var cyclesTruncated = allCycles.Count > displayLimit;
-        var candidateTruncated = candidateRowCount > candidateEdgeLimit;
-        var cycles = allCycles.Take(displayLimit).ToList();
-        var cycleNodes = cycles.SelectMany(static cycle => cycle).ToHashSet(StringComparer.Ordinal);
-        var outputEdges = edges
-            .Where(edge => cycleNodes.Count == 0 || (cycleNodes.Contains(edge.SourcePath) && cycleNodes.Contains(edge.TargetPath)))
-            .Take(displayLimit)
-            .ToList();
-        var truncatedReason = candidateTruncated
-            ? "candidate_edge_limit"
-            : cyclesTruncated
-                ? "display_limit"
+        var allComponents = FindRankedDependencyCycles(graphEdges, cancellationToken);
+        var graphBudgetReached = graphRowCount > graphEdgeBudget;
+        var components = allComponents.Skip(pageOffset).Take(displayLimit).ToList();
+        var nextOffset = pageOffset + components.Count;
+        var hasMore = nextOffset < allComponents.Count;
+        var outputEdges = FilterEdgesToComponents(graphEdges, components);
+        var truncatedReason = graphBudgetReached
+            ? "graph_edge_budget"
+            : hasMore
+                ? "page_limit"
                 : null;
         var terminationReason = truncatedReason switch
         {
-            "candidate_edge_limit" => "candidate_limit_reached",
-            "display_limit" => "display_limit_reached",
+            "graph_edge_budget" => "graph_budget_reached",
+            "page_limit" => "page_limit_reached",
             _ => "completed",
         };
+        var nextCursor = hasMore
+            ? FormatDependencyCycleCursor(new DependencyCycleCursor(nextOffset, cursorFingerprint))
+            : null;
 
         return new DependencyCycleAnalysis(
             outputEdges,
-            cycles,
-            candidateTruncated || cyclesTruncated,
+            components,
+            graphBudgetReached || hasMore,
             terminationReason,
             truncatedReason,
-            Math.Min(candidateRowCount, candidateEdgeLimit),
-            candidateEdgeLimit,
+            Math.Min(graphRowCount, graphEdgeBudget),
+            graphEdgeBudget,
+            !graphBudgetReached,
+            allComponents.Count,
+            !graphBudgetReached,
+            pageOffset,
             displayLimit,
-            DependencyCycleDetectionMode);
+            hasMore,
+            nextCursor,
+            DependencyCycleDetectionMode,
+            DependencyCycleRankingMode);
     }
 
-    private static void AddDependencyCycleAnalysisJsonFields(JsonObject payload, DependencyCycleAnalysis analysis)
-        => AddDependencyCycleAnalysisJsonFields(
-            payload,
-            analysis.Truncated,
-            analysis.TerminationReason,
-            analysis.TruncatedReason,
-            analysis.CandidateEdgeCount,
-            analysis.CandidateEdgeLimit,
-            analysis.DisplayLimit,
-            analysis.DetectionMode);
-
-    internal static void AddDependencyCycleAnalysisJsonFields(
-        JsonObject payload,
-        bool truncated,
-        string terminationReason,
-        string? truncatedReason,
-        int candidateEdgeCount,
-        int candidateEdgeLimit,
-        int displayLimit,
-        string detectionMode,
-        JsonArray? nextStepFlags = null)
+    internal static void AddDependencyCycleAnalysisJsonFields(JsonObject payload, DependencyCycleAnalysis analysis, bool mcpArguments = false)
     {
-        payload["truncated"] = truncated;
-        payload["termination_reason"] = terminationReason;
-        if (truncatedReason != null)
-            payload["truncated_reason"] = truncatedReason;
-        payload["candidate_edge_count"] = candidateEdgeCount;
-        payload["candidate_edge_limit"] = candidateEdgeLimit;
-        payload["cycle_detection_mode"] = detectionMode;
-        payload["cycle_result_scope"] = BuildDependencyCycleResultScope(truncatedReason);
-        payload["cycle_result_note"] = BuildDependencyCycleResultNote(truncatedReason);
-        payload["next_step_flags"] = nextStepFlags ?? BuildDependencyCycleNextStepFlagsJson(truncatedReason, candidateEdgeLimit, displayLimit);
+        payload["truncated"] = analysis.Truncated;
+        payload["termination_reason"] = analysis.TerminationReason;
+        if (analysis.TruncatedReason != null)
+            payload["truncated_reason"] = analysis.TruncatedReason;
+        payload["analysis_complete"] = analysis.AnalysisComplete;
+        payload["graph_edge_count"] = analysis.GraphEdgeCount;
+        payload["graph_edge_budget"] = analysis.GraphEdgeBudget;
+        payload["candidate_edge_count"] = analysis.GraphEdgeCount;
+        payload["candidate_edge_limit"] = analysis.GraphEdgeBudget;
+        payload["cycle_detection_mode"] = analysis.DetectionMode;
+        payload["cycle_ranking_mode"] = analysis.RankingMode;
+        payload["cycle_ranking_stable"] = true;
+        payload["cycle_result_scope"] = BuildDependencyCycleResultScope(analysis.TruncatedReason);
+        payload["cycle_result_note"] = BuildDependencyCycleResultNote(analysis.TruncatedReason);
+        payload["total_cycle_count"] = analysis.TotalCycleCount;
+        payload["total_cycle_count_authoritative"] = analysis.TotalCycleCountAuthoritative;
+        payload["page_offset"] = analysis.PageOffset;
+        payload["page_limit"] = analysis.PageLimit;
+        payload["returned_count"] = analysis.Components.Count;
+        payload["has_more"] = analysis.HasMore;
+        payload["next_cursor"] = analysis.NextCursor;
+        payload["next_step_flags"] = BuildDependencyCycleNextStepFlagsJson(analysis, mcpArguments);
     }
 
     private static string BuildDependencyCycleTruncationSummary(DependencyCycleAnalysis analysis)
-        => analysis.TruncatedReason == "display_limit"
-            ? $"partial: showing first {analysis.Cycles.Count} cycles"
-            : $"partial: candidate edge limit reached after {analysis.CandidateEdgeCount} candidate edges";
+        => analysis.TruncatedReason == "page_limit"
+            ? $"page complete: showing ranked cycles {analysis.PageOffset + 1}-{analysis.PageOffset + analysis.Components.Count}"
+            : $"partial analysis: graph edge budget reached after {analysis.GraphEdgeCount} edges";
 
     private static string BuildDependencyCycleTruncationWarning(DependencyCycleAnalysis analysis)
     {
-        var nextSteps = BuildDependencyCycleNextStepFlags(
-            analysis.TruncatedReason,
-            analysis.CandidateEdgeLimit,
-            analysis.DisplayLimit);
+        var nextSteps = BuildDependencyCycleNextStepFlags(analysis, mcpArguments: false);
         var nextStepsText = nextSteps.Count == 0
             ? string.Empty
             : $" Next steps: {string.Join(", ", nextSteps)}.";
-        return "Warning: dependency cycle detection returned partial results "
+        return "Warning: dependency cycle results are truncated "
                + $"({BuildDependencyCycleTruncationSummary(analysis)}). "
                + BuildDependencyCycleResultNote(analysis.TruncatedReason)
                + nextStepsText;
@@ -1061,106 +1233,166 @@ public static partial class QueryCommandRunner
     private static string BuildDependencyCycleResultScope(string? truncatedReason)
         => truncatedReason switch
         {
-            "candidate_edge_limit" => "partial_candidate_edge_sample",
-            "display_limit" => "partial_display_limit",
-            _ => "complete_candidate_edges",
+            "graph_edge_budget" => "partial_graph_budget",
+            "page_limit" => "complete_graph_page",
+            _ => "complete_graph",
         };
 
     private static string BuildDependencyCycleResultNote(string? truncatedReason)
         => truncatedReason switch
         {
-            "candidate_edge_limit" => "Candidate edge limit reached before cdidx could prove cycle completeness; returned cycles are a bounded sample, not a complete or ranked cycle set.",
-            "display_limit" => "More cycles were detected than displayed; returned cycles are the first displayed cycles from the bounded candidate scan.",
-            _ => "Cycle detection completed for all candidate edges selected by the current filters.",
+            "graph_edge_budget" => "The graph edge budget was reached before cdidx could prove SCC completeness; increase --graph-budget or narrow the graph filters.",
+            "page_limit" => "SCC analysis is complete for the selected graph; continue with next_cursor to retrieve the next stable ranked page.",
+            _ => "SCC analysis and the stable ranked result set are complete for the selected graph.",
         };
 
     private static JsonArray BuildDependencyCycleNextStepFlagsJson(
-        string? truncatedReason,
-        int candidateEdgeLimit,
-        int displayLimit)
-        => new(BuildDependencyCycleNextStepFlags(truncatedReason, candidateEdgeLimit, displayLimit)
-            .Select(flag => JsonValue.Create(flag))
-            .ToArray<JsonNode?>());
-
-    internal static JsonArray BuildMcpDependencyCycleNextStepFlagsJson(
-        string? truncatedReason,
-        int candidateEdgeLimit,
-        int displayLimit)
-        => new(BuildMcpDependencyCycleNextStepFlags(truncatedReason, candidateEdgeLimit, displayLimit)
+        DependencyCycleAnalysis analysis,
+        bool mcpArguments)
+        => new(BuildDependencyCycleNextStepFlags(analysis, mcpArguments)
             .Select(flag => JsonValue.Create(flag))
             .ToArray<JsonNode?>());
 
     private static List<string> BuildDependencyCycleNextStepFlags(
-        string? truncatedReason,
-        int candidateEdgeLimit,
-        int displayLimit)
+        DependencyCycleAnalysis analysis,
+        bool mcpArguments)
     {
         var flags = new List<string>();
-        switch (truncatedReason)
+        if (analysis.HasMore && analysis.NextCursor != null)
+            flags.Add(mcpArguments ? $"cursor={analysis.NextCursor}" : $"--cursor {analysis.NextCursor}");
+        if (analysis.TruncatedReason == "graph_edge_budget")
         {
-            case "candidate_edge_limit":
-                AddHigherLimitFlag(flags, candidateEdgeLimit);
+            var higherBudget = GetHigherDependencyCycleGraphBudget(analysis.GraphEdgeBudget);
+            if (higherBudget > analysis.GraphEdgeBudget)
+                flags.Add(mcpArguments ? $"graphBudget={higherBudget}" : $"--graph-budget {higherBudget}");
+            if (!mcpArguments)
+            {
                 flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--suppress-noise"));
                 flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--symbol"));
                 flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--symbol-family"));
-                flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--path", "<narrower-glob>"));
-                break;
-            case "display_limit":
-                AddHigherLimitFlag(flags, displayLimit);
-                flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--path", "<narrower-glob>"));
-                break;
+            }
+            flags.Add(mcpArguments
+                ? "path=<narrower-glob>"
+                : CliFlagSchema.GetUsageTokenForCommand("deps", "--path", "<narrower-glob>"));
         }
 
         return flags;
     }
 
-    private static List<string> BuildMcpDependencyCycleNextStepFlags(
-        string? truncatedReason,
-        int candidateEdgeLimit,
-        int displayLimit)
+    private static int GetHigherDependencyCycleGraphBudget(int currentBudget)
     {
-        var flags = new List<string>();
-        switch (truncatedReason)
+        if (currentBudget >= MaxDependencyCycleGraphBudget)
+            return MaxDependencyCycleGraphBudget;
+        var doubled = currentBudget > MaxDependencyCycleGraphBudget / 2
+            ? MaxDependencyCycleGraphBudget
+            : currentBudget * 2;
+        return Math.Min(MaxDependencyCycleGraphBudget, Math.Max(currentBudget + 1, doubled));
+    }
+
+    internal static string BuildDependencyCycleCursorFingerprint(QueryCommandOptions options, bool reverse)
+    {
+        var builder = new StringBuilder();
+        AppendCursorFingerprintValue(builder, "db", DbPathResolver.NormalizeDbPath(options.DbPath));
+        AppendCursorFingerprintValue(builder, "workspace", string.Join('\u001f', options.WorkspaceDbPaths));
+        AppendCursorFingerprintValue(builder, "lang", options.Lang);
+        AppendCursorFingerprintValue(builder, "path", string.Join('\u001f', options.PathPatterns));
+        AppendCursorFingerprintValue(builder, "exclude", string.Join('\u001f', options.ExcludePaths));
+        AppendCursorFingerprintValue(builder, "excludeTests", options.ExcludeTests ? "1" : "0");
+        AppendCursorFingerprintValue(builder, "includeGenerated", options.IncludeGenerated ? "1" : "0");
+        AppendCursorFingerprintValue(builder, "reverse", reverse ? "1" : "0");
+        AppendCursorFingerprintValue(builder, "symbols", string.Join('\u001f', options.DependencySymbols));
+        AppendCursorFingerprintValue(builder, "families", string.Join('\u001f', options.DependencySymbolFamilies));
+        AppendCursorFingerprintValue(builder, "suppressNoise", options.DependencySuppressNoise ? "1" : "0");
+        AppendCursorFingerprintValue(builder, "graphBudget", options.DependencyCycleGraphBudget.ToString(CultureInfo.InvariantCulture));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
+        return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
+    }
+
+    internal static string BuildDependencyCycleGraphFingerprint(
+        string queryFingerprint,
+        IReadOnlyList<FileDependencyResult> edges,
+        int graphRowCount)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendDependencyCycleGraphHashValue(hash, queryFingerprint);
+        AppendDependencyCycleGraphHashValue(hash, graphRowCount.ToString(CultureInfo.InvariantCulture));
+        foreach (var edge in edges)
         {
-            case "candidate_edge_limit":
-                AddHigherLimitArgument(flags, candidateEdgeLimit);
-                flags.Add("path=<narrower-glob>");
-                break;
-            case "display_limit":
-                AddHigherLimitArgument(flags, displayLimit);
-                flags.Add("path=<narrower-glob>");
-                break;
+            AppendDependencyCycleGraphHashValue(hash, edge.SourceDb);
+            AppendDependencyCycleGraphHashValue(hash, edge.SourcePath);
+            AppendDependencyCycleGraphHashValue(hash, edge.TargetDb);
+            AppendDependencyCycleGraphHashValue(hash, edge.TargetPath);
+            AppendDependencyCycleGraphHashValue(hash, edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
         }
 
-        return flags;
+        var digest = hash.GetHashAndReset();
+        return Convert.ToHexString(digest.AsSpan(0, 16)).ToLowerInvariant();
     }
 
-    private static void AddHigherLimitFlag(List<string> flags, int currentLimit)
+    private static void AppendDependencyCycleGraphHashValue(IncrementalHash hash, string? value)
     {
-        var nextLimit = GetHigherDependencyCycleLimit(currentLimit);
-        if (nextLimit > currentLimit)
-            flags.Add($"--limit {nextLimit}");
+        value ??= string.Empty;
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        byte[]? rented = null;
+        Span<byte> buffer = byteCount <= 1024
+            ? stackalloc byte[byteCount]
+            : (rented = ArrayPool<byte>.Shared.Rent(byteCount));
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(value.AsSpan(), buffer);
+            hash.AppendData(buffer[..written]);
+            Span<byte> separator = stackalloc byte[1] { 0 };
+            hash.AppendData(separator);
+        }
+        finally
+        {
+            if (rented != null)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
-    private static void AddHigherLimitArgument(List<string> flags, int currentLimit)
+    private static void AppendCursorFingerprintValue(StringBuilder builder, string name, string? value)
+        => builder.Append(name).Append('=').Append(value ?? string.Empty).Append('\n');
+
+    internal static string FormatDependencyCycleCursor(DependencyCycleCursor cursor)
     {
-        var nextLimit = GetHigherDependencyCycleLimit(currentLimit);
-        if (nextLimit > currentLimit)
-            flags.Add($"limit={nextLimit}");
+        var payload = Encoding.UTF8.GetBytes(
+            cursor.Offset.ToString(CultureInfo.InvariantCulture) + "\n" + cursor.Fingerprint);
+        return DependencyCycleCursorPrefix
+               + Convert.ToBase64String(payload)
+                   .TrimEnd('=')
+                   .Replace('+', '-')
+                   .Replace('/', '_');
     }
 
-    private static int GetHigherDependencyCycleLimit(int currentLimit)
+    internal static bool TryParseDependencyCycleCursor(string value, out DependencyCycleCursor cursor)
     {
-        var upperBound = NumericFlagUpperBounds.TryGetValue("--limit", out var maxLimit)
-            ? maxLimit
-            : int.MaxValue;
-        if (currentLimit >= upperBound)
-            return upperBound;
-
-        var doubled = currentLimit > upperBound / 2
-            ? upperBound
-            : currentLimit * 2;
-        return Math.Min(upperBound, Math.Max(currentLimit + 1, doubled));
+        cursor = default;
+        if (value.Length > MaxDependencyCycleCursorLength
+            || !value.StartsWith(DependencyCycleCursorPrefix, StringComparison.Ordinal))
+            return false;
+        var encoded = value[DependencyCycleCursorPrefix.Length..]
+            .Replace('-', '+')
+            .Replace('_', '/');
+        encoded = encoded.PadRight(encoded.Length + ((4 - encoded.Length % 4) % 4), '=');
+        try
+        {
+            var payload = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            var separator = payload.IndexOf('\n');
+            if (separator <= 0
+                || !int.TryParse(payload.AsSpan(0, separator), NumberStyles.None, CultureInfo.InvariantCulture, out var offset)
+                || offset < 0)
+                return false;
+            var fingerprint = payload[(separator + 1)..];
+            if (fingerprint.Length != 32 || fingerprint.Any(static ch => !Uri.IsHexDigit(ch)))
+                return false;
+            cursor = new DependencyCycleCursor(offset, fingerprint.ToLowerInvariant());
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
 
     private static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
@@ -1388,14 +1620,6 @@ public static partial class QueryCommandRunner
     }
 
     private static string EscapeDot(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
-
-    internal static int GetDependencyCycleGraphLimit(int displayLimit)
-    {
-        var requestedLimit = Math.Max(displayLimit, DefaultDependencyCycleGraphLimit);
-        return NumericFlagUpperBounds.TryGetValue("--limit", out var maxLimit)
-            ? Math.Min(requestedLimit, maxLimit)
-            : requestedLimit;
-    }
 
     private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse, int limit, CancellationToken cancellationToken)
     {
