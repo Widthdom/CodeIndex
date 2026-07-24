@@ -118,7 +118,7 @@ public partial class DbReader
         set => LegacyResourceReadSqliteVmStepLimitOverride.Value = value;
     }
 
-    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0, bool useIndexedLiteralCandidates = false)
+    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0, bool useIndexedLiteralCandidates = false, string? resumePath = null, int? resumeLine = null)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
             return new FindResults([], new FindScanSummary(0, 0, 0));
@@ -144,25 +144,41 @@ public partial class DbReader
         var linesScanned = 0;
         var truncated = false;
         string? truncationReason = null;
+        string? nextPath = null;
+        int? nextLine = null;
         var matchesSkipped = 0;
         offset = Math.Max(0, offset);
+        var resumePending = resumePath is not null;
         var results = new List<FileFindResult>();
         using var fileReader = fileCmd.ExecuteTrackedReader();
         while (fileReader.TrackedRead())
         {
             if (results.Count >= limit)
                 break;
-            if (maxCandidateFiles.HasValue && filesScanned >= maxCandidateFiles.Value)
-            {
-                truncated = true;
-                truncationReason ??= "candidate_file_limit";
-                break;
-            }
 
             var fileId = fileReader.GetInt64(0);
             var path = fileReader.GetString(1);
             var fileLang = GetNullableString(fileReader, 2);
             var totalLines = fileReader.GetInt32(3);
+            if (resumePending)
+            {
+                if (!string.Equals(path, resumePath, StringComparison.Ordinal))
+                    continue;
+                resumePending = false;
+            }
+            if (maxCandidateFiles.HasValue && filesScanned >= maxCandidateFiles.Value)
+            {
+                truncated = true;
+                truncationReason ??= "candidate_file_limit";
+                nextPath = path;
+                nextLine = 1;
+                break;
+            }
+
+            var firstEligibleLine = string.Equals(path, resumePath, StringComparison.Ordinal)
+                ? Math.Max(1, resumeLine ?? 1)
+                : 1;
+            var firstContextLine = Math.Max(1, firstEligibleLine - before);
             filesScanned++;
             if (totalLines <= 0)
                 continue;
@@ -178,18 +194,25 @@ public partial class DbReader
             {
                 if (indexedLine.Number > totalLines)
                     break;
+                if (indexedLine.Number < firstContextLine)
+                    continue;
+                var eligibleForMatch = indexedLine.Number >= firstEligibleLine;
                 if (maxLinesScanned.HasValue && linesScanned >= maxLinesScanned.Value)
                 {
                     truncated = true;
                     truncationReason ??= "line_scan_limit";
+                    nextPath = path;
+                    nextLine = indexedLine.Number;
                     stopScanning = true;
                     break;
                 }
-                linesScanned++;
+                if (eligibleForMatch)
+                    linesScanned++;
 
                 AddLineToFindWindow(indexedLine, snippetWindow, snippetLinesByNumber);
 
                 if ((matchesSkipped < offset || acceptedMatches < limit)
+                    && eligibleForMatch
                     && (!focusLine.HasValue || indexedLine.Number == focusLine.Value))
                 {
                     foreach (var lineMatch in EnumerateFindLineMatches(
@@ -259,7 +282,9 @@ public partial class DbReader
                 maxCandidateFiles,
                 maxLinesScanned,
                 searchPlan.Strategy,
-                searchPlan.FallbackReason));
+                searchPlan.FallbackReason,
+                nextPath,
+                nextLine));
     }
 
     public int CountFindCandidateFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -1874,6 +1899,19 @@ public partial class DbReader
             FreshnessAvailable = freshnessAvailable,
             FreshnessDegradedReason = freshnessAvailable ? null : "files.indexed_at column missing in this index",
         };
+    }
+
+    internal (string Identity, string? StableAt) GetPaginationGeneration()
+    {
+        var freshness = GetFreshnessHint();
+        var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
+        var indexedHeadTimestamp = TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey);
+        var indexedAt = freshness.IndexedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var stableAt = indexedHeadTimestamp ?? indexedAt;
+        var identity = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{indexedHeadSha ?? "no-indexed-head"}\n{indexedHeadTimestamp ?? "no-indexed-head-timestamp"}\n{indexedAt ?? "no-indexed-at"}\n{freshness.FileCount}");
+        return (identity, stableAt);
     }
 
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()

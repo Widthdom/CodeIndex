@@ -1489,7 +1489,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit + 3, json.GetProperty("total_symbol_count").GetInt32());
             Assert.Equal(2, json.GetProperty("returned_symbol_count").GetInt32());
             Assert.Equal(0, json.GetProperty("cursor_offset").GetInt32());
-            Assert.Equal("outline:2", json.GetProperty("next_cursor").GetString());
+            Assert.StartsWith("page:v1:", json.GetProperty("next_cursor").GetString(), StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(json.GetProperty("result_stable_at").GetString()));
             Assert.True(json.GetProperty("has_more").GetBoolean());
         }
         finally
@@ -1909,15 +1910,26 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, firstJson.GetProperty("returned_symbol_count").GetInt32());
             Assert.Equal(0, firstJson.GetProperty("cursor_offset").GetInt32());
             Assert.True(firstJson.GetProperty("has_more").GetBoolean());
-            Assert.Equal("outline:2", firstJson.GetProperty("next_cursor").GetString());
+            var nextCursor = firstJson.GetProperty("next_cursor").GetString();
+            Assert.StartsWith("page:v1:", nextCursor, StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(firstJson.GetProperty("result_stable_at").GetString()));
             Assert.Equal(new[] { "function" }, firstJson.GetProperty("kind_filter").EnumerateArray().Select(item => item.GetString()).ToArray());
             Assert.Equal(new[] { "name", "line", "kind" }, firstJson.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
             Assert.Equal(new[] { "M0", "M1" }, firstSymbols.Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
             foreach (var symbol in firstSymbols)
                 Assert.Equal(new[] { "name", "line", "kind" }, symbol.EnumerateObject().Select(property => property.Name).ToArray());
 
+            var (mismatchedExitCode, mismatchedStdout, mismatchedStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/many.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "name", "--limit", "2", "--cursor", nextCursor!, "--outline-fields", "name,line,kind"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, mismatchedExitCode);
+            Assert.Equal(string.Empty, mismatchedStdout);
+            Assert.Contains("query scope, filters, or ordering", mismatchedStderr, StringComparison.Ordinal);
+            Assert.Contains("restart required", mismatchedStderr, StringComparison.Ordinal);
+
             var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
-                ["src/many.cs", "--db", dbPath, "--json", "--kind", "function", "--limit", "2", "--cursor", "outline:2", "--outline-fields", "name,line,kind"],
+                ["src/many.cs", "--db", dbPath, "--json", "--kind", "function", "--limit", "2", "--cursor", nextCursor!, "--outline-fields", "name,line,kind"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, secondExitCode);
@@ -1933,6 +1945,21 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(JsonValueKind.Null, secondJson.GetProperty("next_cursor").ValueKind);
             Assert.Single(secondSymbols);
             Assert.Equal("M2", secondSymbols[0].GetProperty("name").GetString());
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, "2026-07-24T12:00:00.0000000+00:00");
+            }
+
+            var (staleExitCode, staleStdout, staleStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/many.cs", "--db", dbPath, "--json", "--kind", "function", "--limit", "2", "--cursor", nextCursor!, "--outline-fields", "name,line,kind"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
+            Assert.Equal(string.Empty, staleStdout);
+            Assert.Contains("index generation changed", staleStderr, StringComparison.Ordinal);
+            Assert.Contains("restart required", staleStderr, StringComparison.Ordinal);
         }
         finally
         {
