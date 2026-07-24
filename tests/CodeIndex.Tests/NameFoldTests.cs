@@ -42,4 +42,11 @@ public class NameFoldTests
         Assert.Equal(fingerprint.ToLowerInvariant(), fingerprint);
         Assert.DoesNotContain(fingerprint, c => c is >= 'A' and <= 'F');
     }
+
+    [Fact]
+    public void PersistedKeyContract_VersionsNimStyleInsensitiveIdentity_Issue4738()
+    {
+        Assert.Equal(3, NameFold.Version);
+        Assert.Equal("myproc", DbReader.FoldNameForLanguage("my_proc", "nim"));
+    }
 }

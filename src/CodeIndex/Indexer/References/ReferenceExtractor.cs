@@ -64,6 +64,7 @@ public static partial class ReferenceExtractor
         "reference_definition_lookup_line_name_budget_exceeded",
         "reference_definition_lookup_symbol_budget_exceeded",
         "reference_enclosing_type_candidate_budget_exceeded",
+        "reference_scientific_native_dependency_name_budget_exceeded",
         ShaderReferenceExtractor.LineNameBudgetDiagnosticKind,
         ShaderReferenceExtractor.TrackedNameBudgetDiagnosticKind,
         "reference_swift_property_line_budget_exceeded",
@@ -408,6 +409,39 @@ public static partial class ReferenceExtractor
         ["smalltalk"] = new HashSet<string>(StringComparer.Ordinal)
         {
             "false", "nil", "self", "super", "thisContext", "true",
+        },
+        ["ada"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "accept", "begin", "case", "declare", "delay", "else", "elsif", "end", "entry",
+            "exception", "exit", "function", "generic", "if", "loop", "package", "pragma",
+            "procedure", "raise", "record", "renames", "return", "select", "task", "terminate",
+            "type", "use", "when", "while", "with",
+        },
+        ["cython"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "cdef", "cpdef", "ctypedef", "cimport", "def", "extern", "gil", "include",
+            "nogil", "property",
+        },
+        ["d"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "__traits", "assert", "cast", "debug", "extern", "is", "mixin", "pragma", "scope",
+            "static", "unittest", "version",
+        },
+        ["julia"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "abstract", "baremodule", "begin", "do", "export", "finally", "function", "import",
+            "let", "macro", "module", "mutable", "primitive", "quote", "struct", "using", "where",
+        },
+        ["matlab"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "arguments", "case", "catch", "classdef", "elseif", "end", "function", "import",
+            "methods", "otherwise", "parfor", "properties", "spmd",
+        },
+        ["nim"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "block", "case", "concept", "converter", "defer", "discard", "distinct", "from",
+            "func", "import", "include", "iterator", "macro", "method", "mixin", "object",
+            "proc", "template", "type", "when",
         },
         // Gradle/Groovy keywords / Gradle/Groovy キーワード
         ["gradle"] = new HashSet<string>(StringComparer.Ordinal)
@@ -1393,6 +1427,112 @@ public static partial class ReferenceExtractor
         return namesByLine;
     }
 
+    private static IReadOnlyDictionary<int, Dictionary<string, HashSet<int>>>?
+        BuildScientificDefinitionNameIndicesByLine(
+            string language,
+            IReadOnlyList<string> lines,
+            IReadOnlyList<SymbolRecord> symbols,
+            IReadOnlyDictionary<int, HashSet<string>> definitionNamesByLine)
+    {
+        if (!ScientificNativeReferenceExtractor.Supports(language) || symbols.Count == 0)
+            return null;
+
+        var limits = GetSafetyLimits();
+        var comparer = GetDefinitionNamesComparer(language);
+        var comparison = comparer == StringComparer.OrdinalIgnoreCase
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var indicesByLine = new Dictionary<int, Dictionary<string, HashSet<int>>>();
+        for (var symbolIndex = 0;
+             symbolIndex < symbols.Count && symbolIndex < limits.MaxLookupSymbols;
+             symbolIndex++)
+        {
+            var symbol = symbols[symbolIndex];
+            if (symbol.Line <= 0
+                || symbol.Line > lines.Count
+                || !definitionNamesByLine.TryGetValue(symbol.Line, out var retainedNames)
+                || !retainedNames.Contains(symbol.Name))
+            {
+                continue;
+            }
+
+            var line = lines[symbol.Line - 1];
+            var searchStart = Math.Clamp(symbol.StartColumn ?? 0, 0, line.Length);
+            var definitionIndex = FindScientificDefinitionNameIndex(
+                line,
+                symbol.Name,
+                searchStart,
+                comparison);
+            if (definitionIndex < 0)
+                continue;
+
+            if (!indicesByLine.TryGetValue(symbol.Line, out var indicesByName))
+            {
+                indicesByName = new Dictionary<string, HashSet<int>>(comparer);
+                indicesByLine[symbol.Line] = indicesByName;
+            }
+
+            AddScientificDefinitionNameIndex(
+                indicesByName,
+                symbol.Name,
+                definitionIndex);
+
+            var leafSeparatorIndex = symbol.Name.LastIndexOf('.');
+            if (leafSeparatorIndex >= 0 && leafSeparatorIndex + 1 < symbol.Name.Length)
+            {
+                AddScientificDefinitionNameIndex(
+                    indicesByName,
+                    symbol.Name[(leafSeparatorIndex + 1)..],
+                    definitionIndex + leafSeparatorIndex + 1);
+            }
+        }
+
+        return indicesByLine;
+    }
+
+    private static int FindScientificDefinitionNameIndex(
+        string line,
+        string name,
+        int searchStart,
+        StringComparison comparison)
+    {
+        while (searchStart <= line.Length - name.Length)
+        {
+            var index = line.IndexOf(name, searchStart, comparison);
+            if (index < 0)
+                return -1;
+
+            var beforeIsBoundary = index == 0
+                || !IsScientificDefinitionIdentifierChar(line[index - 1]);
+            var end = index + name.Length;
+            var afterIsBoundary = end == line.Length
+                || !IsScientificDefinitionIdentifierChar(line[end]);
+            if (beforeIsBoundary && afterIsBoundary)
+                return index;
+
+            searchStart = index + 1;
+        }
+
+        return -1;
+    }
+
+    private static bool IsScientificDefinitionIdentifierChar(char value)
+        => char.IsLetterOrDigit(value) || value is '_' or '!' or '?' or '$';
+
+    private static void AddScientificDefinitionNameIndex(
+        Dictionary<string, HashSet<int>> indicesByName,
+        string name,
+        int index)
+    {
+        if (!indicesByName.TryGetValue(name, out var indices))
+        {
+            indices = [];
+            indicesByName[name] = indices;
+        }
+
+        indices.Add(index);
+    }
+
     private static IReadOnlySet<string> BuildAllDefinitionNames(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
@@ -1508,7 +1648,7 @@ public static partial class ReferenceExtractor
         => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
 
     private static StringComparer GetDefinitionNamesComparer(string language)
-        => language == "sql"
+        => language is "sql" or "ada"
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
 
@@ -1927,7 +2067,8 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string? language = null)
+        string? language = null,
+        string? targetQualifier = null)
     {
         AddReference(
             references,
@@ -1939,7 +2080,8 @@ public static partial class ReferenceExtractor
             context,
             lineNumber,
             container,
-            language);
+            language,
+            targetQualifier);
     }
 
     internal static void AddReference(
@@ -1952,24 +2094,38 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string? language = null)
+        string? language = null,
+        string? targetQualifier = null)
     {
         var column = nameIndex + 1;
         var dedupeKey = CreateReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container);
         if (!seen.Add(dedupeKey))
             return;
+        var currentContainerReceiver = string.Equals(
+            targetQualifier,
+            ScientificNativeReferenceExtractor.CurrentContainerReceiverMarker,
+            StringComparison.Ordinal);
 
         TryAddReference(references, new ReferenceRecord
         {
             FileId = fileId,
             SymbolName = name,
+            IdentitySymbolNameFolded = language == "nim"
+                ? NimIdentifierIdentity.Fold(name)
+                : null,
             ReferenceKind = referenceKind,
             Line = lineNumber,
             Column = column,
             Context = context,
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
-            IsSelfReference = IsSameReferenceName(container?.Name, name),
+            IdentityContainerNameFolded = language == "nim"
+                ? NimIdentifierIdentity.Fold(container?.Name)
+                : null,
+            TargetQualifier = currentContainerReceiver ? null : targetQualifier,
+            SuppressInferredTargetQualifier = currentContainerReceiver,
+            IsSelfReference = (targetQualifier == null || currentContainerReceiver)
+                && IsSameReferenceName(container?.Name, name),
         });
     }
 

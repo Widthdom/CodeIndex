@@ -1659,6 +1659,28 @@ public partial class DbReader : IDisposable
             : normalized;
     }
 
+    internal static string FoldNameForLanguage(string value, string? lang) =>
+        string.Equals(NormalizeQueryLanguage(lang), "nim", StringComparison.Ordinal)
+            ? NimIdentifierIdentity.Fold(value) ?? value
+            : NameFold.Fold(value) ?? value;
+
+    private static string BuildPersistedFoldedNameMatchSql(
+        string foldedNameSql,
+        string parameterSql,
+        string fileLanguageSql = "f.lang")
+        => $"(({fileLanguageSql} <> 'nim' AND {foldedNameSql} = {parameterSql})"
+            + $" OR ({fileLanguageSql} = 'nim' AND {foldedNameSql} = {parameterSql}Nim))";
+
+    private static void AddPersistedFoldedNameQueryParameters(
+        SqliteCommand command,
+        string parameterName,
+        string value,
+        string? lang)
+    {
+        SqliteCommandPolicy.Add(command, parameterName, FoldNameForLanguage(value, lang));
+        SqliteCommandPolicy.Add(command, $"{parameterName}Nim", FoldNameForLanguage(value, "nim"));
+    }
+
     internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
         => langs.Any(IsSqlLanguage);
 

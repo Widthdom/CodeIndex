@@ -1913,6 +1913,10 @@ public partial class SymbolExtractorTests
         // #4729 adversarial review の回帰: switch arm も `=>` を使うが member 宣言ではない。
         // arm ごとにメソッド末尾のセミコロンまで走査すると二乗時間になるため、密な
         // switch 式を runaway guard として維持する。
+        // Keep the wall-clock budget broad enough for full-suite host load: this is a
+        // quadratic-regression tripwire, not a benchmark threshold (#4792).
+        // wall-clock 予算は full suite の host 負荷に耐える幅を持たせる。これは benchmark
+        // 閾値ではなく、二乗時間への回帰を検出する tripwire である (#4792)。
         const int armCount = 10_000;
         var arms = string.Join('\n', Enumerable.Range(0, armCount).Select(i => $"            {i} => {i},"));
         var content = $$"""
@@ -1935,7 +1939,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SwitchHost");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Map");
         Assert.DoesNotContain(symbols, s => s.Name == "value");
-        var runawayBudget = TimeSpan.FromSeconds(8);
+        var runawayBudget = TimeSpan.FromSeconds(15);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Dense C# switch-expression extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");

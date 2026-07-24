@@ -37,6 +37,7 @@ public static partial class ReferenceExtractor
         "solution", "dependency_manifest", "dependency_lock", "json", "jsonl", "toml",
         "gitignore", "gitattributes", "editorconfig", "dockerignore", "config", "app_manifest",
         "zig", "css", "sass", "stylus", "xml", "yaml", "graphql", "html", "markdown", "fortran", "pascal", "objc", "smalltalk",
+        "ada", "cython", "d", "julia", "matlab", "nim", "ambiguous_m",
         "verilog", "systemverilog", "vhdl",
     ];
 

@@ -2710,7 +2710,7 @@ public partial class QueryCommandRunnerTests
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_format_count_issue4316");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.pl", "prolog", "main :- true.\n");
 
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
             QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
@@ -2791,15 +2791,15 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
-        var adaGuidance = languages["ada"].GetProperty("unsupported_guidance").EnumerateArray().ToList();
+        var prologGuidance = languages["prolog"].GetProperty("unsupported_guidance").EnumerateArray().ToList();
 
-        var referenceGuidance = adaGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "references");
-        Assert.Contains("Reference extraction is not advertised for 'ada'", referenceGuidance.GetProperty("message").GetString());
+        var referenceGuidance = prologGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "references");
+        Assert.Contains("Reference extraction is not advertised for 'prolog'", referenceGuidance.GetProperty("message").GetString());
         var referenceCommands = referenceGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
         Assert.Contains("search", referenceCommands);
         Assert.Contains("definition", referenceCommands);
 
-        var graphGuidance = adaGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "graph");
+        var graphGuidance = prologGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "graph");
         Assert.Contains("empty callers, callees, or impact results are not authoritative", graphGuidance.GetProperty("message").GetString());
         var graphCommands = graphGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
         Assert.Contains("search", graphCommands);
@@ -2885,7 +2885,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsCythonSymbolsAndCudaReferences_Issue4737()
+    public void RunLanguages_JsonReportsCythonAndCudaReferences_Issues4737And4738()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
@@ -2898,8 +2898,8 @@ public partial class QueryCommandRunnerTests
         var cuda = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "cuda");
 
         Assert.True(cython.GetProperty("symbol_extraction").GetBoolean());
-        Assert.False(cython.GetProperty("reference_extraction").GetBoolean());
-        Assert.False(cython.GetProperty("graph_queries").GetBoolean());
+        Assert.True(cython.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(cython.GetProperty("graph_queries").GetBoolean());
         Assert.True(cuda.GetProperty("symbol_extraction").GetBoolean());
         Assert.True(cuda.GetProperty("reference_extraction").GetBoolean());
         Assert.True(cuda.GetProperty("graph_queries").GetBoolean());
@@ -3179,7 +3179,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsMatlabAndPrologSymbolOnlyCapabilities_Issue4612()
+    public void RunLanguages_JsonReportsScientificNativeReferenceCapabilities_Issue4738()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
@@ -3189,13 +3189,16 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
-        foreach (var language in new[] { "matlab", "prolog" })
+        foreach (var language in new[] { "ada", "ambiguous_m", "cython", "d", "julia", "matlab", "nim" })
         {
             Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean());
-            Assert.False(languages[language].GetProperty("reference_extraction").GetBoolean());
-            Assert.False(languages[language].GetProperty("graph_queries").GetBoolean());
+            Assert.True(languages[language].GetProperty("reference_extraction").GetBoolean());
+            Assert.True(languages[language].GetProperty("graph_queries").GetBoolean());
         }
 
+        Assert.True(languages["prolog"].GetProperty("symbol_extraction").GetBoolean());
+        Assert.False(languages["prolog"].GetProperty("reference_extraction").GetBoolean());
+        Assert.False(languages["prolog"].GetProperty("graph_queries").GetBoolean());
         Assert.Contains(".m", languages["ambiguous_m"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains(".pl", languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
     }
@@ -3330,7 +3333,7 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var symbolOnly in new[] { "ada", "crystal", "d", "groovy", "julia", "nim", "tcl" })
+        foreach (var symbolOnly in new[] { "crystal", "groovy", "tcl" })
         {
             Assert.True(languages.ContainsKey(symbolOnly), $"expected '{symbolOnly}' to be listed");
             var entry = languages[symbolOnly];
