@@ -294,6 +294,13 @@ sections below show examples and option details for the most common workflows.
 | MCP | `mcp` | Start the MCP server for AI tools | server transport |
 | Legal | `license` | Show the license and commercial-use summary; add `--json` for the stable `license`, `commercial_use`, `trademark`, and controlling `documents` fields | -- |
 
+For `files` and `map`, `--exclude-tests` without an explicit `--path` applies the
+same production-source preset (`src/**` plus the built-in non-source exclusions).
+With an explicit `--path`, both commands keep that selected path scope and remove
+test paths from it. As a result, `files --exclude-tests --count` and the
+`file_count` reported by `map --exclude-tests --sections summary --json` describe
+the same filtered file set.
+
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
 Run `cdidx --help` for the full syntax line for every command. For focused help,
@@ -3498,6 +3505,13 @@ cdidx index . --quiet
 | Portability | `export` / `import` | build 済み CodeIndex database を portable archive として共有 | -- |
 | MCP | `mcp` | AI tools 向け MCP server を起動 | server transport |
 | Legal | `license` | license と commercial-use summary を表示。`--json` を付けると、安定した `license`、`commercial_use`、`trademark`、controlling `documents` field を出力 | -- |
+
+`files` と `map` では、明示的な `--path` なしで `--exclude-tests` を指定すると、
+同じ本番ソース preset（`src/**` と組み込みの非ソース除外）が適用されます。
+明示的な `--path` がある場合は、両コマンドとも選択した path scope を維持し、
+そこから test path を除外します。このため、`files --exclude-tests --count` と
+`map --exclude-tests --sections summary --json` が返す `file_count` は、同じ
+filter 済み file 集合を表します。
 
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
