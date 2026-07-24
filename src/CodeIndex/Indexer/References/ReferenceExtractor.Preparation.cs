@@ -86,7 +86,9 @@ public static partial class ReferenceExtractor
             : (MultilineStringContent: null, BlockComment: null);
         var csharpLinesInsideMultilineStringContent = csharpLineState.MultilineStringContent;
         var csharpLinesInsideBlockComment = csharpLineState.BlockComment;
-        var referenceStructuralLines = language == "cpp"
+        var referenceStructuralLines = language == "tcl"
+            ? lines
+            : language == "cpp"
             ? SplitContentLines(MaskCppLexicalRanges(
                 maskedContent,
                 [new CppLexicalRange(0, maskedContent.Length)],

@@ -1069,11 +1069,16 @@ public partial class ReferenceExtractorTests
             end
 
             class Inline; def inline_helper(); end; end
+
+            abstract class Base
+              abstract def declared(value)
+            end
             """;
 
         var (symbols, references) = ExtractSymbolsAndReferences("crystal", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "declared");
         AssertReferencesContain(references, "type_reference", null, "support");
         AssertReferencesContain(references, "call", "run", "helper");
         Assert.Equal(4, references.Count(reference =>
@@ -1092,7 +1097,7 @@ public partial class ReferenceExtractorTests
             stringCall.Column);
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "require" or "def" or "inline_helper");
+            && reference.SymbolName is "require" or "def" or "inline_helper" or "declared");
     }
 
     [Fact]
@@ -1102,7 +1107,7 @@ public partial class ReferenceExtractorTests
             import demo.Support
 
             class Runner {
-                Runner(
+                @Inject Runner(
                     int seed
                 ) {
                     super(seed)
@@ -1112,10 +1117,21 @@ public partial class ReferenceExtractorTests
                     value
                 }
 
+                @Override def annotated(value) {
+                    value
+                }
+
+                Map<String, Integer> convert(String value) {
+                    [:]
+                }
+
                 def run(value) {
                     helper value
                     helper(value)
                     def text = "123456789"; helper(value)
+                    [1].each { helper it }
+                    annotated(value)
+                    convert("value")
                     helper = 1
                     synchronized(value) {}
                 }
@@ -1127,12 +1143,22 @@ public partial class ReferenceExtractorTests
         var (symbols, references) = ExtractSymbolsAndReferences("groovy", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "annotated");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "convert");
         AssertReferencesContain(references, "type_reference", null, "Support");
         AssertReferencesContain(references, "call", "run", "helper");
-        Assert.Equal(3, references.Count(reference =>
+        Assert.Equal(4, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper"));
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "annotated");
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "convert");
         var stringCallLine = Array.FindIndex(
             content.Split('\n'),
             line => line.Contains("text =", StringComparison.Ordinal)) + 1;
@@ -1312,6 +1338,8 @@ public partial class ReferenceExtractorTests
     public void Extract_Tcl_IndexesSingleLineProcBodiesAndMasksComments_Issue4746()
     {
         const string content = """
+            # continued declaration comment \
+            proc fake {} { helper }
             proc helper {} { return 1 }
             # [helper]
             proc run {helper} {
@@ -1337,6 +1365,10 @@ public partial class ReferenceExtractorTests
                 catch {
                     helper
                 }
+                if {1} "helper"
+                eval helper
+                after 1 helper
+                uplevel helper
                 switch $value {
                     one { helper }
                     default {
@@ -1359,13 +1391,14 @@ public partial class ReferenceExtractorTests
             proc sameLine {} { helper }; helper
             """;
 
-        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+        var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
 
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "fake");
         AssertReferencesContain(references, "call", "run", "helper");
         AssertReferencesContain(references, "call", "multiline", "helper");
         AssertReferencesContain(references, "call", "split", "helper");
         AssertReferencesContain(references, "call", "sameLine", "helper");
-        Assert.Equal(15, references.Count(reference =>
+        Assert.Equal(19, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
         Assert.Single(references, reference =>
@@ -1406,6 +1439,8 @@ public partial class ReferenceExtractorTests
                 Term =.. [node,
                           value],
                 helper.
+            qualified :-
+                demo:helper.
             % helper().
             /*
             helper().
@@ -1419,9 +1454,9 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "build");
         Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
         AssertReferencesContain(references, "type_reference", null, "support");
-        Assert.Equal(4, references.Count(reference =>
+        Assert.Equal(5, references.Count(reference =>
             reference.ReferenceKind == "call"
-            && reference.ContainerName is "threshold" or "quoted" or "meta" or "build"
+            && reference.ContainerName is "threshold" or "quoted" or "meta" or "build" or "qualified"
             && reference.SymbolName == "helper"));
         Assert.Equal(4, references.Count(reference =>
             reference.ReferenceKind == "call"

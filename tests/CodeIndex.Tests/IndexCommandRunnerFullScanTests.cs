@@ -4005,6 +4005,73 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_StampsRefreshedDynamicGraphContractWhenFoldContractRemainsStale_Issue4746()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "commands.tcl"),
+                """
+                proc helper {} { return 1 }
+                proc run {} { helper }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "unchanged.cs"),
+                "class Unchanged { void Run() { } }");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"""
+                    UPDATE codeindex_meta
+                    SET value = '2'
+                    WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("tcl")}';
+                    UPDATE codeindex_meta
+                    SET value = '0'
+                    WHERE key = 'fold_key_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText =
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("tcl")}'";
+            Assert.Equal(
+                SymbolExtractor.DynamicReferenceGraphContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+
+            using var referenceCmd = verify.CreateCommand();
+            referenceCmd.CommandText = """
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE symbol_name = 'helper'
+                  AND container_name = 'run'
+                  AND reference_kind = 'call'
+                """;
+            Assert.Equal(1L, referenceCmd.ExecuteScalar());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_ReindexesUnchangedCSharpTupleReadonlyFieldWhenExtractorVersionChanged_Issue4616()
     {
         var projectRoot = CreateTempProject();

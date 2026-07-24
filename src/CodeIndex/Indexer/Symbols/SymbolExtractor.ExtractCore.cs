@@ -147,6 +147,12 @@ public static partial class SymbolExtractor
         structuralLines = DynamicDeclarativeReferenceExtractor.MaskNonCodeLines(
             lang,
             structuralLines);
+        if (lang == "tcl")
+        {
+            structuralLines = DynamicDeclarativeReferenceExtractor.MaskTclContinuedCommentLines(
+                lines,
+                structuralLines);
+        }
         string[]? javaScriptTypeScriptSanitizedLines = null;
         string[] GetJavaScriptTypeScriptSanitizedLines() =>
             javaScriptTypeScriptSanitizedLines ??= BuildJavaScriptTypeScriptSanitizedLines(lines);

@@ -2091,6 +2091,11 @@ public partial class McpServer
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);
+            // A successful refresh can stamp the languages it regenerated even when the
+            // independent fold-key contract remains stale.
+            // 成功した refresh で再生成した言語は、独立した fold-key 契約が stale の
+            // ままでも extractor version を stamp できる。
+            writer.StampSymbolExtractorVersions(indexedSymbolExtractorLanguages);
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
             // unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows keep NULL
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
