@@ -10,6 +10,76 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void GraphQueries_ReportMissingHdlGraphContractWithoutExactMode_Issue4742()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hdl_graph_contract_queries");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "top.v",
+                "verilog",
+                """
+                module child;
+                endmodule
+                module top;
+                    child u_child();
+                endmodule
+                """);
+            MarkGraphAndFoldReady(dbPath);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM symbol_references;
+                    DELETE FROM codeindex_meta WHERE key = 'hdl_graph_contract_version';
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var queryResults = new[]
+            {
+                CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    ["child", "--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunCallers(
+                    ["child", "--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunCallees(
+                    ["child", "--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunImpact(
+                    ["child", "--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunUnused(
+                    ["--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+                CaptureConsole(() => QueryCommandRunner.RunDeps(
+                    ["--db", dbPath, "--lang", "verilog", "--json"],
+                    _jsonOptions)),
+            };
+
+            foreach (var (exitCode, stdout, _) in queryResults)
+            {
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+                Assert.True(json.GetProperty("degraded").GetBoolean());
+                Assert.False(json.GetProperty("hdl_graph_contract_ready").GetBoolean());
+                Assert.Contains(
+                    "hdl_graph_contract_ready=false",
+                    json.GetProperty("hdl_graph_contract_degraded_reason").GetString(),
+                    StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_AllowsExcludePathValueThatLooksLikePreviewOption()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_preview_like_exclude_path_value");

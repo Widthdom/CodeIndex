@@ -107,7 +107,7 @@ public partial class ReferenceExtractorTests
             module top;
                 logic clk;
                 logic hFF;
-                fifo #(.WIDTH(8)) u_fifo (.clk(clk));
+                fifo #(.WIDTH(8)) u_fifo[3:0] (.clk(clk));
                 helper(clk);
                 assign sink = 8'hFF;
                 // fifo ignored_in_comment (.clk(clk));
@@ -140,18 +140,21 @@ public partial class ReferenceExtractorTests
         const string vhdl = """
             package util_pkg is
                 function declared_only(x : integer) return integer;
+                constant X : integer := 1;
                 type state_t is (Idle, Busy);
                 constant after_decl : integer := declared_only(1);
             end package;
             package body util_pkg is
-                function declared_only(x : integer) return integer is
+                function declared_only
+                    (x : integer)
+                    return integer is
                 begin
                     return x;
                 end function declared_only;
             end package body util_pkg;
 
-            library ieee;
-            use work.util_pkg.all;
+            library ieee, osvvm;
+            use ieee.std_logic_1164.all, work.util_pkg.all;
 
             entity Child is
                 port (clk : in std_logic);
@@ -201,7 +204,7 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "instantiate"
             && reference.SymbolName is "property" or "sequence" or "covergroup");
 
-        AssertReferencesContain(vhdlReferences, "import", null, "ieee", "util_pkg");
+        AssertReferencesContain(vhdlReferences, "import", null, "ieee", "osvvm", "std_logic_1164", "util_pkg");
         AssertReferencesContain(vhdlReferences, "type_reference", null, "Child", "Top");
         AssertReferencesContain(vhdlReferences, "call", "util_pkg", "declared_only");
         AssertReferencesContain(vhdlReferences, "instantiate", "structural", "Child");
@@ -215,7 +218,7 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "X"
             && (reference.Context.Contains("'X'", StringComparison.Ordinal)
                 || reference.Context.Contains("X\"FF\"", StringComparison.Ordinal)
-                || reference.Context.Contains("declared_only(x", StringComparison.OrdinalIgnoreCase)
+                || reference.Context.Contains("(x : integer)", StringComparison.OrdinalIgnoreCase)
                 || reference.Context.Equals("return x;", StringComparison.OrdinalIgnoreCase)));
         Assert.DoesNotContain(vhdlReferences, reference =>
             reference.SymbolName == "declared_only"

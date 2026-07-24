@@ -124,9 +124,13 @@ public static partial class QueryCommandRunner
         JsonObject payload,
         DbReader reader,
         JsonSerializerOptions jsonOptions,
-        SqlGraphContractSignal sqlGraphSignal)
+        SqlGraphContractSignal sqlGraphSignal,
+        HdlGraphContractSignal? hdlGraphSignal = null)
     {
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        AddHdlGraphContractJsonFields(
+            payload,
+            hdlGraphSignal ?? reader.GetHdlGraphContractSignal());
         AddReferenceGraphCompletenessJsonFields(payload, reader, jsonOptions);
     }
 

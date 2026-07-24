@@ -31,6 +31,11 @@ public readonly record struct SqlGraphContractSignal(
     bool Relevant,
     string? DegradedReason);
 
+public readonly record struct HdlGraphContractSignal(
+    bool Ready,
+    bool Relevant,
+    string? DegradedReason);
+
 internal readonly record struct IndexedFileSnapshot(string Path, string? Checksum, int? Lines);
 
 /// <summary>
@@ -1240,17 +1245,19 @@ public partial class DbReader : IDisposable
         IReadOnlyList<string>? excludePathPatterns = null,
         bool excludeTests = false)
     {
-        if (_hdlGraphContractCurrent
-            || !ScopeMayIncludeHdlFiles(lang, pathPatterns, excludePathPatterns, excludeTests))
-        {
+        var signal = GetHdlGraphContractSignal(
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests);
+        if (!signal.Relevant || signal.Ready)
             return null;
-        }
 
         return new(
             ExactIndexAvailable: false,
             HasMissingIndex: false,
             HasMissingTable: false,
-            DegradedReason: "hdl_graph_contract_ready=false (Verilog/SystemVerilog/VHDL reference rows are stale; run `cdidx index .`)");
+            DegradedReason: signal.DegradedReason);
     }
 
     private bool ScopeMayIncludeCSharpFiles(
@@ -1336,6 +1343,24 @@ public partial class DbReader : IDisposable
             Ready: false,
             Relevant: true,
             DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason());
+    }
+
+    internal HdlGraphContractSignal GetHdlGraphContractSignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        if (!ScopeMayIncludeHdlFiles(lang, pathPatterns, excludePathPatterns, excludeTests))
+            return new HdlGraphContractSignal(Ready: true, Relevant: false, DegradedReason: null);
+
+        if (_hdlGraphContractCurrent)
+            return new HdlGraphContractSignal(Ready: true, Relevant: true, DegradedReason: null);
+
+        return new HdlGraphContractSignal(
+            Ready: false,
+            Relevant: true,
+            DegradedReason: "hdl_graph_contract_ready=false (Verilog/SystemVerilog/VHDL reference rows are stale; run `cdidx index .`)");
     }
 
     private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)

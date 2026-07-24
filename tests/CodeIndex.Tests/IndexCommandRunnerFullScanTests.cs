@@ -3968,6 +3968,22 @@ public partial class IndexCommandRunnerTests
                 Assert.Contains("hdl_graph_contract_ready=false", exactSignal.DegradedReason, StringComparison.Ordinal);
             }
 
+            var (scopedExitCode, scopedJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                Path.Combine(projectRoot, "top.v"),
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, scopedExitCode);
+            Assert.Equal(1, scopedJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.False(scopedJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(scopedJson.GetProperty("hdl_graph_contract_ready").GetBoolean());
+            Assert.Contains(
+                "hdl_graph_contract_ready=false",
+                scopedJson.GetProperty("hdl_graph_contract_degraded_reason").GetString(),
+                StringComparison.Ordinal);
+
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
