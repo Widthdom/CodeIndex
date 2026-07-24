@@ -1345,11 +1345,15 @@ aggregations support `--count-by path|file|symbol|origin|return-type|subsystem`,
 Row-producing recipe modes (text, aggregate JSON, compact JSON, NDJSON, and
 issue drafts) apply `--first-per-file` and deterministic `--sample <n>` before
 the effective per-query `--limit` / cross-query `--total-limit`. Aggregate JSON
-and compact query objects report `selection_reason` and
-`selection_omitted_count` when selection removes rows; NDJSON reports the same
-fields on its terminal record. Selection-only omission contributes to matched
-and omitted counts but does not set `truncated`, `has_more`, or `next_cursor`;
-those fields remain reserved for limit-based continuation. Count, aggregation,
+  and compact query objects report `selection_reason` and
+  `selection_omitted_count` when selection removes rows; issue-draft `source`
+  objects and NDJSON terminal records report the same fields. Selection-only
+  omission contributes to matched
+  and omitted counts but does not set `truncated`, `has_more`, or `next_cursor`.
+  If a later limit also omits selected rows, `truncated` / `has_more` are set but
+  `next_cursor` is suppressed because a raw cursor cannot preserve row-selection
+  state; increase the applicable limit and rerun instead. Generated compact and
+  issue-draft replay commands retain the active selector. Count, aggregation,
 and summary-only compact recipe output reject row-selection controls because
 they cannot represent selected rows, and recipe execution rejects
 `--per-file-limit` because it does not produce grouped search output.
@@ -1360,7 +1364,8 @@ applied result limits, and conservative truncation metadata.
 Other search export formats and `--json=array` are rejected for recipe modes
 because recipe output is grouped by query or list metadata.
 Recipe JSON and compact output apply `--limit` per query, include a `summary`
-with emitted/truncated counts, and mark truncated child queries with
+  with emitted/truncated counts, and mark truncated child queries that do not
+  use a row selector with
 `next_cursor`; rerun a single child query as
 `--recipe <recipe>/<query> --cursor <next_cursor>` to page the next result set.
 The MCP `search` tool exposes the same recipe surface with
@@ -4578,11 +4583,15 @@ aggregate count、query ごとの count、query freshness だけを出力でき�
 `--group-by file|symbol|origin|return-type|subsystem --count`、`--unique path|file|symbol|origin|return-type|subsystem` に対応します。
 row を返す recipe mode（text、aggregate JSON、compact JSON、NDJSON、issue draft）は、
 `--first-per-file` と決定的な `--sample <n>` を、有効な query ごとの `--limit` /
-query 全体の `--total-limit` より先に適用します。aggregate JSON / compact の query object は
-selection で row が省略された場合に `selection_reason` と `selection_omitted_count` を返し、
-NDJSON は同じ field を terminal record に返します。selection だけによる省略は matched /
-omitted count に含まれますが、`truncated`、`has_more`、`next_cursor` は設定せず、これらの
-field は limit による継続にのみ使います。count、aggregation、summary-only compact の
+  query 全体の `--total-limit` より先に適用します。aggregate JSON / compact の query object は
+  selection で row が省略された場合に `selection_reason` と `selection_omitted_count` を返し、
+  issue-draft の `source` object と NDJSON terminal record も同じ field を返します。
+  selection だけによる省略は matched /
+  omitted count に含まれますが、`truncated`、`has_more`、`next_cursor` は設定しません。
+  後続の limit でも選択済み row が省略される場合は `truncated` / `has_more` を設定しますが、
+  raw cursor では row-selection state を保持できないため `next_cursor` は抑止します。この場合は
+  該当 limit を増やして再実行してください。compact / issue-draft が生成する replay command は
+  有効な selector を保持します。count、aggregation、summary-only compact の
 recipe output は選択済み row を表現できないため row-selection control を拒否し、recipe
 execution は grouped search output を生成しないため `--per-file-limit` を拒否します。
 recipe SARIF は返却された recipe result ごとに上限付き finding を1件出力します。rule ID は
@@ -4591,8 +4600,9 @@ result / run properties は severity、confidence、scope、適用済み result 
 保守的な truncation metadata を保持します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
-recipe の JSON/compact output は `--limit` を query ごとに適用し、emitted/truncated
-count を含む `summary` を出力し、truncated な child query には `next_cursor` を付けます。
+  recipe の JSON/compact output は `--limit` を query ごとに適用し、emitted/truncated
+  count を含む `summary` を出力し、row selector を使っていない truncated な child query には
+  `next_cursor` を付けます。
 次の result set を取得するには、単一 child query を
 `--recipe <recipe>/<query> --cursor <next_cursor>` として再実行してください。
 MCP `search` tool では `{"listRecipes":true}` で recipe を発見し、
