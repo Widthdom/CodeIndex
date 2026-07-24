@@ -1,4 +1,7 @@
 using System.Text.Json;
+using CodeIndex.Database;
+using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
@@ -6,8 +9,12 @@ internal static class WorkspaceCommandRunner
 {
     private const int MaxAmbiguousMemberCandidates = 5;
     private const int MaxAmbiguousMemberPathChars = 160;
+    internal const int MaxMemberHealthDatabaseProbes = 64;
 
-    internal static int Run(string[] args, JsonSerializerOptions jsonOptions)
+    internal static int Run(
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken = default)
     {
         var json = args.Contains("--json", StringComparer.Ordinal);
         args = args.Where(a => a != "--json").ToArray();
@@ -17,15 +24,23 @@ internal static class WorkspaceCommandRunner
         return args[0] switch
         {
             "list" => List(json, jsonOptions),
-            "status" => List(json, jsonOptions, includeActiveWorkspaceStatus: true),
+            "status" => List(
+                json,
+                jsonOptions,
+                includeActiveWorkspaceStatus: true,
+                cancellationToken: cancellationToken),
             "current" => Current(json, jsonOptions),
             "use" => Use(args[1..], json, jsonOptions),
             "clear" or "deactivate" => Clear(args[1..], json, jsonOptions),
-            _ => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "Unknown workspace command.", CommandExitCodes.UsageError, "use `cdidx workspace list`, `cdidx workspace use <name>`, `cdidx workspace current`, or `cdidx workspace clear`.")
+            _ => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "Unknown workspace command.", CommandExitCodes.UsageError, "use `cdidx workspace list`, `cdidx workspace use <name-or-relative-path>`, `cdidx workspace current`, or `cdidx workspace clear`.")
         };
     }
 
-    private static int List(bool json, JsonSerializerOptions jsonOptions, bool includeActiveWorkspaceStatus = false)
+    private static int List(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        bool includeActiveWorkspaceStatus = false,
+        CancellationToken cancellationToken = default)
     {
         var discovery = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
         if (discovery.Path == null)
@@ -43,7 +58,8 @@ internal static class WorkspaceCommandRunner
                         null,
                         Array.Empty<WorkspaceMember>(),
                         manifestStatus,
-                        BuildActiveWorkspaceStatus(includeActiveWorkspaceStatus, manifest: null)),
+                        BuildActiveWorkspaceStatus(includeActiveWorkspaceStatus, manifest: null),
+                        MemberHealthSummary: null),
                     jsonOptions));
             }
             else
@@ -63,6 +79,9 @@ internal static class WorkspaceCommandRunner
 
         if (json)
         {
+            var memberHealth = includeActiveWorkspaceStatus
+                ? BuildMemberHealth(manifest, cancellationToken)
+                : null;
             var manifestStatus = new WorkspaceManifestStatusJsonResult(
                 "loaded",
                 "loaded",
@@ -72,17 +91,27 @@ internal static class WorkspaceCommandRunner
             Console.WriteLine(JsonSerializer.Serialize(
                 new WorkspaceListJsonResult(
                     manifest,
-                    manifest.Members,
+                    memberHealth?.Members ?? manifest.Members,
                     manifestStatus,
-                    BuildActiveWorkspaceStatus(includeActiveWorkspaceStatus, manifest)),
+                    BuildActiveWorkspaceStatus(includeActiveWorkspaceStatus, manifest),
+                    memberHealth?.Summary),
                 jsonOptions));
             return CommandExitCodes.Success;
         }
 
         Console.WriteLine($"Manifest : {manifest.Path}");
         Console.WriteLine($"Strategy : {manifest.IndexStrategy}");
-        foreach (var member in manifest.Members)
-            Console.WriteLine($"  {(member.Exists ? "ok" : "missing")}  {member.Path}  ->  {member.DbPath}");
+        var humanMembers = includeActiveWorkspaceStatus
+            ? BuildMemberHealth(manifest, cancellationToken).Members
+            : manifest.Members;
+        foreach (var member in humanMembers)
+        {
+            var label = member.IndexHealth?.Status ?? (member.Exists ? "ok" : "missing");
+            var healthSuffix = member.IndexHealth is null
+                ? string.Empty
+                : $"  ({FormatMemberHealth(member.IndexHealth)})";
+            Console.WriteLine($"  {label,-11}  {member.Path}  ->  {member.DbPath}{healthSuffix}");
+        }
         return CommandExitCodes.Success;
     }
 
@@ -142,27 +171,49 @@ internal static class WorkspaceCommandRunner
     private static int Use(string[] args, bool json, JsonSerializerOptions jsonOptions)
     {
         if (args.Length != 1)
-            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace use requires a name.", CommandExitCodes.UsageError, "run `cdidx workspace use <name>` from a manifest member or pass `default`.");
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace use requires a name or relative path.", CommandExitCodes.UsageError, "run `cdidx workspace use <name-or-relative-path>` from a manifest member or pass `default`.");
 
         var name = args[0];
         var manifest = WorkspaceManifestLoader.Find(Environment.CurrentDirectory);
         var useDefault = string.Equals(name, "default", StringComparison.OrdinalIgnoreCase);
         if (manifest == null && !useDefault)
-            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace manifest was not found.", CommandExitCodes.UsageError, "run `cdidx workspace use <name>` from a manifest member or pass `default`.");
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace manifest was not found.", CommandExitCodes.UsageError, "run `cdidx workspace use <name-or-relative-path>` from a manifest member or pass `default`.");
 
         WorkspaceMember? member = null;
+        var selectedName = name;
         if (manifest != null && !useDefault)
         {
             var memberNameComparison = PathCasing.ComparisonFor(manifest.Root);
-            var matches = manifest.Members
-                .Where(m => string.Equals(Path.GetFileName(m.Path), name, memberNameComparison))
-                .Take(MaxAmbiguousMemberCandidates + 1)
-                .ToArray();
+            WorkspaceMember[] matches;
+            if (WorkspaceManifestLoader.TryResolveMemberSelectorPath(
+                    manifest,
+                    name,
+                    out var selectedPath,
+                    out _))
+            {
+                matches = manifest.Members
+                    .Where(m => string.Equals(m.Path, selectedPath, memberNameComparison))
+                    .Take(1)
+                    .ToArray();
+                if (matches.Length == 1)
+                {
+                    selectedName = WorkspaceManifestLoader.GetManifestRelativeMemberPath(
+                        manifest,
+                        matches[0]);
+                }
+            }
+            else
+            {
+                matches = manifest.Members
+                    .Where(m => string.Equals(Path.GetFileName(m.Path), name, memberNameComparison))
+                    .Take(MaxAmbiguousMemberCandidates + 1)
+                    .ToArray();
+            }
 
             if (matches.Length == 0)
-                return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member was not found.", CommandExitCodes.UsageError, "run `cdidx workspace list` and pass one of the listed member directory names.");
+                return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member was not found.", CommandExitCodes.UsageError, "run `cdidx workspace list` and pass a listed member directory name or manifest-relative path.");
             if (matches.Length > 1)
-                return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member name is ambiguous.", CommandExitCodes.UsageError, $"matching members: {FormatAmbiguousMemberCandidates(matches)}. Use unique member directory names in the workspace manifest.");
+                return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member name is ambiguous.", CommandExitCodes.UsageError, $"matching members: {FormatAmbiguousMemberCandidates(matches)}. Pass a manifest-relative member path to select one.");
 
             member = matches[0];
         }
@@ -180,7 +231,11 @@ internal static class WorkspaceCommandRunner
         }
 
         var dbPath = member?.DbPath ?? DbPathResolver.ResolveForIndex(root, explicitDbPath: null);
-        var state = new ActiveWorkspaceState(name, root, dbPath);
+        var state = new ActiveWorkspaceState(
+            selectedName,
+            root,
+            dbPath,
+            ManifestMember: member is not null);
         try
         {
             ActiveWorkspace.Save(state);
@@ -210,6 +265,224 @@ internal static class WorkspaceCommandRunner
         => path.Length <= MaxAmbiguousMemberPathChars
             ? path
             : path[..(MaxAmbiguousMemberPathChars - 3)] + "...";
+
+    private static MemberHealthBuildResult BuildMemberHealth(
+        WorkspaceManifest manifest,
+        CancellationToken cancellationToken)
+    {
+        var members = new List<WorkspaceMember>(manifest.Members.Count);
+        var cache = new Dictionary<string, WorkspaceMemberIndexHealth>(
+            StringComparer.FromComparison(PathCasing.ComparisonFor(manifest.Root)));
+        var singleStrategy = string.Equals(manifest.IndexStrategy, "single", StringComparison.OrdinalIgnoreCase);
+        var databaseProbeCount = 0;
+        var unprobedMemberCount = 0;
+
+        foreach (var member in manifest.Members)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            WorkspaceMemberIndexHealth health;
+            var dbExists = File.Exists(LongPath.EnsureWindowsPrefix(member.DbPath));
+            if (!member.Exists)
+            {
+                health = new WorkspaceMemberIndexHealth(
+                    DbExists: dbExists,
+                    Probed: false,
+                    Status: "missing",
+                    Reason: "member_missing");
+            }
+            else if (!dbExists)
+            {
+                health = new WorkspaceMemberIndexHealth(
+                    DbExists: false,
+                    Probed: false,
+                    Status: "missing",
+                    Reason: "database_not_found");
+            }
+            else if (cache.TryGetValue(member.DbPath, out var cachedHealth))
+            {
+                health = cachedHealth;
+            }
+            else if (databaseProbeCount >= MaxMemberHealthDatabaseProbes)
+            {
+                health = new WorkspaceMemberIndexHealth(
+                    DbExists: true,
+                    Probed: false,
+                    Status: "not_checked",
+                    Reason: "database_probe_limit_reached");
+                unprobedMemberCount++;
+            }
+            else
+            {
+                databaseProbeCount++;
+                var projectRoot = singleStrategy ? manifest.Root : member.Path;
+                health = ProbeMemberHealth(
+                    member.DbPath,
+                    projectRoot,
+                    cancellationToken);
+                cache[member.DbPath] = health;
+            }
+
+            members.Add(member with { IndexHealth = health });
+        }
+
+        return new MemberHealthBuildResult(
+            members,
+            new WorkspaceMemberHealthSummary(
+                manifest.Members.Count,
+                databaseProbeCount,
+                MaxMemberHealthDatabaseProbes,
+                unprobedMemberCount,
+                unprobedMemberCount > 0));
+    }
+
+    private static WorkspaceMemberIndexHealth ProbeMemberHealth(
+        string dbPath,
+        string projectRoot,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var db = new DbContext(
+                DbOpenIntent.QueryOnly,
+                dbPath,
+                cancellationToken);
+            if (!db.TryValidateIsCodeIndexDb(out _))
+            {
+                return new WorkspaceMemberIndexHealth(
+                    DbExists: true,
+                    Probed: true,
+                    Status: "invalid",
+                    Reason: "invalid_codeindex_database",
+                    SchemaCompatible: false);
+            }
+
+            using var reader = new DbReader(db, cancellationToken);
+            var snapshot = reader.GetWorkspaceIndexHealth();
+            var schemaCompatible = !snapshot.IndexNewerThanReader;
+            var graphReady = snapshot.GraphTableAvailable
+                && snapshot.GraphDataCurrent
+                && snapshot.ReferenceGraphComplete
+                && snapshot.IndexComplete;
+            if (!schemaCompatible)
+            {
+                return new WorkspaceMemberIndexHealth(
+                    DbExists: true,
+                    Probed: true,
+                    Status: "incompatible",
+                    Reason: "index_newer_than_reader",
+                    SchemaCompatible: false,
+                    FreshnessReason: "schema_incompatible",
+                    IndexedAt: snapshot.IndexedAt,
+                    LatestModified: snapshot.LatestModified,
+                    GraphTableAvailable: snapshot.GraphTableAvailable,
+                    GraphDataCurrent: snapshot.GraphDataCurrent,
+                    ReferenceGraphComplete: snapshot.ReferenceGraphComplete,
+                    IndexComplete: snapshot.IndexComplete,
+                    GraphReady: graphReady,
+                    IndexNewerThanReader: true);
+            }
+
+            var freshness = IndexFreshnessChecker.Check(
+                reader,
+                projectRoot,
+                cancellationToken,
+                internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
+            var status = "ready";
+            var reason = "ready";
+            if (!freshness.Checked)
+            {
+                status = "degraded";
+                reason = "freshness_check_unavailable";
+            }
+            else if (!freshness.MatchesWorkspace)
+            {
+                status = "stale";
+                reason = freshness.Reason;
+            }
+            else if (!snapshot.IndexComplete)
+            {
+                status = "degraded";
+                reason = "index_incomplete";
+            }
+            else if (!snapshot.GraphTableAvailable)
+            {
+                status = "degraded";
+                reason = "graph_table_missing";
+            }
+            else if (!snapshot.ReferenceGraphComplete)
+            {
+                status = "degraded";
+                reason = "reference_graph_incomplete";
+            }
+            else if (!snapshot.GraphDataCurrent)
+            {
+                status = "degraded";
+                reason = "graph_data_not_current";
+            }
+
+            return new WorkspaceMemberIndexHealth(
+                DbExists: true,
+                Probed: true,
+                Status: status,
+                Reason: reason,
+                SchemaCompatible: true,
+                IndexMatchesWorkspace: freshness.Checked ? freshness.MatchesWorkspace : null,
+                FreshnessReason: freshness.Reason,
+                IndexedAt: snapshot.IndexedAt,
+                LatestModified: snapshot.LatestModified,
+                GraphTableAvailable: snapshot.GraphTableAvailable,
+                GraphDataCurrent: snapshot.GraphDataCurrent,
+                ReferenceGraphComplete: snapshot.ReferenceGraphComplete,
+                IndexComplete: snapshot.IndexComplete,
+                GraphReady: graphReady,
+                IndexNewerThanReader: false);
+        }
+        catch (Exception ex) when (IsMemberHealthProbeFailure(ex))
+        {
+            return new WorkspaceMemberIndexHealth(
+                DbExists: true,
+                Probed: true,
+                Status: "unavailable",
+                Reason: "database_probe_failed");
+        }
+    }
+
+    private static bool IsMemberHealthProbeFailure(Exception ex)
+        => ex is SqliteException
+            or CodeIndexException
+            or InvalidDataException
+            or IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or ArgumentException
+            or NotSupportedException;
+
+    private static string FormatMemberHealth(WorkspaceMemberIndexHealth health)
+    {
+        var schema = health.SchemaCompatible switch
+        {
+            true => "schema compatible",
+            false => "schema incompatible",
+            _ => "schema unknown",
+        };
+        var freshness = health.IndexMatchesWorkspace switch
+        {
+            true => "index fresh",
+            false => $"index stale: {health.FreshnessReason}",
+            _ => $"freshness {health.FreshnessReason ?? "not checked"}",
+        };
+        var graph = health.GraphReady switch
+        {
+            true => "graph ready",
+            false => "graph degraded",
+            _ => "graph unknown",
+        };
+        return $"{schema}; {freshness}; {graph}; reason={health.Reason}";
+    }
+
+    private sealed record MemberHealthBuildResult(
+        IReadOnlyList<WorkspaceMember> Members,
+        WorkspaceMemberHealthSummary Summary);
 
     private static int WriteManifestValidationError(bool json, JsonSerializerOptions jsonOptions, Exception ex)
         => CommandErrorWriter.WriteJsonOrHuman(

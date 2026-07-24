@@ -116,7 +116,10 @@ internal static partial class ProgramRunner
                     "Unknown config command: use `cdidx config show`.",
                     CommandExitCodes.UsageError,
                     "use `cdidx config show`."),
-            "workspace" => WorkspaceCommandRunner.Run(subArgs, context.JsonOptions),
+            "workspace" => WorkspaceCommandRunner.Run(
+                subArgs,
+                context.JsonOptions,
+                context.CancellationToken),
             "db" => DbCommandRunner.Run(subArgs, context.JsonOptions, context.CancellationToken),
             "report" => ReportCommandRunner.Run(subArgs, context.JsonOptions, context.AppVersion),
             "test-extractor" => RunTestExtractor(subArgs, context.JsonOptions),
