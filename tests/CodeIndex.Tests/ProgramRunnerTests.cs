@@ -315,7 +315,9 @@ public class ProgramRunnerTests
         Assert.Empty(exportStderr);
 
         Assert.Equal(CommandExitCodes.Success, updateExitCode);
-        Assert.Contains("Content edits mutate only an editable local draft", updateStdout, StringComparison.Ordinal);
+        Assert.Contains("[--title <text>] [--evidence-path <path>]", updateStdout, StringComparison.Ordinal);
+        Assert.Contains("require at least one content-edit flag", updateStdout, StringComparison.Ordinal);
+        Assert.Contains("mutate only an editable local draft", updateStdout, StringComparison.Ordinal);
         Assert.Contains("may update records with upstream references", updateStdout, StringComparison.Ordinal);
         Assert.Empty(updateStderr);
 
@@ -328,6 +330,21 @@ public class ProgramRunnerTests
         Assert.Contains("defaulting to `tags` in the current directory", ctagsStdout, StringComparison.Ordinal);
         Assert.Contains("replacing an existing destination", ctagsStdout, StringComparison.Ordinal);
         Assert.Empty(ctagsStderr);
+    }
+
+    [Fact]
+    public void Run_SuggestionsIssueStateRequiresLiveDuplicatePreflight_Issue4733()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["suggestions", "list", "--issue-state", "open"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains(
+            "--issue-state can only be used with `suggestions export --format issue-drafts --open-issues github`",
+            stderr,
+            StringComparison.Ordinal);
     }
 
     [Theory]
