@@ -62,6 +62,11 @@ internal static class DiagnosticRedactor
         RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
+    private static readonly Regex KnownStructuredSecretPattern = new(
+        @"(?<![A-Za-z0-9])(?:(?:sk|rk)_(?:live|test|proj)_|whsec_|sk-(?:proj-)?|glpat-|xox[baprs]-)[A-Za-z0-9._~+/=-]{16,}\b",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RegexTimeout);
+
     private static readonly Regex HighEntropyTokenPattern = new(
         @"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=[A-Za-z0-9._~+/=-]*[A-Z])(?=[A-Za-z0-9._~+/=-]*[a-z])(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]+\b",
         RegexOptions.CultureInvariant | RegexOptions.Compiled,
@@ -329,9 +334,20 @@ internal static class DiagnosticRedactor
             });
             redacted = SuggestionNamedSecretPattern.Replace(redacted, match =>
                 RedactSuggestionNamedSecretMatch(match, types));
+            redacted = KnownStructuredSecretPattern.Replace(redacted, _ =>
+            {
+                types.Add("high_entropy_token");
+                return SuggestionRedactedHighEntropyToken;
+            });
+            redacted = GitHubTokenPattern.Replace(redacted, _ =>
+            {
+                types.Add("high_entropy_token");
+                return SuggestionRedactedHighEntropyToken;
+            });
             redacted = HighEntropyTokenPattern.Replace(redacted, match =>
             {
-                if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
+                if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal)
+                    || LooksLikeStructuredIdentifier(match.Value))
                     return match.Value;
                 types.Add("high_entropy_token");
                 return SuggestionRedactedHighEntropyToken;
@@ -357,6 +373,115 @@ internal static class DiagnosticRedactor
         types.Add("credential");
         return $"{match.Groups[1].Value}{name}={SuggestionRedactedCredential}";
     }
+
+    private static bool LooksLikeStructuredIdentifier(string value)
+    {
+        var start = 0;
+        while (start < value.Length && value[start] == '_')
+            start++;
+
+        if (start >= value.Length || !char.IsLetter(value[start]))
+            return false;
+
+        var hasDelimiter = false;
+        var segmentStart = start;
+        var segmentCount = 0;
+        var wordCount = 0;
+        var hasNaturalWord = false;
+
+        for (var index = start; index <= value.Length; index++)
+        {
+            if (index < value.Length && !IsIdentifierDelimiter(value[index]))
+            {
+                if (!char.IsLetterOrDigit(value[index]))
+                    return false;
+                continue;
+            }
+
+            if (index == segmentStart
+                || !TryAnalyzeIdentifierSegment(
+                    value.AsSpan(segmentStart, index - segmentStart),
+                    out var segmentWordCount,
+                    out var segmentHasNaturalWord))
+            {
+                return false;
+            }
+
+            segmentCount++;
+            wordCount += segmentWordCount;
+            hasNaturalWord |= segmentHasNaturalWord;
+
+            if (index < value.Length)
+            {
+                hasDelimiter = true;
+                segmentStart = index + 1;
+            }
+        }
+
+        return hasDelimiter
+            ? segmentCount >= 2 && wordCount >= 3 && hasNaturalWord
+            : char.IsUpper(value[start]) && wordCount >= 3 && hasNaturalWord;
+    }
+
+    private static bool TryAnalyzeIdentifierSegment(
+        ReadOnlySpan<char> segment,
+        out int wordCount,
+        out bool hasNaturalWord)
+    {
+        wordCount = 0;
+        hasNaturalWord = false;
+
+        if (segment.IsEmpty || !char.IsLetter(segment[0]))
+            return false;
+
+        var letterCount = 0;
+        var hasUpper = false;
+        var hasLower = false;
+        var maxLowerRun = 0;
+        var lowerRun = 0;
+
+        for (var index = 0; index < segment.Length; index++)
+        {
+            var current = segment[index];
+            if (char.IsDigit(current))
+            {
+                lowerRun = 0;
+                continue;
+            }
+
+            letterCount++;
+            if (char.IsUpper(current))
+            {
+                hasUpper = true;
+                lowerRun = 0;
+                if (index == 0
+                    || char.IsLower(segment[index - 1])
+                    || char.IsDigit(segment[index - 1])
+                    || (char.IsUpper(segment[index - 1])
+                        && index + 1 < segment.Length
+                        && char.IsLower(segment[index + 1])))
+                {
+                    wordCount++;
+                }
+            }
+            else
+            {
+                hasLower = true;
+                lowerRun++;
+                maxLowerRun = Math.Max(maxLowerRun, lowerRun);
+                if (index == 0)
+                    wordCount++;
+            }
+        }
+
+        if (!hasUpper || !hasLower)
+            wordCount = 1;
+
+        hasNaturalWord = letterCount >= 3 && (!hasUpper || !hasLower || maxLowerRun >= 3);
+        return true;
+    }
+
+    private static bool IsIdentifierDelimiter(char value) => value is '_' or '-' or '/';
 
     internal static string BoundDiagnosticText(string? value, int maxChars = DefaultDiagnosticValueCharLimit)
     {

@@ -2219,8 +2219,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
         if (focusColumn.HasValue && focusColumn.Value <= 0)
             return CreateToolErrorResponse(id, "focusColumn must be greater than or equal to 1");
-        if (!focusColumn.HasValue && (focusLine.HasValue || explicitFocusLength))
-            return CreateToolErrorResponse(id, "focusLine and focusLength require focusColumn");
+        if (!focusColumn.HasValue && explicitFocusLength)
+            return CreateToolErrorResponse(id, "focusLength requires focusColumn");
 
         return WithDbReader(id, args, reader =>
         {
