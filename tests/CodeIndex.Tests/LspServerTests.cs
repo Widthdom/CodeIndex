@@ -1308,7 +1308,9 @@ public class LspServerTests
             {
                 BeforeSymbolRequestForTesting = cancellationToken =>
                 {
-                    cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+                    Assert.True(
+                        cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)),
+                        "The active request was not cancelled after output backpressure was released.");
                     cancellationToken.ThrowIfCancellationRequested();
                 },
             };
