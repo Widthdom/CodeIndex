@@ -1297,13 +1297,26 @@ public partial class ReferenceExtractorTests
                 X
             ) :-
                 helper.
+            no_argument_rule
+            :-
+                helper.
+            no_argument_dcg
+            -->
+                helper.
+            no_argument_fact
+            .
             """;
 
         var (symbols, references) = ExtractSymbolsAndReferences(language, content);
 
         Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "helper");
         Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "multi_line_head");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "no_argument_rule");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "no_argument_dcg");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "no_argument_fact");
         AssertReferencesContain(references, "call", "multi_line_head", "helper");
+        AssertReferencesContain(references, "call", "no_argument_rule", "helper");
+        AssertReferencesContain(references, "call", "no_argument_dcg", "helper");
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "multi_line_head");
@@ -1706,7 +1719,12 @@ public partial class ReferenceExtractorTests
         const string content = """
             set data {
                 proc fake {} { return 1 }
+                package require fakepkg
             }
+            set quoted "
+                package require quotedfake
+            "
+            package require realpkg
             proc helper {} { return 1 }
             proc run {} {
                 fake
@@ -1718,6 +1736,9 @@ public partial class ReferenceExtractorTests
 
         Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "fake");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "fakepkg" or "quotedfake");
+        AssertReferencesContain(references, "type_reference", null, "realpkg");
         AssertReferencesContain(references, "call", "run", "helper");
     }
 

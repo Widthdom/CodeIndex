@@ -99,7 +99,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*(?:$|:-|[a-z][A-Za-z0-9_]*\s*\(\s*$|[a-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s*(?::-|-->|\.))))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PrologMultilineHeadRegex = new(
-        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*\(",
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)(?:(?<open>\s*\()|\s*$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CrystalRequireRegex = new(
         @"^\s*require\s+['""](?<name>[^'""]+)['""]",
@@ -704,9 +704,12 @@ internal static class DynamicDeclarativeReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Action<string, int> addCallLikeReference)
     {
+        var importScanLine = language == "tcl"
+            ? state.GetCallScanLine(language, lineNumber, structuralLine)
+            : structuralLine;
         EmitImportReference(
             language,
-            structuralLine,
+            importScanLine,
             references,
             seen,
             fileId,
@@ -2241,8 +2244,10 @@ internal static class DynamicDeclarativeReferenceExtractor
             0,
             lines[startLineIndex].Length);
         var headLine = lines[startLineIndex][startColumn..];
-        if (PrologHeadRegex.IsMatch(headLine) || !PrologMultilineHeadRegex.IsMatch(headLine))
+        var multilineHeadMatch = PrologMultilineHeadRegex.Match(headLine);
+        if (PrologHeadRegex.IsMatch(headLine) || !multilineHeadMatch.Success)
             return false;
+        parenthesesClosed = !multilineHeadMatch.Groups["open"].Success;
 
         for (var lineIndex = startLineIndex; lineIndex < currentLineIndex; lineIndex++)
         {

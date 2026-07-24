@@ -117,6 +117,21 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Prolog_ManySameLineTerminatorsUsesLinearScan_Issue4746()
+    {
+        var content = string.Concat(Enumerable.Repeat(". ", 30_000));
+        var stopwatch = Stopwatch.StartNew();
+
+        var symbols = SymbolExtractor.Extract(1, "prolog", content);
+
+        stopwatch.Stop();
+        Assert.Empty(symbols);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(3),
+            $"Expected linear terminator scanning, elapsed={stopwatch.Elapsed}.");
+    }
+
+    [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {
         using var cancellation = new CancellationTokenSource();
