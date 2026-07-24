@@ -844,6 +844,130 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraph_ModuleEvidenceDoesNotBroadenCSharpQualifiedCandidates_Issue4738()
+    {
+        var callerId = UpsertTestFileWithLanguage(
+            "src/caller.cs",
+            "csharp",
+            "qualified-csharp-caller");
+        var targetId = UpsertTestFileWithLanguage(
+            "src/targets.cs",
+            "csharp",
+            "qualified-csharp-target");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = targetId,
+                Kind = "namespace",
+                Name = "A",
+                Line = 1,
+            },
+            new SymbolRecord
+            {
+                FileId = targetId,
+                Kind = "namespace",
+                Name = "B",
+                Line = 2,
+            },
+            new SymbolRecord
+            {
+                FileId = targetId,
+                Kind = "class",
+                Name = "Thing",
+                ContainerName = "A",
+                Line = 3,
+            },
+            new SymbolRecord
+            {
+                FileId = targetId,
+                Kind = "class",
+                Name = "Thing",
+                ContainerName = "B",
+                Line = 4,
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "Thing",
+                TargetQualifier = "A",
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = "A.Thing value;",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {targetId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'Thing'
+              AND container_name = 'A'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+    }
+
+    [Fact]
+    public void ReferenceGraph_ExtractedScientificQualifierResolvesDuplicateLeaf_Issue4738()
+    {
+        const string callerContent = "void Run() { p1.Flush(); }\n";
+        var callerId = UpsertTestFileWithLanguage(
+            "src/main.d",
+            "d",
+            "qualified-d-call-caller");
+        var p1Id = UpsertTestFileWithLanguage(
+            "src/p1.d",
+            "d",
+            "qualified-d-call-p1");
+        var p2Id = UpsertTestFileWithLanguage(
+            "src/p2.d",
+            "d",
+            "qualified-d-call-p2");
+        var callerSymbols = SymbolExtractor.Extract(callerId, "d", callerContent);
+        _writer.InsertSymbols([
+            .. callerSymbols,
+            new SymbolRecord { FileId = p1Id, Kind = "namespace", Name = "p1", Line = 1 },
+            new SymbolRecord { FileId = p1Id, Kind = "function", Name = "Flush", Line = 2 },
+            new SymbolRecord { FileId = p2Id, Kind = "namespace", Name = "p2", Line = 1 },
+            new SymbolRecord { FileId = p2Id, Kind = "function", Name = "Flush", Line = 2 },
+        ]);
+        var callerReferences = ReferenceExtractor.Extract(
+            callerId,
+            "d",
+            callerContent,
+            callerSymbols);
+        _writer.InsertReferences(callerReferences, refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        var call = Assert.Single(callerReferences, reference =>
+            reference.SymbolName == "Flush" && reference.ReferenceKind == "call");
+        Assert.Equal("p1", call.TargetQualifier);
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {p1Id.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'Flush'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'Flush'
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+    }
+
+    [Fact]
     public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
     {
         var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");

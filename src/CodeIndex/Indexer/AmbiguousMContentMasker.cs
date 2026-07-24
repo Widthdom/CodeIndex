@@ -14,14 +14,35 @@ internal static class AmbiguousMContentMasker
         bool maskObjectiveCComments,
         bool preserveObjectiveCModuloExpressions = false)
     {
+        if (preserveObjectiveCModuloExpressions)
+        {
+            preserveObjectiveCModuloExpressions =
+                HasStrongObjectiveCModuloEvidence(content);
+        }
+
+        return MaskContent(
+            content,
+            maskMatlabComments,
+            maskObjectiveCComments,
+            preserveObjectiveCModuloExpressions,
+            maskStrings: false);
+    }
+
+    private static string MaskContent(
+        string content,
+        bool maskMatlabComments,
+        bool maskObjectiveCComments,
+        bool preserveObjectiveCModuloExpressions,
+        bool maskStrings)
+    {
         if ((!maskMatlabComments || content.IndexOf('%') < 0)
-            && (!maskObjectiveCComments || content.IndexOf('/') < 0))
+            && (!maskObjectiveCComments || content.IndexOf('/') < 0)
+            && (!maskStrings
+                || (content.IndexOf('"') < 0 && content.IndexOf('\'') < 0)))
         {
             return content;
         }
 
-        preserveObjectiveCModuloExpressions &=
-            HasStrongObjectiveCModuloEvidence(content);
         StringBuilder? masked = null;
         var inBlockComment = false;
         var inMatlabBlockComment = false;
@@ -34,7 +55,12 @@ internal static class AmbiguousMContentMasker
             if (current is '\r' or '\n')
             {
                 inLineComment = false;
-                quote = '\0';
+                if (!maskStrings
+                    || quote == '\0'
+                    || !IsEscapedLineBreak(content, index))
+                {
+                    quote = '\0';
+                }
                 continue;
             }
 
@@ -71,10 +97,15 @@ internal static class AmbiguousMContentMasker
 
             if (quote != '\0')
             {
-                if (preserveObjectiveCModuloExpressions
+                if (maskStrings)
+                    MaskAt(index);
+
+                if ((preserveObjectiveCModuloExpressions || maskStrings)
                     && current == '\\'
                     && index + 1 < content.Length)
                 {
+                    if (maskStrings && content[index + 1] is not ('\r' or '\n'))
+                        MaskAt(index + 1);
                     index++;
                     continue;
                 }
@@ -83,6 +114,8 @@ internal static class AmbiguousMContentMasker
                 {
                     if (quote == '\'' && index + 1 < content.Length && content[index + 1] == '\'')
                     {
+                        if (maskStrings)
+                            MaskAt(index + 1);
                         index++;
                         continue;
                     }
@@ -98,6 +131,8 @@ internal static class AmbiguousMContentMasker
                         || IsMatlabSingleQuoteStart(content, index))))
             {
                 quote = current;
+                if (maskStrings)
+                    MaskAt(index);
                 continue;
             }
 
@@ -243,14 +278,23 @@ internal static class AmbiguousMContentMasker
 
     private static bool HasStrongObjectiveCModuloEvidence(string content)
     {
+        var evidenceContent = MaskContent(
+            content,
+            maskMatlabComments: true,
+            maskObjectiveCComments: true,
+            preserveObjectiveCModuloExpressions: false,
+            maskStrings: true);
         var lineStart = 0;
-        while (lineStart < content.Length)
+        while (lineStart < evidenceContent.Length)
         {
             var lineEnd = lineStart;
-            while (lineEnd < content.Length && content[lineEnd] is not ('\r' or '\n'))
+            while (lineEnd < evidenceContent.Length
+                && evidenceContent[lineEnd] is not ('\r' or '\n'))
+            {
                 lineEnd++;
+            }
 
-            var line = content.AsSpan(lineStart, lineEnd - lineStart).TrimStart();
+            var line = evidenceContent.AsSpan(lineStart, lineEnd - lineStart).TrimStart();
             if (StartsWithObjectiveCPreprocessorDirective(line)
                 || StartsWithObjectiveCAtKeyword(line)
                 || StartsWithObjectiveCMethodDeclaration(line))
@@ -259,16 +303,36 @@ internal static class AmbiguousMContentMasker
             }
 
             lineStart = lineEnd + 1;
-            if (lineEnd < content.Length
-                && content[lineEnd] == '\r'
-                && lineStart < content.Length
-                && content[lineStart] == '\n')
+            if (lineEnd < evidenceContent.Length
+                && evidenceContent[lineEnd] == '\r'
+                && lineStart < evidenceContent.Length
+                && evidenceContent[lineStart] == '\n')
             {
                 lineStart++;
             }
         }
 
         return false;
+    }
+
+    private static bool IsEscapedLineBreak(string content, int lineBreakIndex)
+    {
+        var previousIndex = lineBreakIndex - 1;
+        if (content[lineBreakIndex] == '\n'
+            && previousIndex >= 0
+            && content[previousIndex] == '\r')
+        {
+            previousIndex--;
+        }
+
+        var backslashCount = 0;
+        while (previousIndex >= 0 && content[previousIndex] == '\\')
+        {
+            backslashCount++;
+            previousIndex--;
+        }
+
+        return backslashCount % 2 != 0;
     }
 
     private static bool StartsWithObjectiveCPreprocessorDirective(ReadOnlySpan<char> line)

@@ -1271,6 +1271,39 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "helper");
     }
 
+    [Theory]
+    [InlineData(
+        """
+        %{
+        @interface Fake
+        %}
+        function result = run(left)
+          result = left % helper();
+        end
+        """)]
+    [InlineData(
+        """
+        const char *text = "\
+        @interface Fake";
+        function result = run(left)
+          result = left % helper();
+        end
+        """)]
+    public void Extract_AmbiguousMCommentedOrQuotedObjectiveCMarkersDoNotEnableModulo_Issue4738(
+        string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, "ambiguous_m", content, "unknown.m");
+
+        var references = ReferenceExtractor.Extract(
+            1,
+            "ambiguous_m",
+            content,
+            symbols,
+            "unknown.m");
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "helper");
+    }
+
     [Fact]
     public void Extract_AmbiguousMRetainsSharedSafetyGuards_Issue4738()
     {
@@ -1322,6 +1355,53 @@ public partial class ReferenceExtractorTests
 
         Assert.Equal("Base", reference.SymbolName);
         Assert.Equal(expectedQualifier, reference.TargetQualifier);
+    }
+
+    [Theory]
+    [InlineData("d", "void run() { pkg.tools.flush(); }\n", "flush", "pkg.tools")]
+    [InlineData("ada", "procedure Run is begin Pkg.Tools.Flush(); end Run;\n", "Flush", "Pkg.Tools")]
+    [InlineData("nim", "proc run() = pkg.tools.flush()\n", "flush", "pkg.tools")]
+    [InlineData("julia", "function run()\n  Pkg.Tools.flush()\nend\n", "flush", "Pkg.Tools")]
+    [InlineData("cython", "def run():\n    pkg.tools.flush()\n", "flush", "pkg.tools")]
+    [InlineData("matlab", "function run()\n  pkg.tools.flush();\nend\n", "flush", "pkg.tools")]
+    public void Extract_QualifiedScientificCallsPreserveTargetQualifiers_Issue4738(
+        string language,
+        string content,
+        string expectedName,
+        string expectedQualifier)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var reference = Assert.Single(
+            ReferenceExtractor.Extract(1, language, content, symbols),
+            candidate => candidate.SymbolName == expectedName
+                && candidate.ReferenceKind == "call");
+
+        Assert.Equal(expectedQualifier, reference.TargetQualifier);
+    }
+
+    [Fact]
+    public void Extract_QualifiedJuliaDefinitionsDoNotEmitPhantomCalls_Issue4738()
+    {
+        const string content = """
+            module Base
+            function Base.foo(x)
+              helper()
+            end
+            Base.bar(x) = helper2()
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "foo" or "bar"
+            && reference.ReferenceKind == "call");
+        Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Single(references, reference =>
+            reference.SymbolName == "helper2" && reference.ReferenceKind == "call");
     }
 
     [Theory]

@@ -89,6 +89,43 @@ internal static class ScientificNativeReferenceExtractor
 
     internal static bool Supports(string language) => SupportedLanguages.Contains(language);
 
+    internal static string? GetParenthesizedCallTargetQualifier(
+        string preparedLine,
+        int callIndex)
+    {
+        var separatorIndex = callIndex - 1;
+        while (separatorIndex >= 0 && char.IsWhiteSpace(preparedLine[separatorIndex]))
+            separatorIndex--;
+        if (separatorIndex < 0 || preparedLine[separatorIndex] != '.')
+            return null;
+
+        var segments = new List<string>();
+        while (separatorIndex >= 0 && preparedLine[separatorIndex] == '.')
+        {
+            var segmentEnd = separatorIndex;
+            var segmentStart = segmentEnd - 1;
+            while (segmentStart >= 0 && char.IsWhiteSpace(preparedLine[segmentStart]))
+                segmentStart--;
+            segmentEnd = segmentStart + 1;
+            while (segmentStart >= 0 && IsQualifierIdentifierPart(preparedLine[segmentStart]))
+                segmentStart--;
+            segmentStart++;
+            if (segmentStart >= segmentEnd
+                || !IsQualifierIdentifierStart(preparedLine[segmentStart]))
+            {
+                return null;
+            }
+
+            segments.Add(preparedLine[segmentStart..segmentEnd]);
+            separatorIndex = segmentStart - 1;
+            while (separatorIndex >= 0 && char.IsWhiteSpace(preparedLine[separatorIndex]))
+                separatorIndex--;
+        }
+
+        segments.Reverse();
+        return string.Join('.', segments);
+    }
+
     internal static bool IsDTemplateArgumentCall(
         IReadOnlyList<DTemplateArgumentCallSpan>? spans,
         ref int spanIndex,
@@ -741,5 +778,11 @@ internal static class ScientificNativeReferenceExtractor
         char.IsLetter(value) || value == '_';
 
     private static bool IsDIdentifierPart(char value) =>
+        char.IsLetterOrDigit(value) || value == '_';
+
+    private static bool IsQualifierIdentifierStart(char value) =>
+        char.IsLetter(value) || value == '_';
+
+    private static bool IsQualifierIdentifierPart(char value) =>
         char.IsLetterOrDigit(value) || value == '_';
 }

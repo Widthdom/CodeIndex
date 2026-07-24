@@ -153,20 +153,32 @@ public partial class DbWriter
               s.container_name = r.target_qualifier COLLATE NOCASE
               OR s.container_qualified_name = r.target_qualifier COLLATE NOCASE
               OR s.container_qualified_name LIKE '%.' || r.target_qualifier COLLATE NOCASE
-              OR EXISTS (
-                  SELECT 1
-                  FROM symbols AS target_scope
-                  WHERE target_scope.file_id = s.file_id
-                    AND target_scope.kind IN ('namespace', 'module', 'package')
-                    AND (
-                        target_scope.name = r.target_qualifier COLLATE NOCASE
-                        OR target_scope.container_qualified_name = r.target_qualifier COLLATE NOCASE
-                        OR substr(
-                               target_scope.name,
-                               1,
-                               length(r.target_qualifier) + 1
-                           ) = (r.target_qualifier || '.') COLLATE NOCASE
-                    )
+              OR (
+                  source_file.lang IN (
+                      'ada',
+                      'ambiguous_m',
+                      'cython',
+                      'd',
+                      'julia',
+                      'matlab',
+                      'nim',
+                      'objc'
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM symbols AS target_scope
+                      WHERE target_scope.file_id = s.file_id
+                        AND target_scope.kind IN ('namespace', 'module', 'package')
+                        AND (
+                            target_scope.name = r.target_qualifier COLLATE NOCASE
+                            OR target_scope.container_qualified_name = r.target_qualifier COLLATE NOCASE
+                            OR substr(
+                                   target_scope.name,
+                                   1,
+                                   length(r.target_qualifier) + 1
+                               ) = (r.target_qualifier || '.') COLLATE NOCASE
+                        )
+                  )
               )
           );
 

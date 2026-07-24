@@ -1610,6 +1610,26 @@ public static partial class ReferenceExtractor
                     }
                 }
 
+                if (language == "julia")
+                {
+                    var targetQualifier =
+                        ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                            preparedLine,
+                            callIndex);
+                    if (targetQualifier != null)
+                    {
+                        var qualifiedName = $"{targetQualifier}.{resolvedName}";
+                        var qualifiedDefinitionIndex =
+                            preparedLine.IndexOf(qualifiedName, StringComparison.Ordinal);
+                        if (qualifiedDefinitionIndex >= 0
+                            && callIndex == qualifiedDefinitionIndex + targetQualifier.Length + 1
+                            && definitionNames.Contains(qualifiedName))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
                 if (language != "sql")
                     return TryGetDefinitionNameIndex(resolvedName, out var definitionIndex)
                         && callIndex == definitionIndex;
@@ -2298,7 +2318,14 @@ public static partial class ReferenceExtractor
             }
 
             void AddCallLikeReference(string name, int callIndex) =>
-                _ = TryAddCallLikeReference(name, callIndex);
+                _ = TryAddCallLikeReference(
+                    name,
+                    callIndex,
+                    ScientificNativeReferenceExtractor.Supports(language)
+                        ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                            preparedLine,
+                            callIndex)
+                        : null);
 
             void AddPowerShellParameterReference(string name, int callIndex)
             {
@@ -2306,7 +2333,10 @@ public static partial class ReferenceExtractor
                 AddReference(references, seen, fileId, name, callIndex, "parameter", context, lineNumber, callContainer, language);
             }
 
-            bool TryAddCallLikeReference(string name, int callIndex)
+            bool TryAddCallLikeReference(
+                string name,
+                int callIndex,
+                string? targetQualifier = null)
             {
                 var normalizedName = language == "fsharp" && FSharpReferenceExtractor.IsOperatorCallName(name)
                     ? $"operator {name}"
@@ -2405,7 +2435,18 @@ public static partial class ReferenceExtractor
                 }
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        normalizedName,
+                        callIndex,
+                        "instantiate",
+                        context,
+                        lineNumber,
+                        callContainer,
+                        language,
+                        targetQualifier);
                     return true;
                 }
                 if (language == "rust"
@@ -2472,7 +2513,17 @@ public static partial class ReferenceExtractor
                     return true;
                 }
 
-                AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
+                AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    normalizedName,
+                    callIndex,
+                    "call",
+                    context,
+                    lineNumber,
+                    callContainer,
+                    targetQualifier: targetQualifier);
                 return true;
 
                 bool TryGetKnownPythonTypeCall(string candidate, out string canonicalName)
@@ -2613,7 +2664,14 @@ public static partial class ReferenceExtractor
                         && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
                         continue;
                     GetMatchedCallIndices().Add(callIndex);
-                    if (TryAddCallLikeReference(name, callIndex))
+                    if (TryAddCallLikeReference(
+                            name,
+                            callIndex,
+                            ScientificNativeReferenceExtractor.Supports(language)
+                                ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                                    preparedLine,
+                                    callIndex)
+                                : null))
                     {
                         EmitGenericInvocationTypeArgumentReferences(
                             language,
