@@ -2563,7 +2563,10 @@ public static partial class ReferenceExtractor
                                 name,
                                 callIndex,
                                 lineNumber,
-                                dynamicDeclarativeState))
+                                dynamicDeclarativeState,
+                                language == "groovy"
+                                    ? ResolveContainerForCall(callIndex)
+                                    : null))
                         {
                             continue;
                         }

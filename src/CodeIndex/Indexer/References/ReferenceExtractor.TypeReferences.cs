@@ -4771,7 +4771,8 @@ public static partial class ReferenceExtractor
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby" and not "r" and not "haskell"
             and not "makefile" and not "terraform" and not "dockerfile"
-            and not "css" and not "fortran";
+            and not "css" and not "fortran" and not "crystal" and not "tcl"
+            and not "prolog" and not "ambiguous_pl";
 
     private static bool UsesDashDashComments(string lang) =>
         lang is "lua" or "sql" or "haskell";

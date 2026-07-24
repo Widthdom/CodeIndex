@@ -98,7 +98,13 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"(?:^|[;=])\s*(?:return\s+)?(?<name>[A-Za-z_]\w*)\b(?!\s*(?:\(|(?:<<|>>|[+\-*/%&|^])?=))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GroovyConstructorDeclarationRegex = new(
-        @"^\s*(?:(?:public|protected|private)\s+)*(?<name>[A-Z]\w*)\s*\([^)]*\)\s*(?:throws\s+[\w.,\s]+)?\{",
+        @"(?:^|[;{])\s*(?:(?:public|protected|private)\s+)*(?<name>[A-Z]\w*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GroovyMethodDeclarationRegex = new(
+        @"(?:^|[;{])\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native)\s+)*(?:def|void|boolean|byte|char|short|int|long|float|double|BigDecimal|BigInteger|String|[A-Za-z_$][\w.$<>\[\]?]*)\s+(?<name>[A-Za-z_]\w*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalMethodDeclarationRegex = new(
+        @"(?:^|;)\s*(?:(?:private|protected)\s+)?def\s+(?:self\.)?(?<name>[A-Za-z_]\w*[?!]?)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TclCommandRegex = new(
         @"(?:^|[;\[])\s*(?<name>[A-Za-z_:][\w:.-]*)",
@@ -672,19 +678,42 @@ internal static class DynamicDeclarativeReferenceExtractor
         string name,
         int callIndex,
         int lineNumber,
-        ExtractionState? state)
+        ExtractionState? state,
+        SymbolRecord? container)
     {
         if (language == "ambiguous_pl")
             return state?.HasPrologContainer(lineNumber) == true;
+        if (language == "crystal")
+            return MatchesDeclarationAt(CrystalMethodDeclarationRegex, preparedLine, name, callIndex);
         if (language != "groovy")
             return false;
         if (name is "super" or "synchronized" or "this")
             return true;
 
-        var declaration = GroovyConstructorDeclarationRegex.Match(preparedLine);
-        return declaration.Success
-            && declaration.Groups["name"].Index == callIndex
-            && string.Equals(declaration.Groups["name"].Value, name, StringComparison.Ordinal);
+        if (MatchesDeclarationAt(GroovyMethodDeclarationRegex, preparedLine, name, callIndex))
+            return true;
+        return container?.Kind == "class"
+            && string.Equals(container.Name, name, StringComparison.Ordinal)
+            && MatchesDeclarationAt(GroovyConstructorDeclarationRegex, preparedLine, name, callIndex);
+    }
+
+    private static bool MatchesDeclarationAt(
+        Regex regex,
+        string line,
+        string name,
+        int callIndex)
+    {
+        foreach (Match declaration in BoundedRegex.EnumerateMatches(regex, line))
+        {
+            var nameGroup = declaration.Groups["name"];
+            if (nameGroup.Index == callIndex
+                && string.Equals(nameGroup.Value, name, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static int SkipQuotedToken(string line, int startColumn, char delimiter)
@@ -1258,10 +1287,18 @@ internal static class DynamicDeclarativeReferenceExtractor
         var result = new string[lines.Count];
         var frames = new Stack<TclLexicalFrame>();
         frames.Push(new TclLexicalFrame(TclLexicalFrameKind.Script));
+        var commentContinued = false;
 
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (commentContinued)
+            {
+                result[lineIndex] = new string(' ', line.Length);
+                commentContinued = HasTclEscapedNewline(line);
+                continue;
+            }
+
             var buffer = line.ToCharArray();
             var lineContinued = false;
             var suppressLeadingContinuedWord = frames.Peek().Kind != TclLexicalFrameKind.Script
@@ -1397,6 +1434,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                 if (ch == '#' && frame.CommandStart)
                 {
                     FillWithSpaces(buffer, column);
+                    commentContinued = HasTclEscapedNewline(line);
                     break;
                 }
                 if (ch == '"')
@@ -1514,6 +1552,14 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool HasTclEscapedNewline(string line)
+    {
+        var backslashCount = 0;
+        for (var column = line.Length - 1; column >= 0 && line[column] == '\\'; column--)
+            backslashCount++;
+        return backslashCount % 2 == 1;
     }
 
     private static string ReadTclBareWord(string line, int startColumn)

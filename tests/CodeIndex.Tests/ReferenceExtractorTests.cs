@@ -1064,8 +1064,11 @@ public partial class ReferenceExtractorTests
               helper value
               helper(value)
               text = "123456789"; helper(value)
+              divided = value // 2; helper(value)
               helper = 1
             end
+
+            class Inline; def inline_helper(); end; end
             """;
 
         var (symbols, references) = ExtractSymbolsAndReferences("crystal", content);
@@ -1073,7 +1076,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
         AssertReferencesContain(references, "type_reference", null, "support");
         AssertReferencesContain(references, "call", "run", "helper");
-        Assert.Equal(3, references.Count(reference =>
+        Assert.Equal(4, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper"));
@@ -1089,7 +1092,7 @@ public partial class ReferenceExtractorTests
             stringCall.Column);
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "require" or "def");
+            && reference.SymbolName is "require" or "def" or "inline_helper");
     }
 
     [Fact]
@@ -1099,8 +1102,10 @@ public partial class ReferenceExtractorTests
             import demo.Support
 
             class Runner {
-                Runner() {
-                    super(1)
+                Runner(
+                    int seed
+                ) {
+                    super(seed)
                 }
 
                 static def helper(value) {
@@ -1115,6 +1120,8 @@ public partial class ReferenceExtractorTests
                     synchronized(value) {}
                 }
             }
+
+            class InlineRunner { InlineRunner() {}; def inlineHelper() {} }
             """;
 
         var (symbols, references) = ExtractSymbolsAndReferences("groovy", content);
@@ -1138,7 +1145,8 @@ public partial class ReferenceExtractorTests
             stringCall.Column);
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "import" or "def" or "Runner" or "super" or "synchronized");
+            && reference.SymbolName is "import" or "def" or "Runner" or "InlineRunner"
+                or "inlineHelper" or "super" or "synchronized");
     }
 
     [Fact]
@@ -1312,6 +1320,8 @@ public partial class ReferenceExtractorTests
             }
             proc multiline {} {
                 set value 1 ;# [helper]
+                # continued comment \
+                helper
                 set color #fff; helper
                 set quoted "[helper]"
                 set braced {[helper]}
@@ -1387,6 +1397,9 @@ public partial class ReferenceExtractorTests
                 bar(value) = bar(other),
                 bar = value,
                 process(value).
+            division_data(X) :-
+                Y is X // 2,
+                process(Y).
             meta :-
                 call(helper).
             build(Term) :-
@@ -1410,9 +1423,9 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "call"
             && reference.ContainerName is "threshold" or "quoted" or "meta" or "build"
             && reference.SymbolName == "helper"));
-        Assert.Equal(3, references.Count(reference =>
+        Assert.Equal(4, references.Count(reference =>
             reference.ReferenceKind == "call"
-            && (reference.ContainerName is "data_only" or "list_data" or "operator_data")
+            && (reference.ContainerName is "data_only" or "list_data" or "operator_data" or "division_data")
             && reference.SymbolName == "process"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
@@ -1426,6 +1439,7 @@ public partial class ReferenceExtractorTests
             sub helper { return 1; }
             prolog_entry :- helper().
             my %cache = (answer => helper());
+            my $fallback = undef // helper();
             clp_entry(X) :- X #= 1, helper.
             # helper();
             % helper().
@@ -1437,7 +1451,7 @@ public partial class ReferenceExtractorTests
 
         var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
 
-        Assert.Equal(3, references.Count(reference =>
+        Assert.Equal(4, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
         AssertReferencesContain(references, "call", "prolog_entry", "helper");
