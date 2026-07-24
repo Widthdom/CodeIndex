@@ -206,6 +206,11 @@ public static partial class SymbolExtractor
     {
         if (name.Length == 0 || name.Length > StructuredDataMaxPathLength)
             return true;
+        if (symbols.Count >= StructuredDataMaxSymbols)
+        {
+            truncated = true;
+            return false;
+        }
 
         if (!TryAddStructuredDataSymbol(
             fileId,
@@ -289,7 +294,7 @@ public static partial class SymbolExtractor
         return span.Trim().ToString();
     }
 
-    private static bool TryGetBracketSection(
+    internal static bool TryGetBracketSection(
         ReadOnlySpan<char> trimmed,
         bool allowDoubleBrackets,
         out string section,
@@ -303,20 +308,29 @@ public static partial class SymbolExtractor
         isDoubleBracket = allowDoubleBrackets && trimmed.Length >= 5 && trimmed[1] == '[';
         var closing = isDoubleBracket ? "]]".AsSpan() : "]".AsSpan();
         var start = isDoubleBracket ? 2 : 1;
-        var closingOffset = trimmed[start..].IndexOf(closing);
-        if (closingOffset < 0)
-            return false;
+        var searchOffset = start;
+        while (searchOffset < trimmed.Length)
+        {
+            var relativeClosingOffset = trimmed[searchOffset..].IndexOf(closing);
+            if (relativeClosingOffset < 0)
+                return false;
 
-        var value = trimmed.Slice(start, closingOffset).Trim();
-        if (value.IsEmpty)
-            return false;
+            var closingOffset = searchOffset + relativeClosingOffset;
+            var remainder = trimmed[(closingOffset + closing.Length)..].Trim();
+            if (remainder.IsEmpty || remainder[0] is '#' or ';')
+            {
+                var value = trimmed.Slice(start, closingOffset - start).Trim();
+                if (value.IsEmpty)
+                    return false;
 
-        var remainder = trimmed[(start + closingOffset + closing.Length)..].Trim();
-        if (!remainder.IsEmpty && remainder[0] is not ('#' or ';'))
-            return false;
+                section = value.ToString();
+                return true;
+            }
 
-        section = value.ToString();
-        return true;
+            searchOffset = closingOffset + closing.Length;
+        }
+
+        return false;
     }
 
     private static bool TryGetConfigRuleName(ReadOnlySpan<char> trimmed, out string ruleName)

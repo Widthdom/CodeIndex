@@ -6,9 +6,10 @@ public partial class ReferenceExtractorTests
 {
     [Theory]
     [InlineData("toml", "[build]\ninclude = \"config/shared.toml\"\n", "config/shared.toml", 2)]
+    [InlineData("toml", "path = \"config\\\\shared.toml\"\n", "config/shared.toml", 1)]
     [InlineData("gitignore", "# generated\nartifacts/\n", "artifacts", 2)]
     [InlineData("gitattributes", "docs/** linguist-documentation\n", "docs/**", 1)]
-    [InlineData("editorconfig", "[src/**/*.cs]\nindent_style = space\n", "src/**/*.cs", 1)]
+    [InlineData("editorconfig", "[src/[ab]/*.cs]\nindent_style = space\n", "src/[ab]/*.cs", 1)]
     [InlineData("dockerignore", "bin/\n", "bin", 1)]
     [InlineData("config", "rule(\ninclude = [\"rules/common.rules\"]\n)\n", "rules/common.rules", 2)]
     public void Extract_RepositoryMetadata_IndexesLocalPathReferences_Issue4740(
@@ -144,5 +145,33 @@ public partial class ReferenceExtractorTests
         var attributeSymbols = SymbolExtractor.Extract(1, "gitattributes", attributes);
         var attributeReferences = ReferenceExtractor.Extract(1, "gitattributes", attributes, attributeSymbols);
         Assert.Empty(attributeReferences);
+    }
+
+    [Fact]
+    public void Extract_LargeRepositoryMetadataAndJsonLines_RemainsBoundedAndComplete_Issue4740()
+    {
+        const int recordCount = 4200;
+        var cases = new[]
+        {
+            (
+                Language: "toml",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, recordCount).Select(index => $"path{index} = \"src/file{index}.cs\""))),
+            (
+                Language: "jsonl",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, recordCount).Select(index => $$"""{"path":"src/file{{index}}.cs"}"""))),
+        };
+
+        foreach (var testCase in cases)
+        {
+            var symbols = SymbolExtractor.Extract(1, testCase.Language, testCase.Content);
+            var references = ReferenceExtractor.Extract(1, testCase.Language, testCase.Content, symbols);
+
+            Assert.Equal(recordCount, references.Count);
+            Assert.Equal("src/file4199.cs", references[^1].SymbolName);
+        }
     }
 }

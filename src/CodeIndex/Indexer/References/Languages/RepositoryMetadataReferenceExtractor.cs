@@ -1,3 +1,4 @@
+using System.Text;
 using System.Xml;
 using CodeIndex.Models;
 
@@ -5,6 +6,8 @@ namespace CodeIndex.Indexer;
 
 internal static class RepositoryMetadataReferenceExtractor
 {
+    private readonly record struct QuotedMetadataValue(string RawValue, char Quote);
+
     internal static List<ReferenceRecord> Extract(
         long fileId,
         string language,
@@ -14,6 +17,9 @@ internal static class RepositoryMetadataReferenceExtractor
     {
         var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount, Math.Min(lines.Length, 64));
         var seen = new ReferenceDedupeSet();
+        var containers = BuildLineContainerMap(
+            symbols,
+            preferredKind: language == "gitattributes" ? "rule" : null);
 
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
@@ -23,10 +29,7 @@ internal static class RepositoryMetadataReferenceExtractor
                 continue;
 
             var lineNumber = lineIndex + 1;
-            var container = FindLineContainer(
-                symbols,
-                lineNumber,
-                preferredKind: language == "gitattributes" ? "rule" : null);
+            containers.TryGetValue(lineNumber, out var container);
             if (language is "gitignore" or "dockerignore")
             {
                 if (!TryNormalizeIgnorePattern(trimmed, out var pattern, out var sourceIndex))
@@ -230,14 +233,16 @@ internal static class RepositoryMetadataReferenceExtractor
         foreach (var candidate in candidates)
         {
             foundQuotedValue = true;
+            if (!TryDecodeQuotedPathCandidate(candidate, out var decodedCandidate))
+                continue;
             if (!TryNormalizeRepositoryPath(
-                candidate,
+                decodedCandidate,
                 allowBarePattern: false,
                 allowRootAnchoredPattern: false,
                 out var normalized))
                 continue;
 
-            var sourceIndex = context.IndexOf(candidate, StringComparison.Ordinal);
+            var sourceIndex = context.IndexOf(candidate.RawValue, StringComparison.Ordinal);
             AddPathReference(
                 references,
                 seen,
@@ -276,7 +281,7 @@ internal static class RepositoryMetadataReferenceExtractor
             language);
     }
 
-    private static IEnumerable<string> EnumerateQuotedValues(string value)
+    private static IEnumerable<QuotedMetadataValue> EnumerateQuotedValues(string value)
     {
         for (var index = 0; index < value.Length; index++)
         {
@@ -304,10 +309,43 @@ internal static class RepositoryMetadataReferenceExtractor
                 if (character != quote)
                     continue;
 
-                yield return value[start..index];
+                yield return new QuotedMetadataValue(value[start..index], quote);
                 break;
             }
         }
+    }
+
+    private static bool TryDecodeQuotedPathCandidate(
+        QuotedMetadataValue candidate,
+        out string decoded)
+    {
+        decoded = candidate.RawValue;
+        if (candidate.Quote == '\'' || !candidate.RawValue.Contains('\\'))
+            return true;
+
+        var builder = new StringBuilder(candidate.RawValue.Length);
+        for (var index = 0; index < candidate.RawValue.Length; index++)
+        {
+            var character = candidate.RawValue[index];
+            if (character != '\\')
+            {
+                builder.Append(character);
+                continue;
+            }
+
+            if (index + 1 >= candidate.RawValue.Length
+                || candidate.RawValue[index + 1] != '\\')
+            {
+                decoded = string.Empty;
+                return false;
+            }
+
+            builder.Append('\\');
+            index++;
+        }
+
+        decoded = builder.ToString();
+        return true;
     }
 
     private static int FindUnquotedComment(ReadOnlySpan<char> value)
@@ -372,14 +410,14 @@ internal static class RepositoryMetadataReferenceExtractor
     private static bool TryGetEditorConfigSection(ReadOnlySpan<char> trimmed, out string pattern)
     {
         pattern = string.Empty;
-        if (trimmed.Length < 3 || trimmed[0] != '[')
+        if (!SymbolExtractor.TryGetBracketSection(
+            trimmed,
+            allowDoubleBrackets: false,
+            out var candidate,
+            out _))
+        {
             return false;
-
-        var closingIndex = trimmed[1..].IndexOf(']');
-        if (closingIndex < 0)
-            return false;
-
-        var candidate = trimmed.Slice(1, closingIndex).Trim().ToString();
+        }
         return TryNormalizeRepositoryPath(
             candidate,
             allowBarePattern: true,
@@ -539,19 +577,22 @@ internal static class RepositoryMetadataReferenceExtractor
             language);
     }
 
-    private static SymbolRecord? FindLineContainer(
+    private static Dictionary<int, SymbolRecord> BuildLineContainerMap(
         IReadOnlyList<SymbolRecord> symbols,
-        int lineNumber,
         string? preferredKind)
     {
-        for (var index = symbols.Count - 1; index >= 0; index--)
+        var containers = new Dictionary<int, SymbolRecord>(Math.Min(symbols.Count, 4096));
+        for (var index = 0; index < symbols.Count; index++)
         {
-            if (symbols[index].Line == lineNumber
-                && (preferredKind == null || symbols[index].Kind == preferredKind))
-                return symbols[index];
+            var symbol = symbols[index];
+            if (symbol.Line > 0
+                && (preferredKind == null || symbol.Kind == preferredKind))
+            {
+                containers[symbol.Line] = symbol;
+            }
         }
 
-        return null;
+        return containers;
     }
 
     private static string GetLine(string[] lines, int lineNumber) =>
