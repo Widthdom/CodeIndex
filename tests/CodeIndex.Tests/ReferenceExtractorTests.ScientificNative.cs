@@ -1126,4 +1126,122 @@ public partial class ReferenceExtractorTests
         Assert.Empty(oversizeReferences);
         Assert.Empty(conflictReferences);
     }
+
+    [Theory]
+    [InlineData("nim", "type Child = object of pkg.Base\n", "pkg")]
+    [InlineData("matlab", "classdef Child < pkg.Base\nend\n", "pkg")]
+    [InlineData("julia", "struct Child <: Pkg.Base\nend\n", "Pkg")]
+    [InlineData("d", "class Child : pkg.Base {}\n", "pkg")]
+    [InlineData("cython", "cdef class Child(pkg.Base):\n    pass\n", "pkg")]
+    [InlineData("ada", "type Child is new Pkg.Base;\n", "Pkg")]
+    public void Extract_QualifiedScientificBaseTypesUseResolvableLeafNames_Issue4738(
+        string language,
+        string content,
+        string expectedQualifier)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var reference = Assert.Single(
+            ReferenceExtractor.Extract(1, language, content, symbols),
+            candidate => candidate.ReferenceKind == "type_reference");
+
+        Assert.Equal("Base", reference.SymbolName);
+        Assert.Equal(expectedQualifier, reference.TargetQualifier);
+    }
+
+    [Theory]
+    [InlineData("objc")]
+    [InlineData("ambiguous_m")]
+    public void Extract_ObjectiveCQuotedImportsSurviveStringMasking_Issue4738(string language)
+    {
+        const string content = """
+            /*
+            #import "Ignored.h"
+            */
+            #import "Local/Header.h"
+            #include <Framework/Header.h>
+            """;
+        var symbols = SymbolExtractor.Extract(1, language, content, "sample.m");
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols, "sample.m");
+
+        Assert.Single(references, reference =>
+            reference.SymbolName == "Local/Header.h" && reference.ReferenceKind == "import");
+        Assert.Single(references, reference =>
+            reference.SymbolName == "Framework/Header.h" && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ignored.h");
+    }
+
+    [Fact]
+    public void Extract_AdaBackslashesDoNotEscapeClosingStringQuotes_Issue4738()
+    {
+        const string content = """
+            procedure Run is
+            begin
+              Put("C:\"); Helper;
+            end Run;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "ada", content);
+
+        var references = ReferenceExtractor.Extract(1, "ada", content, symbols);
+
+        Assert.Single(references, reference =>
+            reference.SymbolName == "Helper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        f(x) = helper(
+            nested(x)
+        )
+        outside()
+        """)]
+    [InlineData(
+        """
+        f(x) =
+            helper(
+                nested(x)
+            )
+        outside()
+        """)]
+    public void Extract_JuliaShortFunctionMultilineCallsKeepNestedReferencesScoped_Issue4738(
+        string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Equal("f", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Equal("f", Assert.Single(references, reference =>
+            reference.SymbolName == "nested" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_MatlabManyEndlessPeerFunctionsKeepIndependentLinearRanges_Issue4738()
+    {
+        const int functionCount = 2_048;
+        var content = new System.Text.StringBuilder(functionCount * 40);
+        for (var index = 0; index < functionCount; index++)
+        {
+            content.Append("function f")
+                .Append(index)
+                .Append("()\n  helper")
+                .Append(index)
+                .Append("();\n");
+        }
+
+        var symbols = SymbolExtractor.Extract(1, "matlab", content.ToString());
+
+        Assert.Equal(functionCount, symbols.Count(symbol => symbol.Kind == "function"));
+        Assert.Equal(2, Assert.Single(symbols, symbol => symbol.Name == "f0").EndLine);
+        Assert.Equal(functionCount * 2 + 1, Assert.Single(
+            symbols,
+            symbol => symbol.Name == $"f{functionCount - 1}").EndLine);
+    }
 }

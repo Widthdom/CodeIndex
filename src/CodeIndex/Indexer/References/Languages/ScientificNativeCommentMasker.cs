@@ -26,7 +26,8 @@ internal static class ScientificNativeCommentMasker
 
     internal static string MaskLineStringLiteralsPreservingPostfixSingleQuotes(
         string line,
-        bool useMatlabStringRules)
+        bool useMatlabStringRules,
+        bool useBackslashEscapes)
     {
         char[]? chars = null;
 
@@ -52,7 +53,7 @@ internal static class ScientificNativeCommentMasker
             {
                 var current = line[cursor];
                 MaskAt(cursor);
-                if (!useMatlabStringRules
+                if (useBackslashEscapes
                     && current == '\\'
                     && cursor + 1 < line.Length)
                 {

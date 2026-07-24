@@ -2572,6 +2572,7 @@ public static partial class ReferenceExtractor
                     dTemplateArgumentCallSpans = ScientificNativeReferenceExtractor.EmitReferences(
                         language,
                         preparedLine,
+                        originalLine,
                         references,
                         seen,
                         fileId,

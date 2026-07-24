@@ -71,10 +71,13 @@ internal static class ScientificNativeReferenceExtractor
         @"^\s*type\s+[A-Za-z]\w*\s+is\s+new\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex AdaBareCallRegex = new(
-        @"^\s*(?!(?:end|null|return|exit|raise|goto)\b)(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s*;",
+        @"(?:^|;)\s*(?!(?:end|null|return|exit|raise|goto)\b)(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s*;",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ObjectiveCImportRegex = new(
         """^\s*#\s*(?:import|include)\s*[<"](?<name>[^>"]+)[>"]""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex ObjectiveCImportDirectiveRegex = new(
+        @"^\s*#\s*(?:import|include)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     internal static bool Supports(string language) => SupportedLanguages.Contains(language);
@@ -96,6 +99,7 @@ internal static class ScientificNativeReferenceExtractor
     internal static IReadOnlyList<DTemplateArgumentCallSpan>? EmitReferences(
         string language,
         string preparedLine,
+        string originalLine,
         List<ReferenceRecord> references,
         ReferenceDedupeSet seen,
         long fileId,
@@ -114,12 +118,16 @@ internal static class ScientificNativeReferenceExtractor
             case "nim":
                 EmitMatch(NimFromImportRegex, "import");
                 EmitNimImportList();
-                EmitMatches(NimBaseTypeRegex, "type_reference");
-                EmitMatches(NimAnnotatedTypeRegex, "type_reference");
+                EmitMatches(NimBaseTypeRegex, "type_reference", normalizeQualifiedTypeName: true);
+                EmitMatches(NimAnnotatedTypeRegex, "type_reference", normalizeQualifiedTypeName: true);
                 break;
             case "matlab":
                 EmitNameList(MatlabImportListRegex, "import", ',', splitOnWhitespace: true);
-                EmitNameList(MatlabBaseTypeListRegex, "type_reference", '&');
+                EmitNameList(
+                    MatlabBaseTypeListRegex,
+                    "type_reference",
+                    '&',
+                    normalizeQualifiedTypeName: true);
                 break;
             case "julia":
                 EmitNameList(
@@ -128,7 +136,7 @@ internal static class ScientificNativeReferenceExtractor
                     ',',
                     stopAtColon: true,
                     stripLeadingRelativePrefix: true);
-                EmitMatches(JuliaTypeRegex, "type_reference");
+                EmitMatches(JuliaTypeRegex, "type_reference", normalizeQualifiedTypeName: true);
                 foreach (Match match in JuliaMacroCallRegex.Matches(preparedLine))
                 {
                     var group = match.Groups["name"];
@@ -142,7 +150,11 @@ internal static class ScientificNativeReferenceExtractor
                 break;
             case "d":
                 EmitNameList(DImportListRegex, "import", ',', stopAtColon: true, stripLeadingAlias: true);
-                EmitNameList(DBaseTypeListRegex, "type_reference", ',');
+                EmitNameList(
+                    DBaseTypeListRegex,
+                    "type_reference",
+                    ',',
+                    normalizeQualifiedTypeName: true);
                 foreach (Match match in DTemplateInvocationRegex.Matches(preparedLine))
                 {
                     var group = match.Groups["name"];
@@ -156,13 +168,16 @@ internal static class ScientificNativeReferenceExtractor
             case "cython":
                 EmitMatch(CythonFromImportRegex, "import", stripLeadingRelativePrefix: true);
                 EmitNameList(CythonImportListRegex, "import", ',');
-                EmitNameList(CythonBaseTypeListRegex, "type_reference", ',');
+                EmitNameList(
+                    CythonBaseTypeListRegex,
+                    "type_reference",
+                    ',',
+                    normalizeQualifiedTypeName: true);
                 break;
             case "ada":
                 EmitNameList(AdaImportListRegex, "import", ',');
-                EmitMatches(AdaDerivedTypeRegex, "type_reference");
-                var bareCall = AdaBareCallRegex.Match(preparedLine);
-                if (bareCall.Success)
+                EmitMatches(AdaDerivedTypeRegex, "type_reference", normalizeQualifiedTypeName: true);
+                foreach (Match bareCall in AdaBareCallRegex.Matches(preparedLine))
                 {
                     var group = bareCall.Groups["name"];
                     var separatorIndex = group.Value.LastIndexOf('.');
@@ -171,7 +186,7 @@ internal static class ScientificNativeReferenceExtractor
                 }
                 break;
             case "objc":
-                EmitMatch(ObjectiveCImportRegex, "import");
+                EmitObjectiveCImport();
                 break;
         }
 
@@ -200,10 +215,13 @@ internal static class ScientificNativeReferenceExtractor
                 EmitName(group.Value[nameStart..], group.Index + nameStart, referenceKind);
         }
 
-        void EmitMatches(Regex regex, string referenceKind)
+        void EmitMatches(
+            Regex regex,
+            string referenceKind,
+            bool normalizeQualifiedTypeName = false)
         {
             foreach (Match match in regex.Matches(preparedLine))
-                EmitGroup(match.Groups["name"], referenceKind);
+                EmitGroup(match.Groups["name"], referenceKind, normalizeQualifiedTypeName);
         }
 
         void EmitNameList(
@@ -213,7 +231,8 @@ internal static class ScientificNativeReferenceExtractor
             bool splitOnWhitespace = false,
             bool stopAtColon = false,
             bool stripLeadingAlias = false,
-            bool stripLeadingRelativePrefix = false)
+            bool stripLeadingRelativePrefix = false,
+            bool normalizeQualifiedTypeName = false)
         {
             var match = regex.Match(preparedLine);
             if (!match.Success)
@@ -251,6 +270,7 @@ internal static class ScientificNativeReferenceExtractor
                     referenceKind,
                     stripLeadingAlias,
                     stripLeadingRelativePrefix,
+                    normalizeQualifiedTypeName,
                     emit: canEmit))
                 {
                     if (!canEmit)
@@ -281,6 +301,7 @@ internal static class ScientificNativeReferenceExtractor
             string referenceKind,
             bool stripLeadingAlias,
             bool stripLeadingRelativePrefix,
+            bool normalizeQualifiedTypeName = false,
             bool emit = true)
         {
             while (segmentStart < segmentEnd && char.IsWhiteSpace(names[segmentStart]))
@@ -335,12 +356,26 @@ internal static class ScientificNativeReferenceExtractor
             var emittedNameStart = stripLeadingRelativePrefix
                 ? firstIdentifierIndex
                 : segmentStart;
+            string? targetQualifier = null;
+            if (normalizeQualifiedTypeName)
+            {
+                var lastDotIndex = names.LastIndexOf(
+                    '.',
+                    nameEnd - 1,
+                    nameEnd - emittedNameStart);
+                if (lastDotIndex >= emittedNameStart)
+                {
+                    targetQualifier = names[emittedNameStart..lastDotIndex];
+                    emittedNameStart = lastDotIndex + 1;
+                }
+            }
             if (emit)
             {
                 EmitName(
                     names[emittedNameStart..nameEnd],
                     absoluteOffset + emittedNameStart,
-                    referenceKind);
+                    referenceKind,
+                    targetQualifier);
             }
 
             return true;
@@ -482,15 +517,33 @@ internal static class ScientificNativeReferenceExtractor
                 $"Scientific/native dependency extraction used the first {maxDependenciesPerDeclaration:N0} names on line {lineNumber:N0} and skipped additional names."));
         }
 
-        void EmitGroup(Group group, string referenceKind)
+        void EmitGroup(
+            Group group,
+            string referenceKind,
+            bool normalizeQualifiedTypeName = false)
         {
             if (!group.Success || group.Length == 0)
                 return;
 
-            EmitName(group.Value, group.Index, referenceKind);
+            if (!normalizeQualifiedTypeName)
+            {
+                EmitName(group.Value, group.Index, referenceKind);
+                return;
+            }
+
+            var lastDotIndex = group.Value.LastIndexOf('.');
+            EmitName(
+                lastDotIndex >= 0 ? group.Value[(lastDotIndex + 1)..] : group.Value,
+                group.Index + lastDotIndex + 1,
+                referenceKind,
+                lastDotIndex >= 0 ? group.Value[..lastDotIndex] : null);
         }
 
-        void EmitName(string name, int index, string referenceKind)
+        void EmitName(
+            string name,
+            int index,
+            string referenceKind,
+            string? targetQualifier = null)
         {
             ReferenceExtractor.AddReference(
                 references,
@@ -502,7 +555,23 @@ internal static class ScientificNativeReferenceExtractor
                 context,
                 lineNumber,
                 resolveContainerForColumn(index),
-                language);
+                language,
+                targetQualifier);
+        }
+
+        void EmitObjectiveCImport()
+        {
+            var directiveLine = ObjectiveCImportRegex.IsMatch(preparedLine)
+                ? preparedLine
+                : ObjectiveCImportDirectiveRegex.IsMatch(preparedLine)
+                    ? originalLine
+                    : null;
+            if (directiveLine == null)
+                return;
+
+            var match = ObjectiveCImportRegex.Match(directiveLine);
+            if (match.Success)
+                EmitGroup(match.Groups["name"], "import");
         }
     }
 

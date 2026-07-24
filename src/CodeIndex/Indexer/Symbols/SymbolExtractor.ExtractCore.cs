@@ -187,6 +187,9 @@ public static partial class SymbolExtractor
         var scientificBodyScannerLines = lang is "julia" or "matlab"
             ? PrepareScientificBodyScannerLines(structuralLines, lang)
             : null;
+        var matlabExplicitOuterClosureByLine = lang == "matlab" && scientificBodyScannerLines != null
+            ? BuildMatlabExplicitOuterClosureMap(scientificBodyScannerLines)
+            : null;
         string[]? javaScriptTypeScriptSanitizedLines = null;
         string[] GetJavaScriptTypeScriptSanitizedLines() =>
             javaScriptTypeScriptSanitizedLines ??= BuildJavaScriptTypeScriptSanitizedLines(lines);
@@ -897,7 +900,8 @@ public static partial class SymbolExtractor
                                                 pattern.BodyStyle,
                                                 lang,
                                                 absoluteStartColumn,
-                                                scientificBodyScannerLines);
+                                                scientificBodyScannerLines,
+                                                matlabExplicitOuterClosureByLine);
                         if (fortranContinuationCandidate != null)
                             endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);
                         var startLine = i + 1;

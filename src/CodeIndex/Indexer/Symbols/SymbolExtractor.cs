@@ -4788,7 +4788,7 @@ public static partial class SymbolExtractor
 
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle) =>
-        ResolveRange(lines, startIndex, bodyStyle, null, 0, null);
+        ResolveRange(lines, startIndex, bodyStyle, null, 0, null, null);
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(
         string[] lines,
@@ -4796,7 +4796,8 @@ public static partial class SymbolExtractor
         BodyStyle bodyStyle,
         string? lang = null,
         int startColumn = 0,
-        string[]? scientificBodyScannerLines = null)
+        string[]? scientificBodyScannerLines = null,
+        bool[]? matlabExplicitOuterClosureByLine = null)
     {
         return bodyStyle switch
         {
@@ -4810,9 +4811,10 @@ public static partial class SymbolExtractor
             BodyStyle.FortranEnd => FindFortranRange(lines, startIndex),
             BodyStyle.ElixirEnd => FindElixirRange(lines, startIndex),
             BodyStyle.ScientificEnd when lang is "julia" or "matlab" => FindScientificEndRange(
-                scientificBodyScannerLines ?? PrepareScientificBodyScannerLines(lines, lang),
-                startIndex,
-                lang),
+                  scientificBodyScannerLines ?? PrepareScientificBodyScannerLines(lines, lang),
+                  startIndex,
+                  lang,
+                  matlabExplicitOuterClosureByLine: matlabExplicitOuterClosureByLine),
             BodyStyle.JuliaShortFunction when lang == "julia" => FindJuliaShortFunctionRange(
                 scientificBodyScannerLines ?? PrepareScientificBodyScannerLines(lines, lang),
                 startIndex),

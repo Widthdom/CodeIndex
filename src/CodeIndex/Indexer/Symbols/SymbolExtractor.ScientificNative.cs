@@ -16,7 +16,8 @@ public static partial class SymbolExtractor
         string[] scannerLines,
         int startIndex,
         string language,
-        int? openingTokenLineIndex = null)
+        int? openingTokenLineIndex = null,
+        bool[]? matlabExplicitOuterClosureByLine = null)
     {
         var tokenRegex = language == "julia"
             ? JuliaScientificBlockTokenRegex
@@ -38,10 +39,10 @@ public static partial class SymbolExtractor
                 && depth == 1
                 && delimiterFrames.Count == 0
                 && IsMatlabPeerDeclaration(
-                    scannerLines,
                     lineIndex,
                     code,
-                    matches))
+                    matches,
+                    matlabExplicitOuterClosureByLine))
             {
                 return bodyStartLine == null
                     ? (lineIndex, null, null)
@@ -185,24 +186,18 @@ public static partial class SymbolExtractor
         if (assignmentIndex < 0)
             return false;
 
-        var expressionStart = assignmentIndex + 1;
-        while (expressionStart < startLine.Length && char.IsWhiteSpace(startLine[expressionStart]))
-            expressionStart++;
-        if (expressionStart >= startLine.Length
-            || startLine[expressionStart] is not ('(' or '[' or '{'))
-        {
-            return false;
-        }
-
         var delimiters = new Stack<char>();
-        var sawOpeningDelimiter = false;
+        var sawExpressionContent = false;
+        var sawUnclosedDelimiter = false;
         for (var lineIndex = startIndex; lineIndex < scannerLines.Length; lineIndex++)
         {
             var line = scannerLines[lineIndex];
-            var cursor = lineIndex == startIndex ? expressionStart : 0;
+            var cursor = lineIndex == startIndex ? assignmentIndex + 1 : 0;
             for (; cursor < line.Length; cursor++)
             {
                 var value = line[cursor];
+                if (!char.IsWhiteSpace(value))
+                    sawExpressionContent = true;
                 var closingDelimiter = value switch
                 {
                     '(' => ')',
@@ -213,7 +208,6 @@ public static partial class SymbolExtractor
                 if (closingDelimiter != '\0')
                 {
                     delimiters.Push(closingDelimiter);
-                    sawOpeningDelimiter = true;
                     continue;
                 }
 
@@ -221,13 +215,23 @@ public static partial class SymbolExtractor
                     && value == expectedClosingDelimiter)
                 {
                     delimiters.Pop();
-                    if (sawOpeningDelimiter && delimiters.Count == 0)
-                    {
-                        expressionEndLine = lineIndex + 1;
-                        return true;
-                    }
                 }
             }
+
+            if (delimiters.Count > 0)
+            {
+                sawUnclosedDelimiter = true;
+                continue;
+            }
+
+            if (sawUnclosedDelimiter)
+            {
+                expressionEndLine = lineIndex + 1;
+                return true;
+            }
+
+            if (sawExpressionContent)
+                return false;
         }
 
         return false;
@@ -300,10 +304,10 @@ public static partial class SymbolExtractor
     }
 
     private static bool IsMatlabPeerDeclaration(
-        string[] scannerLines,
         int lineIndex,
         string code,
-        MatchCollection matches)
+        MatchCollection matches,
+        bool[]? matlabExplicitOuterClosureByLine)
     {
         foreach (Match match in matches)
         {
@@ -314,20 +318,23 @@ public static partial class SymbolExtractor
                 return false;
             }
 
-            return !HasMatlabExplicitOuterClosure(scannerLines, lineIndex);
+            return matlabExplicitOuterClosureByLine == null
+                || lineIndex >= matlabExplicitOuterClosureByLine.Length
+                || !matlabExplicitOuterClosureByLine[lineIndex];
         }
 
         return false;
     }
 
-    private static bool HasMatlabExplicitOuterClosure(string[] scannerLines, int nestedDeclarationLineIndex)
+    private static bool[] BuildMatlabExplicitOuterClosureMap(string[] scannerLines)
     {
-        var depth = 1;
+        var result = new bool[scannerLines.Length];
+        var tokens = new List<(int LineIndex, int BalanceAfter, bool IsDeclaration)>();
+        var balance = 0;
         var delimiterFrames = new Stack<(char ClosingDelimiter, int BlockDepth)>();
-        for (var lineIndex = nestedDeclarationLineIndex; lineIndex < scannerLines.Length; lineIndex++)
+        for (var lineIndex = 0; lineIndex < scannerLines.Length; lineIndex++)
         {
             var code = scannerLines[lineIndex];
-            var skipNestedDeclaration = lineIndex == nestedDeclarationLineIndex;
             var delimiterScanIndex = 0;
             foreach (Match match in MatlabScientificBlockTokenRegex.Matches(code))
             {
@@ -335,16 +342,9 @@ public static partial class SymbolExtractor
                     code,
                     delimiterScanIndex,
                     match.Index,
-                    depth,
+                    balance,
                     delimiterFrames);
                 delimiterScanIndex = match.Index + match.Length;
-
-                if (skipNestedDeclaration)
-                {
-                    skipNestedDeclaration = false;
-                    depth++;
-                    continue;
-                }
 
                 var keyword = match.Groups["keyword"].Value;
                 if (!IsScientificBlockTokenAtStatementBoundary(code, match.Index, keyword, "matlab"))
@@ -353,30 +353,47 @@ public static partial class SymbolExtractor
                 if (keyword.Equals("end", StringComparison.OrdinalIgnoreCase))
                 {
                     if (delimiterFrames.TryPeek(out var delimiterFrame)
-                        && depth <= delimiterFrame.BlockDepth)
+                        && balance <= delimiterFrame.BlockDepth)
                     {
                         continue;
                     }
 
-                    depth--;
-                    if (depth == 0)
-                        return true;
+                    balance--;
                 }
                 else
                 {
-                    depth++;
+                    balance++;
                 }
+
+                tokens.Add((
+                    lineIndex,
+                    balance,
+                    keyword.Equals("function", StringComparison.OrdinalIgnoreCase)
+                        || keyword.Equals("classdef", StringComparison.OrdinalIgnoreCase)));
             }
 
             ScanScientificDelimiterFrames(
                 code,
                 delimiterScanIndex,
                 code.Length,
-                depth,
+                balance,
                 delimiterFrames);
         }
 
-        return false;
+        var suffixMinimumBalance = int.MaxValue;
+        for (var tokenIndex = tokens.Count - 1; tokenIndex >= 0; tokenIndex--)
+        {
+            var token = tokens[tokenIndex];
+            if (token.IsDeclaration)
+            {
+                result[token.LineIndex] =
+                    suffixMinimumBalance <= token.BalanceAfter - 2;
+            }
+
+            suffixMinimumBalance = Math.Min(suffixMinimumBalance, token.BalanceAfter);
+        }
+
+        return result;
     }
 
     private static void ScanScientificDelimiterFrames(
@@ -436,7 +453,8 @@ public static partial class SymbolExtractor
     {
         var masked = ScientificNativeCommentMasker.MaskLineStringLiteralsPreservingPostfixSingleQuotes(
             line,
-            useMatlabStringRules: language == "matlab");
+            useMatlabStringRules: language == "matlab",
+            useBackslashEscapes: language == "julia");
         var commentMarker = language == "julia" ? '#' : '%';
         var commentIndex = masked.IndexOf(commentMarker);
         return commentIndex >= 0 ? masked[..commentIndex] : masked;

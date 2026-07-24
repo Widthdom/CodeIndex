@@ -1960,7 +1960,8 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string? language = null)
+        string? language = null,
+        string? targetQualifier = null)
     {
         AddReference(
             references,
@@ -1972,7 +1973,8 @@ public static partial class ReferenceExtractor
             context,
             lineNumber,
             container,
-            language);
+            language,
+            targetQualifier);
     }
 
     internal static void AddReference(
@@ -1985,7 +1987,8 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string? language = null)
+        string? language = null,
+        string? targetQualifier = null)
     {
         var column = nameIndex + 1;
         var dedupeKey = CreateReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container);
@@ -2002,6 +2005,7 @@ public static partial class ReferenceExtractor
             Context = context,
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
+            TargetQualifier = targetQualifier,
             IsSelfReference = IsSameReferenceName(container?.Name, name),
         });
     }
