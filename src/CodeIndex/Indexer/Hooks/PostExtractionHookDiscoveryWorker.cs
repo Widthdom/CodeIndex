@@ -365,10 +365,11 @@ internal static class PostExtractionHookDiscoveryWorker
 
     private static T ExecuteExtensionCode<T>(Func<T> action)
     {
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
         using var capturedOut = new BoundedTextWriter(CapturedConsoleMaxChars);
         using var capturedError = new BoundedTextWriter(CapturedConsoleMaxChars);
+        using var consoleOwnership = ConsoleStreamOwnership.Enter();
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
         try
         {
             Console.SetOut(capturedOut);
@@ -377,8 +378,7 @@ internal static class PostExtractionHookDiscoveryWorker
         }
         finally
         {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
+            ConsoleStreamOwnership.Restore(originalOut, originalError);
         }
     }
 

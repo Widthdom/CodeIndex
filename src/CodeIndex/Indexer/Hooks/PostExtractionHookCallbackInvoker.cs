@@ -1,4 +1,5 @@
 using System.Reflection;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Hooks;
 
@@ -9,10 +10,11 @@ internal static class PostExtractionHookCallbackInvoker
         PostExtractionHookCallbackProtocol.WorkerRequest request,
         int capturedConsoleMaxChars)
     {
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
         using var capturedOut = new BoundedTextWriter(capturedConsoleMaxChars);
         using var capturedError = new BoundedTextWriter(capturedConsoleMaxChars);
+        using var consoleOwnership = ConsoleStreamOwnership.Enter();
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
         Exception? callbackFailure = null;
         try
         {
@@ -41,8 +43,7 @@ internal static class PostExtractionHookCallbackInvoker
         }
         finally
         {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
+            ConsoleStreamOwnership.Restore(originalOut, originalError);
         }
 
         var symbolsTruncated = PostExtractionHookMutationMaterializer.TrimToLimit(request.Symbols, request.MaxSymbols);
