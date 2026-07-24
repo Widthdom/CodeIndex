@@ -1344,6 +1344,30 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Tcl_RejectsSyntaxMarkersAndPartialCommandWords_Issue4746()
+    {
+        const string content = """
+            proc then {} { return 1 }
+            proc helper {} { return 1 }
+            proc run {value} {
+                if {$value} then { helper }
+                helper()
+                set generic External<Outer<Type>>()
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"
+            && reference.SymbolName == "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "then" or "External");
+    }
+
+    [Fact]
     public void Extract_Prolog_IndexesModulesImportsAndPredicateCallsWithCaller_Issue4746()
     {
         const string content = """
@@ -1380,6 +1404,7 @@ public partial class ReferenceExtractorTests
             :- initialization(
                 helper
             ).
+            :- external_goal().
             """;
 
         var (_, references) = ExtractSymbolsAndReferences(language, content);
@@ -1388,6 +1413,9 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "call"
             && reference.ContainerName == null
             && reference.SymbolName == "helper"));
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "external_goal");
     }
 
     [Theory]
@@ -1886,6 +1914,9 @@ public partial class ReferenceExtractorTests
             prolog_entry :- helper().
             my %cache = (answer => helper());
             my $fallback = undef // helper();
+            my @items = (1, 2);
+            my $last = $#items; helper();
+            my $braced_last = $#{items}; helper();
             clp_entry(X) :- X #= 1, helper.
             prolog_comment :-
                 %TODO
@@ -1902,7 +1933,7 @@ public partial class ReferenceExtractorTests
 
         var (_, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
 
-        Assert.Equal(7, references.Count(reference =>
+        Assert.Equal(9, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
         AssertReferencesContain(references, "call", "prolog_entry", "helper");
@@ -1910,6 +1941,31 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(references, "call", "prolog_comment", "helper");
         AssertReferencesContain(references, "call", "inline_comment", "helper");
         AssertReferencesContain(references, "call", "after_inline", "helper");
+    }
+
+    [Theory]
+    [InlineData("__DATA__")]
+    [InlineData("__END__")]
+    public void Extract_AmbiguousPl_MasksPerlTerminalDataSections_Issue4746(
+        string marker)
+    {
+        var content = $$"""
+            package Hybrid;
+            sub helper { return 1; }
+            :- module(hybrid, [entry/0]).
+            entry :- helper.
+            {{marker}}
+            fake :- helper.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        AssertReferencesContain(references, "call", "entry", "helper");
+        Assert.DoesNotContain(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "fake");
+        Assert.DoesNotContain(references, reference =>
+            reference.ContainerName == "fake");
     }
 
     [Fact]

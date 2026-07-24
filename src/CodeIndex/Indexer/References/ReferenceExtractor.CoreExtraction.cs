@@ -2729,7 +2729,8 @@ public static partial class ReferenceExtractor
                 // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
                 // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
                 // `call` / `instantiate` を発行する。issue #263 参照。
-                if (MayContainNestedGenericSyntax(preparedLine))
+                if (language is not ("tcl" or "prolog" or "ambiguous_pl")
+                    && MayContainNestedGenericSyntax(preparedLine))
                 {
                     foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices ?? EmptyMatchedIndices))
                     {

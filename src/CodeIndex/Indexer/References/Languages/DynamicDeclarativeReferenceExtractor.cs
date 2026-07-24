@@ -19,7 +19,8 @@ internal static class DynamicDeclarativeReferenceExtractor
             IReadOnlyList<TclContainerScope> tclContainerScopes,
             IReadOnlyDictionary<int, List<SymbolRecord>> prologContainersByLine,
             IReadOnlyList<string>? tclCallLines,
-            IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine)
+            IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine,
+            IReadOnlySet<int> prologDirectiveLines)
         {
             CallableNames = callableNames;
             DeclarationPositions = declarationPositions;
@@ -28,6 +29,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             PrologContainersByLine = prologContainersByLine;
             TclCallLines = tclCallLines;
             PrologGoalCallsByLine = prologGoalCallsByLine;
+            PrologDirectiveLines = prologDirectiveLines;
         }
 
         public HashSet<string> CallableNames { get; }
@@ -37,6 +39,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         private IReadOnlyDictionary<int, List<SymbolRecord>> PrologContainersByLine { get; }
         private IReadOnlyList<string>? TclCallLines { get; }
         private IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? PrologGoalCallsByLine { get; }
+        private IReadOnlySet<int> PrologDirectiveLines { get; }
 
         public SymbolRecord? ResolveContainer(int lineNumber, int column, SymbolRecord? fallback)
         {
@@ -92,6 +95,9 @@ internal static class DynamicDeclarativeReferenceExtractor
             ContainersByLine.ContainsKey(lineNumber)
             || PrologContainersByLine.ContainsKey(lineNumber);
 
+        public bool IsPrologDirectiveLine(int lineNumber) =>
+            PrologDirectiveLines.Contains(lineNumber);
+
         public bool IsDeclarationAt(int lineNumber, int column, string name) =>
             DeclarationPositions.Contains(new DeclarationPosition(lineNumber, column, name));
     }
@@ -145,7 +151,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"(?:^|;)\s*fun\s+(?:[A-Za-z_]\w*\.)?(?<name>[A-Za-z_]\w*[?!]?)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TclCommandRegex = new(
-        @"(?:^|[;\[])\s*(?<name>[A-Za-z_:][\w:.-]*)",
+        @"(?:^|[;\[])\s*(?<name>[A-Za-z_:][\w:.-]*)(?=$|[\s;\]}""])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CrystalHeredocOpenerRegex = new(
         @"<<-\s*['""]?(?<delimiter>[A-Za-z_]\w*)['""]?",
@@ -315,6 +321,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         char groovyTripleQuote = '\0';
         string? crystalHeredocDelimiter = null;
         var insideAmbiguousPerlPod = false;
+        var insideAmbiguousPerlData = false;
         AmbiguousPerlQuoteLikeState? ambiguousPerlQuoteLikeState = null;
         var insideSlashyLiteral = false;
         var insideGroovyDollarSlashyLiteral = false;
@@ -344,6 +351,21 @@ internal static class DynamicDeclarativeReferenceExtractor
             if (language == "ambiguous_pl")
             {
                 var trimmed = line.AsSpan().TrimStart();
+                if (insideAmbiguousPerlData)
+                {
+                    result[lineIndex] = new string(' ', line.Length);
+                    continue;
+                }
+
+                var trimmedMarker = trimmed.TrimEnd();
+                if (trimmedMarker.SequenceEqual("__DATA__")
+                    || trimmedMarker.SequenceEqual("__END__"))
+                {
+                    result[lineIndex] = new string(' ', line.Length);
+                    insideAmbiguousPerlData = true;
+                    continue;
+                }
+
                 if (insideAmbiguousPerlPod)
                 {
                     result[lineIndex] = new string(' ', line.Length);
@@ -599,7 +621,8 @@ internal static class DynamicDeclarativeReferenceExtractor
 
                 if (language == "ambiguous_pl" && ch == '#')
                 {
-                    if (IsPrologHashOperator(line, column))
+                    if (IsPrologHashOperator(line, column)
+                        || IsPerlLastIndexVariable(line, column))
                     {
                         column++;
                         continue;
@@ -827,6 +850,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         var prologContainersByLine = new Dictionary<int, List<SymbolRecord>>();
         string[]? tclCallLines = null;
         IReadOnlyDictionary<int, IReadOnlyList<PrologGoalCall>>? prologGoalCallsByLine = null;
+        IReadOnlySet<int> prologDirectiveLines = new HashSet<int>();
         if (language == "tcl")
         {
             var tclScriptBodyOpenings = new HashSet<long>();
@@ -853,6 +877,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                 preparedLines,
                 containersByLine,
                 callableNames);
+            prologDirectiveLines = BuildPrologDirectiveLines(preparedLines);
         }
 
         return new ExtractionState(
@@ -862,7 +887,8 @@ internal static class DynamicDeclarativeReferenceExtractor
             tclContainerScopes,
             prologContainersByLine,
             tclCallLines,
-            prologGoalCallsByLine);
+            prologGoalCallsByLine,
+            prologDirectiveLines);
     }
 
     public static void EmitAdditionalReferences(
@@ -1120,7 +1146,8 @@ internal static class DynamicDeclarativeReferenceExtractor
         SymbolRecord? container)
     {
         if (language == "ambiguous_pl")
-            return state?.HasPrologContainer(lineNumber) == true;
+            return state?.HasPrologContainer(lineNumber) == true
+                || state?.IsPrologDirectiveLine(lineNumber) == true;
         if (state?.IsDeclarationAt(lineNumber, callIndex, name) == true)
             return true;
         if (language == "crystal")
@@ -1222,6 +1249,20 @@ internal static class DynamicDeclarativeReferenceExtractor
             return false;
 
         return line[column + 1] is '=' or '<' or '>' or '\\' or '/' or '#';
+    }
+
+    private static bool IsPerlLastIndexVariable(string line, int column)
+    {
+        if (column <= 0
+            || line[column - 1] != '$'
+            || column + 1 >= line.Length)
+        {
+            return false;
+        }
+
+        return line[column + 1] == '{'
+            || line[column + 1] == '_'
+            || char.IsLetter(line[column + 1]);
     }
 
     private static bool IsPerlHashSigil(string line, int column)
@@ -2481,6 +2522,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                             : IsTclBareScriptCommandArgument(
                                 frame,
                                 wordIndex,
+                                token,
                                 lines,
                                 new TclBraceEnd(lineIndex, column + token.Length - 1)));
                     if (wordIndex == 0)
@@ -2631,9 +2673,13 @@ internal static class DynamicDeclarativeReferenceExtractor
     private static bool IsTclBareScriptCommandArgument(
         TclLexicalFrame frame,
         int wordIndex,
+        string token,
         IReadOnlyList<string> lines,
         TclBraceEnd wordEnd)
     {
+        if (frame.CommandName == "if" && token == "then")
+            return false;
+
         return IsTclScriptArgument(
             frame,
             wordIndex,
@@ -2999,6 +3045,25 @@ internal static class DynamicDeclarativeReferenceExtractor
         while (column < line.Length && char.IsWhiteSpace(line[column]))
             column++;
         return line.AsSpan(column).StartsWith(":-", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlySet<int> BuildPrologDirectiveLines(
+        IReadOnlyList<string> lines)
+    {
+        var directiveLines = new HashSet<int>();
+        var scanningDirective = false;
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+        {
+            if (!scanningDirective && !StartsWithPrologGoalDirective(lines[lineIndex]))
+                continue;
+
+            scanningDirective = true;
+            directiveLines.Add(lineIndex + 1);
+            if (ContainsPrologClauseTerminator(lines[lineIndex]))
+                scanningDirective = false;
+        }
+
+        return directiveLines;
     }
 
     private static bool IsTopLevelPrologDirectiveGoal(string line, int goalColumn)
