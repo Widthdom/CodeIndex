@@ -481,6 +481,7 @@ public static partial class SymbolExtractor
         RubyEnd,
         FortranEnd,
         ElixirEnd,
+        ScientificEnd,
         VisualBasicEnd,
         PascalEnd,
         SmalltalkMethod,
@@ -1630,11 +1631,11 @@ public static partial class SymbolExtractor
         ],
         ["julia"] =
         [
-            new("namespace", new Regex(@"^\s*(?:baremodule|module)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("struct",   new Regex(@"^\s*(?:mutable\s+)?struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("type",     new Regex(@"^\s*(?:abstract|primitive)\s+type\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("function", new Regex(@"^\s*function\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
-            new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ElixirEnd),
+            new("namespace", new Regex(@"^\s*(?:baremodule|module)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("struct",   new Regex(@"^\s*(?:mutable\s+)?struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("type",     new Regex(@"^\s*(?:abstract|primitive)\s+type\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("function", new Regex(@"^\s*function\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
             new("function", new Regex(@"^\s*(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\([^)\r\n]*\)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("property", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:using|import)\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
@@ -1702,8 +1703,8 @@ public static partial class SymbolExtractor
         ],
         ["matlab"] =
         [
-            new("class", new Regex(@"^\s*classdef\s*(?:\([^)]*\)\s*)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*function\s+(?:(?:\[[^\]]+\]|[A-Za-z]\w*)\s*=\s*)?(?<name>[A-Za-z]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class", new Regex(@"^\s*classdef\s*(?:\([^)]*\)\s*)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("function", new Regex(@"^\s*function\s+(?:(?:\[[^\]]+\]|[A-Za-z]\w*)\s*=\s*)?(?<name>[A-Za-z]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
             new("import", new Regex(@"^\s*import\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z*]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["prolog"] =
@@ -4798,6 +4799,7 @@ public static partial class SymbolExtractor
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.FortranEnd => FindFortranRange(lines, startIndex),
             BodyStyle.ElixirEnd => FindElixirRange(lines, startIndex),
+            BodyStyle.ScientificEnd when lang is "julia" or "matlab" => FindScientificEndRange(lines, startIndex, lang),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
             BodyStyle.PascalEnd => FindPascalRange(lines, startIndex),
             BodyStyle.SmalltalkMethod => FindSmalltalkMethodRange(lines, startIndex),

@@ -2714,6 +2714,7 @@ public static partial class ReferenceExtractor
         bool MaskRustLifetimes,
         bool MaskStringLiterals,
         bool IncludeBacktickStringDelimiter,
+        bool PreservePostfixSingleQuotes,
         bool UsesHashComments,
         bool UsesRHashComments,
         bool UsesSlashComments,
@@ -2729,6 +2730,7 @@ public static partial class ReferenceExtractor
             MaskRustLifetimes: lang == "rust",
             MaskStringLiterals: lang != "cobol",
             IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
+            PreservePostfixSingleQuotes: lang is "julia" or "matlab",
             UsesHashComments: UsesHashComments(lang),
             UsesRHashComments: lang == "r",
             UsesSlashComments: UsesSlashComments(lang),
@@ -2754,10 +2756,17 @@ public static partial class ReferenceExtractor
             result = MaskRustLifetimeTokens(result);
         if (options.MaskStringLiterals && MayContainStringLiteralDelimiter(result, options.IncludeBacktickStringDelimiter))
         {
-            var stringLiteralRegex = !options.IncludeBacktickStringDelimiter
-                ? NonBacktickStringLiteralRegex
-                : StringLiteralRegex;
-            result = stringLiteralRegex.Replace(result, "\"\"");
+            if (options.PreservePostfixSingleQuotes)
+            {
+                result = ScientificNativeCommentMasker.MaskLineStringLiteralsPreservingPostfixSingleQuotes(result);
+            }
+            else
+            {
+                var stringLiteralRegex = !options.IncludeBacktickStringDelimiter
+                    ? NonBacktickStringLiteralRegex
+                    : StringLiteralRegex;
+                result = stringLiteralRegex.Replace(result, "\"\"");
+            }
         }
         if (result.Contains("/*", StringComparison.Ordinal))
             result = InlineBlockCommentRegex.Replace(result, " ");

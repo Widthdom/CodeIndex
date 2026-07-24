@@ -394,7 +394,7 @@ public static partial class ReferenceExtractor
         },
         ["d"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "assert", "debug", "mixin", "scope", "static", "unittest", "version",
+            "assert", "cast", "debug", "mixin", "scope", "static", "unittest", "version",
         },
         ["julia"] = new HashSet<string>(StringComparer.Ordinal)
         {
