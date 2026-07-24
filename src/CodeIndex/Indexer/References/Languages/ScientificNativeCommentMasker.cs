@@ -311,18 +311,26 @@ internal static class ScientificNativeCommentMasker
         var inCStyleBlockComment = false;
         var inBacktickString = false;
         string? tokenStringClosing = null;
+        var tokenStringClosingRequiresLineBoundary = false;
         var tokenStringQuote = '\0';
         var tokenStringQuoteUsesEscapes = false;
         var tokenStringInBacktickString = false;
         var tokenStringNestedCommentDepth = 0;
         var tokenStringInCStyleBlockComment = false;
         string? nestedTokenStringClosing = null;
+        var nestedTokenStringClosingRequiresLineBoundary = false;
         var quote = '\0';
         var quoteUsesEscapes = false;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
             char[]? chars = null;
+            var firstNonWhitespaceIndex = 0;
+            while (firstNonWhitespaceIndex < line.Length
+                && char.IsWhiteSpace(line[firstNonWhitespaceIndex]))
+            {
+                firstNonWhitespaceIndex++;
+            }
 
             void MaskAt(int index) =>
                 (chars ??= line.ToCharArray())[index] = ' ';
@@ -341,10 +349,13 @@ internal static class ScientificNativeCommentMasker
 
                 if (tokenStringClosing != null)
                 {
-                    if (StartsWith(line, cursor, tokenStringClosing))
+                    if ((!tokenStringClosingRequiresLineBoundary
+                            || cursor == firstNonWhitespaceIndex)
+                        && StartsWith(line, cursor, tokenStringClosing))
                     {
                         MaskToken(tokenStringClosing);
                         tokenStringClosing = null;
+                        tokenStringClosingRequiresLineBoundary = false;
                         continue;
                     }
 
@@ -356,10 +367,13 @@ internal static class ScientificNativeCommentMasker
                 {
                     if (nestedTokenStringClosing != null)
                     {
-                        if (StartsWith(line, cursor, nestedTokenStringClosing))
+                        if ((!nestedTokenStringClosingRequiresLineBoundary
+                                || cursor == firstNonWhitespaceIndex)
+                            && StartsWith(line, cursor, nestedTokenStringClosing))
                         {
                             MaskToken(nestedTokenStringClosing);
                             nestedTokenStringClosing = null;
+                            nestedTokenStringClosingRequiresLineBoundary = false;
                             continue;
                         }
 
@@ -453,11 +467,14 @@ internal static class ScientificNativeCommentMasker
                             line,
                             cursor + 2,
                             out var nestedOpeningLength,
-                            out var nestedClosing))
+                            out var nestedClosing,
+                            out var nestedClosingRequiresLineBoundary))
                     {
                         for (var openingIndex = 0; openingIndex < 2 + nestedOpeningLength; openingIndex++)
                             MaskAt(cursor++);
                         nestedTokenStringClosing = nestedClosing;
+                        nestedTokenStringClosingRequiresLineBoundary =
+                            nestedClosingRequiresLineBoundary;
                         continue;
                     }
 
@@ -575,11 +592,17 @@ internal static class ScientificNativeCommentMasker
 
                 if (StartsWith(line, cursor, "q\"")
                     && (cursor == 0 || !IsIdentifierChar(line[cursor - 1]))
-                    && TryGetDTokenStringClosing(line, cursor + 2, out var openingLength, out var closing))
+                    && TryGetDTokenStringClosing(
+                        line,
+                        cursor + 2,
+                        out var openingLength,
+                        out var closing,
+                        out var closingRequiresLineBoundary))
                 {
                     for (var openingIndex = 0; openingIndex < 2 + openingLength; openingIndex++)
                         MaskAt(cursor++);
                     tokenStringClosing = closing;
+                    tokenStringClosingRequiresLineBoundary = closingRequiresLineBoundary;
                     continue;
                 }
 
@@ -627,10 +650,12 @@ internal static class ScientificNativeCommentMasker
         string line,
         int delimiterIndex,
         out int openingLength,
-        out string closing)
+        out string closing,
+        out bool closingRequiresLineBoundary)
     {
         openingLength = 0;
         closing = string.Empty;
+        closingRequiresLineBoundary = false;
         if (delimiterIndex >= line.Length)
             return false;
 
@@ -659,6 +684,7 @@ internal static class ScientificNativeCommentMasker
 
         openingLength = end - delimiterIndex;
         closing = line[delimiterIndex..end] + '"';
+        closingRequiresLineBoundary = true;
         return true;
     }
 

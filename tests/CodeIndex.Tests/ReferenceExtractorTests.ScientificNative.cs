@@ -393,6 +393,26 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_AdaConsecutiveBareCallsDoNotConsumeNextSeparator_Issue4738()
+    {
+        const string content = """
+            procedure Run is
+            begin
+              First; Second; Third;
+            end Run;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "ada", content);
+
+        var references = ReferenceExtractor.Extract(1, "ada", content, symbols);
+
+        foreach (var name in new[] { "First", "Second", "Third" })
+        {
+            Assert.Equal("Run", Assert.Single(references, reference =>
+                reference.SymbolName == name && reference.ReferenceKind == "call").ContainerName);
+        }
+    }
+
+    [Fact]
     public void Extract_MatlabCommaSeparatedEndKeepsFollowingCallTopLevel_Issue4738()
     {
         const string content = """
@@ -878,6 +898,27 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DIdentifierTokenStringRequiresDelimiterLineBoundary_Issue4738()
+    {
+        const string content = """
+            void run() {
+                enum text = q"EOS
+            inside text contains EOS"; phantomCall()
+            still inside
+            EOS";
+                helper();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "d", content);
+
+        var references = ReferenceExtractor.Extract(1, "d", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "phantomCall");
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
     public void Extract_DCommentTextCannotOpenTokenStrings_Issue4738()
     {
         const string content = """
@@ -1117,6 +1158,9 @@ public partial class ReferenceExtractorTests
                 afterAssignment();
                 int fourth = index++ % postIncrement();
                 int fifth = index-- % postDecrement();
+                int sixth = left % [self computeValue];
+                int seventh = 'x' % charRhs();
+                int eighth = left % @(boxed());
             }
             @end
             """;
@@ -1132,6 +1176,9 @@ public partial class ReferenceExtractorTests
             "afterAssignment",
             "postIncrement",
             "postDecrement",
+            "computeValue",
+            "charRhs",
+            "boxed",
         })
         {
             Assert.Single(references, reference =>

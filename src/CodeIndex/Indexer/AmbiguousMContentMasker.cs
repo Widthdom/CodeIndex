@@ -201,7 +201,7 @@ internal static class AmbiguousMContentMasker
 
         if (previousIndex < 0
             || content[previousIndex] is '\r' or '\n'
-            || !IsTransposeOperandEnd(content[previousIndex]))
+            || !IsObjectiveCModuloLeftOperandEnd(content[previousIndex]))
         {
             return false;
         }
@@ -233,8 +233,11 @@ internal static class AmbiguousMContentMasker
         return nextIndex < content.Length
             && content[nextIndex] is not '\r' and not '\n'
             && (char.IsLetterOrDigit(content[nextIndex])
-                || content[nextIndex] is '_' or '(' or '\'' or '"');
+                || content[nextIndex] is '_' or '(' or '[' or '@' or '\'' or '"');
     }
+
+    private static bool IsObjectiveCModuloLeftOperandEnd(char value) =>
+        IsTransposeOperandEnd(value) || value is '\'' or '"';
 
     private static bool IsTransposeOperandEnd(char value) =>
         char.IsLetterOrDigit(value) || value is '_' or ')' or ']' or '}';

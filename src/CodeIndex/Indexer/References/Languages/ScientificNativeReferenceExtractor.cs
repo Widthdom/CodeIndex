@@ -77,7 +77,7 @@ internal static class ScientificNativeReferenceExtractor
         @"^\s*type\s+[A-Za-z]\w*\s+is\s+new\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex AdaBareCallRegex = new(
-        @"(?:^|;)\s*(?!(?:end|null|return|exit|raise|goto)\b)(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s*;",
+        @"(?:^|(?<=;))\s*(?!(?:end|null|return|exit|raise|goto)\b)(?<name>[A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s*;",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ObjectiveCImportRegex = new(
         """^\s*#\s*(?:import|include)\s*[<"](?<name>[^>"]+)[>"]""",
