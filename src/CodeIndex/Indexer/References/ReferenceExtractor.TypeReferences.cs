@@ -2718,6 +2718,7 @@ public static partial class ReferenceExtractor
         bool UsesRHashComments,
         bool UsesSlashComments,
         bool UsesDashDashComments,
+        bool UsesPercentComments,
         bool UsesFortranBangComments,
         bool UsesPascalBlockComments,
         bool UsesVisualBasicComments);
@@ -2732,6 +2733,7 @@ public static partial class ReferenceExtractor
             UsesRHashComments: lang == "r",
             UsesSlashComments: UsesSlashComments(lang),
             UsesDashDashComments: UsesDashDashComments(lang),
+            UsesPercentComments: lang == "matlab",
             UsesFortranBangComments: lang == "fortran",
             UsesPascalBlockComments: lang == "pascal",
             UsesVisualBasicComments: lang == "vb");
@@ -2782,6 +2784,13 @@ public static partial class ReferenceExtractor
             var dashCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
             if (dashCommentIndex >= 0)
                 result = result[..dashCommentIndex];
+        }
+
+        if (options.UsesPercentComments)
+        {
+            var percentCommentIndex = result.IndexOf('%');
+            if (percentCommentIndex >= 0)
+                result = result[..percentCommentIndex];
         }
 
         if (options.UsesFortranBangComments)
@@ -2976,7 +2985,7 @@ public static partial class ReferenceExtractor
     }
 
     private static bool UsesCStyleBlockComments(string language) =>
-        language is "c" or "cpp" or "go" or "objc" or "dart";
+        language is "c" or "cpp" or "go" or "objc" or "dart" or "d";
 
     private static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
     {
@@ -4762,15 +4771,17 @@ public static partial class ReferenceExtractor
 
     private static bool UsesHashComments(string lang) =>
         lang is "python" or "ruby" or "perl" or "php" or "elixir" or "r" or "powershell"
-            or "shell" or "makefile" or "terraform" or "dockerfile" or "protobuf";
+            or "shell" or "makefile" or "terraform" or "dockerfile" or "protobuf"
+            or "nim" or "julia" or "cython";
 
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby" and not "r" and not "haskell"
             and not "makefile" and not "terraform" and not "dockerfile"
-            and not "css" and not "fortran";
+            and not "css" and not "fortran" and not "nim" and not "matlab"
+            and not "julia" and not "cython" and not "ada";
 
     private static bool UsesDashDashComments(string lang) =>
-        lang is "lua" or "sql" or "haskell";
+        lang is "lua" or "sql" or "haskell" or "ada";
 
     private static bool IsPythonStringPrefixChar(char c) =>
         c is 'r' or 'R' or 'u' or 'U' or 'b' or 'B' or 'f' or 'F';

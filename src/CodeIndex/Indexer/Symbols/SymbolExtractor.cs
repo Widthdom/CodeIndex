@@ -24,6 +24,7 @@ public static partial class SymbolExtractor
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
     public const int SystemsLanguageContractVersion = 2;
+    public const int ScientificNativeGraphContractVersion = 3;
     private static readonly string[] AdditionalSymbolLanguages =
     [
         "app_manifest",
@@ -41,6 +42,7 @@ public static partial class SymbolExtractor
         "solidity",
         "solution",
         "cuda",
+        "ambiguous_m",
         "dependency_manifest",
         "dependency_lock",
     ];
@@ -79,8 +81,8 @@ public static partial class SymbolExtractor
             "sass" or "stylus" => StyleAndXamlContractVersion,
             "xml" => XmlContractVersion,
             "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
-            "crystal" or "groovy" or "julia" or "tcl" => DynamicLanguageContractVersion,
-            "ada" or "d" or "nim" => SystemsLanguageContractVersion,
+            "crystal" or "groovy" or "tcl" => DynamicLanguageContractVersion,
+            "ada" or "ambiguous_m" or "cython" or "d" or "julia" or "matlab" or "nim" or "objc" => ScientificNativeGraphContractVersion,
             "app_manifest" or "cmake" or "dependency_lock" or "dependency_manifest" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };

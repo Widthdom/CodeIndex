@@ -81,6 +81,35 @@ public static partial class SymbolExtractor
             return DependencyPackageExtractor.ExtractSymbols(fileId, content, SplitContentLines(content), filePath, lang);
         }
 
+        if (lang == "ambiguous_m")
+        {
+            var maskedContent = AmbiguousMContentMasker.MaskComments(content);
+            var matlabSymbols = ExtractCore(
+                fileId,
+                "matlab",
+                maskedContent,
+                contentIsNormalized: true,
+                hasOversizeLine: false,
+                conflictMarkerLine: 0,
+                filePath,
+                projectRoot,
+                patternConfigsAlreadyLoaded: true,
+                cancellationToken);
+            var objectiveCSymbols = ExtractCore(
+                fileId,
+                "objc",
+                maskedContent,
+                contentIsNormalized: true,
+                hasOversizeLine: false,
+                conflictMarkerLine: 0,
+                filePath,
+                projectRoot,
+                patternConfigsAlreadyLoaded: true,
+                cancellationToken);
+            matlabSymbols.AddRange(objectiveCSymbols);
+            return matlabSymbols;
+        }
+
         if (lang == "markdown")
         {
             var markdownLines = SplitContentLines(content);

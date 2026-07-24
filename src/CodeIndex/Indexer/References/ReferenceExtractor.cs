@@ -380,6 +380,38 @@ public static partial class ReferenceExtractor
         {
             "false", "nil", "self", "super", "thisContext", "true",
         },
+        ["ada"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "accept", "begin", "case", "declare", "delay", "else", "elsif", "end", "entry",
+            "exception", "exit", "function", "generic", "if", "loop", "package", "pragma",
+            "procedure", "raise", "record", "renames", "return", "select", "task", "terminate",
+            "type", "use", "when", "while", "with",
+        },
+        ["cython"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "cdef", "cpdef", "ctypedef", "cimport", "def", "extern", "gil", "include",
+            "nogil", "property",
+        },
+        ["d"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "assert", "debug", "mixin", "scope", "static", "unittest", "version",
+        },
+        ["julia"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "abstract", "baremodule", "begin", "do", "export", "finally", "function", "import",
+            "let", "macro", "module", "mutable", "primitive", "quote", "struct", "using", "where",
+        },
+        ["matlab"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "case", "catch", "classdef", "elseif", "end", "function", "import", "methods",
+            "otherwise", "parfor", "properties", "spmd",
+        },
+        ["nim"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "block", "case", "concept", "converter", "defer", "discard", "distinct", "from",
+            "func", "import", "include", "iterator", "macro", "method", "mixin", "object",
+            "proc", "template", "type", "when",
+        },
         // Gradle/Groovy keywords / Gradle/Groovy キーワード
         ["gradle"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1479,7 +1511,7 @@ public static partial class ReferenceExtractor
         => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
 
     private static StringComparer GetDefinitionNamesComparer(string language)
-        => language == "sql"
+        => language is "sql" or "ada"
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
 
