@@ -6281,7 +6281,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDefinition_ExactZeroJson_ReturnsEmptyStdout()
+    public void RunDefinition_MissingJsonWithAndWithoutBody_ReturnsStructuredNotFound_Issue4744()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero");
         try
@@ -6299,13 +6299,32 @@ public partial class QueryCommandRunnerTests
                 }
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["Handle", "--db", dbPath, "--json", "--exact"],
-                _jsonOptions));
+            foreach (var includeBody in new[] { false, true })
+            {
+                var args = new List<string>
+                {
+                    "MissingDefinitionIssue4744",
+                    "--db",
+                    dbPath,
+                    "--json",
+                    "--exact-name",
+                };
+                if (includeBody)
+                    args.Add("--body");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Equal(string.Empty, stderr);
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    QueryCommandRunner.RunDefinition([.. args], _jsonOptions));
+
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.QueryNotFound, json.GetProperty("error_code").GetString());
+                Assert.Equal("not_found", json.GetProperty("category").GetString());
+                Assert.Equal("1", json.GetProperty("api_version").GetString());
+            }
         }
         finally
         {

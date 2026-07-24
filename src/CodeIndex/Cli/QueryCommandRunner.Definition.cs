@@ -181,6 +181,17 @@ public static partial class QueryCommandRunner
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
                     return ZeroResultExitCode(options);
+                if (options.Json)
+                {
+                    return CommandErrorWriter.WriteJsonOrHuman(
+                        json: true,
+                        jsonOptions,
+                        BuildZeroResultLine("No definitions found", options),
+                        CommandExitCodes.NotFound,
+                        "Check the symbol spelling or narrow/adjust --kind, --lang, and --path filters.",
+                        errorCode: CommandErrorCodes.QueryNotFound,
+                        category: "not_found");
+                }
                 if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No definitions found", options));
