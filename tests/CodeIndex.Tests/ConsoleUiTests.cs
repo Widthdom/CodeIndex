@@ -1376,6 +1376,46 @@ public class ConsoleUiTests
         Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
     }
 
+    [Fact]
+    public void CompletionRenderer_LongFlagCatalogMatchesSchemaAcrossShells_Issue4732()
+    {
+        var expected = new SortedSet<string>(
+            CliFlagSchema.All.Select(flag => flag.Name.TrimStart('-')),
+            StringComparer.Ordinal);
+
+        foreach (var shell in new[] { "bash", "zsh", "fish", "powershell" })
+        {
+            var actual = ExtractLongFlagCatalog(
+                ConsoleCompletionRenderer.GetCompletionScript(shell),
+                shell);
+            actual.ExceptWith(["help", "license"]);
+            Assert.True(
+                expected.SetEquals(actual),
+                $"{shell} completion catalog drifted from CliFlagSchema. "
+                + $"Missing: {string.Join(", ", expected.Except(actual))}. "
+                + $"Unexpected: {string.Join(", ", actual.Except(expected))}.");
+            Assert.Contains("issue-state", actual);
+            Assert.Contains("suppress-noise", actual);
+        }
+    }
+
+    [Fact]
+    public void CompletionRenderer_FishCommandFlagScopesMatchSchema_Issue4732()
+    {
+        var script = ConsoleCompletionRenderer.GetCompletionScript("fish");
+
+        foreach (var command in CliFlagSchema.AllCommands)
+        {
+            var expected = new SortedSet<string>(
+                CliFlagSchema.GetCompletionFlagsForCommand(command)
+                    .Select(flag => flag.Name.TrimStart('-')),
+                StringComparer.Ordinal);
+            var actual = ExtractFishSubcommandFlags(script, command);
+
+            Assert.Equal(expected, actual);
+        }
+    }
+
     [Theory]
     [InlineData("bash")]
     [InlineData("zsh")]
@@ -1519,6 +1559,17 @@ public class ConsoleUiTests
                 continue;
             flags.Add(match.Groups["flag"].Value);
         }
+        return flags;
+    }
+
+    private static SortedSet<string> ExtractLongFlagCatalog(string script, string shell)
+    {
+        var pattern = shell == "fish"
+            ? @"(?:^|\s)-l\s+(?<name>[a-z][a-z0-9-]*)\b"
+            : @"--(?<name>[a-z][a-z0-9-]*)\b";
+        var flags = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(script, pattern, RegexOptions.Multiline))
+            flags.Add(match.Groups["name"].Value);
         return flags;
     }
 
