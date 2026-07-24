@@ -2715,6 +2715,7 @@ public static partial class ReferenceExtractor
         bool MaskStringLiterals,
         bool MaskNimRawStrings,
         bool IncludeBacktickStringDelimiter,
+        bool PreserveStringLiteralLength,
         bool PreservePostfixSingleQuotes,
         bool UseMatlabStringRules,
         bool ScientificStringUsesBackslashEscapes,
@@ -2734,9 +2735,10 @@ public static partial class ReferenceExtractor
             MaskStringLiterals: lang != "cobol",
             MaskNimRawStrings: lang == "nim",
             IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
+            PreserveStringLiteralLength: ScientificNativeReferenceExtractor.Supports(lang),
             PreservePostfixSingleQuotes: lang is "ada" or "julia" or "matlab",
             UseMatlabStringRules: lang == "matlab",
-            ScientificStringUsesBackslashEscapes: lang == "julia",
+            ScientificStringUsesBackslashEscapes: lang is "cython" or "d" or "julia" or "nim" or "objc",
             UsesHashComments: UsesHashComments(lang),
             UsesRHashComments: lang == "r",
             UsesSlashComments: UsesSlashComments(lang),
@@ -2764,12 +2766,13 @@ public static partial class ReferenceExtractor
             result = ScientificNativeCommentMasker.MaskNimRawStringLiterals(result);
         if (options.MaskStringLiterals && MayContainStringLiteralDelimiter(result, options.IncludeBacktickStringDelimiter))
         {
-            if (options.PreservePostfixSingleQuotes)
+            if (options.PreserveStringLiteralLength)
             {
                 result = ScientificNativeCommentMasker.MaskLineStringLiteralsPreservingPostfixSingleQuotes(
                     result,
                     options.UseMatlabStringRules,
-                    options.ScientificStringUsesBackslashEscapes);
+                    options.ScientificStringUsesBackslashEscapes,
+                    options.PreservePostfixSingleQuotes);
             }
             else
             {

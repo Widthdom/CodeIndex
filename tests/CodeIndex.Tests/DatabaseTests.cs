@@ -763,6 +763,80 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraph_AmbiguousMUniqueFallbackRequiresUnionWideUniqueness_Issue4738()
+    {
+        var callerId = UpsertTestFileWithLanguage(
+            "src/caller.m",
+            "ambiguous_m",
+            "ambiguous-union-caller");
+        var objectiveCTargetId = UpsertTestFileWithLanguage(
+            "src/objective-c-target.m",
+            "objc",
+            "ambiguous-union-objc");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = objectiveCTargetId, Kind = "function", Name = "Foo", Line = 1 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "Foo",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "Foo();",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            var firstMatlabTargetId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/first-matlab-target.m",
+                Lang = "matlab",
+                Size = 32,
+                Lines = 1,
+                Modified = new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "ambiguous-union-matlab-first",
+            });
+            var secondMatlabTargetId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/second-matlab-target.m",
+                Lang = "matlab",
+                Size = 32,
+                Lines = 1,
+                Modified = new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "ambiguous-union-matlab-second",
+            });
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = firstMatlabTargetId, Kind = "function", Name = "Foo", Line = 1 },
+                new SymbolRecord { FileId = secondMatlabTargetId, Kind = "function", Name = "Foo", Line = 1 },
+            ]);
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        Assert.Equal("unresolved", ReadReferenceResolutionState(callerId));
+        Assert.Equal(0, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND target_symbol_id IS NOT NULL
+            """));
+        Assert.Equal(0, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_reference_candidates AS candidate
+            JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+            WHERE reference.file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+            """));
+    }
+
+    [Fact]
     public void ReferenceGraph_ScientificQualifiersUseModuleEvidenceOrSafeUniqueFallback_Issue4738()
     {
         var dCallerId = UpsertTestFileWithLanguage("src/child.d", "d", "qualified-d-caller");

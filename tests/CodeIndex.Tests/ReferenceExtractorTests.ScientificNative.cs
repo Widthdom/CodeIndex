@@ -1606,6 +1606,42 @@ public partial class ReferenceExtractorTests
         }
     }
 
+    public static TheoryData<string, string> ScientificNativeFollowingStringReferenceCases => new()
+    {
+        {
+            "cython",
+            """def run(): consume("a very long string", pkg.helper())"""
+        },
+        {
+            "d",
+            """void run() { consume("a very long string", pkg.helper()); }"""
+        },
+        {
+            "nim",
+            """proc run() = consume("a very long string", pkg.helper())"""
+        },
+        {
+            "objc",
+            """void run() { consume(@"a very long string", pkg.helper()); }"""
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(ScientificNativeFollowingStringReferenceCases))]
+    public void Extract_ScientificNativeStringsPreserveFollowingReferenceColumns_Issue4738(
+        string language,
+        string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        var helper = Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Equal("pkg", helper.TargetQualifier);
+        Assert.Equal(content.IndexOf("helper", StringComparison.Ordinal) + 1, helper.Column);
+    }
+
     [Fact]
     public void Extract_MatlabContinuationTailDoesNotEmitCalls_Issue4738()
     {

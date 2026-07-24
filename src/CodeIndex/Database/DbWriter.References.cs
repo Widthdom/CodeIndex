@@ -122,7 +122,27 @@ public partial class DbWriter
         FROM symbols AS s
         JOIN files AS target_file ON target_file.id = s.file_id
         WHERE s.name_folded IS NOT NULL
+          AND target_file.lang <> 'ambiguous_m'
         GROUP BY target_file.lang, s.name_folded
+        HAVING COUNT(DISTINCT target_file.path || char(31) ||
+                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                              COALESCE(s.name, '')) = 1;
+
+        -- An ambiguous .m caller can bind to either dialect, so uniqueness must hold
+        -- across the MATLAB/Objective-C union rather than within either language alone.
+        -- ambiguous .m の呼出し先は両方の方言になり得るため、一意性は各言語内ではなく
+        -- MATLAB/Objective-C の和集合全体で成立させる。
+        INSERT INTO temp.reference_unique_symbol_families(lang, name_folded, family_key)
+        SELECT 'ambiguous_m',
+               s.name_folded,
+               MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, '')) AS family_key
+        FROM symbols AS s
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE s.name_folded IS NOT NULL
+          AND target_file.lang IN ('matlab', 'objc')
+        GROUP BY s.name_folded
         HAVING COUNT(DISTINCT target_file.path || char(31) ||
                               COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
                               COALESCE(s.name, '')) = 1;
@@ -326,16 +346,21 @@ public partial class DbWriter
         FROM symbol_references AS r
         JOIN files AS source_file ON source_file.id = r.file_id
         JOIN temp.reference_unique_symbol_families AS unique_family
-          ON (
-              (unique_family.lang = source_file.lang
-               AND source_file.lang <> 'ambiguous_m')
-              OR (source_file.lang = 'ambiguous_m' AND unique_family.lang IN ('matlab', 'objc'))
-          )
+          ON unique_family.lang = source_file.lang
          AND unique_family.name_folded = r.symbol_name_folded
         JOIN symbols AS target ON target.name_folded = unique_family.name_folded
         JOIN files AS target_file
-          ON target_file.id = target.file_id
-         AND target_file.lang = unique_family.lang
+         ON target_file.id = target.file_id
+         AND (
+             (
+                 unique_family.lang <> 'ambiguous_m'
+                 AND target_file.lang = unique_family.lang
+             )
+             OR (
+                 unique_family.lang = 'ambiguous_m'
+                 AND target_file.lang IN ('matlab', 'objc')
+             )
+         )
          AND target_file.path || char(31) ||
              COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
              COALESCE(target.name, '') = unique_family.family_key

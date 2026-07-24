@@ -27,7 +27,8 @@ internal static class ScientificNativeCommentMasker
     internal static string MaskLineStringLiteralsPreservingPostfixSingleQuotes(
         string line,
         bool useMatlabStringRules,
-        bool useBackslashEscapes)
+        bool useBackslashEscapes,
+        bool singleQuoteCanBePostfix = true)
     {
         char[]? chars = null;
 
@@ -41,6 +42,7 @@ internal static class ScientificNativeCommentMasker
                 continue;
 
             if (quote == '\''
+                && singleQuoteCanBePostfix
                 && IsPostfixSingleQuote(
                     line,
                     cursor,
@@ -241,6 +243,32 @@ internal static class ScientificNativeCommentMasker
         char[]? chars = null;
         for (var cursor = 0; cursor < line.Length;)
         {
+            if (line[cursor] == '"')
+            {
+                if (cursor + 2 < line.Length
+                    && line[cursor + 1] == '"'
+                    && line[cursor + 2] == '"')
+                {
+                    var closing = line.IndexOf("\"\"\"", cursor + 3, StringComparison.Ordinal);
+                    cursor = closing < 0 ? line.Length : closing + 3;
+                    continue;
+                }
+
+                cursor++;
+                while (cursor < line.Length)
+                {
+                    if (line[cursor] == '\\' && cursor + 1 < line.Length)
+                    {
+                        cursor += 2;
+                        continue;
+                    }
+
+                    if (line[cursor++] == '"')
+                        break;
+                }
+                continue;
+            }
+
             if (!(char.IsLetter(line[cursor]) || line[cursor] == '_')
                 || (cursor > 0 && IsIdentifierChar(line[cursor - 1])))
             {
@@ -263,7 +291,8 @@ internal static class ScientificNativeCommentMasker
                 && line[cursor + 2] == '"')
             {
                 // Leave the triple-quote delimiter for the stateful multiline masker.
-                cursor += 3;
+                var closing = line.IndexOf("\"\"\"", cursor + 3, StringComparison.Ordinal);
+                cursor = closing < 0 ? line.Length : closing + 3;
                 continue;
             }
 

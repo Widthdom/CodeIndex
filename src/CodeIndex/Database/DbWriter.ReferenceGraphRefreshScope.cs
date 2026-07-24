@@ -61,7 +61,29 @@ public partial class DbWriter
         JOIN files AS target_file ON target_file.id = s.file_id
         WHERE s.name_folded = dirty_name.name_folded
           AND target_file.lang = dirty_name.lang
+          AND target_file.lang <> 'ambiguous_m'
         GROUP BY target_file.lang, s.name_folded
+        HAVING COUNT(DISTINCT target_file.path || char(31) ||
+                              COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                              COALESCE(s.name, '')) = 1;
+
+        -- Keep the scoped projection aligned with the full-refresh union-wide
+        -- uniqueness contract for callers whose .m dialect is unresolved.
+        -- .m 方言が未確定な呼出し元について、差分更新でも全件更新と同じ
+        -- 言語横断の一意性契約を維持する。
+        INSERT INTO temp.reference_unique_symbol_families(lang, name_folded, family_key)
+        SELECT 'ambiguous_m',
+               s.name_folded,
+               MIN(target_file.path || char(31) ||
+                   COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                   COALESCE(s.name, '')) AS family_key
+        FROM temp.{ReferenceGraphLookupNamesTable} AS dirty_name
+        CROSS JOIN symbols AS s INDEXED BY idx_symbols_name_folded
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE dirty_name.lang = 'ambiguous_m'
+          AND s.name_folded = dirty_name.name_folded
+          AND target_file.lang IN ('matlab', 'objc')
+        GROUP BY s.name_folded
         HAVING COUNT(DISTINCT target_file.path || char(31) ||
                               COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
                               COALESCE(s.name, '')) = 1;
