@@ -123,6 +123,40 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void SymbolIdentity_TclNamespaceQualifiedCallResolvesMatchingProc_Issue4746()
+    {
+        const string path = "src/identity/namespaced.tcl";
+        InsertIndexedFile(path, "tcl", """
+            namespace eval ::alpha { proc worker {} { return 1 } }
+            namespace eval ::beta { proc worker {} { return 2 } }
+            proc driver {} {
+                ::beta::worker
+            }
+            """);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "worker",
+            limit: 10,
+            lang: "tcl",
+            pathPatterns: [path],
+            exact: true));
+        Assert.Equal("resolved", reference.ResolutionState);
+        Assert.NotNull(reference.TargetSymbolId);
+        Assert.Equal(1, reference.ResolutionCandidateCount);
+
+        using var targetContainer = _db.Connection.CreateCommand();
+        targetContainer.CommandText = """
+            SELECT container_name
+            FROM symbols
+            WHERE id = @target_symbol_id
+            """;
+        targetContainer.Parameters.AddWithValue(
+            "@target_symbol_id",
+            reference.TargetSymbolId!.Value);
+        Assert.Equal("::beta", (string)targetContainer.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void SymbolIdentity_CSharpGlobalQualifierResolvesQualifiedEnumMember()
     {
         InsertIndexedFile("src/identity/GlobalStatus.cs", "csharp", """

@@ -1370,14 +1370,19 @@ public partial class McpServer
         AddHdlGraphContractSignal(
             payload,
             reader.GetHdlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests));
-        AddReferenceGraphCompletenessSignal(payload, reader.GetReferenceExtractionCapHits());
+        AddReferenceGraphCompletenessSignal(
+            payload,
+            reader,
+            reader.GetReferenceExtractionCapHits());
     }
 
     private void AddReferenceGraphCompletenessSignal(
         JsonObject payload,
+        DbReader reader,
         ReferenceExtractionCapHitSummary capHits)
     {
-        var complete = capHits.StateAvailable && capHits.HitCount == 0;
+        var complete = reader.IsReferenceGraphComplete(capHits);
+        var incompleteReasons = reader.GetReferenceGraphIncompleteReasons(capHits);
         payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
             ReferenceExtractor.GetSafetyLimits(),
             _jsonOptions);
@@ -1388,7 +1393,7 @@ public partial class McpServer
         if (!complete)
         {
             payload["reference_graph_incomplete_reasons"] = JsonSerializer.SerializeToNode(
-                capHits.Reasons,
+                incompleteReasons,
                 _jsonOptions);
             payload["degraded"] = true;
         }

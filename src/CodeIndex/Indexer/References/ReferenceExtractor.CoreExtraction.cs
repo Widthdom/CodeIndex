@@ -203,6 +203,11 @@ public static partial class ReferenceExtractor
             : default;
         var shellCallableNames = shellNameSets.CallableNames;
         var shellGlobalAliasNames = shellNameSets.GlobalAliasNames;
+        var dynamicDeclarativeState = DynamicDeclarativeReferenceExtractor.CreateState(
+            language,
+            preparedLines,
+            referenceStructuralLines,
+            symbols);
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
             ? BuildCSharpNamespaceScopes(symbols)
             : Array.Empty<(int StartLine, int EndLine)>();
@@ -1469,7 +1474,7 @@ public static partial class ReferenceExtractor
                     }
                 }
 
-                return container;
+                return dynamicDeclarativeState?.ResolveContainer(lineNumber, column, container) ?? container;
             }
 
             SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
@@ -2591,6 +2596,10 @@ public static partial class ReferenceExtractor
 
             HashSet<int>? matchedCallIndices = null;
             HashSet<int> GetMatchedCallIndices() => matchedCallIndices ??= [];
+            var callScanLine = dynamicDeclarativeState?.GetCallScanLine(
+                language,
+                lineNumber,
+                preparedLine) ?? preparedLine;
 
             if (language is "commonlisp" or "racket")
             {
@@ -2631,8 +2640,7 @@ public static partial class ReferenceExtractor
             }
             else if (language is "assembly")
             {
-                // Assembly references are operand-driven, not `name(...)` call syntax. Running the
-                // shared CallRegex would misread addressing forms such as `foo(%rip)` as calls.
+                // Assembly references are operand-driven, not `name(...)` call syntax.
             }
             else
             {
@@ -2656,66 +2664,82 @@ public static partial class ReferenceExtractor
                 }
 
                 var dTemplateArgumentCallSpanIndex = 0;
-                foreach (Match match in CallRegex.Matches(preparedLine))
+                if (language is not ("tcl" or "prolog"))
                 {
-                    var name = match.Groups["name"].Value;
-                    var callIndex = match.Groups["name"].Index;
-                    if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
-                        continue;
-                    if (language == "d"
-                        && ScientificNativeReferenceExtractor.IsDTemplateArgumentCall(
-                            dTemplateArgumentCallSpans,
-                            ref dTemplateArgumentCallSpanIndex,
-                            callIndex))
+                    foreach (Match match in CallRegex.Matches(callScanLine))
                     {
-                        continue;
+                        var name = match.Groups["name"].Value;
+                        var callIndex = match.Groups["name"].Index;
+                        if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
+                            continue;
+                        if (language == "d"
+                            && ScientificNativeReferenceExtractor.IsDTemplateArgumentCall(
+                                dTemplateArgumentCallSpans,
+                                ref dTemplateArgumentCallSpanIndex,
+                                callIndex))
+                        {
+                            continue;
+                        }
+                        if (language == "ada"
+                            && callIndex > 0
+                            && preparedLine[callIndex - 1] == '\'')
+                        {
+                            continue;
+                        }
+                        if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
+                            continue;
+                        if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                            continue;
+                        if (sqlWindowFunctionCallSiteSuppressions != null
+                            && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
+                            continue;
+                        if (DynamicDeclarativeReferenceExtractor.ShouldSuppressGenericCall(
+                                language,
+                                callScanLine,
+                                name,
+                                callIndex,
+                                lineNumber,
+                                dynamicDeclarativeState,
+                                language == "groovy"
+                                    ? ResolveContainerForCall(callIndex)
+                                    : null))
+                        {
+                            continue;
+                        }
+                        GetMatchedCallIndices().Add(callIndex);
+                        if (TryAddCallLikeReference(
+                                name,
+                                callIndex,
+                                ScientificNativeReferenceExtractor.Supports(language)
+                                    ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                                        language,
+                                        preparedLine,
+                                        callIndex)
+                                    : null))
+                        {
+                            EmitGenericInvocationTypeArgumentReferences(
+                                language,
+                                preparedLine,
+                                callIndex,
+                                references,
+                                seen,
+                                fileId,
+                                context,
+                                lineNumber,
+                                ResolveContainerForCall(callIndex));
+                        }
+                        if (language == "ruby")
+                            RubyReferenceExtractor.EmitCommandTargetReferences(
+                                name,
+                                callIndex,
+                                originalLine,
+                                references,
+                                seen,
+                                fileId,
+                                context,
+                                lineNumber,
+                                ResolveContainerForCall);
                     }
-                    if (language == "ada"
-                        && callIndex > 0
-                        && preparedLine[callIndex - 1] == '\'')
-                    {
-                        continue;
-                    }
-                    if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
-                        continue;
-                    if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
-                        continue;
-                    if (sqlWindowFunctionCallSiteSuppressions != null
-                        && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
-                        continue;
-                    GetMatchedCallIndices().Add(callIndex);
-                    if (TryAddCallLikeReference(
-                            name,
-                            callIndex,
-                            ScientificNativeReferenceExtractor.Supports(language)
-                                ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
-                                    language,
-                                    preparedLine,
-                                    callIndex)
-                                : null))
-                    {
-                        EmitGenericInvocationTypeArgumentReferences(
-                            language,
-                            preparedLine,
-                            callIndex,
-                            references,
-                            seen,
-                            fileId,
-                            context,
-                            lineNumber,
-                            ResolveContainerForCall(callIndex));
-                    }
-                    if (language == "ruby")
-                        RubyReferenceExtractor.EmitCommandTargetReferences(
-                            name,
-                            callIndex,
-                            originalLine,
-                            references,
-                            seen,
-                            fileId,
-                            context,
-                            lineNumber,
-                            ResolveContainerForCall);
                 }
 
                 if (language == "ruby")
@@ -2732,11 +2756,29 @@ public static partial class ReferenceExtractor
                         GetMatchedCallIndices(),
                         AddCallLikeReference);
                 }
-                else if (language == "perl")
+                else if (language is "perl" or "ambiguous_pl")
                 {
                     PerlReferenceExtractor.EmitAdditionalReferences(
-                        preparedLine,
+                        language == "ambiguous_pl" ? callScanLine : preparedLine,
                         originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        AddCallLikeReference,
+                        emitArrowCallReferences: language != "ambiguous_pl"
+                            || dynamicDeclarativeState?.HasPrologContainer(lineNumber) != true);
+                }
+
+                if (dynamicDeclarativeState != null)
+                {
+                    DynamicDeclarativeReferenceExtractor.EmitAdditionalReferences(
+                        language,
+                        callScanLine,
+                        referenceStructuralLines[i],
+                        dynamicDeclarativeState,
                         references,
                         seen,
                         fileId,
@@ -2831,7 +2873,8 @@ public static partial class ReferenceExtractor
                 // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
                 // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
                 // `call` / `instantiate` を発行する。issue #263 参照。
-                if (MayContainNestedGenericSyntax(preparedLine))
+                if (language is not ("tcl" or "prolog" or "ambiguous_pl")
+                    && MayContainNestedGenericSyntax(preparedLine))
                 {
                     foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices ?? EmptyMatchedIndices))
                     {

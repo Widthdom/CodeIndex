@@ -28,9 +28,9 @@ public static partial class QueryCommandRunner
         new(
             "reference_graph_complete",
             "Reference extraction coverage",
-            "reference-extraction cap state is available and extraction completed without hitting a hard lookup or container-candidate safety cap.",
-            "reference-extraction cap state is unavailable, or one or more files hit a hard cap; absent graph edges are not authoritative in either case.",
-            "Inspect `reference_extraction_cap_hits.state_available`: when false, rerun `cdidx index <projectPath>` to populate current issue state; otherwise inspect `files`, reduce or exclude the cap-hitting generated/pathological source, and rerun indexing."),
+            "reference-extraction cap state is available, current dynamic-language extractor contracts are stamped, and extraction completed without hitting a hard lookup or container-candidate safety cap.",
+            "reference-extraction cap state is unavailable, a dynamic-language extractor stamp is stale, or one or more files hit a hard cap; absent graph edges are not authoritative.",
+            "Inspect `reference_graph_incomplete_reasons` and `reference_extraction_cap_hits.state_available`: refresh indexing for unavailable state or stale contracts; for a hard cap, inspect `files`, reduce or exclude the generated/pathological source, and rerun indexing."),
         new(
             "issues_table_available",
             "Validation issues table",

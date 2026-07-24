@@ -1512,31 +1512,24 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunSymbols_UnsupportedExtractorLanguageExplainsSearchOnlyFallback()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_unsupported_extractor");
-        try
-        {
-            File.WriteAllText(Path.Combine(projectRoot, "settings.pl"), "enabled = true\n");
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
+        using var project = CreateSearchOnlyLanguageProject(
+            "cdidx_symbols_unsupported_extractor",
+            out var dbPath);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "settings" + SearchOnlyTestExtension,
+            SearchOnlyTestLanguage,
+            "enabled = true\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["enabled", "--db", dbPath, "--lang", "ambiguous_pl"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["enabled", "--db", dbPath, "--lang", SearchOnlyTestLanguage],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("symbol extraction is not available", stderr);
-            Assert.Contains("cdidx search <query> --lang ambiguous_pl", stderr);
-            Assert.Contains("missing-symbols", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("symbol extraction is not available", stderr);
+        Assert.Contains($"cdidx search <query> --lang {SearchOnlyTestLanguage}", stderr);
+        Assert.Contains("missing-symbols", stderr);
     }
 
     [Fact]

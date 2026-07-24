@@ -59,7 +59,7 @@ public partial class DbWriter
         if (!allowReuse)
             return null;
         ReusableUnchangedFileLookupForTesting?.Invoke(relativePath);
-        if (!SymbolExtractorVersionMatchesCurrent(language))
+        if (!ExtractorContractsMatchCurrentForReuse(language))
             return null;
         if (HasStaleIssueMetadata(relativePath))
             return null;
@@ -130,7 +130,7 @@ public partial class DbWriter
     {
         if (!allowReuse)
             return null;
-        if (!SymbolExtractorVersionMatchesCurrent(language))
+        if (!ExtractorContractsMatchCurrentForReuse(language))
             return null;
 
         var hasIssueMetadataColumns = HasIssueMetadataColumns();
@@ -260,7 +260,7 @@ public partial class DbWriter
     {
         if (!allowReuse)
             return null;
-        if (!SymbolExtractorVersionMatchesCurrent(language))
+        if (!ExtractorContractsMatchCurrentForReuse(language))
             return null;
         if (HasStaleIssueMetadata(relativePath))
             return null;
@@ -304,7 +304,7 @@ public partial class DbWriter
     {
         if (!allowReuse)
             return null;
-        if (!SymbolExtractorVersionMatchesCurrent(language))
+        if (!ExtractorContractsMatchCurrentForReuse(language))
             return null;
 
         var hasIssueMetadataColumns = HasIssueMetadataColumns();
@@ -533,7 +533,7 @@ public partial class DbWriter
                 var reusableLanguage = language!;
                 if (!currentVersionByLanguage.TryGetValue(reusableLanguage, out var versionCurrent))
                 {
-                    versionCurrent = SymbolExtractorVersionMatchesCurrent(reusableLanguage);
+                    versionCurrent = ExtractorContractsMatchCurrentForReuse(reusableLanguage);
                     currentVersionByLanguage.Add(reusableLanguage, versionCurrent);
                 }
 

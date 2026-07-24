@@ -23,8 +23,7 @@ public partial class DbReader
             var indexComplete = !batchInProgress
                 && !string.Equals(indexCompleteness, "incomplete", StringComparison.OrdinalIgnoreCase);
             var referenceExtractionCapHits = GetReferenceExtractionCapHits();
-            var referenceGraphComplete = referenceExtractionCapHits.StateAvailable
-                && referenceExtractionCapHits.HitCount == 0;
+            var referenceGraphComplete = IsReferenceGraphComplete(referenceExtractionCapHits);
             var hdlGraphContractReady = !ScopeMayIncludeHdlFiles(
                 lang: null,
                 pathPatterns: null,

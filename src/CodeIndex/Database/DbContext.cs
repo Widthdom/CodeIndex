@@ -2058,6 +2058,8 @@ public class DbContext : IDisposable
     public const string HdlGraphContractVersionMetaKey = "hdl_graph_contract_version";
     public const int ReferenceIdentityContractVersion = 2;
     public const string ReferenceIdentityContractVersionMetaKey = "reference_identity_contract_version";
+    public static string GetDynamicReferenceGraphContractVersionMetaKey(string lang) =>
+        $"dynamic_reference_graph_contract_version_{lang}";
     public const string SymbolsOnlyGraphOmittedMetaKey = "symbols_only_graph_omitted";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
     public const string IndexedFollowSymlinksPolicyMetaKey = "indexed_follow_symlinks_policy";

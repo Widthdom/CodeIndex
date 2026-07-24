@@ -2205,8 +2205,8 @@ public static partial class IndexCommandRunner
                     GraphDataCurrent = false,
                     IndexComplete = false,
                     ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
-                    ReferenceGraphComplete = referenceExtractionCapHits.StateAvailable
-                        && referenceExtractionCapHits.HitCount == 0,
+                    ReferenceGraphComplete = signalReader.IsReferenceGraphComplete(
+                        referenceExtractionCapHits),
                     ReferenceExtractionCapHits = referenceExtractionCapHits,
                     ErrorCode = CommandErrorCodes.IndexPartial,
                     IssuesTableAvailable = issuesTableAvailable,
@@ -3044,6 +3044,8 @@ public static partial class IndexCommandRunner
                             WriteProjectRootOnce();
                             txn.Commit();
                             ftsMutated |= fileFtsMutated;
+                            if (!string.IsNullOrWhiteSpace(record.Lang))
+                                indexedSymbolExtractorLanguages.Add(record.Lang);
                             CountFreshInsertedRows(chunkCount: chunks.Count);
 
                             processed++;
@@ -3523,6 +3525,12 @@ public static partial class IndexCommandRunner
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);
+            // Extractor versions describe rows regenerated during this successful run and
+            // must not depend on whether the independent fold-key contract can be restamped.
+            // extractor version は今回再生成した row の契約であり、独立した fold-key
+            // 契約を restamp できるかどうかに依存させない。
+            writer.StampSymbolExtractorVersions(indexedSymbolExtractorLanguages);
+            writer.StampDynamicReferenceGraphContracts(indexedSymbolExtractorLanguages);
             // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
             // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
             // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip
@@ -3660,8 +3668,8 @@ public static partial class IndexCommandRunner
                 : writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
-        var referenceGraphCompleteAfter = referenceExtractionCapHitsAfter.StateAvailable
-            && referenceExtractionCapHitsAfter.HitCount == 0;
+        var referenceGraphCompleteAfter = signalReader.IsReferenceGraphComplete(
+            referenceExtractionCapHitsAfter);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         if (!hasSqlFilesAfter)
         {
