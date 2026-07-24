@@ -763,6 +763,87 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraph_ScientificQualifiersUseModuleEvidenceOrSafeUniqueFallback_Issue4738()
+    {
+        var dCallerId = UpsertTestFileWithLanguage("src/child.d", "d", "qualified-d-caller");
+        var dTargetId = UpsertTestFileWithLanguage("src/pkg/base.d", "d", "qualified-d-target");
+        var cythonCallerId = UpsertTestFileWithLanguage(
+            "src/child.pyx",
+            "cython",
+            "qualified-cython-caller");
+        var cythonTargetId = UpsertTestFileWithLanguage(
+            "src/pkg/base.pyx",
+            "cython",
+            "qualified-cython-target");
+        var adaCallerId = UpsertTestFileWithLanguage("src/main.adb", "ada", "qualified-ada-caller");
+        var adaP1Id = UpsertTestFileWithLanguage("src/p1.adb", "ada", "qualified-ada-p1");
+        var adaP2Id = UpsertTestFileWithLanguage("src/p2.adb", "ada", "qualified-ada-p2");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = dTargetId, Kind = "namespace", Name = "pkg.base", Line = 1 },
+            new SymbolRecord { FileId = dTargetId, Kind = "class", Name = "Base", Line = 2 },
+            new SymbolRecord { FileId = cythonTargetId, Kind = "class", Name = "NativeBase", Line = 1 },
+            new SymbolRecord { FileId = adaP1Id, Kind = "namespace", Name = "P1", Line = 1 },
+            new SymbolRecord { FileId = adaP1Id, Kind = "function", Name = "Flush", Line = 2 },
+            new SymbolRecord { FileId = adaP2Id, Kind = "namespace", Name = "P2", Line = 1 },
+            new SymbolRecord { FileId = adaP2Id, Kind = "function", Name = "Flush", Line = 2 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = dCallerId,
+                SymbolName = "Base",
+                TargetQualifier = "pkg",
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = "class Child : pkg.Base {}",
+            },
+            new ReferenceRecord
+            {
+                FileId = cythonCallerId,
+                SymbolName = "NativeBase",
+                TargetQualifier = "pkg",
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = "cdef class Child(pkg.NativeBase):",
+            },
+            new ReferenceRecord
+            {
+                FileId = adaCallerId,
+                SymbolName = "Flush",
+                TargetQualifier = "P1",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "P1.Flush;",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        AssertResolvedTo(dCallerId, dTargetId, "Base");
+        AssertResolvedTo(cythonCallerId, cythonTargetId, "NativeBase");
+        AssertResolvedTo(adaCallerId, adaP1Id, "Flush");
+
+        void AssertResolvedTo(long callerId, long targetFileId, string symbolName)
+        {
+            var expectedTargetId = ExecuteScalarLong($"""
+                SELECT id
+                FROM symbols
+                WHERE file_id = {targetFileId.ToString(CultureInfo.InvariantCulture)}
+                  AND name = '{symbolName}'
+                """);
+            Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+                SELECT target_symbol_id
+                FROM symbol_references
+                WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+                """));
+            Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+        }
+    }
+
+    [Fact]
     public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
     {
         var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");

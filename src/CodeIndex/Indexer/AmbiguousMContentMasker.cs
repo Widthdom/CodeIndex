@@ -20,6 +20,8 @@ internal static class AmbiguousMContentMasker
             return content;
         }
 
+        preserveObjectiveCModuloExpressions &=
+            HasStrongObjectiveCModuloEvidence(content);
         StringBuilder? masked = null;
         var inBlockComment = false;
         var inMatlabBlockComment = false;
@@ -238,6 +240,75 @@ internal static class AmbiguousMContentMasker
 
     private static bool IsObjectiveCModuloLeftOperandEnd(char value) =>
         IsTransposeOperandEnd(value) || value is '\'' or '"';
+
+    private static bool HasStrongObjectiveCModuloEvidence(string content)
+    {
+        var lineStart = 0;
+        while (lineStart < content.Length)
+        {
+            var lineEnd = lineStart;
+            while (lineEnd < content.Length && content[lineEnd] is not ('\r' or '\n'))
+                lineEnd++;
+
+            var line = content.AsSpan(lineStart, lineEnd - lineStart).TrimStart();
+            if (StartsWithObjectiveCPreprocessorDirective(line)
+                || StartsWithObjectiveCAtKeyword(line)
+                || StartsWithObjectiveCMethodDeclaration(line))
+            {
+                return true;
+            }
+
+            lineStart = lineEnd + 1;
+            if (lineEnd < content.Length
+                && content[lineEnd] == '\r'
+                && lineStart < content.Length
+                && content[lineStart] == '\n')
+            {
+                lineStart++;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool StartsWithObjectiveCPreprocessorDirective(ReadOnlySpan<char> line)
+    {
+        if (line.IsEmpty || line[0] != '#')
+            return false;
+
+        var keywordStart = 1;
+        while (keywordStart < line.Length && char.IsWhiteSpace(line[keywordStart]))
+            keywordStart++;
+
+        return StartsWithToken(line[keywordStart..], "import")
+            || StartsWithToken(line[keywordStart..], "include");
+    }
+
+    private static bool StartsWithObjectiveCAtKeyword(ReadOnlySpan<char> line) =>
+        StartsWithToken(line, "@interface")
+        || StartsWithToken(line, "@implementation")
+        || StartsWithToken(line, "@protocol")
+        || StartsWithToken(line, "@class")
+        || StartsWithToken(line, "@property")
+        || StartsWithToken(line, "@synthesize")
+        || StartsWithToken(line, "@dynamic")
+        || StartsWithToken(line, "@autoreleasepool");
+
+    private static bool StartsWithObjectiveCMethodDeclaration(ReadOnlySpan<char> line)
+    {
+        if (line.IsEmpty || line[0] is not ('-' or '+'))
+            return false;
+
+        var openingParenthesis = 1;
+        while (openingParenthesis < line.Length && char.IsWhiteSpace(line[openingParenthesis]))
+            openingParenthesis++;
+
+        return openingParenthesis < line.Length && line[openingParenthesis] == '(';
+    }
+
+    private static bool StartsWithToken(ReadOnlySpan<char> line, string token) =>
+        line.StartsWith(token, StringComparison.Ordinal)
+        && (line.Length == token.Length || !IsTransposeOperandEnd(line[token.Length]));
 
     private static bool IsTransposeOperandEnd(char value) =>
         char.IsLetterOrDigit(value) || value is '_' or ')' or ']' or '}';

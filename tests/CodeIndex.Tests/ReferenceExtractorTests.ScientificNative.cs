@@ -410,6 +410,7 @@ public partial class ReferenceExtractorTests
         var flushReference = Assert.Single(references, reference =>
             reference.SymbolName == "Flush" && reference.ReferenceKind == "call");
         Assert.Equal("Run", flushReference.ContainerName);
+        Assert.Equal("Helpers", flushReference.TargetQualifier);
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Helpers.Flush");
     }
 
@@ -1257,6 +1258,17 @@ public partial class ReferenceExtractorTests
             Assert.Single(references, reference =>
                 reference.SymbolName == name && reference.ReferenceKind == "call");
         }
+    }
+
+    [Fact]
+    public void Extract_AmbiguousMMatlabCommentsDoNotMasqueradeAsModuloExpressions_Issue4738()
+    {
+        const string content = "x = left % helper();";
+
+        var symbols = SymbolExtractor.Extract(1, "ambiguous_m", content, "unknown.m");
+        var references = ReferenceExtractor.Extract(1, "ambiguous_m", content, symbols, "unknown.m");
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "helper");
     }
 
     [Fact]

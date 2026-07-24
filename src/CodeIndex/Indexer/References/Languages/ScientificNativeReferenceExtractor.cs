@@ -189,7 +189,11 @@ internal static class ScientificNativeReferenceExtractor
                     var group = bareCall.Groups["name"];
                     var separatorIndex = group.Value.LastIndexOf('.');
                     var leafOffset = separatorIndex + 1;
-                    addCallLikeReference(group.Value[leafOffset..], group.Index + leafOffset);
+                    EmitName(
+                        group.Value[leafOffset..],
+                        group.Index + leafOffset,
+                        "call",
+                        separatorIndex >= 0 ? group.Value[..separatorIndex] : null);
                 }
                 break;
             case "objc":

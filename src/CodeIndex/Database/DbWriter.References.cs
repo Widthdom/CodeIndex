@@ -153,6 +153,21 @@ public partial class DbWriter
               s.container_name = r.target_qualifier COLLATE NOCASE
               OR s.container_qualified_name = r.target_qualifier COLLATE NOCASE
               OR s.container_qualified_name LIKE '%.' || r.target_qualifier COLLATE NOCASE
+              OR EXISTS (
+                  SELECT 1
+                  FROM symbols AS target_scope
+                  WHERE target_scope.file_id = s.file_id
+                    AND target_scope.kind IN ('namespace', 'module', 'package')
+                    AND (
+                        target_scope.name = r.target_qualifier COLLATE NOCASE
+                        OR target_scope.container_qualified_name = r.target_qualifier COLLATE NOCASE
+                        OR substr(
+                               target_scope.name,
+                               1,
+                               length(r.target_qualifier) + 1
+                           ) = (r.target_qualifier || '.') COLLATE NOCASE
+                    )
+              )
           );
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
@@ -311,7 +326,19 @@ public partial class DbWriter
              COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
              COALESCE(target.name, '') = unique_family.family_key
         WHERE source_file.lang <> 'csharp'
-          AND r.target_qualifier IS NULL
+          AND (
+              r.target_qualifier IS NULL
+              OR source_file.lang IN (
+                  'ada',
+                  'ambiguous_m',
+                  'cython',
+                  'd',
+                  'julia',
+                  'matlab',
+                  'nim',
+                  'objc'
+              )
+          )
           AND NOT EXISTS (
               SELECT 1 FROM symbol_reference_candidates AS existing
               WHERE existing.reference_id = r.id
