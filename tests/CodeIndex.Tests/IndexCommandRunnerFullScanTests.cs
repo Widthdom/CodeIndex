@@ -3927,6 +3927,80 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesUnchangedHdlFilesWhenGraphContractIsMissing_Issue4742()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "top.v"),
+                """
+                module child;
+                endmodule
+                module top;
+                    child u_child();
+                endmodule
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    DELETE FROM symbol_references WHERE file_id IN (
+                        SELECT id FROM files WHERE lang IN ('verilog', 'systemverilog', 'vhdl')
+                    );
+                    DELETE FROM codeindex_meta WHERE key = 'hdl_graph_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            using (var legacyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var legacyReader = new DbReader(legacyDb.Connection);
+                Assert.False(legacyReader.GetStatus().GraphDataCurrent);
+                var exactSignal = legacyReader.GetReferencesExactQuerySignal(lang: "verilog");
+                Assert.False(exactSignal.ExactIndexAvailable);
+                Assert.Contains("hdl_graph_contract_ready=false", exactSignal.DegradedReason, StringComparison.Ordinal);
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.True(json.GetProperty("graph_data_current").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var referenceCmd = verify.CreateCommand();
+            referenceCmd.CommandText = """
+                SELECT COUNT(*)
+                FROM symbol_references r
+                JOIN files f ON f.id = r.file_id
+                WHERE f.lang = 'verilog'
+                  AND r.reference_kind = 'instantiate'
+                  AND r.symbol_name = 'child'
+                """;
+            Assert.Equal(1L, (long)referenceCmd.ExecuteScalar()!);
+
+            using var contractCmd = verify.CreateCommand();
+            contractCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'hdl_graph_contract_version'";
+            Assert.Equal(
+                DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                contractCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_RewritesStaleCSharpExtractorContractForRazorDirectives()
     {
         var projectRoot = CreateTempProject();

@@ -2134,6 +2134,8 @@ public partial class QueryCommandRunnerTests
             foreach (var fixture in fixtures)
                 TestProjectHelper.InsertIndexedFile(dbPath, fixture.Path, fixture.Language, fixture.Content);
             MarkGraphAndFoldReady(dbPath);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                new DbWriter(db).MarkHdlGraphContractReady();
 
             foreach (var fixture in fixtures)
             {

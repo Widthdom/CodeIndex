@@ -127,14 +127,31 @@ public partial class ReferenceExtractorTests
                 packet_t packet;
                 util_pkg::packet_t qualified_packet;
                 child u_child (.clk(clk));
+                property p(input logic value);
+                    value;
+                endproperty
+                sequence s(input logic value);
+                    value;
+                endsequence
+                covergroup cg(input logic value);
+                endgroup
             endmodule
             """;
         const string vhdl = """
+            package util_pkg is
+                function declared_only(x : integer) return integer;
+                type state_t is (Idle, Busy);
+                constant after_decl : integer := declared_only(1);
+            end package;
+            package body util_pkg is
+                function declared_only(x : integer) return integer is
+                begin
+                    return x;
+                end function declared_only;
+            end package body util_pkg;
+
             library ieee;
             use work.util_pkg.all;
-            package util_pkg is
-                type state_t is (Idle, Busy);
-            end package;
 
             entity Child is
                 port (clk : in std_logic);
@@ -155,6 +172,7 @@ public partial class ReferenceExtractorTests
                     port map (clk => clk);
                 current <= current;
                 current <= 'X';
+                current <= X"FF";
             end structural;
             """;
 
@@ -179,9 +197,13 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(systemVerilogReferences, "type_reference", null, "external_if");
         AssertReferencesContain(systemVerilogReferences, "type_reference", "top", "packet_t");
         AssertReferencesContain(systemVerilogReferences, "reference", "top", "util_pkg");
+        Assert.DoesNotContain(systemVerilogReferences, reference =>
+            reference.ReferenceKind == "instantiate"
+            && reference.SymbolName is "property" or "sequence" or "covergroup");
 
         AssertReferencesContain(vhdlReferences, "import", null, "ieee", "util_pkg");
         AssertReferencesContain(vhdlReferences, "type_reference", null, "Child", "Top");
+        AssertReferencesContain(vhdlReferences, "call", "util_pkg", "declared_only");
         AssertReferencesContain(vhdlReferences, "instantiate", "structural", "Child");
         Assert.Equal(2, vhdlReferences.Count(reference =>
             reference.SymbolName == "Child"
@@ -191,7 +213,16 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(vhdlReferences, "reference", "structural", "current");
         Assert.DoesNotContain(vhdlReferences, reference =>
             reference.SymbolName == "X"
-            && reference.Context.Contains("'X'", StringComparison.Ordinal));
+            && (reference.Context.Contains("'X'", StringComparison.Ordinal)
+                || reference.Context.Contains("X\"FF\"", StringComparison.Ordinal)
+                || reference.Context.Contains("declared_only(x", StringComparison.OrdinalIgnoreCase)
+                || reference.Context.Equals("return x;", StringComparison.OrdinalIgnoreCase)));
+        Assert.DoesNotContain(vhdlReferences, reference =>
+            reference.SymbolName == "declared_only"
+            && reference.ContainerName == "declared_only");
+        Assert.DoesNotContain(vhdlReferences, reference =>
+            reference.SymbolName == "ieee"
+            && reference.ContainerName == "util_pkg");
         Assert.DoesNotContain(vhdlReferences, reference =>
             reference.ReferenceKind == "instantiate"
             && reference.Context.StartsWith("entity ", StringComparison.OrdinalIgnoreCase));

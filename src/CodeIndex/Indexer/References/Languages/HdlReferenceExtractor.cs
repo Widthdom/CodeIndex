@@ -83,18 +83,27 @@ public static partial class ReferenceExtractor
         @"^\s*(?<name>" + VhdlIdentifierPattern + @")\s*:\s*process\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VhdlScopeEndRegex = new(
-        @"^\s*end(?:\s+(?<kind>architecture|entity|package|function|procedure|process|configuration))?(?:\s+(?<name>" + VhdlIdentifierPattern + @"))?\s*;",
+        @"^\s*end(?:\s+(?<kind>architecture|entity|package|function|procedure|process|configuration))?(?:\s+body)?(?:\s+(?<name>" + VhdlIdentifierPattern + @"))?\s*;",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VhdlSubprogramBodyMarkerRegex = new(
+        @"\bis\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VhdlParameterNamesRegex = new(
+        @"(?<names>" + VhdlIdentifierPattern + @"(?:\s*,\s*" + VhdlIdentifierPattern + @")*)\s*:",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VhdlLocalDeclarationRegex = new(
+        @"^\s*(?:variable|constant|signal)\s+(?<names>" + VhdlIdentifierPattern + @"(?:\s*,\s*" + VhdlIdentifierPattern + @")*)\s*:",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> VerilogInstantiationKeywords = new(StringComparer.Ordinal)
     {
         "always", "always_comb", "always_ff", "always_latch", "and", "assign", "begin", "buf", "bufif0",
         "bufif1", "case", "casex", "casez", "class", "cmos", "deassign", "disable", "else", "end", "event",
-        "for", "force", "forever", "fork", "function", "generate", "if", "initial", "input", "interface",
+        "covergroup", "for", "force", "forever", "fork", "function", "generate", "if", "initial", "input", "interface",
         "join", "join_any", "join_none", "logic", "macromodule", "module", "nand", "nmos", "nor", "not",
         "notif0", "notif1", "or", "output", "package", "parameter", "pmos", "primitive", "program", "pullup",
         "pulldown", "rcmos", "reg", "release", "repeat", "rnmos", "rpmos", "rtran", "rtranif0", "rtranif1",
-        "task", "tran", "tranif0", "tranif1", "typedef", "wait", "wand", "while", "wire", "wor", "xnor", "xor",
+        "property", "sequence", "task", "tran", "tranif0", "tranif1", "typedef", "wait", "wand", "while", "wire", "wor", "xnor", "xor",
     };
     private static readonly HashSet<string> VhdlControlEndNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -105,7 +114,15 @@ public static partial class ReferenceExtractor
         "assert", "block", "case", "component", "entity", "for", "generate", "if", "loop", "process",
     };
 
-    private readonly record struct HdlKnownSymbol(string Name, string ReferenceKind);
+    private sealed record HdlKnownSymbol(
+        string Name,
+        string ReferenceKind,
+        HashSet<int>? LocalDesignUnitIds);
+
+    private sealed record HdlScope(
+        SymbolRecord Symbol,
+        int DesignUnitId,
+        HashSet<string> ShadowedNames);
 
     private static bool IsHdlReferenceLanguage(string language)
         => language is "verilog" or "systemverilog" or "vhdl";
@@ -134,8 +151,16 @@ public static partial class ReferenceExtractor
         var comparer = request.Language == "vhdl"
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
-        var (knownSymbols, definitionsByLine) = BuildHdlKnownSymbols(request, comparer, limits);
-        var scopes = new List<SymbolRecord>();
+        var vhdlDesignUnitIds = request.Language == "vhdl"
+            ? BuildVhdlDesignUnitIds(lines)
+            : null;
+        var (knownSymbols, definitionsByLine) = BuildHdlKnownSymbols(
+            request,
+            comparer,
+            limits,
+            vhdlDesignUnitIds);
+        var scopes = new List<HdlScope>();
+        var nextDesignUnitId = 1;
         var inVerilogBlockComment = false;
         var lineCount = Math.Min(lines.Length, limits.MaxLookupLines);
         if (lines.Length > lineCount)
@@ -162,7 +187,7 @@ public static partial class ReferenceExtractor
 
             var lineNumber = lineIndex + 1;
             var endedScope = TryPopHdlScope(request.Language, structuralLine, scopes);
-            var container = scopes.Count > 0 ? scopes[^1] : null;
+            var container = scopes.Count > 0 ? scopes[^1].Symbol : null;
             var specialPositions = new HashSet<int>();
             if (request.Language == "vhdl")
             {
@@ -191,6 +216,17 @@ public static partial class ReferenceExtractor
 
             if (!endedScope && !ReferenceLimitReached(references))
             {
+                var vhdlDeclaredNames = request.Language == "vhdl"
+                    ? GetVhdlDeclaredNames(structuralLine)
+                    : null;
+                if (vhdlDeclaredNames is { Count: > 0 }
+                    && scopes.Count > 0
+                    && scopes[^1].Symbol.Kind == "function"
+                    && VhdlLocalDeclarationRegex.IsMatch(structuralLine))
+                {
+                    scopes[^1].ShadowedNames.UnionWith(vhdlDeclaredNames);
+                }
+
                 EmitKnownHdlReferences(
                     request,
                     structuralLine,
@@ -202,11 +238,18 @@ public static partial class ReferenceExtractor
                     specialPositions,
                     knownSymbols,
                     definitionsByLine,
+                    scopes,
+                    vhdlDeclaredNames,
+                    vhdlDesignUnitIds?[lineIndex] ?? 0,
                     limits,
                     ref lineNameBudgetReported);
             }
 
-            TryPushHdlScope(request.Language, structuralLine, scopes);
+            TryPushHdlScope(
+                request.Language,
+                structuralLine,
+                scopes,
+                ref nextDesignUnitId);
         }
 
         return references;
@@ -218,7 +261,8 @@ public static partial class ReferenceExtractor
         BuildHdlKnownSymbols(
             ReferenceExtractionContext request,
             StringComparer comparer,
-            ReferenceExtractionSafetyLimits limits)
+            ReferenceExtractionSafetyLimits limits,
+            IReadOnlyList<int>? vhdlDesignUnitIds)
     {
         var knownSymbols = new Dictionary<string, HdlKnownSymbol>(comparer);
         var definitionsByLine = new Dictionary<int, HashSet<string>>();
@@ -230,11 +274,29 @@ public static partial class ReferenceExtractor
                 continue;
 
             var referenceKind = GetHdlKnownReferenceKind(symbol.Kind);
-            if (referenceKind != null
-                && (!knownSymbols.TryGetValue(symbol.Name, out var existing)
-                    || GetHdlReferenceKindPriority(referenceKind) > GetHdlReferenceKindPriority(existing.ReferenceKind)))
+            if (referenceKind != null)
             {
-                knownSymbols[symbol.Name] = new HdlKnownSymbol(symbol.Name, referenceKind);
+                var localDesignUnitId = request.Language == "vhdl"
+                    && symbol.Kind == "property"
+                    && vhdlDesignUnitIds != null
+                    && symbol.Line > 0
+                    && symbol.Line <= vhdlDesignUnitIds.Count
+                        ? vhdlDesignUnitIds[symbol.Line - 1]
+                        : (int?)null;
+                if (!knownSymbols.TryGetValue(symbol.Name, out var existing)
+                    || GetHdlReferenceKindPriority(referenceKind) > GetHdlReferenceKindPriority(existing.ReferenceKind))
+                {
+                    knownSymbols[symbol.Name] = new HdlKnownSymbol(
+                        symbol.Name,
+                        referenceKind,
+                        localDesignUnitId > 0 ? [localDesignUnitId.Value] : null);
+                }
+                else if (referenceKind == existing.ReferenceKind
+                    && localDesignUnitId > 0
+                    && existing.LocalDesignUnitIds != null)
+                {
+                    existing.LocalDesignUnitIds.Add(localDesignUnitId.Value);
+                }
             }
 
             if (symbol.Line <= 0)
@@ -523,6 +585,9 @@ public static partial class ReferenceExtractor
         HashSet<int> specialPositions,
         IReadOnlyDictionary<string, HdlKnownSymbol> knownSymbols,
         IReadOnlyDictionary<int, HashSet<string>> definitionsByLine,
+        IReadOnlyList<HdlScope> scopes,
+        IReadOnlySet<string>? declaredNames,
+        int currentDesignUnitId,
         ReferenceExtractionSafetyLimits limits,
         ref bool lineNameBudgetReported)
     {
@@ -549,7 +614,11 @@ public static partial class ReferenceExtractor
             if (specialPositions.Contains(match.Index)
                 || !knownSymbols.TryGetValue(match.Value, out var knownSymbol)
                 || definitionsByLine.TryGetValue(lineNumber, out var definitions)
-                    && definitions.Contains(match.Value))
+                    && definitions.Contains(match.Value)
+                || declaredNames?.Contains(match.Value) == true
+                || scopes.Any(scope => scope.ShadowedNames.Contains(match.Value))
+                || knownSymbol.LocalDesignUnitIds is { Count: > 0 } localDesignUnitIds
+                    && !localDesignUnitIds.Contains(currentDesignUnitId))
             {
                 continue;
             }
@@ -615,7 +684,7 @@ public static partial class ReferenceExtractor
     private static bool TryPopHdlScope(
         string language,
         string structuralLine,
-        List<SymbolRecord> scopes)
+        List<HdlScope> scopes)
     {
         if (scopes.Count == 0)
             return false;
@@ -651,7 +720,7 @@ public static partial class ReferenceExtractor
     }
 
     private static void PopHdlScope(
-        List<SymbolRecord> scopes,
+        List<HdlScope> scopes,
         string? kind,
         string? name,
         bool ignoreCase)
@@ -661,7 +730,7 @@ public static partial class ReferenceExtractor
             : StringComparison.Ordinal;
         for (var index = scopes.Count - 1; index >= 0; index--)
         {
-            var scope = scopes[index];
+            var scope = scopes[index].Symbol;
             if ((kind == null || string.Equals(scope.Kind, kind, comparison))
                 && (name == null || string.Equals(scope.Name, name, comparison)))
             {
@@ -674,7 +743,8 @@ public static partial class ReferenceExtractor
     private static void TryPushHdlScope(
         string language,
         string structuralLine,
-        List<SymbolRecord> scopes)
+        List<HdlScope> scopes,
+        ref int nextDesignUnitId)
     {
         if (language != "vhdl")
         {
@@ -684,64 +754,209 @@ public static partial class ReferenceExtractor
                 AddHdlScope(
                     scopes,
                     NormalizeVerilogScopeKind(match.Groups["kind"].Value),
-                    match.Groups["name"].Value);
+                    match.Groups["name"].Value,
+                    ref nextDesignUnitId);
                 return;
             }
 
             match = SystemVerilogClassStartRegex.Match(structuralLine);
             if (match.Success)
             {
-                AddHdlScope(scopes, "class", match.Groups["name"].Value);
+                AddHdlScope(scopes, "class", match.Groups["name"].Value, ref nextDesignUnitId);
                 return;
             }
 
             match = VerilogFunctionStartRegex.Match(structuralLine);
             if (match.Success)
             {
-                AddHdlScope(scopes, "function", match.Groups["name"].Value);
+                AddHdlScope(scopes, "function", match.Groups["name"].Value, ref nextDesignUnitId);
                 return;
             }
 
             match = VerilogTaskStartRegex.Match(structuralLine);
             if (match.Success)
-                AddHdlScope(scopes, "function", match.Groups["name"].Value);
+                AddHdlScope(scopes, "function", match.Groups["name"].Value, ref nextDesignUnitId);
             return;
         }
 
-        if (TryMatchHdlScope(VhdlArchitectureStartRegex, structuralLine, "module", scopes)
-            || TryMatchHdlScope(VhdlEntityStartRegex, structuralLine, "module", scopes)
-            || TryMatchHdlScope(VhdlPackageStartRegex, structuralLine, "package", scopes)
-            || TryMatchHdlScope(VhdlConfigurationStartRegex, structuralLine, "module", scopes)
-            || TryMatchHdlScope(VhdlFunctionStartRegex, structuralLine, "function", scopes)
-            || TryMatchHdlScope(VhdlProcedureStartRegex, structuralLine, "function", scopes))
+        if (TryMatchHdlScope(VhdlArchitectureStartRegex, structuralLine, "module", scopes, ref nextDesignUnitId)
+            || TryMatchHdlScope(VhdlEntityStartRegex, structuralLine, "module", scopes, ref nextDesignUnitId)
+            || TryMatchHdlScope(VhdlPackageStartRegex, structuralLine, "package", scopes, ref nextDesignUnitId)
+            || TryMatchHdlScope(VhdlConfigurationStartRegex, structuralLine, "module", scopes, ref nextDesignUnitId))
         {
             return;
         }
 
-        TryMatchHdlScope(VhdlProcessStartRegex, structuralLine, "function", scopes);
+        var subprogramMatch = VhdlFunctionStartRegex.Match(structuralLine);
+        if (!subprogramMatch.Success)
+            subprogramMatch = VhdlProcedureStartRegex.Match(structuralLine);
+        if (subprogramMatch.Success)
+        {
+            // A package declaration such as `function F(...) return T;` has no matching
+            // `end function`; only bodies containing the VHDL `is` marker create scopes.
+            if (VhdlSubprogramBodyMarkerRegex.IsMatch(structuralLine))
+            {
+                AddHdlScope(
+                    scopes,
+                    "function",
+                    subprogramMatch.Groups["name"].Value,
+                    ref nextDesignUnitId,
+                    GetVhdlDeclaredNames(structuralLine));
+            }
+            return;
+        }
+
+        TryMatchHdlScope(
+            VhdlProcessStartRegex,
+            structuralLine,
+            "function",
+            scopes,
+            ref nextDesignUnitId);
     }
 
     private static bool TryMatchHdlScope(
         Regex regex,
         string line,
         string kind,
-        List<SymbolRecord> scopes)
+        List<HdlScope> scopes,
+        ref int nextDesignUnitId)
     {
         var match = regex.Match(line);
         if (!match.Success)
             return false;
 
-        AddHdlScope(scopes, kind, match.Groups["name"].Value);
+        AddHdlScope(scopes, kind, match.Groups["name"].Value, ref nextDesignUnitId);
         return true;
     }
 
-    private static void AddHdlScope(List<SymbolRecord> scopes, string kind, string name)
+    private static void AddHdlScope(
+        List<HdlScope> scopes,
+        string kind,
+        string name,
+        ref int nextDesignUnitId,
+        IReadOnlySet<string>? shadowedNames = null)
     {
-        scopes.Add(new SymbolRecord
+        var designUnitId = scopes.Count == 0
+            ? nextDesignUnitId++
+            : scopes[0].DesignUnitId;
+        scopes.Add(new HdlScope(
+            new SymbolRecord
+            {
+                Kind = kind,
+                Name = name,
+            },
+            designUnitId,
+            shadowedNames == null
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(shadowedNames, StringComparer.OrdinalIgnoreCase)));
+    }
+
+    private static int[] BuildVhdlDesignUnitIds(string[] lines)
+    {
+        var result = new int[lines.Length];
+        var scopes = new List<HdlScope>();
+        var designUnitIdsByKey = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var nextDesignUnitId = 1;
+        var unusedBlockCommentState = false;
+        for (var index = 0; index < lines.Length; index++)
         {
-            Kind = kind,
-            Name = name,
-        });
+            var structuralLine = MaskHdlCommentsAndStrings(
+                lines[index],
+                "vhdl",
+                ref unusedBlockCommentState);
+            if (string.IsNullOrWhiteSpace(structuralLine))
+                continue;
+
+            TryPopHdlScope("vhdl", structuralLine, scopes);
+            var wasOutsideDesignUnit = scopes.Count == 0;
+            TryPushHdlScope("vhdl", structuralLine, scopes, ref nextDesignUnitId);
+            if (wasOutsideDesignUnit
+                && scopes.Count > 0
+                && TryGetVhdlDesignUnitKey(structuralLine, out var designUnitKey))
+            {
+                if (!designUnitIdsByKey.TryGetValue(designUnitKey, out var designUnitId))
+                {
+                    designUnitId = scopes[0].DesignUnitId;
+                    designUnitIdsByKey[designUnitKey] = designUnitId;
+                }
+                scopes[0] = scopes[0] with { DesignUnitId = designUnitId };
+            }
+            if (scopes.Count > 0)
+                result[index] = scopes[0].DesignUnitId;
+        }
+
+        return result;
+    }
+
+    private static bool TryGetVhdlDesignUnitKey(string line, out string key)
+    {
+        var architectureMatch = VhdlArchitectureRegex.Match(line);
+        if (architectureMatch.Success)
+        {
+            key = $"entity:{architectureMatch.Groups["entity"].Value}";
+            return true;
+        }
+
+        var entityMatch = VhdlEntityStartRegex.Match(line);
+        if (entityMatch.Success)
+        {
+            key = $"entity:{entityMatch.Groups["name"].Value}";
+            return true;
+        }
+
+        var packageMatch = VhdlPackageStartRegex.Match(line);
+        if (packageMatch.Success)
+        {
+            key = $"package:{packageMatch.Groups["name"].Value}";
+            return true;
+        }
+
+        var configurationMatch = VhdlConfigurationStartRegex.Match(line);
+        if (configurationMatch.Success)
+        {
+            key = $"configuration:{configurationMatch.Groups["name"].Value}";
+            return true;
+        }
+
+        key = string.Empty;
+        return false;
+    }
+
+    private static HashSet<string>? GetVhdlDeclaredNames(string line)
+    {
+        Match? declarationMatch = null;
+        if (VhdlFunctionStartRegex.IsMatch(line) || VhdlProcedureStartRegex.IsMatch(line))
+        {
+            var openParenthesis = line.IndexOf('(');
+            var closeParenthesis = line.LastIndexOf(')');
+            if (openParenthesis >= 0 && closeParenthesis > openParenthesis)
+            {
+                var parameters = line.Substring(
+                    openParenthesis + 1,
+                    closeParenthesis - openParenthesis - 1);
+                var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (Match parameterMatch in VhdlParameterNamesRegex.Matches(parameters))
+                    AddVhdlDeclaredNames(result, parameterMatch.Groups["names"].Value);
+                return result.Count == 0 ? null : result;
+            }
+        }
+        else
+        {
+            declarationMatch = VhdlLocalDeclarationRegex.Match(line);
+        }
+
+        if (declarationMatch is not { Success: true })
+            return null;
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddVhdlDeclaredNames(names, declarationMatch.Groups["names"].Value);
+        return names.Count == 0 ? null : names;
+    }
+
+    private static void AddVhdlDeclaredNames(HashSet<string> names, string value)
+    {
+        foreach (var name in value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            names.Add(name);
     }
 
     private static string NormalizeVerilogScopeKind(string kind)
@@ -827,6 +1042,12 @@ public static partial class ReferenceExtractor
 
             if (line[index] == '"')
             {
+                if (language == "vhdl")
+                {
+                    var bitStringStart = FindVhdlBitStringLiteralStart(line, index);
+                    if (bitStringStart < index)
+                        MaskRange(ref masked, line, bitStringStart, index);
+                }
                 inString = true;
                 MaskCharacter(ref masked, line, index);
                 continue;
@@ -862,6 +1083,26 @@ public static partial class ReferenceExtractor
 
         return masked == null ? line : new string(masked);
     }
+
+    private static int FindVhdlBitStringLiteralStart(string line, int quoteIndex)
+    {
+        var baseIndex = quoteIndex - 1;
+        if (baseIndex < 0 || !"BOXDboxd".Contains(line[baseIndex]))
+            return quoteIndex;
+
+        var start = baseIndex;
+        if (start > 0 && (line[start - 1] is 'U' or 'u' or 'S' or 's'))
+            start--;
+        while (start > 0 && (char.IsDigit(line[start - 1]) || line[start - 1] == '_'))
+            start--;
+
+        return start == 0 || !IsVhdlIdentifierCharacter(line[start - 1])
+            ? start
+            : quoteIndex;
+    }
+
+    private static bool IsVhdlIdentifierCharacter(char value)
+        => char.IsAsciiLetterOrDigit(value) || value == '_';
 
     private static int FindVerilogNumericLiteralEnd(string line, int apostropheIndex)
     {
