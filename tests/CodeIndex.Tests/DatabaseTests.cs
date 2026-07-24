@@ -4725,8 +4725,8 @@ public class DatabaseTests : IDisposable
 
     [Theory]
     [InlineData("groovy", 4)]
-    [InlineData("prolog", 3)]
-    [InlineData("ambiguous_pl", 3)]
+    [InlineData("prolog", 4)]
+    [InlineData("ambiguous_pl", 4)]
     public void GetUnchangedFileId_InvalidatesPriorDynamicGraphContracts_Issue4746(
         string language,
         int previousContractVersion)

@@ -24,7 +24,7 @@ public static partial class SymbolExtractor
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
     public const int DynamicReferenceGraphContractVersion = 5;
-    public const int PrologReferenceGraphContractVersion = 4;
+    public const int PrologReferenceGraphContractVersion = 5;
     public const int SystemsLanguageContractVersion = 2;
     private static readonly string[] ExplicitReferenceGraphContractLanguages =
         ["crystal", "groovy", "tcl", "prolog", "ambiguous_pl"];

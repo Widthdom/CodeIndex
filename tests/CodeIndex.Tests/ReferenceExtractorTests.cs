@@ -1545,6 +1545,46 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_AmbiguousPl_PreservesFatArrowPairsAndShortPrologHeads_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            sub helper { return 1; }
+            my %dispatch = (s => helper(), qr => helper());
+            :- module(hybrid, [q/0]).
+            q :- helper.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "q");
+        Assert.Equal(3, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"));
+        AssertReferencesContain(references, "call", "q", "helper");
+    }
+
+    [Fact]
+    public void Extract_Prolog_ManyClauseTerminatorsCompletesWithinRunawayGuard_Issue4746()
+    {
+        const int terminatorCount = 50_000;
+        var content = "run :-\n" + string.Concat(Enumerable.Repeat(". ", terminatorCount));
+        var symbols = SymbolExtractor.Extract(1, "prolog", content);
+
+        var stopwatch = Stopwatch.StartNew();
+        var references = ReferenceExtractor.Extract(1, "prolog", content, symbols);
+        stopwatch.Stop();
+
+        Assert.Empty(references);
+        var runawayBudget = TimeSpan.FromSeconds(5);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Prolog clause terminator extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
     public void Extract_Crystal_PreservesPredicateAndBangCallsWhileMaskingCommentsAndHeredocs_Issue4746()
     {
         const string content = """

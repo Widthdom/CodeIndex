@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 using Regex = CodeIndex.Indexer.BoundedRegex;
@@ -6,6 +7,9 @@ namespace CodeIndex.Indexer;
 
 internal static class DynamicDeclarativeReferenceExtractor
 {
+    private static readonly ConditionalWeakTable<string, PrologClauseTerminatorMap>
+        PrologClauseTerminatorMaps = new();
+
     internal sealed class ExtractionState
     {
         public ExtractionState(
@@ -362,6 +366,8 @@ internal static class DynamicDeclarativeReferenceExtractor
             var tclCommentStart = language == "tcl"
                 ? FindTclCommentStart(line)
                 : -1;
+            var hasPrologLineStructure = language == "ambiguous_pl"
+                && (StartsWithPrologGoalDirective(line) || PrologHeadRegex.IsMatch(line));
             for (var column = 0; column < line.Length;)
             {
                 if (ambiguousPerlQuoteLikeState != null)
@@ -534,6 +540,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                 }
 
                 if (language == "ambiguous_pl"
+                    && !hasPrologLineStructure
                     && TryBeginAmbiguousPerlQuoteLikeLiteral(
                         line,
                         buffer,
@@ -1405,6 +1412,13 @@ internal static class DynamicDeclarativeReferenceExtractor
         {
             return false;
         }
+        var delimiterSpan = line.AsSpan(delimiterColumn);
+        if (delimiterSpan.StartsWith("=>", StringComparison.Ordinal)
+            || delimiterSpan.StartsWith(":-", StringComparison.Ordinal)
+            || delimiterSpan.StartsWith("-->", StringComparison.Ordinal))
+        {
+            return false;
+        }
 
         var openingDelimiter = line[delimiterColumn];
         var closingDelimiter = GetPairedClosingDelimiter(openingDelimiter);
@@ -1667,54 +1681,72 @@ internal static class DynamicDeclarativeReferenceExtractor
         if (column < 0 || column >= line.Length || line[column] != '.')
             return false;
 
-        var previous = column > 0 ? line[column - 1] : '\0';
-        var next = column + 1 < line.Length ? line[column + 1] : '\0';
-        if (previous == '.' || next == '.')
-            return false;
-        if (char.IsDigit(previous) && char.IsDigit(next))
-            return false;
-        if (next != '\0' && !char.IsWhiteSpace(next))
-            return false;
-        return IsTopLevelPrologColumn(line, column);
+        return PrologClauseTerminatorMaps
+            .GetValue(line, static currentLine => new PrologClauseTerminatorMap(currentLine))
+            .IsTerminator(column);
     }
 
-    private static bool IsTopLevelPrologColumn(string line, int targetColumn)
+    private sealed class PrologClauseTerminatorMap
     {
-        var parenthesisDepth = 0;
-        var bracketDepth = 0;
-        var braceDepth = 0;
-        for (var column = 0; column < targetColumn; column++)
+        private readonly bool[] _terminatorColumns;
+
+        public PrologClauseTerminatorMap(string line)
         {
-            var ch = line[column];
-            if (ch is '\'' or '"')
+            _terminatorColumns = new bool[line.Length];
+            var parenthesisDepth = 0;
+            var bracketDepth = 0;
+            var braceDepth = 0;
+            for (var column = 0; column < line.Length; column++)
             {
-                column = SkipQuotedToken(line, column, ch) - 1;
-                continue;
-            }
-            switch (ch)
-            {
-                case '(':
-                    parenthesisDepth++;
-                    break;
-                case ')' when parenthesisDepth > 0:
-                    parenthesisDepth--;
-                    break;
-                case '[':
-                    bracketDepth++;
-                    break;
-                case ']' when bracketDepth > 0:
-                    bracketDepth--;
-                    break;
-                case '{':
-                    braceDepth++;
-                    break;
-                case '}' when braceDepth > 0:
-                    braceDepth--;
-                    break;
+                var ch = line[column];
+                if (ch is '\'' or '"')
+                {
+                    column = SkipQuotedToken(line, column, ch) - 1;
+                    continue;
+                }
+                switch (ch)
+                {
+                    case '(':
+                        parenthesisDepth++;
+                        continue;
+                    case ')' when parenthesisDepth > 0:
+                        parenthesisDepth--;
+                        continue;
+                    case '[':
+                        bracketDepth++;
+                        continue;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        continue;
+                    case '{':
+                        braceDepth++;
+                        continue;
+                    case '}' when braceDepth > 0:
+                        braceDepth--;
+                        continue;
+                }
+
+                if (ch != '.'
+                    || parenthesisDepth != 0
+                    || bracketDepth != 0
+                    || braceDepth != 0)
+                {
+                    continue;
+                }
+
+                var previous = column > 0 ? line[column - 1] : '\0';
+                var next = column + 1 < line.Length ? line[column + 1] : '\0';
+                if (previous != '.'
+                    && next != '.'
+                    && !(char.IsDigit(previous) && char.IsDigit(next))
+                    && (next == '\0' || char.IsWhiteSpace(next)))
+                {
+                    _terminatorColumns[column] = true;
+                }
             }
         }
 
-        return parenthesisDepth == 0 && bracketDepth == 0 && braceDepth == 0;
+        public bool IsTerminator(int column) => _terminatorColumns[column];
     }
 
     private static int FindPrologClauseTerminator(string line, int startColumn)
