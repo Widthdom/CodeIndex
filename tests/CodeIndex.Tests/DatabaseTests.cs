@@ -638,6 +638,779 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraph_AmbiguousMResolvesAgainstDefinitiveDialects_Issue4738()
+    {
+        var callerId = UpsertTestFileWithLanguage("src/caller.m", "ambiguous_m", "ambiguous-caller");
+        var unresolvedTargetId = UpsertTestFileWithLanguage(
+            "src/unresolved-target.m",
+            "ambiguous_m",
+            "ambiguous-target");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = unresolvedTargetId, Kind = "function", Name = "MatlabTarget", Line = 1 },
+            new SymbolRecord { FileId = unresolvedTargetId, Kind = "function", Name = "ObjectiveCTarget", Line = 2 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "MatlabTarget",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "MatlabTarget();",
+            },
+            new ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "ObjectiveCTarget",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 1,
+                Context = "ObjectiveCTarget();",
+            },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal(2, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND resolution_state = 'unresolved'
+            """));
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            var matlabTargetId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/matlab-target.m",
+                Lang = "matlab",
+                Size = 32,
+                Lines = 2,
+                Modified = new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "matlab-target",
+            });
+            var objectiveCTargetId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/objective-c-target.m",
+                Lang = "objc",
+                Size = 32,
+                Lines = 2,
+                Modified = new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "objective-c-target",
+            });
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = matlabTargetId, Kind = "function", Name = "MatlabTarget", Line = 1 },
+                new SymbolRecord { FileId = objectiveCTargetId, Kind = "function", Name = "ObjectiveCTarget", Line = 1 },
+            ]);
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        Assert.Equal(2, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND resolution_state = 'resolved'
+            """));
+
+        _writer.RefreshMutualRecursionFlags();
+        Assert.Equal(2, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND resolution_state = 'resolved'
+            """));
+
+        _writer.MarkGraphReady();
+        _writer.MarkReferenceIdentityContractReady();
+        var reader = new DbReader(_db.Connection);
+        foreach (var (name, language, path) in new[]
+        {
+            ("MatlabTarget", "matlab", "src/matlab-target.m"),
+            ("ObjectiveCTarget", "objc", "src/objective-c-target.m"),
+        })
+        {
+            var symbolId = ExecuteScalarLong($"""
+                SELECT symbol.id
+                FROM symbols AS symbol
+                JOIN files AS file ON file.id = symbol.file_id
+                WHERE symbol.name = '{name}'
+                  AND file.path = '{path}'
+                """);
+            var definition = new DefinitionResult
+            {
+                SymbolId = symbolId,
+                Path = path,
+                Lang = language,
+                Kind = "function",
+                Name = name,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            };
+            Assert.Equal(1, ExecuteScalarLong($"""
+                SELECT COUNT(*)
+                FROM symbol_reference_candidates
+                WHERE symbol_id = {symbolId.ToString(CultureInfo.InvariantCulture)}
+                """));
+
+            var identityScopedReference = Assert.Single(
+                reader.GetReferencesForDefinition(definition, limit: 20));
+            Assert.Equal("src/caller.m", identityScopedReference.Path);
+            Assert.Equal("ambiguous_m", identityScopedReference.Lang);
+            Assert.Equal(name, identityScopedReference.SymbolName);
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraph_AmbiguousMUniqueFallbackRequiresUnionWideUniqueness_Issue4738()
+    {
+        var callerId = UpsertTestFileWithLanguage(
+            "src/caller.m",
+            "ambiguous_m",
+            "ambiguous-union-caller");
+        var objectiveCTargetId = UpsertTestFileWithLanguage(
+            "src/objective-c-target.m",
+            "objc",
+            "ambiguous-union-objc");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = objectiveCTargetId, Kind = "function", Name = "Foo", Line = 1 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "Foo",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "Foo();",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            var firstMatlabTargetId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/first-matlab-target.m",
+                Lang = "matlab",
+                Size = 32,
+                Lines = 1,
+                Modified = new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "ambiguous-union-matlab-first",
+            });
+            var secondMatlabTargetId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "src/second-matlab-target.m",
+                Lang = "matlab",
+                Size = 32,
+                Lines = 1,
+                Modified = new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "ambiguous-union-matlab-second",
+            });
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = firstMatlabTargetId, Kind = "function", Name = "Foo", Line = 1 },
+                new SymbolRecord { FileId = secondMatlabTargetId, Kind = "function", Name = "Foo", Line = 1 },
+            ]);
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        Assert.Equal("unresolved", ReadReferenceResolutionState(callerId));
+        Assert.Equal(0, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND target_symbol_id IS NOT NULL
+            """));
+        Assert.Equal(0, ExecuteScalarLong($"""
+            SELECT COUNT(*)
+            FROM symbol_reference_candidates AS candidate
+            JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+            WHERE reference.file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+            """));
+    }
+
+    [Fact]
+    public void ReferenceGraph_ScientificQualifiersUseModuleEvidenceOrSafeUniqueFallback_Issue4738()
+    {
+        var dCallerId = UpsertTestFileWithLanguage("src/child.d", "d", "qualified-d-caller");
+        var dTargetId = UpsertTestFileWithLanguage("src/pkg/base.d", "d", "qualified-d-target");
+        var cythonCallerId = UpsertTestFileWithLanguage(
+            "src/child.pyx",
+            "cython",
+            "qualified-cython-caller");
+        var cythonTargetId = UpsertTestFileWithLanguage(
+            "src/pkg/base.pyx",
+            "cython",
+            "qualified-cython-target");
+        var adaCallerId = UpsertTestFileWithLanguage("src/main.adb", "ada", "qualified-ada-caller");
+        var adaP1Id = UpsertTestFileWithLanguage("src/p1.adb", "ada", "qualified-ada-p1");
+        var adaP2Id = UpsertTestFileWithLanguage("src/p2.adb", "ada", "qualified-ada-p2");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = dTargetId, Kind = "namespace", Name = "pkg.base", Line = 1 },
+            new SymbolRecord { FileId = dTargetId, Kind = "class", Name = "Base", Line = 2 },
+            new SymbolRecord { FileId = cythonTargetId, Kind = "class", Name = "NativeBase", Line = 1 },
+            new SymbolRecord { FileId = adaP1Id, Kind = "namespace", Name = "P1", Line = 1 },
+            new SymbolRecord { FileId = adaP1Id, Kind = "function", Name = "Flush", Line = 2 },
+            new SymbolRecord { FileId = adaP2Id, Kind = "namespace", Name = "P2", Line = 1 },
+            new SymbolRecord { FileId = adaP2Id, Kind = "function", Name = "Flush", Line = 2 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = dCallerId,
+                SymbolName = "Base",
+                TargetQualifier = "pkg",
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = "class Child : pkg.Base {}",
+            },
+            new ReferenceRecord
+            {
+                FileId = cythonCallerId,
+                SymbolName = "NativeBase",
+                TargetQualifier = "pkg",
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = "cdef class Child(pkg.NativeBase):",
+            },
+            new ReferenceRecord
+            {
+                FileId = adaCallerId,
+                SymbolName = "Flush",
+                TargetQualifier = "P1",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "P1.Flush;",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        AssertResolvedTo(dCallerId, dTargetId, "Base");
+        AssertResolvedTo(cythonCallerId, cythonTargetId, "NativeBase");
+        AssertResolvedTo(adaCallerId, adaP1Id, "Flush");
+
+        void AssertResolvedTo(long callerId, long targetFileId, string symbolName)
+        {
+            var expectedTargetId = ExecuteScalarLong($"""
+                SELECT id
+                FROM symbols
+                WHERE file_id = {targetFileId.ToString(CultureInfo.InvariantCulture)}
+                  AND name = '{symbolName}'
+                """);
+            Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+                SELECT target_symbol_id
+                FROM symbol_references
+                WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+                """));
+            Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraph_ModuleEvidenceDoesNotBroadenCSharpQualifiedCandidates_Issue4738()
+    {
+        var callerId = UpsertTestFileWithLanguage(
+            "src/caller.cs",
+            "csharp",
+            "qualified-csharp-caller");
+        var targetId = UpsertTestFileWithLanguage(
+            "src/targets.cs",
+            "csharp",
+            "qualified-csharp-target");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = targetId,
+                Kind = "namespace",
+                Name = "A",
+                Line = 1,
+            },
+            new SymbolRecord
+            {
+                FileId = targetId,
+                Kind = "namespace",
+                Name = "B",
+                Line = 2,
+            },
+            new SymbolRecord
+            {
+                FileId = targetId,
+                Kind = "class",
+                Name = "Thing",
+                ContainerName = "A",
+                Line = 3,
+            },
+            new SymbolRecord
+            {
+                FileId = targetId,
+                Kind = "class",
+                Name = "Thing",
+                ContainerName = "B",
+                Line = 4,
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerId,
+                SymbolName = "Thing",
+                TargetQualifier = "A",
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = "A.Thing value;",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {targetId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'Thing'
+              AND container_name = 'A'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+    }
+
+    [Fact]
+    public void ReferenceGraph_ExtractedScientificQualifierResolvesDuplicateLeaf_Issue4738()
+    {
+        const string callerContent = "void Run() { p1.Flush(); }\n";
+        var callerId = UpsertTestFileWithLanguage(
+            "src/main.d",
+            "d",
+            "qualified-d-call-caller");
+        var p1Id = UpsertTestFileWithLanguage(
+            "src/p1.d",
+            "d",
+            "qualified-d-call-p1");
+        var p2Id = UpsertTestFileWithLanguage(
+            "src/p2.d",
+            "d",
+            "qualified-d-call-p2");
+        var callerSymbols = SymbolExtractor.Extract(callerId, "d", callerContent);
+        _writer.InsertSymbols([
+            .. callerSymbols,
+            new SymbolRecord { FileId = p1Id, Kind = "namespace", Name = "p1", Line = 1 },
+            new SymbolRecord { FileId = p1Id, Kind = "function", Name = "Flush", Line = 2 },
+            new SymbolRecord { FileId = p2Id, Kind = "namespace", Name = "p2", Line = 1 },
+            new SymbolRecord { FileId = p2Id, Kind = "function", Name = "Flush", Line = 2 },
+        ]);
+        var callerReferences = ReferenceExtractor.Extract(
+            callerId,
+            "d",
+            callerContent,
+            callerSymbols);
+        _writer.InsertReferences(callerReferences, refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        var call = Assert.Single(callerReferences, reference =>
+            reference.SymbolName == "Flush" && reference.ReferenceKind == "call");
+        Assert.Equal("p1", call.TargetQualifier);
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {p1Id.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'Flush'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'Flush'
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(callerId));
+    }
+
+    [Fact]
+    public void ReferenceGraph_JuliaQualifierSelectsContainerWithinSharedModuleFile_Issue4738()
+    {
+        const string targetContent = """
+            module A
+            function foo()
+            end
+            macro trace(value)
+                value
+            end
+            end
+            module B
+            function foo()
+            end
+            macro trace(value)
+                value
+            end
+            end
+            """;
+        const string callerContent = """
+            function run()
+                A.foo()
+                A.@trace 1
+            end
+            """;
+        var targetId = UpsertTestFileWithLanguage(
+            "src/modules.jl",
+            "julia",
+            "qualified-julia-shared-module-target");
+        var callerId = UpsertTestFileWithLanguage(
+            "src/caller.jl",
+            "julia",
+            "qualified-julia-shared-module-caller");
+        var targetSymbols = SymbolExtractor.Extract(targetId, "julia", targetContent);
+        var callerSymbols = SymbolExtractor.Extract(callerId, "julia", callerContent);
+        _writer.InsertSymbols([.. targetSymbols, .. callerSymbols]);
+        var callerReferences = ReferenceExtractor.Extract(
+            callerId,
+            "julia",
+            callerContent,
+            callerSymbols);
+        _writer.InsertReferences(callerReferences, refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        foreach (var name in new[] { "foo", "trace" })
+        {
+            var reference = Assert.Single(callerReferences, candidate =>
+                candidate.SymbolName == name && candidate.ReferenceKind == "call");
+            Assert.Equal("A", reference.TargetQualifier);
+            var expectedTargetId = ExecuteScalarLong($"""
+                SELECT id
+                FROM symbols
+                WHERE file_id = {targetId.ToString(CultureInfo.InvariantCulture)}
+                  AND name = '{name}'
+                  AND container_name = 'A'
+                """);
+            Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+                SELECT target_symbol_id
+                FROM symbol_references
+                WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+                  AND symbol_name = '{name}'
+                """));
+            Assert.Equal("resolved", ExecuteScalarString($"""
+                SELECT resolution_state
+                FROM symbol_references
+                WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
+                  AND symbol_name = '{name}'
+                """));
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraph_CythonSelfReceiverResolvesSameClassDuplicateLeaf_Issue4738()
+    {
+        const string content = """
+            cdef class A:
+                def helper(self):
+                    pass
+                def run(self):
+                    self.helper()
+            cdef class B:
+                def helper(self):
+                    pass
+            """;
+        var fileId = UpsertTestFileWithLanguage(
+            "src/workers.pyx",
+            "cython",
+            "cython-self-receiver");
+        var symbols = SymbolExtractor.Extract(fileId, "cython", content);
+        _writer.InsertSymbols(symbols);
+        var references = ReferenceExtractor.Extract(fileId, "cython", content, symbols);
+        _writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        var helperReference = Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Null(helperReference.TargetQualifier);
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'helper'
+              AND container_name = 'A'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'helper'
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+    }
+
+    [Fact]
+    public void ReferenceGraph_NimStyleInsensitiveIdentityResolvesAndSearches_Issue4738()
+    {
+        const string content = """
+            proc myProc() = discard
+            proc RunGraph() =
+              my_proc()
+            """;
+        var fileId = UpsertTestFileWithLanguage(
+            "src/style.nim",
+            "nim",
+            "nim-style-insensitive");
+        _writer.InsertChunks([
+            new()
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 3,
+                Content = content,
+            },
+        ]);
+        var symbols = SymbolExtractor.Extract(fileId, "nim", content);
+        _writer.InsertSymbols(symbols);
+        var references = ReferenceExtractor.Extract(fileId, "nim", content, symbols);
+        _writer.InsertReferences(references, refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+        Assert.True(_writer.MarkFoldReady(
+            stampCurrentSymbolExtractorVersions: true,
+            symbolExtractorLanguagesToStamp: ["nim"]));
+        _writer.MarkGraphReady();
+
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'myProc'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'my_proc'
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+        var expectedSourceId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'RunGraph'
+            """);
+        Assert.Equal(expectedSourceId, ExecuteScalarLong($"""
+            SELECT source_symbol_id
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'my_proc'
+            """));
+        Assert.Equal("myproc", ExecuteScalarString($"""
+            SELECT name_folded
+            FROM symbols
+            WHERE id = {expectedTargetId.ToString(CultureInfo.InvariantCulture)}
+            """));
+        Assert.Equal("myproc", ExecuteScalarString($"""
+            SELECT symbol_name_folded
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND symbol_name = 'my_proc'
+            """));
+        Assert.Equal("Myproc", DbReader.FoldNameForLanguage("My_proc", "nim"));
+        Assert.Equal(0, ExecuteScalarLong("""
+            SELECT COUNT(*)
+            FROM symbols
+            WHERE name_folded = 'Myproc'
+            """));
+
+        var reader = new DbReader(_db.Connection);
+        Assert.Single(reader.SearchSymbols("my_proc", lang: "nim", exact: true));
+        Assert.Single(reader.SearchReferences("myProc", lang: "nim", exact: true));
+        Assert.Empty(reader.SearchSymbols("My_proc", lang: "nim", exact: true));
+        Assert.Empty(reader.SearchReferences("MyProc", lang: "nim", exact: true));
+
+        Assert.Single(reader.SearchSymbols("my_proc", exact: true));
+        Assert.Equal(1, reader.CountSearchSymbols("my_proc", exact: true));
+        Assert.Equal(1, reader.CountDefinitionsTotal("my_proc", exact: true).Count);
+        Assert.Single(reader.SearchReferences("my_proc", exact: true));
+        Assert.Equal(1, reader.CountSearchReferences("my_proc", exact: true));
+        Assert.Equal(1, reader.CountSearchReferencesTotal("my_proc", exact: true).Count);
+        Assert.Single(reader.GetCallers("my_proc", exact: true));
+        Assert.Equal(1, reader.CountCallers("my_proc", exact: true));
+        Assert.Equal(1, reader.CountCallersTotal("my_proc", exact: true).Count);
+        Assert.Single(reader.GetCallees("Run_Graph", exact: true));
+        Assert.Equal(1, reader.CountCallees("Run_Graph", exact: true));
+        Assert.Equal(1, reader.CountCalleesTotal("Run_Graph", exact: true).Count);
+        Assert.Empty(reader.SearchSymbols("My_proc", exact: true));
+        Assert.Empty(reader.SearchReferences("My_proc", exact: true));
+        Assert.Empty(reader.GetCallers("My_proc", exact: true));
+        Assert.Empty(reader.GetCallees("run_graph", exact: true));
+    }
+
+    [Fact]
+    public void ReferenceGraph_NimBackfillRewritesLegacyKeysAndRefreshesCandidates_Issue4738()
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/legacy-style.nim",
+            "nim",
+            "nim-legacy-style");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "my_proc",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "RunGraph",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 3,
+                BodyStartLine = 3,
+                BodyEndLine = 3,
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "myProc",
+                ReferenceKind = "call",
+                Line = 3,
+                Column = 3,
+                ContainerKind = "function",
+                ContainerName = "RunGraph",
+                Context = "myProc()",
+            },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal("unresolved", ReadReferenceResolutionState(fileId));
+
+        var rewritten = _writer.BackfillFoldedColumns(rewriteAll: true);
+
+        Assert.Equal((2, 1), rewritten);
+        var expectedTargetId = ExecuteScalarLong($"""
+            SELECT id
+            FROM symbols
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+              AND name = 'my_proc'
+            """);
+        Assert.Equal(expectedTargetId, ExecuteScalarLong($"""
+            SELECT target_symbol_id
+            FROM symbol_references
+            WHERE file_id = {fileId.ToString(CultureInfo.InvariantCulture)}
+            """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+    }
+
+    [Fact]
+    public void ReferenceGraph_NimBackfillRetriesInterruptedGraphRefresh_Issue4738()
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/interrupted-style.nim",
+            "nim",
+            "nim-interrupted-style");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "my_proc",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "myProc",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 1,
+                Context = "myProc()",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var interruptRefresh = true;
+        try
+        {
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                previousRefreshHook?.Invoke();
+                if (interruptRefresh)
+                    throw new OperationCanceledException("interrupt fold graph refresh");
+            };
+
+            Assert.Throws<OperationCanceledException>(
+                () => _writer.BackfillFoldedColumns(rewriteAll: true));
+
+            interruptRefresh = false;
+            Assert.Equal((0, 0), _writer.BackfillFoldedColumns(rewriteAll: true));
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+        }
+
+        Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+    }
+
+    [Fact]
+    public void SearchSymbols_NimExactDegradedPathPreservesRawUnderscores_Issue4738()
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/degraded-style.nim",
+            "nim",
+            "nim-degraded-style");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "my_proc",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        _writer.SetMeta(
+            "fold_key_version",
+            (NameFold.Version - 1).ToString(CultureInfo.InvariantCulture));
+        _writer.SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
+        using (var ready = _db.Connection.CreateCommand())
+        {
+            ready.CommandText =
+                $"PRAGMA user_version = {_db.GetUserVersion() | DbContext.FoldReadyFlag}";
+            ready.ExecuteNonQuery();
+        }
+
+        var reader = new DbReader(_db.Connection);
+
+        Assert.False(reader._foldReady);
+        Assert.Single(reader.SearchSymbols("my_proc", lang: "nim", exact: true));
+        Assert.Empty(reader.SearchSymbols("myProc", lang: "nim", exact: true));
+    }
+
+    [Fact]
     public void ReferenceGraphDirtyScope_RollbackAndCancellationPreserveRetryState()
     {
         var callerId = UpsertTestFileWithLanguage("src/retry-caller.cs", "csharp", "retry-caller");
