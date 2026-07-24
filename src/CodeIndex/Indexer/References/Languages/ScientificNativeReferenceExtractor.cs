@@ -60,6 +60,12 @@ internal static class ScientificNativeReferenceExtractor
     private static readonly Regex CythonImportListRegex = new(
         @"^\s*(?:cimport|import)\s+(?<names>[^\r\n]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CythonStringDependencyRegex = new(
+        """^\s*(?:include\s+|cdef\s+extern\s+from\s+)(?:'(?<name>[^']+)'|"(?<name>[^"]+)")""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CythonStringDependencyDirectiveRegex = new(
+        @"^\s*(?:include\b|cdef\s+extern\s+from\b)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CythonBaseTypeListRegex = new(
         @"^\s*(?:cdef\s+)?class\s+[A-Za-z_]\w*\s*\(\s*(?<names>[^)\r\n]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -168,6 +174,7 @@ internal static class ScientificNativeReferenceExtractor
             case "cython":
                 EmitMatch(CythonFromImportRegex, "import", stripLeadingRelativePrefix: true);
                 EmitNameList(CythonImportListRegex, "import", ',');
+                EmitCythonStringDependency();
                 EmitNameList(
                     CythonBaseTypeListRegex,
                     "type_reference",
@@ -570,6 +577,21 @@ internal static class ScientificNativeReferenceExtractor
                 return;
 
             var match = ObjectiveCImportRegex.Match(directiveLine);
+            if (match.Success)
+                EmitGroup(match.Groups["name"], "import");
+        }
+
+        void EmitCythonStringDependency()
+        {
+            var directiveLine = CythonStringDependencyRegex.IsMatch(preparedLine)
+                ? preparedLine
+                : CythonStringDependencyDirectiveRegex.IsMatch(preparedLine)
+                    ? originalLine
+                    : null;
+            if (directiveLine == null)
+                return;
+
+            var match = CythonStringDependencyRegex.Match(directiveLine);
             if (match.Success)
                 EmitGroup(match.Groups["name"], "import");
         }

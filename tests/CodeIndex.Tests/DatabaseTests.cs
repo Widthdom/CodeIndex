@@ -641,6 +641,14 @@ public class DatabaseTests : IDisposable
     public void ReferenceGraph_AmbiguousMResolvesAgainstDefinitiveDialects_Issue4738()
     {
         var callerId = UpsertTestFileWithLanguage("src/caller.m", "ambiguous_m", "ambiguous-caller");
+        var unresolvedTargetId = UpsertTestFileWithLanguage(
+            "src/unresolved-target.m",
+            "ambiguous_m",
+            "ambiguous-target");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = unresolvedTargetId, Kind = "function", Name = "MatlabTarget", Line = 1 },
+            new SymbolRecord { FileId = unresolvedTargetId, Kind = "function", Name = "ObjectiveCTarget", Line = 2 },
+        ]);
         _writer.InsertReferences([
             new ReferenceRecord
             {
@@ -723,9 +731,11 @@ public class DatabaseTests : IDisposable
         })
         {
             var symbolId = ExecuteScalarLong($"""
-                SELECT id
-                FROM symbols
-                WHERE name = '{name}'
+                SELECT symbol.id
+                FROM symbols AS symbol
+                JOIN files AS file ON file.id = symbol.file_id
+                WHERE symbol.name = '{name}'
+                  AND file.path = '{path}'
                 """);
             var definition = new DefinitionResult
             {

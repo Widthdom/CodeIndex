@@ -946,6 +946,49 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_NimRawTripleStringUsesMultilineMask_Issue4738()
+    {
+        const string content = """"
+            let text = r"""
+            proc Phantom() = discard
+            phantomCall()
+            """
+            proc real() =
+              helper()
+            """";
+        var symbols = SymbolExtractor.Extract(1, "nim", content);
+
+        var references = ReferenceExtractor.Extract(1, "nim", content, symbols);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "Phantom");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "phantomCall");
+        Assert.Equal("real", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CythonStringDependenciesPreserveQuotedNames_Issue4738()
+    {
+        const string content = """"
+            include "helpers.pxi"
+            cdef extern from 'native.h':
+                void native_call()
+            """
+            include "phantom.pxi"
+            """
+            """";
+        var symbols = SymbolExtractor.Extract(1, "cython", content);
+
+        var references = ReferenceExtractor.Extract(1, "cython", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "helpers.pxi" && reference.ReferenceKind == "import");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "native.h" && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "phantom.pxi");
+    }
+
+    [Fact]
     public void Extract_AdaAttributesPreserveNestedCallsWithoutPhantomAttributeCalls_Issue4738()
     {
         const string content = """

@@ -249,6 +249,15 @@ internal static class ScientificNativeCommentMasker
             }
 
             chars ??= line.ToCharArray();
+            if (cursor + 3 < line.Length
+                && line[cursor + 2] == '"'
+                && line[cursor + 3] == '"')
+            {
+                // Leave the triple-quote delimiter for the stateful multiline masker.
+                chars[cursor] = ' ';
+                continue;
+            }
+
             chars[cursor++] = ' ';
             chars[cursor++] = ' ';
             while (cursor < line.Length)

@@ -143,7 +143,8 @@ public partial class DbWriter
           )
         JOIN files AS target_file ON target_file.id = s.file_id
         WHERE (
-              source_file.lang = target_file.lang
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND r.target_qualifier IS NOT NULL
@@ -199,7 +200,8 @@ public partial class DbWriter
         JOIN files AS target_file ON target_file.id = s.file_id
         JOIN symbols AS source ON source.id = r.source_symbol_id
         WHERE (
-              source_file.lang = target_file.lang
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND r.target_qualifier IS NULL
@@ -228,7 +230,8 @@ public partial class DbWriter
         JOIN files AS target_file ON target_file.id = s.file_id
         JOIN symbols AS source ON source.id = r.source_symbol_id
         WHERE (
-              source_file.lang = target_file.lang
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND r.target_qualifier IS NULL
@@ -252,7 +255,8 @@ public partial class DbWriter
           )
         JOIN files AS target_file ON target_file.id = s.file_id
         WHERE (
-              source_file.lang = target_file.lang
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND r.target_qualifier IS NULL
@@ -275,7 +279,8 @@ public partial class DbWriter
         JOIN files AS target_file ON target_file.id = s.file_id
         JOIN symbols AS source ON source.id = r.source_symbol_id
         WHERE (
-              source_file.lang = target_file.lang
+              (source_file.lang = target_file.lang
+               AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND r.target_qualifier IS NULL
@@ -293,7 +298,8 @@ public partial class DbWriter
         JOIN files AS source_file ON source_file.id = r.file_id
         JOIN temp.reference_unique_symbol_families AS unique_family
           ON (
-              unique_family.lang = source_file.lang
+              (unique_family.lang = source_file.lang
+               AND source_file.lang <> 'ambiguous_m')
               OR (source_file.lang = 'ambiguous_m' AND unique_family.lang IN ('matlab', 'objc'))
           )
          AND unique_family.name_folded = r.symbol_name_folded
