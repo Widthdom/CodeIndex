@@ -178,8 +178,8 @@ public static partial class QueryCommandRunner
             }
 
             var results = options.GroupPartials
-                ? reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, sortMode: options.SymbolSortMode, groupPartials: true)
-                : reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, sortMode: options.SymbolSortMode);
+                ? reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, sortMode: options.SymbolSortMode, groupPartials: true, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("symbols"))
+                : reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, sortMode: options.SymbolSortMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("symbols"));
             var hasExactPredicate = exact && symbolQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             var multiNameExactHint = symbolQueries != null && symbolQueries.Count > 1;
@@ -460,7 +460,16 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, filesScope.PathPatterns, filesScope.ExcludePaths, filesScope.ExcludeTests, options.Since, orderBySize: options.RawBytes);
+            var results = reader.ListFiles(
+                options.Query,
+                options.Limit,
+                options.Lang,
+                filesScope.PathPatterns,
+                filesScope.ExcludePaths,
+                filesScope.ExcludeTests,
+                options.Since,
+                orderBySize: options.RawBytes,
+                offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("files"));
             if (results.Count == 0)
             {
                 if (IsDiscoveryNdjson(options))

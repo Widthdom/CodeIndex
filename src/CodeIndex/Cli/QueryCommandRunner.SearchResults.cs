@@ -371,24 +371,11 @@ public static partial class QueryCommandRunner
     private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {
         var originalCount = rows.Count;
-        var firstPerFileTruncated = false;
-        if (options.FirstPerFile)
-        {
-            var beforeFirstPerFile = rows.Count;
-            rows = rows
-                .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
-                .Select(group => group.First())
-                .ToList();
-            firstPerFileTruncated = rows.Count < beforeFirstPerFile;
-        }
-
-        var sampleTruncated = false;
-        if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
-        {
-            sampleTruncated = true;
-            rows = SampleSearchRows(rows, options.SampleSize.Value);
-        }
-
+        rows = ApplySearchPostSelectors(
+            rows,
+            options,
+            out var firstPerFileTruncated,
+            out var sampleTruncated);
         var postSelectionCount = rows.Count;
         var limitTruncated = rows.Count > options.Limit;
         if (limitTruncated)
@@ -410,6 +397,32 @@ public static partial class QueryCommandRunner
             Math.Max(0, originalCount - postSelectionCount));
     }
 
+    private static List<SearchDisplayRow> ApplySearchPostSelectors(
+        List<SearchDisplayRow> rows,
+        QueryCommandOptions options,
+        out bool firstPerFileTruncated,
+        out bool sampleTruncated)
+    {
+        firstPerFileTruncated = false;
+        if (options.FirstPerFile)
+        {
+            var beforeFirstPerFile = rows.Count;
+            rows = rows
+                .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+            firstPerFileTruncated = rows.Count < beforeFirstPerFile;
+        }
+
+        sampleTruncated = false;
+        if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
+        {
+            sampleTruncated = true;
+            rows = SampleSearchRows(rows, options.SampleSize.Value);
+        }
+        return rows;
+    }
+
     private static List<SearchDisplayRow> SampleSearchRows(List<SearchDisplayRow> rows, int sampleSize)
     {
         if (sampleSize <= 0 || rows.Count <= sampleSize)
@@ -427,19 +440,34 @@ public static partial class QueryCommandRunner
         return sampled;
     }
 
-    private static int WriteGroupedSearchResults(List<SearchDisplayRow> rows, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static int WriteGroupedSearchResults(
+        List<SearchDisplayRow> rows,
+        QueryCountResult matchedCounts,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
     {
         var groups = BuildSearchFileGroups(rows, options);
-        var totalMatches = rows.Count;
+        var groupedMatchCount = rows.Count;
+        var emittedMatchCount = groups.Sum(group => group.Results.Count);
+        var omittedMatchCount = Math.Max(0, matchedCounts.Count - emittedMatchCount);
+        var truncated = omittedMatchCount > 0 || groups.Any(group => group.Truncated);
         var json = JsonSerializer.Serialize(
                 new SearchFileGroupedJsonResult(
                     JsonOutputContract.ApiVersion,
                     options.Query!,
-                    totalMatches,
+                    matchedCounts.Count,
+                    matchedCounts.Count,
+                    groupedMatchCount,
+                    emittedMatchCount,
+                    omittedMatchCount,
                     groups.Count,
+                    matchedCounts.FileCount,
                     rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
+                    matchedCounts.FileCount,
                     options.GroupedPerFileLimit,
-                    groups.Any(group => group.Truncated),
+                    truncated,
+                    truncated,
+                    truncated ? "Increase --limit or --per-file-limit, or use a resumable JSON envelope." : null,
                     groups),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchFileGroupedJsonResult);
         return WriteJsonObjectWithOptionalByteLimit(
@@ -448,6 +476,26 @@ public static partial class QueryCommandRunner
             "grouped search results",
             "Reduce --limit, --per-file-limit, or increase --max-json-bytes.");
     }
+
+    private static QueryCountResult CountSearchMatches(DbReader reader, QueryCommandOptions options, bool exact)
+        => HasSearchOriginFilters(options)
+            ? CountFilteredSearchResults(reader, options, exact)
+            : reader.CountSearchResults(
+                options.Query!,
+                options.Lang,
+                options.RawFts,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                !options.NoDedup,
+                options.Since,
+                exact,
+                options.Prefix,
+                !options.NoVisibilityRank,
+                options.GuardFilters,
+                options.GuardWindow,
+                options.GuardScope,
+                options.TokenBoundary);
 
     private static void WriteGroupedSearchResultsHuman(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {
@@ -1030,15 +1078,80 @@ public static partial class QueryCommandRunner
 
     private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
     {
-        if (!HasSearchOriginFilters(options))
-            return BuildSearchDisplayRows(ReadSearchResults(reader, options, exact, GetSearchDisplayCandidateLimit(options)), options, exact);
+        var responseOffset = JsonEnvelopeWrapper.GetBoundedResponseOffset("search");
+        var boundedPageLimit = JsonEnvelopeWrapper.GetBoundedResponseLimit("search");
+        if (boundedPageLimit.HasValue
+            && (options.FirstPerFile || options.SampleSize.HasValue))
+        {
+            List<SearchDisplayRow> boundedRows;
+            if (!HasSearchOriginFilters(options))
+            {
+                boundedRows = BuildSearchDisplayRows(
+                    ReadSearchResults(
+                        reader,
+                        options,
+                        exact,
+                        SearchOriginFilterMaxCandidates,
+                        guardRequestedLimit: options.Limit),
+                    options,
+                    exact);
+            }
+            else
+            {
+                boundedRows = ReadOriginFilteredSearchDisplayRows(
+                    reader,
+                    options,
+                    exact,
+                    SearchOriginFilterMaxCandidates);
+            }
 
-        return ReadOriginFilteredSearchDisplayRows(reader, options, exact);
+            var rawWindowComplete = boundedRows.Count < SearchOriginFilterMaxCandidates;
+            var selectedRows = ApplySearchPostSelectors(
+                boundedRows,
+                options,
+                out _,
+                out _);
+            JsonEnvelopeWrapper.ReportBoundedResponseTotal(
+                "search",
+                selectedRows.Count,
+                rawWindowComplete);
+            return selectedRows
+                .Skip(responseOffset)
+                .Take(boundedPageLimit.Value == int.MaxValue
+                    ? int.MaxValue
+                    : boundedPageLimit.Value + 1)
+                .ToList();
+        }
+
+        var requestedLimit = GetSearchDisplayCandidateLimit(options);
+        var requestedThroughOffset = responseOffset > int.MaxValue - requestedLimit
+            ? int.MaxValue
+            : responseOffset + requestedLimit;
+        List<SearchDisplayRow> rows;
+        if (!HasSearchOriginFilters(options))
+        {
+            rows = BuildSearchDisplayRows(
+                ReadSearchResults(reader, options, exact, requestedThroughOffset),
+                options,
+                exact);
+        }
+        else
+        {
+            rows = ReadOriginFilteredSearchDisplayRows(reader, options, exact, requestedThroughOffset);
+        }
+
+        return responseOffset == 0
+            ? rows
+            : rows.Skip(responseOffset).ToList();
     }
 
-    private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
+    private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(
+        DbReader reader,
+        QueryCommandOptions options,
+        bool exact,
+        int requestedLimit)
     {
-        var requestedLimit = Math.Max(0, GetSearchDisplayCandidateLimit(options));
+        requestedLimit = Math.Max(0, requestedLimit);
         if (requestedLimit == 0)
             return [];
 

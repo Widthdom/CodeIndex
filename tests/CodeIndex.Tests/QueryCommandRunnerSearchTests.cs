@@ -12383,6 +12383,60 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_GroupedFormatReportsAuthoritativeTotalsWhenLimitBoundsRows_Issue4735()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_grouped_totals_4735");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/alpha.cs",
+                "csharp",
+                "GroupedTotalNeedle();\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/beta.cs",
+                "csharp",
+                "GroupedTotalNeedle();\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/gamma.cs",
+                "csharp",
+                "GroupedTotalNeedle();\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/delta.cs",
+                "csharp",
+                "GroupedTotalNeedle();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["GroupedTotalNeedle", "--db", dbPath, "--exact-substring", "--format", "grouped", "--limit", "2", "--per-file-limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal(4, root.GetProperty("total_matches").GetInt32());
+            Assert.Equal(4, root.GetProperty("matched_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("grouped_match_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("emitted_match_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("omitted_match_count").GetInt32());
+            Assert.Equal(4, root.GetProperty("total_groups").GetInt32());
+            Assert.Equal(4, root.GetProperty("total_files").GetInt32());
+            Assert.True(root.GetProperty("truncated").GetBoolean());
+            Assert.True(root.GetProperty("has_more").GetBoolean());
+            Assert.Contains("Increase --limit", root.GetProperty("continuation_action").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_SearchFieldsResultsOnlyOmitsDoneRecord_Issue3728()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_projection_results_only");

@@ -2738,11 +2738,130 @@ public static partial class QueryCommandRunner
     private static string FormatSearchCursor(SearchResult result)
         => string.Create(CultureInfo.InvariantCulture, $"{result.Score:R}:{result.ChunkId}:{result.NextOffset}");
 
-    private static string FormatUnusedCursor(int offset)
-        => string.Create(CultureInfo.InvariantCulture, $"unused:{offset}");
+    private const string ScopedOffsetCursorPrefix = "page:v1:";
 
-    private static string FormatOutlineCursor(int offset)
-        => string.Create(CultureInfo.InvariantCulture, $"outline:{offset}");
+    private readonly record struct ScopedOffsetCursor(
+        string Scope,
+        int Offset,
+        string QueryFingerprint,
+        string GenerationFingerprint);
+
+    private readonly record struct PaginationCursorContext(
+        string QueryFingerprint,
+        string GenerationFingerprint,
+        string? ResultStableAt);
+
+    private static PaginationCursorContext BuildPaginationCursorContext(
+        DbReader reader,
+        string scope,
+        IEnumerable<string?> queryComponents)
+    {
+        var generation = reader.GetPaginationGeneration();
+        return new(
+            BuildScopedCursorFingerprint(queryComponents.Prepend(scope)),
+            BuildScopedCursorFingerprint([generation.Identity]),
+            generation.StableAt);
+    }
+
+    private static string? ValidateScopedOffsetCursor(
+        QueryCommandOptions options,
+        string expectedScope,
+        PaginationCursorContext context)
+    {
+        if (options.CursorValue == null
+            || !options.CursorValue.StartsWith(ScopedOffsetCursorPrefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (!TryParseScopedOffsetCursor(options.CursorValue, out var cursor)
+            || !string.Equals(cursor.Scope, expectedScope, StringComparison.Ordinal))
+        {
+            return "The pagination cursor does not belong to this command; restart required.";
+        }
+        if (!string.Equals(cursor.QueryFingerprint, context.QueryFingerprint, StringComparison.Ordinal))
+            return "The pagination cursor does not match the current query scope, filters, or ordering; restart required.";
+        if (!string.Equals(cursor.GenerationFingerprint, context.GenerationFingerprint, StringComparison.Ordinal))
+            return "The pagination cursor is stale because the index generation changed; restart required.";
+        return null;
+    }
+
+    private static string FormatScopedOffsetCursor(string scope, int offset, PaginationCursorContext context)
+    {
+        var payload = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{scope}\n{offset}\n{context.QueryFingerprint}\n{context.GenerationFingerprint}");
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return ScopedOffsetCursorPrefix + encoded;
+    }
+
+    private static string BuildScopedCursorFingerprint(IEnumerable<string?> components)
+    {
+        var canonical = new StringBuilder();
+        foreach (var component in components)
+        {
+            if (component == null)
+            {
+                canonical.Append("-1:");
+                continue;
+            }
+            canonical
+                .Append(component.Length.ToString(CultureInfo.InvariantCulture))
+                .Append(':')
+                .Append(component);
+        }
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
+        return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
+    }
+
+    private static bool TryParseScopedOffsetCursor(string value, out ScopedOffsetCursor cursor)
+    {
+        cursor = default;
+        if (!value.StartsWith(ScopedOffsetCursorPrefix, StringComparison.Ordinal))
+            return false;
+
+        var encoded = value[ScopedOffsetCursorPrefix.Length..]
+            .Replace('-', '+')
+            .Replace('_', '/');
+        var paddingLength = (4 - encoded.Length % 4) % 4;
+        if (paddingLength > 0)
+            encoded += new string('=', paddingLength);
+
+        string payload;
+        try
+        {
+            payload = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        var parts = payload.Split('\n');
+        if (parts.Length != 4
+            || parts[0] is not ("unused" or "outline")
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var offset)
+            || offset < 0
+            || parts[2].Length != 16
+            || parts[3].Length != 16
+            || !parts[2].All(Uri.IsHexDigit)
+            || !parts[3].All(Uri.IsHexDigit))
+        {
+            return false;
+        }
+
+        cursor = new ScopedOffsetCursor(parts[0], offset, parts[2], parts[3]);
+        return true;
+    }
+
+    private static string FormatUnusedCursor(int offset, PaginationCursorContext context)
+        => FormatScopedOffsetCursor("unused", offset, context);
+
+    private static string FormatOutlineCursor(int offset, PaginationCursorContext context)
+        => FormatScopedOffsetCursor("outline", offset, context);
 
     private static bool TryParseSearchCursor(string value, out SearchCursor cursor)
     {
@@ -2772,20 +2891,36 @@ public static partial class QueryCommandRunner
     {
         offset = 0;
         const string prefix = "unused:";
-        if (!value.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-        return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
-            && offset >= 0;
+        if (value.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
+                && offset >= 0;
+        }
+        if (TryParseScopedOffsetCursor(value, out var cursor)
+            && string.Equals(cursor.Scope, "unused", StringComparison.Ordinal))
+        {
+            offset = cursor.Offset;
+            return true;
+        }
+        return false;
     }
 
     private static bool TryParseOutlineCursor(string value, out int offset)
     {
         offset = 0;
         const string prefix = "outline:";
-        if (!value.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-        return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
-            && offset >= 0;
+        if (value.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return int.TryParse(value[prefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
+                && offset >= 0;
+        }
+        if (TryParseScopedOffsetCursor(value, out var cursor)
+            && string.Equals(cursor.Scope, "outline", StringComparison.Ordinal))
+        {
+            offset = cursor.Offset;
+            return true;
+        }
+        return false;
     }
 
     private static string QuoteReplayShellArg(string arg)

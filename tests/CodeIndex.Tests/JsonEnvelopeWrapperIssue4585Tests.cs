@@ -106,7 +106,7 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
             Assert.True(firstMetadata.GetProperty("total_count_authoritative").GetBoolean());
             Assert.Equal(40, firstMetadata.GetProperty("total_count").GetInt32());
             var cursor = Assert.IsType<string>(firstMetadata.GetProperty("next_cursor").GetString());
-            Assert.StartsWith("response:v1:1:", cursor, StringComparison.Ordinal);
+            Assert.StartsWith("response:v2:", cursor, StringComparison.Ordinal);
             var firstLine = firstDocument.RootElement.GetProperty("results")[0].GetProperty("line").GetInt32();
 
             var secondArgs = firstArgs.Concat(["--cursor", cursor!]).ToArray();
@@ -418,9 +418,10 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
             Assert.Equal(3, secondDocument.RootElement.GetProperty("metadata").GetProperty("total_count").GetInt32());
             Assert.NotEqual(firstPath, secondDocument.RootElement.GetProperty("results")[0].GetProperty("path").GetString());
 
-            var cursorFingerprint = cursor[cursor.LastIndexOf(':')..];
+            var lastCursor = Assert.IsType<string>(
+                secondDocument.RootElement.GetProperty("metadata").GetProperty("next_cursor").GetString());
             var (lastExitCode, lastStdout, lastStderr) = CaptureConsole(() => ProgramRunner.Run(
-                firstArgs.Concat(["--cursor", "response:v1:2" + cursorFingerprint]).ToArray(),
+                firstArgs.Concat(["--cursor", lastCursor]).ToArray(),
                 _jsonOptions,
                 "1.0.0-test"));
 

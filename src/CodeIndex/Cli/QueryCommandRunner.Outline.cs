@@ -55,8 +55,26 @@ public static partial class QueryCommandRunner
             : OutlineSortMode.Source;
         var includeReferenceCounts = OutlineNeedsReferenceCounts(options, outlineSortMode);
         var includeDerivedMetadata = OutlineNeedsDerivedMetadata(options, outlineSortMode);
+        var kindFilters = BuildOutlineKindFilters(options.Kind);
         return WithDb(options, jsonOptions, reader =>
         {
+            var cursorComponents = new List<string?>
+            {
+                filePath,
+                FormatOutlineSortMode(outlineSortMode),
+            };
+            cursorComponents.AddRange(kindFilters.Order(StringComparer.Ordinal));
+            var cursorContext = BuildPaginationCursorContext(reader, "outline", cursorComponents);
+            var cursorValidationError = ValidateScopedOffsetCursor(options, "outline", cursorContext);
+            if (cursorValidationError != null)
+            {
+                WriteUsageError(
+                    cursorValidationError,
+                    GetUsageLineOrThrow("outline"),
+                    "Restart outline pagination without --cursor and use the new next_cursor value.");
+                return CommandExitCodes.UsageError;
+            }
+
             var outline = reader.GetOutline(filePath, includeReferenceCounts: includeReferenceCounts);
             if (outline == null)
             {
@@ -67,20 +85,19 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.NotFound;
             }
 
-            var kindFilters = BuildOutlineKindFilters(options.Kind);
             var filteredSymbols = ApplyOutlineKindFilters(outline.Symbols, kindFilters);
             var displaySourceSymbols = ApplyOutlineSort(filteredSymbols, outlineSortMode, includeDerivedMetadata);
             if (options.Json)
             {
                 if (options.Compact)
                 {
-                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, jsonOptions, compact: true);
+                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, cursorContext, jsonOptions, compact: true);
                     AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else if (HasOutlineJsonControls(options, kindFilters))
                 {
-                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, jsonOptions, compact: false);
+                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, cursorContext, jsonOptions, compact: false);
                     AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -337,6 +354,7 @@ public static partial class QueryCommandRunner
         IReadOnlyList<string> kindFilters,
         OutlineSortMode sortMode,
         QueryCommandOptions options,
+        PaginationCursorContext cursorContext,
         JsonSerializerOptions jsonOptions,
         bool compact)
     {
@@ -352,7 +370,7 @@ public static partial class QueryCommandRunner
             var compactOutline = BuildOutlineView(outline, remainingSymbols, totalMatchingSymbols);
             var compactTruncation = ApplyOutlineCompactCaps(compactOutline, compactLimit);
             var payload = JsonSerializer.SerializeToNode(compactOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
-            AddOutlinePagingJsonFields(payload, kindFilters, sortMode, options.SortExplicit, totalMatchingSymbols, offset, compactOutline.Symbols.Count, jsonOptions);
+            AddOutlinePagingJsonFields(payload, kindFilters, sortMode, options.SortExplicit, totalMatchingSymbols, offset, compactOutline.Symbols.Count, cursorContext, jsonOptions);
             ApplyOutlineFieldSelection(payload, compactOutline.Symbols, options, jsonOptions);
             AddCompactJsonFields(payload, compactLimit, compactTruncation);
             return payload;
@@ -364,7 +382,7 @@ public static partial class QueryCommandRunner
             : remainingSymbols;
         var pagedOutline = BuildOutlineView(outline, pageSymbols, totalMatchingSymbols);
         var pagedPayload = JsonSerializer.SerializeToNode(pagedOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
-        AddOutlinePagingJsonFields(pagedPayload, kindFilters, sortMode, options.SortExplicit, totalMatchingSymbols, offset, pageSymbols.Count, jsonOptions);
+        AddOutlinePagingJsonFields(pagedPayload, kindFilters, sortMode, options.SortExplicit, totalMatchingSymbols, offset, pageSymbols.Count, cursorContext, jsonOptions);
         ApplyOutlineFieldSelection(pagedPayload, pageSymbols, options, jsonOptions);
         return pagedPayload;
     }
@@ -387,6 +405,7 @@ public static partial class QueryCommandRunner
         int totalSymbolCount,
         int offset,
         int returnedSymbolCount,
+        PaginationCursorContext cursorContext,
         JsonSerializerOptions jsonOptions)
     {
         var nextOffset = offset + returnedSymbolCount;
@@ -394,8 +413,10 @@ public static partial class QueryCommandRunner
         payload["total_symbol_count"] = totalSymbolCount;
         payload["returned_symbol_count"] = returnedSymbolCount;
         payload["cursor_offset"] = offset;
-        payload["next_cursor"] = hasMore ? JsonValue.Create(FormatOutlineCursor(nextOffset)) : null;
+        payload["next_cursor"] = hasMore ? JsonValue.Create(FormatOutlineCursor(nextOffset, cursorContext)) : null;
         payload["has_more"] = hasMore;
+        if (cursorContext.ResultStableAt != null)
+            payload["result_stable_at"] = cursorContext.ResultStableAt;
         if (kindFilters.Count > 0)
             payload["kind_filter"] = JsonSerializer.SerializeToNode(kindFilters.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (sortExplicit || sortMode != OutlineSortMode.Source)

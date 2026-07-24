@@ -229,7 +229,8 @@ public static partial class QueryCommandRunner
             query["result_kinds"] = JsonSerializer.SerializeToNode(options.ResultKinds, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (options.UnusedCursorOffset.HasValue)
         {
-            query["cursor"] = FormatUnusedCursor(options.UnusedCursorOffset.Value);
+            query["cursor"] = options.CursorValue
+                ?? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"unused:{options.UnusedCursorOffset.Value}");
             query["offset"] = options.UnusedCursorOffset.Value;
         }
         if (options.RankMode != ReferenceRankMode.Weighted)
