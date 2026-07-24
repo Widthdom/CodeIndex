@@ -6,8 +6,6 @@ namespace CodeIndex.Indexer;
 
 internal static class ScientificNativeReferenceExtractor
 {
-    private const int MaxDependenciesPerDeclaration = 64;
-
     private static readonly HashSet<string> SupportedLanguages =
         new(StringComparer.Ordinal) { "ada", "cython", "d", "julia", "matlab", "nim", "objc" };
 
@@ -55,7 +53,7 @@ internal static class ScientificNativeReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex CythonFromImportRegex = new(
-        @"^\s*from\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+cimport\b",
+        @"^\s*from\s+(?<name>\.*[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+cimport\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CythonImportListRegex = new(
         @"^\s*(?:cimport|import)\s+(?<names>[^\r\n]+)",
@@ -103,8 +101,12 @@ internal static class ScientificNativeReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        Action<string, int> addCallLikeReference)
+        Action<string, int> addCallLikeReference,
+        int maxDependenciesPerDeclaration,
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
+        var dependencyLimitReported = false;
+
         switch (language)
         {
             case "nim":
@@ -146,7 +148,7 @@ internal static class ScientificNativeReferenceExtractor
                 }
                 break;
             case "cython":
-                EmitMatch(CythonFromImportRegex, "import");
+                EmitMatch(CythonFromImportRegex, "import", stripLeadingRelativePrefix: true);
                 EmitNameList(CythonImportListRegex, "import", ',');
                 EmitNameList(CythonBaseTypeListRegex, "type_reference", ',');
                 break;
@@ -167,11 +169,27 @@ internal static class ScientificNativeReferenceExtractor
                 break;
         }
 
-        void EmitMatch(Regex regex, string referenceKind)
+        void EmitMatch(
+            Regex regex,
+            string referenceKind,
+            bool stripLeadingRelativePrefix = false)
         {
             var match = regex.Match(preparedLine);
-            if (match.Success)
-                EmitGroup(match.Groups["name"], referenceKind);
+            if (!match.Success)
+                return;
+
+            var group = match.Groups["name"];
+            if (!stripLeadingRelativePrefix)
+            {
+                EmitGroup(group, referenceKind);
+                return;
+            }
+
+            var nameStart = 0;
+            while (nameStart < group.Length && group.Value[nameStart] == '.')
+                nameStart++;
+            if (nameStart < group.Length)
+                EmitName(group.Value[nameStart..], group.Index + nameStart, referenceKind);
         }
 
         void EmitMatches(Regex regex, string referenceKind)
@@ -208,7 +226,7 @@ internal static class ScientificNativeReferenceExtractor
 
             var dependencyCount = 0;
             var segmentStart = 0;
-            for (var index = 0; index <= namesEnd && dependencyCount < MaxDependenciesPerDeclaration; index++)
+            for (var index = 0; index <= namesEnd; index++)
             {
                 var atEnd = index == namesEnd;
                 var isSeparator = !atEnd
@@ -216,6 +234,7 @@ internal static class ScientificNativeReferenceExtractor
                 if (!atEnd && !isSeparator)
                     continue;
 
+                var canEmit = dependencyCount < maxDependenciesPerDeclaration;
                 if (TryEmitDependencySegment(
                     names,
                     segmentStart,
@@ -223,8 +242,15 @@ internal static class ScientificNativeReferenceExtractor
                     group.Index,
                     referenceKind,
                     stripLeadingAlias,
-                    stripLeadingRelativePrefix))
+                    stripLeadingRelativePrefix,
+                    emit: canEmit))
                 {
+                    if (!canEmit)
+                    {
+                        ReportDependencyLimit();
+                        return;
+                    }
+
                     dependencyCount++;
                 }
 
@@ -246,7 +272,8 @@ internal static class ScientificNativeReferenceExtractor
             int absoluteOffset,
             string referenceKind,
             bool stripLeadingAlias,
-            bool stripLeadingRelativePrefix)
+            bool stripLeadingRelativePrefix,
+            bool emit = true)
         {
             while (segmentStart < segmentEnd && char.IsWhiteSpace(names[segmentStart]))
                 segmentStart++;
@@ -300,10 +327,14 @@ internal static class ScientificNativeReferenceExtractor
             var emittedNameStart = stripLeadingRelativePrefix
                 ? firstIdentifierIndex
                 : segmentStart;
-            EmitName(
-                names[emittedNameStart..nameEnd],
-                absoluteOffset + emittedNameStart,
-                referenceKind);
+            if (emit)
+            {
+                EmitName(
+                    names[emittedNameStart..nameEnd],
+                    absoluteOffset + emittedNameStart,
+                    referenceKind);
+            }
+
             return true;
         }
 
@@ -321,7 +352,7 @@ internal static class ScientificNativeReferenceExtractor
             var dependencyCount = 0;
             var segmentStart = 0;
             var bracketDepth = 0;
-            for (var index = 0; index <= names.Length && dependencyCount < MaxDependenciesPerDeclaration; index++)
+            for (var index = 0; index <= names.Length; index++)
             {
                 if (index < names.Length)
                 {
@@ -334,17 +365,24 @@ internal static class ScientificNativeReferenceExtractor
                 if (index < names.Length && (names[index] != ',' || bracketDepth != 0))
                     continue;
 
-                dependencyCount += EmitNimImportSegment(
+                var (emittedCount, truncated) = EmitNimImportSegment(
                     names,
                     segmentStart,
                     index,
                     group.Index,
-                    MaxDependenciesPerDeclaration - dependencyCount);
+                    Math.Max(0, maxDependenciesPerDeclaration - dependencyCount));
+                dependencyCount += emittedCount;
+                if (truncated)
+                {
+                    ReportDependencyLimit();
+                    return;
+                }
+
                 segmentStart = index + 1;
             }
         }
 
-        int EmitNimImportSegment(
+        (int EmittedCount, bool Truncated) EmitNimImportSegment(
             string names,
             int segmentStart,
             int segmentEnd,
@@ -356,7 +394,7 @@ internal static class ScientificNativeReferenceExtractor
             while (segmentEnd > segmentStart && char.IsWhiteSpace(names[segmentEnd - 1]))
                 segmentEnd--;
             if (segmentStart >= segmentEnd)
-                return 0;
+                return (0, false);
 
             var openingBracket = names.IndexOf('[', segmentStart, segmentEnd - segmentStart);
             var closingBracket = openingBracket >= 0
@@ -364,16 +402,19 @@ internal static class ScientificNativeReferenceExtractor
                 : -1;
             if (openingBracket < 0 || closingBracket < 0)
             {
-                return TryEmitDependencySegment(
+                var canEmit = remainingCapacity > 0;
+                var hasDependency = TryEmitDependencySegment(
                     names,
                     segmentStart,
                     segmentEnd,
                     absoluteOffset,
                     "import",
                     stripLeadingAlias: false,
-                    stripLeadingRelativePrefix: false)
-                    ? 1
-                    : 0;
+                    stripLeadingRelativePrefix: false,
+                    emit: canEmit);
+                return hasDependency
+                    ? (canEmit ? 1 : 0, !canEmit)
+                    : (0, false);
             }
 
             var prefixStart = segmentStart;
@@ -381,12 +422,12 @@ internal static class ScientificNativeReferenceExtractor
             while (prefixEnd > prefixStart && char.IsWhiteSpace(names[prefixEnd - 1]))
                 prefixEnd--;
             if (prefixEnd <= prefixStart || names[prefixEnd - 1] != '/')
-                return 0;
+                return (0, false);
 
             var prefix = names[prefixStart..prefixEnd];
             var emittedCount = 0;
             var itemStart = openingBracket + 1;
-            for (var index = itemStart; index <= closingBracket && emittedCount < remainingCapacity; index++)
+            for (var index = itemStart; index <= closingBracket; index++)
             {
                 if (index < closingBracket && names[index] != ',')
                     continue;
@@ -405,6 +446,9 @@ internal static class ScientificNativeReferenceExtractor
                         nameEnd--;
                     if (nameEnd > itemStart)
                     {
+                        if (emittedCount >= remainingCapacity)
+                            return (emittedCount, true);
+
                         EmitName(
                             prefix + names[itemStart..nameEnd],
                             absoluteOffset + itemStart,
@@ -416,7 +460,18 @@ internal static class ScientificNativeReferenceExtractor
                 itemStart = index + 1;
             }
 
-            return emittedCount;
+            return (emittedCount, false);
+        }
+
+        void ReportDependencyLimit()
+        {
+            if (dependencyLimitReported)
+                return;
+
+            dependencyLimitReported = true;
+            reportDiagnostic?.Invoke(new ReferenceExtractionDiagnostic(
+                "reference_scientific_native_dependency_name_budget_exceeded",
+                $"Scientific/native dependency extraction used the first {maxDependenciesPerDeclaration:N0} names on line {lineNumber:N0} and skipped additional names."));
         }
 
         void EmitGroup(Group group, string referenceKind)

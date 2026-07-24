@@ -201,6 +201,19 @@ internal static class AmbiguousMContentMasker
             nextIndex++;
         }
 
+        while (nextIndex < content.Length
+            && content[nextIndex] is not '\r' and not '\n'
+            && content[nextIndex] is '+' or '-' or '!' or '~' or '*' or '&')
+        {
+            nextIndex++;
+            while (nextIndex < content.Length
+                && content[nextIndex] is not '\r' and not '\n'
+                && char.IsWhiteSpace(content[nextIndex]))
+            {
+                nextIndex++;
+            }
+        }
+
         return nextIndex < content.Length
             && content[nextIndex] is not '\r' and not '\n'
             && (char.IsLetterOrDigit(content[nextIndex])

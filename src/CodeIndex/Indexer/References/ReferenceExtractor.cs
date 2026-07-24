@@ -64,6 +64,7 @@ public static partial class ReferenceExtractor
         "reference_definition_lookup_line_name_budget_exceeded",
         "reference_definition_lookup_symbol_budget_exceeded",
         "reference_enclosing_type_candidate_budget_exceeded",
+        "reference_scientific_native_dependency_name_budget_exceeded",
         "reference_swift_property_line_budget_exceeded",
         "reference_swift_property_line_name_budget_exceeded",
         "reference_swift_property_symbol_budget_exceeded",

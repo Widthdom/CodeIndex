@@ -59,6 +59,9 @@ public static partial class ReferenceExtractor
         var csharpLinesInsideBlockComment = preparedInput.CSharpLinesInsideBlockComment;
         var referenceStructuralLines = preparedInput.ReferenceStructuralLines;
         var preparedLines = preparedInput.PreparedLines;
+        var scientificNativeDependencyLimit = ScientificNativeReferenceExtractor.Supports(language)
+            ? GetSafetyLimits().MaxNamesPerLine
+            : 0;
         var goImportBlockLines = preparedInput.GoImportBlockLines;
         var luaReferenceLines = preparedInput.LuaReferenceLines;
         var luaPreparedLines = preparedInput.LuaPreparedLines;
@@ -2548,7 +2551,9 @@ public static partial class ReferenceExtractor
                         context,
                         lineNumber,
                         ResolveContainerForCall,
-                        AddCallLikeReference);
+                        AddCallLikeReference,
+                        scientificNativeDependencyLimit,
+                        request.ReportDiagnostic);
                 }
 
                 foreach (Match match in CallRegex.Matches(preparedLine))

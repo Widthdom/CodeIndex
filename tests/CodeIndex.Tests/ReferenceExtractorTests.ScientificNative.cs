@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -580,6 +581,134 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
     }
 
+    [Theory]
+    [InlineData(
+        "matlab",
+        """
+        function run(A)
+          value = A(1, ...
+            end);
+          helper();
+        end
+        outside();
+        """)]
+    [InlineData(
+        "julia",
+        """
+        function run(A)
+            value = A[
+                end]
+            helper()
+        end
+        outside()
+        """)]
+    public void Extract_ScientificIndexEndOnContinuationLinePreservesFunctionScope_Issue4738(
+        string language,
+        string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Equal(5, Assert.Single(symbols, symbol => symbol.Name == "run").EndLine);
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JuliaMultilineDelimitedShortFunctionKeepsItsCallScope_Issue4738()
+    {
+        const string content = """
+            run(value) = (
+                helper(value)
+            )
+            outside()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Equal(3, Assert.Single(symbols, symbol => symbol.Name == "run").EndLine);
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JuliaEscapedTripleQuoteStaysInsideMultilineString_Issue4738()
+    {
+        const string content = """"
+            function run()
+                text = """
+                escaped \""" fake()
+                still literal
+                """
+                helper()
+            end
+            """";
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Theory]
+    [InlineData("from .helpers cimport thing\n", "helpers")]
+    [InlineData("from ..pkg.helpers cimport thing\n", "pkg.helpers")]
+    public void Extract_CythonRelativeCimportsNormalizeTheirModuleName_Issue4738(
+        string content,
+        string expectedModule)
+    {
+        var references = ReferenceExtractor.Extract(1, "cython", content, []);
+
+        Assert.Single(references, reference =>
+            reference.SymbolName == expectedModule && reference.ReferenceKind == "import");
+    }
+
+    [Fact]
+    public void Extract_ScientificDependencyNameLimitReportsOnlyAfterTheSharedBoundary_Issue4738()
+    {
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        ReferenceExtractor.SafetyLimitsForTesting = new ReferenceExtractionSafetyLimits
+        {
+            MaxLookupSymbols = 100,
+            MaxLookupLines = 100,
+            MaxNamesPerLine = 2,
+            MaxContainerCandidates = 100,
+        };
+
+        try
+        {
+            var exact = ReferenceExtractor.ExtractDetailed(
+                1,
+                "ada",
+                "with Alpha, Beta;\n",
+                []);
+            var exceeded = ReferenceExtractor.ExtractDetailed(
+                1,
+                "ada",
+                "with Alpha, Beta, Gamma;\n",
+                []);
+
+            Assert.Equal(2, exact.References.Count(reference => reference.ReferenceKind == "import"));
+            Assert.Equal(2, exceeded.References.Count(reference => reference.ReferenceKind == "import"));
+            Assert.DoesNotContain(exact.Diagnostics, diagnostic =>
+                diagnostic.Kind == "reference_scientific_native_dependency_name_budget_exceeded");
+            Assert.Contains(exceeded.Diagnostics, diagnostic =>
+                diagnostic.Kind == "reference_scientific_native_dependency_name_budget_exceeded");
+        }
+        finally
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+        }
+    }
+
     public static TheoryData<string, string> ScientificNativeMultilineLiteralCases => new()
     {
         {
@@ -801,16 +930,23 @@ public partial class ReferenceExtractorTests
     public void Extract_AmbiguousMPreservesObjectiveCModuloExpressions_Issue4738()
     {
         const string content = """
-            void run(void) {
-                int value = left % helper();
+            @implementation Widget
+            - (void)run {
+                int first = left % helper();
+                int second = left % -other();
+                int third = left % *pointer();
             }
+            @end
             """;
 
         var symbols = SymbolExtractor.Extract(1, "ambiguous_m", content, "unknown.m");
         var references = ReferenceExtractor.Extract(1, "ambiguous_m", content, symbols, "unknown.m");
 
-        Assert.Single(references, reference =>
-            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        foreach (var name in new[] { "helper", "other", "pointer" })
+        {
+            Assert.Single(references, reference =>
+                reference.SymbolName == name && reference.ReferenceKind == "call");
+        }
     }
 
     [Fact]

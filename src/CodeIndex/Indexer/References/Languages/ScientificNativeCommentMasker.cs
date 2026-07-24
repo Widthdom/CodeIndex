@@ -7,7 +7,13 @@ internal static class ScientificNativeCommentMasker
         {
             "d" => MaskDNonCodeRegions(lines),
             "julia" => MaskNestedBlockComments(
-                MaskTripleQuotedStrings(lines, "#=", "=#", "#", singleQuoteCanBePostfix: true),
+                MaskTripleQuotedStrings(
+                    lines,
+                    "#=",
+                    "=#",
+                    "#",
+                    singleQuoteCanBePostfix: true,
+                    tripleQuoteUsesBackslashEscapes: true),
                 "#=",
                 "=#",
                 "#",
@@ -83,7 +89,8 @@ internal static class ScientificNativeCommentMasker
         string blockOpening,
         string blockClosing,
         string lineComment,
-        bool singleQuoteCanBePostfix = false)
+        bool singleQuoteCanBePostfix = false,
+        bool tripleQuoteUsesBackslashEscapes = false)
     {
         if (!MayContain(lines, "\"\"\""))
             return lines;
@@ -105,7 +112,9 @@ internal static class ScientificNativeCommentMasker
             {
                 if (inTripleQuotedString)
                 {
-                    if (StartsWith(line, cursor, "\"\"\""))
+                    if (StartsWith(line, cursor, "\"\"\"")
+                        && (!tripleQuoteUsesBackslashEscapes
+                            || !HasOddBackslashPrefix(line, cursor)))
                     {
                         MaskToken("\"\"\"");
                         inTripleQuotedString = false;
@@ -194,6 +203,15 @@ internal static class ScientificNativeCommentMasker
         }
 
         return result;
+    }
+
+    private static bool HasOddBackslashPrefix(string line, int index)
+    {
+        var backslashCount = 0;
+        for (index--; index >= 0 && line[index] == '\\'; index--)
+            backslashCount++;
+
+        return (backslashCount & 1) != 0;
     }
 
     internal static string MaskNimRawStringLiterals(string line)
