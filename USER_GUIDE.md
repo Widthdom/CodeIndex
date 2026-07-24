@@ -1875,7 +1875,7 @@ same source location.
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`; max: 10000000) |
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match (max: 1000) |
 | `--after <n>` | `excerpt`, `find` | Include extra context lines after the requested excerpt or match (max: 1000) |
-| `--focus-line <line>` | `excerpt` | Line inside the requested excerpt whose focused column should stay visible when `--max-line-width` clamps long single-line content; requires `--focus-column` (max: 10000000) |
+| `--focus-line <line>` | `excerpt` | Line inside the requested excerpt to focus when `--max-line-width` clamps long single-line content. It can be used without `--focus-column`; in that case, clamping keeps the leading window of the line (max: 10000000). |
 | `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content; must be within that line's length (max: 100000) |
 | `--focus-length <n>` | `excerpt` | Width of the focused span when `--max-line-width` clamps long single-line content (default: 1, max: 100000; requires `--focus-column`) |
 | `--no-semantic-tokens` | `excerpt` | Omit the `semantic_tokens` array from `excerpt --json` while keeping line spans and content metadata. Useful for compact excerpts and token-budgeted clients. |
@@ -5037,7 +5037,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ、最大: 10000000） |
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数（最大: 1000） |
 | `--after <n>` | `excerpt`, `find` | 指定範囲または一致箇所の後に追加する文脈行数（最大: 1000） |
-| `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、注目列を表示に残したい抜粋内の行。`--focus-column` 必須（最大: 10000000） |
+| `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に注目する抜粋内の行。`--focus-column` なしでも使用でき、その場合は対象行の先頭側の window を表示に残します（最大: 10000000）。 |
 | `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列。対象行の長さ以内である必要があります（最大: 100000） |
 | `--focus-length <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際の注目範囲の幅（デフォルト: 1、最大: 100000、`--focus-column` 必須） |
 | `--no-semantic-tokens` | `excerpt` | `excerpt --json` から `semantic_tokens` 配列を省略し、line span と content metadata は維持する。compact な excerpt や token budget が厳しい client 向け。 |

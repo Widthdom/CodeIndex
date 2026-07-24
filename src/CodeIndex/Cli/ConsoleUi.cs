@@ -165,7 +165,7 @@ public static class ConsoleUi
         ("callees", "--json and --format json emit JSON Lines (one JSON object per result), not a single JSON array."),
         ("references", "`refs` is a compatibility alias for `references`; prefer `references` in scripts and documentation."),
         ("excerpt", "Line ranges can be supplied as `path:line` or `path:start-end`; explicit --start/--end flags override range parsing."),
-        ("excerpt", "--focus-line and --focus-length each require --focus-column so clamped excerpts know the column to keep visible."),
+        ("excerpt", "--focus-line may be used alone; without --focus-column, clamping keeps the leading window. --focus-length still requires --focus-column."),
         ("inspect", "In query mode --path is a glob filter; in line mode --path <file> --line <line> selects a source location."),
         ("status", "`stats` is a compatibility alias for `status`; prefer `status` in scripts and documentation."),
         ("backfill-fold", "`fold` is a compatibility alias for `backfill-fold`; prefer `backfill-fold` in scripts and documentation."),
@@ -1138,7 +1138,7 @@ public static class ConsoleUi
         Console.WriteLine("  --snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)");
         Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
         WriteHelpLine($"  --max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
-        Console.WriteLine("  --focus-line <line>        find/excerpt: focus a specific line");
+        WriteHelpLine("  --focus-line <line>        find/excerpt: focus a line; excerpt keeps the leading window when no column is supplied");
         Console.WriteLine("  --focus-column <n>         find/excerpt: focus a specific 1-based column");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
         Console.WriteLine("  --no-semantic-tokens       excerpt JSON: omit semantic_tokens for compact line/window payloads");

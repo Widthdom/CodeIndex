@@ -4378,15 +4378,27 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_FocusLineWithoutFocusColumnReturnsError()
+    public void ToolsCall_Excerpt_LineOnlyFocusAndFocusLengthDependencyReuseFixture_Issue4747()
     {
         InsertIndexedFile("dist/data-focus-error.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-error.txt","startLine":1,"endLine":1,"maxLineWidth":96,"focusLine":1}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var content = structured["content"]!.GetValue<string>();
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("focusLine and focusLength require focusColumn", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.True(structured["contentTruncated"]!.GetValue<bool>());
+        Assert.Equal(1, structured["focusLine"]!.GetValue<int>());
+        Assert.Null(structured["focusColumn"]);
+        Assert.StartsWith("a", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("TARGET", content, StringComparison.Ordinal);
+        Assert.True(content.Length <= 96);
+
+        var focusLengthRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-error.txt","startLine":1,"endLine":1,"focusLength":6}}}""")!;
+        var focusLengthResponse = _server.HandleMessage(focusLengthRequest)!;
+
+        Assert.True(focusLengthResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusLength requires focusColumn", focusLengthResponse["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
