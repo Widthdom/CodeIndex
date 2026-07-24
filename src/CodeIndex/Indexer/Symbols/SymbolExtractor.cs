@@ -21,7 +21,7 @@ public static partial class SymbolExtractor
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
     public const int XmlContractVersion = 3;
-    public const int FunctionalLanguageContractVersion = 2;
+    public const int FunctionalLanguageContractVersion = 3;
     public const int DynamicLanguageContractVersion = 2;
     public const int SystemsLanguageContractVersion = 2;
     public const int RepositoryMetadataContractVersion = 2;

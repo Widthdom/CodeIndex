@@ -26,10 +26,13 @@ public static partial class ReferenceExtractor
     private static readonly string[] BuiltInLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
-        "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
+        "java", "kotlin", "ruby", "perl", "c", "cpp",
+        "cuda", "glsl", "hlsl", "metal", "wgsl",
+        "php", "swift",
         "dart", "scala", "elixir", "lua", "commonlisp", "racket", "vb", "fsharp", "sql", "cobol", "batch",
         "assembly",
         "r", "powershell", "shell", "haskell", "solidity",
+        "clojure", "erlang", "ocaml", "raku",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile", "cmake", "justfile", "msbuild",
         "solution", "dependency_manifest", "dependency_lock", "json", "jsonl", "toml",
         "gitignore", "gitattributes", "editorconfig", "dockerignore", "config", "app_manifest",
