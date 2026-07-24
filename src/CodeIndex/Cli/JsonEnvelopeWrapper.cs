@@ -286,6 +286,37 @@ internal static partial class JsonEnvelopeWrapper
         if (string.IsNullOrEmpty(raw))
             return array;
 
+        var trimmed = raw.Trim();
+        if (trimmed.Length <= MaxRawJsonItemChars)
+        {
+            try
+            {
+                var document = JsonFrameParser.ParseNode(trimmed, MaxRawJsonItemDepth);
+                if (document is not null)
+                {
+                    rawJsonNodeCount = AddRawJsonNodeCount(rawJsonNodeCount, CountJsonNodes(document));
+                    if (IsJsonStreamTerminal(document))
+                    {
+                        streamTerminal = (JsonObject)document.DeepClone();
+                        if (!IsTerminalResultRecord(command, document))
+                            return array;
+                    }
+                    else if (IsJsonStreamControlRecord(document))
+                    {
+                        streamControlRecords.Add(document);
+                        return array;
+                    }
+
+                    array.Add(document);
+                    return array;
+                }
+            }
+            catch (JsonException)
+            {
+                // Multiple NDJSON frames are parsed line by line below.
+            }
+        }
+
         foreach (var line in EnumerateRawLines(raw))
         {
             if (string.IsNullOrWhiteSpace(line))

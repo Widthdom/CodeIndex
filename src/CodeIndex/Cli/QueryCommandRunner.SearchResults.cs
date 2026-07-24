@@ -1065,15 +1065,36 @@ public static partial class QueryCommandRunner
 
     private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
     {
+        var responseOffset = JsonEnvelopeWrapper.GetBoundedResponseOffset("search");
+        var requestedLimit = GetSearchDisplayCandidateLimit(options);
+        var requestedThroughOffset = responseOffset > int.MaxValue - requestedLimit
+            ? int.MaxValue
+            : responseOffset + requestedLimit;
+        List<SearchDisplayRow> rows;
         if (!HasSearchOriginFilters(options))
-            return BuildSearchDisplayRows(ReadSearchResults(reader, options, exact, GetSearchDisplayCandidateLimit(options)), options, exact);
+        {
+            rows = BuildSearchDisplayRows(
+                ReadSearchResults(reader, options, exact, requestedThroughOffset),
+                options,
+                exact);
+        }
+        else
+        {
+            rows = ReadOriginFilteredSearchDisplayRows(reader, options, exact, requestedThroughOffset);
+        }
 
-        return ReadOriginFilteredSearchDisplayRows(reader, options, exact);
+        return responseOffset == 0
+            ? rows
+            : rows.Skip(responseOffset).ToList();
     }
 
-    private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
+    private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(
+        DbReader reader,
+        QueryCommandOptions options,
+        bool exact,
+        int requestedLimit)
     {
-        var requestedLimit = Math.Max(0, GetSearchDisplayCandidateLimit(options));
+        requestedLimit = Math.Max(0, requestedLimit);
         if (requestedLimit == 0)
             return [];
 

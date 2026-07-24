@@ -93,7 +93,7 @@ internal static class CliFlagSchema
     private static readonly string[] LimitCapableCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols",
-        "files", "find", "map", "inspect", "outline", "deps", "impact", "unused", "hotspots", "validate", "audit",
+        "files", "find", "map", "inspect", "outline", "deps", "impact", "unused", "hotspots", "validate", "audit", "languages",
     ];
 
     private static readonly string[] LangCapableCommands =
@@ -117,7 +117,7 @@ internal static class CliFlagSchema
     private static readonly string[] CountCommands =
     [
         "search", "definition", "references", "callers", "callees", "symbols",
-        "files", "find", "impact", "unused", "hotspots", "audit",
+        "files", "find", "impact", "unused", "hotspots", "audit", "languages",
     ];
     private static readonly string[] StrictNotFoundCommands =
     [
@@ -142,7 +142,8 @@ internal static class CliFlagSchema
     private static readonly string[] UnusedFilterCommands = ["unused"];
     private static readonly string[] BoundedProjectionCommands =
     [
-        "definition", "find", "status", "hotspots", "references", "callers", "callees", "impact", "map",
+        "search", "definition", "find", "status", "hotspots", "references", "callers", "callees",
+        "symbols", "files", "languages", "impact", "map",
     ];
     private static readonly string[] CursorCommands = ["search", "outline", "unused", "deps", .. BoundedProjectionCommands];
     private static readonly string[] AllResultCommands = ["goto", "find", "unused"];
@@ -376,7 +377,7 @@ internal static class CliFlagSchema
             new() { Name = "--env-domain", ValuePlaceholder = "<domain>", Description = "Doctor full environment inventory: filter by exact domain", PrimaryCommands = Set("doctor") },
             new() { Name = "--env-category", ValuePlaceholder = "<category>", Description = "Doctor full environment inventory: filter by exact category", PrimaryCommands = Set("doctor") },
             new() { Name = "--env-sensitivity", ValuePlaceholder = "<sensitivity>", Description = "Doctor full environment inventory: filter by exact sensitivity", PrimaryCommands = Set("doctor") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded high-volume responses truncate projected rows with paging metadata", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "doctor") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded high-volume responses truncate projected rows with paging metadata", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "languages", "doctor") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", PrimaryCommands = Set("search") },

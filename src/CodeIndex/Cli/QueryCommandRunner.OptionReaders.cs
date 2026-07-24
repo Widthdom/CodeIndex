@@ -29,7 +29,7 @@ public static partial class QueryCommandRunner
         ["--repo"] = "pass a GitHub repository in owner/name form for `--open-issues github`, e.g. `--repo Widthdom/CodeIndex`.",
         ["--issue-title"] = "pass an issue title hint for ad hoc search issue-drafts, e.g. `--issue-title \"Thread.Yield audit\"`.",
         ["--issue-label"] = "pass an issue label hint for search issue-drafts, e.g. `--issue-label audit`; repeat or comma-separate values.",
-        ["--cursor"] = "pass the opaque `next_cursor` returned by a prior paged response, such as `response:v1:<offset>:<fingerprint>`, a recipe search cursor, or the `page:v1:...` token returned by outline/unused.",
+        ["--cursor"] = "pass the opaque `next_cursor` returned by a prior paged response, such as `response:v2:...`, a recipe search cursor, or the `page:v1:...` token returned by outline/unused.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/outline/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
         ["--outline-fields"] = "pass outline symbol field names such as `name,line,signature`, or `all` for the full symbol payload.",
         ["--outline-only"] = "for inspect, return file, definitions, and nearby_symbols JSON only; add `--body` when definition body snippets are needed.",

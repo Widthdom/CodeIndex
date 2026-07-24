@@ -360,6 +360,18 @@ and `total_files` separately from `grouped_match_count` and
 `emitted_match_count`. When `--limit` or `--per-file-limit` omits rows,
 `omitted_match_count`, `truncated`, `has_more`, and `continuation_action`
 describe the bounded output instead of presenting the displayed page as complete.
+High-volume discovery output is resumable without increasing a global limit.
+`search --format compact`, `symbols --format compact`, and `files --format
+compact` add authoritative totals, omitted/truncated state, `result_stable_at`,
+and an opaque `next_cursor` while retaining their existing compact roots.
+`search --json=array --json-envelope` provides the same metadata around an
+array. `languages --json` accepts `--limit` / `--top`, `--cursor`, and
+`--max-json-bytes`; those controls select a bounded envelope without changing
+the ordinary unbounded JSON shape. Pass each `next_cursor` back to the same
+command and filters. A cursor is bound to that selection and index generation,
+so changed inputs or a refreshed index require restarting the pagination.
+When a bounded `find --all` scan exits partially, its terminal record includes
+`next_cursor`; replaying it resumes after the last scanned line.
 For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `--compact`. It implies JSON output, caps list sections to 5 items by default
 (or the explicit `--limit` / `--top` value), and adds `compact`,
@@ -389,6 +401,9 @@ as a signal to inspect the accompanying readiness or graph/exact trust fields.
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
 cdidx search authenticate --json=array    # single JSON array
+cdidx search authenticate --json=array --json-envelope --limit 50
+cdidx symbols --format compact --limit 50
+cdidx languages --json --limit 20 --max-json-bytes 65536
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # capped JSON with truncation metadata
 cdidx inspect Compute --outline-only      # file/definition/nearby symbol summary
@@ -3585,6 +3600,18 @@ context を維持し、file/line だけの行には縮約しません。
 `emitted_match_count` を分けて報告します。`--limit` または `--per-file-limit` で
 row を省略した場合は、`omitted_match_count`、`truncated`、`has_more`、
 `continuation_action` が上限付き出力であることを示します。
+高ボリュームな discovery 出力は global limit を増やさず再開できます。
+`search --format compact`、`symbols --format compact`、`files --format compact`
+は既存の compact root を維持したまま、authoritative な総数、省略 / truncation 状態、
+`result_stable_at`、opaque な `next_cursor` を追加します。
+`search --json=array --json-envelope` は array を同じ metadata で包みます。
+`languages --json` は `--limit` / `--top`、`--cursor`、`--max-json-bytes` を
+受け付け、これらを指定した場合だけ bounded envelope を選択するため、通常の上限なし
+JSON 形状は変わりません。`next_cursor` は同じ command と filter に渡してください。
+cursor はその選択条件と index generation に束縛されるため、入力変更後または index
+更新後は pagination を最初からやり直す必要があります。上限に達した
+`find --all` scan が partial exit した場合、terminal record の `next_cursor` を
+再利用すると最後に scan した line の次から継続します。
 AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outline` は
 `--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
 既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、
@@ -3612,6 +3639,9 @@ graph/exact trust field を確認してください。
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
 cdidx search authenticate --json=array    # 単一 JSON array
+cdidx search authenticate --json=array --json-envelope --limit 50
+cdidx symbols --format compact --limit 50
+cdidx languages --json --limit 20 --max-json-bytes 65536
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
 cdidx inspect Compute --outline-only      # ファイル・定義・近傍シンボルの概要

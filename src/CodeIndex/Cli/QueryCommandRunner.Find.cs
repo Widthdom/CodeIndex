@@ -10,7 +10,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     internal const int MaxFindLineScanLimit = 10_000_000;
-    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <response:v1:offset:fingerprint>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -158,7 +158,14 @@ public static partial class QueryCommandRunner
                         {
                             AddFindScanJsonFields(payload, counts.Scan);
                             if (options.All)
-                                AddFindTerminalScanFields(payload, counts.Scan, counts.Count, countMode: true);
+                            {
+                                AddFindTerminalScanFields(
+                                    payload,
+                                    counts.Scan,
+                                    counts.Count,
+                                    countMode: true,
+                                    resultStableAt: reader.GetPaginationGeneration().StableAt);
+                            }
                         });
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -171,6 +178,7 @@ public static partial class QueryCommandRunner
             }
 
             var (contextBefore, contextAfter, snippetLines) = ResolveFindContext(options, preparedFindArgs);
+            var (resumePath, resumeLine) = JsonEnvelopeWrapper.GetBoundedFindResume();
             FindResults findResults;
             try
             {
@@ -191,7 +199,9 @@ public static partial class QueryCommandRunner
                     candidateFileLimit,
                     lineLimit,
                     JsonEnvelopeWrapper.GetBoundedResponseOffset("find"),
-                    useIndexedLiteralCandidates: options.All);
+                    useIndexedLiteralCandidates: options.All,
+                    resumePath: resumePath,
+                    resumeLine: resumeLine);
             }
             catch (ArgumentException ex) when (options.Regex)
             {
@@ -202,6 +212,7 @@ public static partial class QueryCommandRunner
                 return WriteFindRegexTimeoutError(ex, jsonOptions, options.Json);
             }
             var results = findResults.Results;
+            var findResume = BuildFindResumeCursor(cmdArgs, reader, findResults.Scan);
             if (results.Count == 0)
             {
                 var candidateFileCount = findResults.Scan.CandidateFiles;
@@ -233,7 +244,13 @@ public static partial class QueryCommandRunner
                     AddFindScanJsonFields(payload, findResults.Scan);
                     if (IsFindAllNdjson(options))
                     {
-                        AddFindTerminalScanFields(payload, findResults.Scan, returnedCount: 0, countMode: false);
+                        AddFindTerminalScanFields(
+                            payload,
+                            findResults.Scan,
+                            returnedCount: 0,
+                            countMode: false,
+                            nextCursor: findResume.Cursor,
+                            resultStableAt: findResume.ResultStableAt);
                         findTerminalLine = payload.ToJsonString(GetCompactJsonOptions(jsonOptions));
                     }
                     else
@@ -254,7 +271,7 @@ public static partial class QueryCommandRunner
                         WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
                     }
                     if (options.All)
-                        WriteFindScanSummary(findResults.Scan);
+                        WriteFindScanSummary(findResults.Scan, nextCursor: findResume.Cursor);
                 }
                 return FindScanExitCode(options, findResults.Scan, ZeroResultExitCode(options));
             }
@@ -299,7 +316,8 @@ public static partial class QueryCommandRunner
                         jsonOptions,
                         findResults.Scan,
                         results.Count,
-                        resultLimitReached: results.Count >= options.Limit);
+                        resultLimitReached: results.Count >= options.Limit,
+                        commandArgs: cmdArgs);
                 }
             }
             else
@@ -312,7 +330,10 @@ public static partial class QueryCommandRunner
                 }
                 var fileCount = results.Select(r => r.Path).Distinct().Count();
                 CommandErrorWriter.WriteStderr($"({results.Count} matches in {fileCount} files)");
-                WriteFindScanSummary(findResults.Scan, resultLimitReached: results.Count >= options.Limit);
+                WriteFindScanSummary(
+                    findResults.Scan,
+                    resultLimitReached: results.Count >= options.Limit,
+                    nextCursor: findResume.Cursor);
             }
             return FindScanExitCode(options, findResults.Scan);
         }, _ =>
@@ -603,8 +624,10 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions,
         FindScanSummary scan,
         int returnedCount,
-        bool resultLimitReached)
+        bool resultLimitReached,
+        string[] commandArgs)
     {
+        var findResume = BuildFindResumeCursor(commandArgs, reader, scan);
         var payload = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
@@ -617,7 +640,9 @@ public static partial class QueryCommandRunner
             returnedCount,
             countMode: false,
             appliedLimit: options.Limit,
-            resultLimitReached: resultLimitReached);
+            resultLimitReached: resultLimitReached,
+            nextCursor: findResume.Cursor,
+            resultStableAt: findResume.ResultStableAt);
         return payload.ToJsonString(GetCompactJsonOptions(jsonOptions));
     }
 
@@ -627,7 +652,9 @@ public static partial class QueryCommandRunner
         int returnedCount,
         bool countMode,
         int? appliedLimit = null,
-        bool resultLimitReached = false)
+        bool resultLimitReached = false,
+        string? nextCursor = null,
+        string? resultStableAt = null)
     {
         var scanComplete = !scan.Truncated && !resultLimitReached;
         payload["terminal_record"] = true;
@@ -636,6 +663,8 @@ public static partial class QueryCommandRunner
         payload["partial_result"] = scan.Truncated;
         payload["scan_complete"] = scanComplete;
         payload["has_more"] = scan.Truncated || resultLimitReached;
+        payload["next_cursor"] = nextCursor;
+        payload["result_stable_at"] = resultStableAt;
         if (!countMode)
             payload["authoritative_rows"] = scanComplete;
         if (appliedLimit.HasValue)
@@ -657,7 +686,9 @@ public static partial class QueryCommandRunner
     }
 
     private static string? FindScanContinuationAction(FindScanSummary scan, bool resultLimitReached)
-        => scan.TruncationReason switch
+        => scan.NextPath is not null && scan.NextLine.HasValue
+            ? "resume_with_next_cursor"
+            : scan.TruncationReason switch
         {
             "line_scan_limit" => "increase_line_scan_limit_or_narrow_scope",
             "candidate_file_limit" => "narrow_scope_with_path",
@@ -667,7 +698,9 @@ public static partial class QueryCommandRunner
         };
 
     private static string? FindScanRecoveryGuidance(FindScanSummary scan, bool resultLimitReached)
-        => scan.TruncationReason switch
+        => scan.NextPath is not null && scan.NextLine.HasValue
+            ? "Pass next_cursor back with --cursor to resume after the scan cap without rescanning completed lines; --line-scan-limit may be increased for the next page."
+            : scan.TruncationReason switch
         {
             "line_scan_limit" => $"Increase --line-scan-limit up to {MaxFindLineScanLimit}, or replace --all with one or more --path filters. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
             "candidate_file_limit" => "Replace --all with one or more --path filters to scan fewer candidate files. Pass --allow-partial only when exit code 0 is acceptable for an incomplete scan.",
@@ -679,7 +712,8 @@ public static partial class QueryCommandRunner
     private static void WriteFindScanSummary(
         FindScanSummary scan,
         bool resultLimitReached = false,
-        bool countMode = false)
+        bool countMode = false,
+        string? nextCursor = null)
     {
         var summary = $"scanned {scan.FilesScanned}/{scan.CandidateFiles} candidate files, {ConsoleUi.Counted(scan.LinesScanned, "line")}";
         summary += $"; search_strategy={scan.SearchStrategy}";
@@ -700,8 +734,30 @@ public static partial class QueryCommandRunner
         if (continuationAction != null)
             summary += $"; continuation_action={continuationAction}";
         CommandErrorWriter.WriteStderr($"({summary})");
+        if (nextCursor != null)
+            CommandErrorWriter.WriteStderr($"next_cursor={nextCursor}");
         var recoveryGuidance = FindScanRecoveryGuidance(scan, resultLimitReached);
         if (recoveryGuidance != null)
             CommandErrorWriter.WriteStderr($"Recovery: {recoveryGuidance}");
+    }
+
+    private static (string? Cursor, string? ResultStableAt) BuildFindResumeCursor(
+        string[] commandArgs,
+        DbReader reader,
+        FindScanSummary scan)
+    {
+        if (!scan.Truncated
+            || scan.NextPath is null
+            || !scan.NextLine.HasValue)
+        {
+            return (null, reader.GetPaginationGeneration().StableAt);
+        }
+
+        var cursor = JsonEnvelopeWrapper.BuildFindResumeCursor(
+            commandArgs,
+            reader,
+            scan.NextPath,
+            scan.NextLine.Value);
+        return (cursor.Cursor, cursor.ResultStableAt);
     }
 }

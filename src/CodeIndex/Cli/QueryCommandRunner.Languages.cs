@@ -154,6 +154,22 @@ public static partial class QueryCommandRunner
                 .Where(kv => options.LanguageCapabilities.All(capability => LanguageMatchesCapability(kv.Value, capability)))
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .ToList();
+            var boundedLimit = JsonEnvelopeWrapper.GetBoundedResponseLimit("languages");
+            if (!boundedLimit.HasValue
+                && cmdArgs.Any(arg => string.Equals(arg, "--limit", StringComparison.Ordinal)
+                                      || arg.StartsWith("--limit=", StringComparison.Ordinal)
+                                      || string.Equals(arg, "--top", StringComparison.Ordinal)
+                                      || arg.StartsWith("--top=", StringComparison.Ordinal)))
+            {
+                boundedLimit = options.Limit;
+            }
+            if (boundedLimit.HasValue)
+            {
+                filtered = filtered
+                    .Skip(JsonEnvelopeWrapper.GetBoundedResponseOffset("languages"))
+                    .Take(boundedLimit.Value)
+                    .ToList();
+            }
 
             if (json && (options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount))
             {
