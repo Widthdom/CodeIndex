@@ -100,6 +100,8 @@ public static partial class QueryCommandRunner
                 applyDefaultSuppressions.ToString(CultureInfo.InvariantCulture),
                 unusedScope.ExcludeTests.ToString(CultureInfo.InvariantCulture),
                 unusedScope.AppliedSourceDefaults.ToString(CultureInfo.InvariantCulture),
+                "include_generated",
+                options.IncludeGenerated.ToString(CultureInfo.InvariantCulture),
                 "path",
             };
             cursorComponents.AddRange(unusedScope.PathPatterns.Order(StringComparer.Ordinal));

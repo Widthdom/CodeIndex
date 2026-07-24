@@ -1909,6 +1909,15 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("query scope, filters, or ordering", mismatchedStderr, StringComparison.Ordinal);
             Assert.Contains("restart required", mismatchedStderr, StringComparison.Ordinal);
 
+            var (generatedMismatchExitCode, generatedMismatchStdout, generatedMismatchStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--include-generated", "--lang", "csharp", "--limit", "2", "--cursor", allFirstCursor!],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, generatedMismatchExitCode);
+            Assert.Equal(string.Empty, generatedMismatchStdout);
+            Assert.Contains("query scope, filters, or ordering", generatedMismatchStderr, StringComparison.Ordinal);
+            Assert.Contains("restart required", generatedMismatchStderr, StringComparison.Ordinal);
+
             var (allSecondExitCode, allSecondStdout, allSecondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "2", "--cursor", allFirstCursor!],
                 _jsonOptions));
