@@ -7031,7 +7031,7 @@ public sealed class Caller
             toolFilter: null,
             maxConcurrency: 1)
         {
-            RequestTimeout = TimeSpan.FromMilliseconds(100),
+            RequestTimeout = TimeSpan.FromSeconds(1),
         };
         Assert.NotNull(await server.ProcessFrameAsync(
             """{"jsonrpc":"2.0","id":"issue-4536-timeout-init","method":"initialize","params":{}}"""));
@@ -7053,7 +7053,8 @@ public sealed class Caller
                 return releaseFirst.Task;
             }
 
-            secondStarted.TrySetResult();
+            if (id?.GetValue<int>() == 453652)
+                secondStarted.TrySetResult();
             return Task.CompletedTask;
         };
 
@@ -7061,19 +7062,23 @@ public sealed class Caller
             """{"jsonrpc":"2.0","id":453651,"method":"ping"}""");
         await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
         var firstResponseText = await firstResponseTask.WaitAsync(TestDeterminism.DefaultTimeout);
-        Assert.Equal("Request timed out", JsonNode.Parse(firstResponseText!)!["error"]!["message"]!.GetValue<string>());
+        var firstResponse = Assert.IsType<JsonObject>(JsonNode.Parse(Assert.IsType<string>(firstResponseText)));
+        var firstError = Assert.IsType<JsonObject>(firstResponse["error"]);
+        Assert.Equal("Request timed out", Assert.IsAssignableFrom<JsonValue>(firstError["message"]).GetValue<string>());
         Assert.Equal(0, server.AvailableConcurrencySlotsForTests);
 
         var secondResponseTask = server.ProcessFrameAsync(
             """{"jsonrpc":"2.0","id":453652,"method":"ping"}""");
         await secondRegistered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
-        Assert.False(secondStarted.Task.IsCompleted);
+        await TestDeterminism.AssertTaskRemainsBlockedAsync(secondStarted.Task);
         Assert.Equal(0, server.AvailableConcurrencySlotsForTests);
 
         releaseFirst.TrySetResult();
         await secondStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
         var secondResponseText = await secondResponseTask.WaitAsync(TestDeterminism.DefaultTimeout);
-        Assert.Equal("ok", JsonNode.Parse(secondResponseText!)!["result"]!["status"]!.GetValue<string>());
+        var secondResponse = Assert.IsType<JsonObject>(JsonNode.Parse(Assert.IsType<string>(secondResponseText)));
+        var secondResult = Assert.IsType<JsonObject>(secondResponse["result"]);
+        Assert.Equal("ok", Assert.IsAssignableFrom<JsonValue>(secondResult["status"]).GetValue<string>());
         Assert.Equal(1, server.AvailableConcurrencySlotsForTests);
     }
 
