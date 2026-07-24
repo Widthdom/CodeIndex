@@ -275,14 +275,19 @@ internal static class GlobalToolLog
 
     internal static string ResolveLogDirectoryForStatus() => ResolveLogDirectory();
 
-    private static string ResolveLogDirectory()
+    private static string ResolveLogDirectory() => ResolveLogDirectory(requireWritableCandidate: true);
+
+    internal static string ResolveLogDirectoryWithoutWriteProbeForTesting()
+        => ResolveLogDirectory(requireWritableCandidate: false);
+
+    private static string ResolveLogDirectory(bool requireWritableCandidate)
     {
         foreach (var candidate in EnumerateLogDirectoryCandidates())
         {
             if (!TryNormalizeLogDirectoryCandidate(candidate, out var fullPath))
                 continue;
 
-            if (CanWriteProbe(fullPath))
+            if (!requireWritableCandidate || CanWriteProbe(fullPath))
                 return fullPath;
         }
 
