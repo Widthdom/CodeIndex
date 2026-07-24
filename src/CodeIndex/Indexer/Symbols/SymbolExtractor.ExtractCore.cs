@@ -168,7 +168,7 @@ public static partial class SymbolExtractor
             ? MaskShellHeredocLines(lines)
             : null;
         bool[]? prologClauseContinuationLines = null;
-        Dictionary<int, string>? prologMultilineHeads = null;
+        Dictionary<int, PrologMultilineHead>? prologMultilineHeads = null;
         if (lang is "prolog" or "ambiguous_pl")
         {
             prologMultilineHeads = [];
@@ -2200,6 +2200,7 @@ public static partial class SymbolExtractor
         @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?<open>\()",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private const int PrologMultilineHeadLookaheadLineLimit = 256;
+    private readonly record struct PrologMultilineHead(string Name, int StartColumn);
 
     private static bool TryGetNextPrologClauseOffset(
         string line,
@@ -2231,7 +2232,7 @@ public static partial class SymbolExtractor
 
     private static bool[] BuildPrologClauseContinuationLines(
         IReadOnlyList<string> structuralLines,
-        Dictionary<int, string> multilineHeads)
+        Dictionary<int, PrologMultilineHead> multilineHeads)
     {
         var continuationLines = new bool[structuralLines.Count];
         var clauseOpen = false;
@@ -2265,7 +2266,9 @@ public static partial class SymbolExtractor
                     lineIndex,
                     clauseCandidateOffset + multilineHead.Groups["open"].Index))
             {
-                multilineHeads[lineIndex] = multilineHead.Groups["name"].Value;
+                multilineHeads[lineIndex] = new PrologMultilineHead(
+                    multilineHead.Groups["name"].Value,
+                    clauseCandidateOffset + multilineHead.Groups["name"].Index);
                 clauseOpen = true;
             }
         }
@@ -2331,9 +2334,9 @@ public static partial class SymbolExtractor
         IReadOnlyList<string> lines,
         List<SymbolRecord> symbols,
         SymbolExtractionState extractionState,
-        IReadOnlyDictionary<int, string> multilineHeads)
+        IReadOnlyDictionary<int, PrologMultilineHead> multilineHeads)
     {
-        foreach (var (lineIndex, name) in multilineHeads)
+        foreach (var (lineIndex, multilineHead) in multilineHeads)
         {
             var lineNumber = lineIndex + 1;
             var line = lines[lineIndex];
@@ -2346,12 +2349,12 @@ public static partial class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "function",
-                    Name = name,
+                    Name = multilineHead.Name,
                     Line = lineNumber,
                     StartLine = lineNumber,
-                    StartColumn = 0,
+                    StartColumn = multilineHead.StartColumn,
                     EndLine = lineNumber,
-                    Signature = line.Trim(),
+                    Signature = line[multilineHead.StartColumn..].Trim(),
                 },
                 line);
         }

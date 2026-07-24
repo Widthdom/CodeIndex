@@ -1198,6 +1198,9 @@ public partial class ReferenceExtractorTests
             }
 
             proc quoted {} "helper"
+            proc multiline_quoted {} "
+                helper
+            "
             proc bare {} helper
             """;
 
@@ -1208,6 +1211,7 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(references, "call", "run", "helper");
         AssertReferencesContain(references, "call", "variadic", "helper");
         AssertReferencesContain(references, "call", "quoted", "helper");
+        AssertReferencesContain(references, "call", "multiline_quoted", "helper");
         AssertReferencesContain(references, "call", "bare", "helper");
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
@@ -1316,14 +1320,31 @@ public partial class ReferenceExtractorTests
             b.
             first. second.
             run :- a. other :- b.
+            before_directive. :- dynamic before_directive/0.
+            before_multiline. multiline_after(
+                X
+            ) :-
+                a.
             """;
 
         var (symbols, references) = ExtractSymbolsAndReferences(language, content);
 
-        foreach (var name in new[] { "first", "second", "run", "other" })
+        foreach (var name in new[]
+            {
+                "first",
+                "second",
+                "run",
+                "other",
+                "before_directive",
+                "before_multiline",
+                "multiline_after",
+            })
+        {
             Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == name);
+        }
         AssertReferencesContain(references, "call", "run", "a");
         AssertReferencesContain(references, "call", "other", "b");
+        AssertReferencesContain(references, "call", "multiline_after", "a");
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"

@@ -96,7 +96,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         @"^\s*proc\s+[A-Za-z_:][\w:.-]*\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PrologHeadRegex = new(
-        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*(?:$|[a-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s*(?::-|-->|\.))))",
+        @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*(?:$|:-|[a-z][A-Za-z0-9_]*\s*\(\s*$|[a-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s*(?::-|-->|\.))))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PrologMultilineHeadRegex = new(
         @"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*\(",
@@ -1425,18 +1425,23 @@ internal static class DynamicDeclarativeReferenceExtractor
 
         if (line[startColumn] == '"')
         {
-            for (var column = startColumn + 1; column < line.Length; column++)
+            for (var lineIndex = startLine; lineIndex < lines.Count; lineIndex++)
             {
-                if (line[column] == '\\')
+                line = lines[lineIndex];
+                var firstColumn = lineIndex == startLine ? startColumn + 1 : 0;
+                for (var column = firstColumn; column < line.Length; column++)
                 {
-                    column++;
-                    continue;
-                }
-                if (line[column] == '"')
-                {
-                    endLine = startLine;
-                    endColumn = column;
-                    return true;
+                    if (line[column] == '\\')
+                    {
+                        column++;
+                        continue;
+                    }
+                    if (line[column] == '"')
+                    {
+                        endLine = lineIndex;
+                        endColumn = column;
+                        return true;
+                    }
                 }
             }
 
@@ -2167,18 +2172,24 @@ internal static class DynamicDeclarativeReferenceExtractor
                 frames.Clear();
                 activeContainer = container;
                 expectGoal = true;
-                scanningMultilineHead = container.StartLine == lineNumber
-                    && !PrologHeadRegex.IsMatch(lines[lineIndex])
-                    && PrologMultilineHeadRegex.IsMatch(lines[lineIndex]);
                 multilineHeadParenthesisDepth = 0;
                 multilineHeadParenthesesClosed = false;
+                scanningMultilineHead = TryInitializePrologMultilineHeadScan(
+                    lines,
+                    container,
+                    lineIndex,
+                    ref multilineHeadParenthesisDepth,
+                    ref multilineHeadParenthesesClosed);
             }
 
             string callScanLine;
             if (scanningMultilineHead)
             {
+                var multilineHeadLine = lineNumber == container.StartLine
+                    ? MaskLineBeforeColumn(lines[lineIndex], container.StartColumn ?? 0)
+                    : lines[lineIndex];
                 callScanLine = PreparePrologMultilineHeadScanLine(
-                    lines[lineIndex],
+                    multilineHeadLine,
                     ref multilineHeadParenthesisDepth,
                     ref multilineHeadParenthesesClosed,
                     out var headEnded);
@@ -2212,6 +2223,53 @@ internal static class DynamicDeclarativeReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool TryInitializePrologMultilineHeadScan(
+        IReadOnlyList<string> lines,
+        SymbolRecord container,
+        int currentLineIndex,
+        ref int parenthesisDepth,
+        ref bool parenthesesClosed)
+    {
+        var startLineIndex = container.StartLine - 1;
+        if (startLineIndex < 0 || startLineIndex >= lines.Count || startLineIndex > currentLineIndex)
+            return false;
+
+        var startColumn = Math.Clamp(
+            container.StartColumn ?? 0,
+            0,
+            lines[startLineIndex].Length);
+        var headLine = lines[startLineIndex][startColumn..];
+        if (PrologHeadRegex.IsMatch(headLine) || !PrologMultilineHeadRegex.IsMatch(headLine))
+            return false;
+
+        for (var lineIndex = startLineIndex; lineIndex < currentLineIndex; lineIndex++)
+        {
+            var line = lineIndex == startLineIndex
+                ? MaskLineBeforeColumn(lines[lineIndex], startColumn)
+                : lines[lineIndex];
+            _ = PreparePrologMultilineHeadScanLine(
+                line,
+                ref parenthesisDepth,
+                ref parenthesesClosed,
+                out var headEnded);
+            if (headEnded)
+                return false;
+        }
+
+        return true;
+    }
+
+    private static string MaskLineBeforeColumn(string line, int startColumn)
+    {
+        startColumn = Math.Clamp(startColumn, 0, line.Length);
+        if (startColumn == 0)
+            return line;
+
+        var masked = line.ToCharArray();
+        FillWithSpaces(masked, 0, startColumn);
+        return new string(masked);
     }
 
     private static string PreparePrologMultilineHeadScanLine(
