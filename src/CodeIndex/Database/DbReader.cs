@@ -257,15 +257,6 @@ public partial class DbReader : IDisposable
     private const string SyntheticTopLevelCallerName = "<top-level>";
     private const string SyntheticTopLevelCallerKind = "function";
 
-    // Reference kinds that represent compile-time type/member references (e.g. C# `nameof(X)`,
-    // `typeof(T)`, Java `T.class`). They are intentionally excluded from default `callers` /
-    // `callees` results because they are not invocation edges, but they remain discoverable
-    // via `references` and explicit `--kind type_reference` queries. See issue #253.
-    // コンパイル時の型・メンバ参照（C# の nameof/typeof、Java の `.class` 等）。
-    // 呼び出しエッジではないため既定の callers/callees からは除外するが、
-    // references や `--kind type_reference` 経由では引き続き参照できる。issue #253 参照。
-    private const string NonInvocationReferenceKindsExclusion =
-        " AND r.reference_kind != 'type_reference'";
     private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpContainingTypeScope(string Path, string Kind, string QualifiedName, string? Visibility, string? Signature, int DeclarationLine, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
