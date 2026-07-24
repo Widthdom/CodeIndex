@@ -412,6 +412,16 @@ public static partial class SymbolExtractor
                         matchLine.Length,
                         line.Length));
             }
+            var prologContinuationResumeOffset = -1;
+            if (prologClauseContinuationLines?[i] == true)
+            {
+                var clauseTerminatorColumn = FindFirstTopLevelPrologClauseTerminator(matchLine);
+                if (clauseTerminatorColumn >= 0)
+                {
+                    prologContinuationResumeOffset = clauseTerminatorColumn + 1;
+                    patternStartOffset = Math.Max(patternStartOffset, prologContinuationResumeOffset);
+                }
+            }
             while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
             {
                 var stopAfterFirstPatternMatch = false;
@@ -419,7 +429,9 @@ public static partial class SymbolExtractor
                 CSharpPropertyMatchCandidate? csharpPropertyCandidateForLine = null;
                 foreach (var pattern in patterns)
                 {
-                    if (prologClauseContinuationLines?[i] == true && pattern.Kind == "function")
+                    if (prologClauseContinuationLines?[i] == true
+                        && prologContinuationResumeOffset < 0
+                        && pattern.Kind == "function")
                         continue;
                     if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
                         continue;
@@ -2286,8 +2298,14 @@ public static partial class SymbolExtractor
     }
 
     private static int FindLastTopLevelPrologClauseTerminator(string line)
+        => FindTopLevelPrologClauseTerminator(line, findLast: true);
+
+    private static int FindFirstTopLevelPrologClauseTerminator(string line)
+        => FindTopLevelPrologClauseTerminator(line, findLast: false);
+
+    private static int FindTopLevelPrologClauseTerminator(string line, bool findLast)
     {
-        var lastTerminatorColumn = -1;
+        var terminatorColumn = -1;
         var parenthesisDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
@@ -2337,11 +2355,13 @@ public static partial class SymbolExtractor
                 && !(char.IsDigit(previous) && char.IsDigit(next))
                 && (next == '\0' || char.IsWhiteSpace(next)))
             {
-                lastTerminatorColumn = column;
+                terminatorColumn = column;
+                if (!findLast)
+                    break;
             }
         }
 
-        return lastTerminatorColumn;
+        return terminatorColumn;
     }
 
     private static bool IsValidatedBareMultilinePrologHead(

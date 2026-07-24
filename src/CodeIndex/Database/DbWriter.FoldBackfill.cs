@@ -216,10 +216,17 @@ public partial class DbWriter
 
         var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
         if (stored == null)
-            return !SymbolExtractor.RequiresExplicitReferenceGraphContractStamp(lang);
+            return true;
 
         var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        if (stored != current)
+        return stored == current;
+    }
+
+    private bool ExtractorContractsMatchCurrentForReuse(string? lang)
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return true;
+        if (!SymbolExtractorVersionMatchesCurrent(lang))
             return false;
         if (!SymbolExtractor.RequiresExplicitReferenceGraphContractStamp(lang))
             return true;

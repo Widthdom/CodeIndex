@@ -1063,6 +1063,16 @@ public partial class ReferenceExtractorTests
             def run(value)
               helper value
               helper(value)
+              if helper
+                helper value
+              end
+              helper value unless helper
+              while helper
+                break
+              end
+              until helper
+                break
+              end
               text = "123456789"; helper(value)
               multiline = "helper()
             continued"
@@ -1088,7 +1098,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "declared");
         AssertReferencesContain(references, "type_reference", null, "support");
         AssertReferencesContain(references, "call", "run", "helper");
-        Assert.Equal(5, references.Count(reference =>
+        Assert.Equal(11, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper"));
@@ -1380,6 +1390,8 @@ public partial class ReferenceExtractorTests
             b.
             first. second.
             run :- a. other :- b.
+            continued :-
+                a. continuation_sibling :- b.
             before_directive. :- dynamic before_directive/0.
             before_multiline. multiline_after(
                 X
@@ -1395,6 +1407,8 @@ public partial class ReferenceExtractorTests
                 "second",
                 "run",
                 "other",
+                "continued",
+                "continuation_sibling",
                 "before_directive",
                 "before_multiline",
                 "multiline_after",
@@ -1404,6 +1418,8 @@ public partial class ReferenceExtractorTests
         }
         AssertReferencesContain(references, "call", "run", "a");
         AssertReferencesContain(references, "call", "other", "b");
+        AssertReferencesContain(references, "call", "continued", "a");
+        AssertReferencesContain(references, "call", "continuation_sibling", "b");
         AssertReferencesContain(references, "call", "multiline_after", "a");
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
@@ -1413,6 +1429,10 @@ public partial class ReferenceExtractorTests
             reference.ReferenceKind == "call"
             && reference.ContainerName == "other"
             && reference.SymbolName == "a");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.ContainerName == "continued"
+            && reference.SymbolName == "b");
     }
 
     [Fact]

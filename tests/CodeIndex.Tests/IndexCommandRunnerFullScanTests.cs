@@ -4071,6 +4071,61 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ScopedUpdate_KeepsFoldReadyIndependentOfStaleDynamicGraphContract_Issue4746()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "commands.tcl"),
+                """
+                proc helper {} { return 1 }
+                proc run {} { helper }
+                """);
+            var csharpPath = Path.Combine(projectRoot, "other.cs");
+            File.WriteAllText(csharpPath, "class Other { void Run() { } }");
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"""
+                    DELETE FROM codeindex_meta
+                    WHERE key = '{DbContext.GetDynamicReferenceGraphContractVersionMetaKey("tcl")}';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(csharpPath, "class Other { void Run() { int value = 1; } }");
+            File.SetLastWriteTimeUtc(csharpPath, DateTime.UtcNow.AddSeconds(2));
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", csharpPath, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+            Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            var status = new DbReader(verify).GetStatus();
+            Assert.True(status.FoldReady);
+            Assert.False(status.ReferenceGraphComplete);
+            Assert.Contains(
+                DbReader.DynamicReferenceGraphContractStaleReason,
+                status.ReferenceGraphIncompleteReasons ?? []);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_StampsSuppressedDynamicGraphLanguage_Issue4746()
     {
         var projectRoot = CreateTempProject();

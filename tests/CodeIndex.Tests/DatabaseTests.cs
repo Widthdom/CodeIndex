@@ -4849,7 +4849,9 @@ public class DatabaseTests : IDisposable
             SymbolExtractor.GetContractVersion(language).ToString(CultureInfo.InvariantCulture),
             metadata[DbContext.GetSymbolExtractorVersionMetaKey(language)]);
         Assert.Equal("2", metadata[graphVersionKey]);
+        Assert.True(_writer.SymbolExtractorVersionsMatchCurrent());
         var status = new DbReader(_db.Connection).GetStatus();
+        Assert.True(status.FoldReady);
         Assert.False(status.ReferenceGraphComplete);
         Assert.Contains(
             DbReader.DynamicReferenceGraphContractStaleReason,

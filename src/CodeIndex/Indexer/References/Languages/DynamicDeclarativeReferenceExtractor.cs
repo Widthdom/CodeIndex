@@ -119,6 +119,9 @@ internal static class DynamicDeclarativeReferenceExtractor
     private static readonly Regex CrystalSuffixedParenthesizedCallRegex = new(
         @"(?<![\w])(?<name>[A-Za-z_]\w*[?!])\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CrystalControlPredicateCallRegex = new(
+        @"\b(?:if|unless|while|until)\s+(?<name>[A-Za-z_]\w*[?!]?)(?![\w?!])(?!\s*(?::|(?:<<|>>|[+\-*/%&|^])?=))",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GroovyBareCallRegex = new(
         @"(?:^|[;={])\s*(?:return\s+)?(?<name>[A-Za-z_]\w*)\b(?!\s*(?::|\(|(?:<<|>>|[+\-*/%&|^])?=))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -792,6 +795,13 @@ internal static class DynamicDeclarativeReferenceExtractor
                 if (state.CallableNames.Contains(nameGroup.Value))
                     addCallLikeReference(nameGroup.Value, nameGroup.Index);
             }
+
+            foreach (Match match in BoundedRegex.EnumerateMatches(CrystalControlPredicateCallRegex, preparedLine))
+            {
+                var nameGroup = match.Groups["name"];
+                if (state.CallableNames.Contains(nameGroup.Value))
+                    addCallLikeReference(nameGroup.Value, nameGroup.Index);
+            }
         }
 
         foreach (Match match in BoundedRegex.EnumerateMatches(callRegex, preparedLine))
@@ -1107,11 +1117,15 @@ internal static class DynamicDeclarativeReferenceExtractor
         string line,
         bool isClauseContinuation)
     {
-        if (language is not ("prolog" or "ambiguous_pl") || isClauseContinuation)
+        if (language is not ("prolog" or "ambiguous_pl"))
             return line;
 
         var masked = line.ToCharArray();
-        var clauseStartColumn = 0;
+        var clauseStartColumn = isClauseContinuation
+            ? FindPrologClauseTerminator(line, 0) + 1
+            : 0;
+        if (isClauseContinuation && clauseStartColumn == 0)
+            return line;
         var changed = false;
         while (TryFindNextPrologClauseStart(line, clauseStartColumn, out var headStartColumn)
             && TryFindPrologHeadBoundary(
