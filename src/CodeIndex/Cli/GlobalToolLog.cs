@@ -617,6 +617,7 @@ internal static class GlobalToolLog
         private readonly string _format;
         private TextWriter? _originalError;
         private TextWriter? _teeError;
+        private IDisposable? _consoleOwnership;
         private bool _disposed;
 
         public Session(StreamWriter writer, string logPath, string format)
@@ -635,9 +636,19 @@ internal static class GlobalToolLog
                 if (_disposed || _teeError != null)
                     return;
 
-                _originalError = Console.Error;
-                _teeError = TextWriter.Synchronized(new TeeTextWriter(_originalError, _writer));
-                Console.SetError(_teeError);
+                var ownership = ConsoleStreamOwnership.Enter();
+                try
+                {
+                    _originalError = Console.Error;
+                    _teeError = TextWriter.Synchronized(new TeeTextWriter(_originalError, _writer));
+                    Console.SetError(_teeError);
+                    _consoleOwnership = ownership;
+                }
+                catch
+                {
+                    ownership.Dispose();
+                    throw;
+                }
             }
         }
 
@@ -685,15 +696,25 @@ internal static class GlobalToolLog
                 try
                 {
                     if (_originalError != null)
-                        Console.SetError(_originalError);
+                        ConsoleStreamOwnership.RestoreError(_originalError);
                 }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
                     // Best-effort only / ベストエフォートのみ
                 }
-
-                CurrentSession.Value = null;
-                _writer.Dispose();
+                finally
+                {
+                    CurrentSession.Value = null;
+                    try
+                    {
+                        _writer.Dispose();
+                    }
+                    finally
+                    {
+                        _consoleOwnership?.Dispose();
+                        _consoleOwnership = null;
+                    }
+                }
             }
         }
     }
