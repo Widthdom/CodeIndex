@@ -5,9 +5,15 @@ internal static class ScientificNativeCommentMasker
     internal static string[] MaskBlockComments(string language, string[] lines) =>
         language switch
         {
-            "d" => MaskNestedBlockComments(MaskDMultilineStrings(lines), "/+", "+/", "//"),
+            "d" => ReferenceExtractor.MaskCStyleBlockCommentLines(
+                "d",
+                MaskNestedBlockComments(
+                    MaskDMultilineStrings(lines),
+                    "/+",
+                    "+/",
+                    "//")),
             "julia" => MaskNestedBlockComments(
-                MaskTripleQuotedStrings(lines, "#=", "=#", "#"),
+                MaskTripleQuotedStrings(lines, "#=", "=#", "#", singleQuoteCanBePostfix: true),
                 "#=",
                 "=#",
                 "#",
@@ -82,7 +88,8 @@ internal static class ScientificNativeCommentMasker
         string[] lines,
         string blockOpening,
         string blockClosing,
-        string lineComment)
+        string lineComment,
+        bool singleQuoteCanBePostfix = false)
     {
         if (!MayContain(lines, "\"\"\""))
             return lines;
@@ -149,15 +156,15 @@ internal static class ScientificNativeCommentMasker
                     continue;
                 }
 
-                if (StartsWith(line, cursor, lineComment))
-                    break;
-
                 if (StartsWith(line, cursor, blockOpening))
                 {
                     blockCommentDepth++;
                     cursor += blockOpening.Length;
                     continue;
                 }
+
+                if (StartsWith(line, cursor, lineComment))
+                    break;
 
                 if (StartsWith(line, cursor, "\"\"\""))
                 {
@@ -168,6 +175,14 @@ internal static class ScientificNativeCommentMasker
 
                 if (line[cursor] is '"' or '\'' or '`')
                 {
+                    if (line[cursor] == '\''
+                        && singleQuoteCanBePostfix
+                        && IsPostfixSingleQuote(line, cursor))
+                    {
+                        cursor++;
+                        continue;
+                    }
+
                     quote = line[cursor++];
                     continue;
                 }

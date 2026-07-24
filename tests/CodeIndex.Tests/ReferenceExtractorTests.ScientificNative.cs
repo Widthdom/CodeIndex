@@ -145,6 +145,78 @@ public partial class ReferenceExtractorTests
             reference.SymbolName.Equals("ignoredBlockCall", StringComparison.OrdinalIgnoreCase));
     }
 
+    public static TheoryData<string, string> ScientificNativePhantomSymbolCases => new()
+    {
+        {
+            "d",
+            """
+            /+
+            void Phantom() {}
+            +/
+            void real() { Phantom(); }
+            """
+        },
+        {
+            "nim",
+            """
+            #[
+            proc Phantom() = discard
+            ]#
+            proc real() = Phantom()
+            """
+        },
+        {
+            "julia",
+            """
+            #=
+            function Phantom()
+            end
+            =#
+            function real()
+                Phantom()
+            end
+            """
+        },
+        {
+            "matlab",
+            """
+            %{
+            function Phantom()
+            end
+            %}
+            function real()
+              Phantom();
+            end
+            """
+        },
+        {
+            "cython",
+            """"
+            """
+            def Phantom():
+                pass
+            """
+            def real():
+                Phantom()
+            """"
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(ScientificNativePhantomSymbolCases))]
+    public void Extract_ScientificNativeNonCodeDeclarationsDoNotBecomeResolutionTargets_Issue4738(
+        string language,
+        string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "Phantom");
+        Assert.Single(references, reference =>
+            reference.SymbolName == "Phantom" && reference.ReferenceKind == "call");
+    }
+
     [Theory]
     [InlineData(
         "matlab",
@@ -391,6 +463,66 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
     }
 
+    [Theory]
+    [InlineData("run(x) = helper(x)\nhelper(x) = x\n", 1)]
+    [InlineData("run(x) = begin\n    helper(x)\nend\nhelper(x) = x\n", 3)]
+    [InlineData("run(x) =\nbegin\n    helper(x)\nend\nhelper(x) = x\n", 4)]
+    public void Extract_JuliaShortFunctionsOwnTheirCallReferences_Issue4738(
+        string content,
+        int expectedEndLine)
+    {
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        var run = Assert.Single(symbols, symbol => symbol.Name == "run");
+        Assert.Equal(expectedEndLine, run.EndLine);
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_MatlabPeerFunctionsWithoutClosingEndHaveSeparateRanges_Issue4738()
+    {
+        const string content = """
+            function first()
+              helper1();
+            function second()
+              helper2();
+            """;
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        var references = ReferenceExtractor.Extract(1, "matlab", content, symbols);
+
+        var first = Assert.Single(symbols, symbol => symbol.Name == "first");
+        var second = Assert.Single(symbols, symbol => symbol.Name == "second");
+        Assert.Equal(2, first.EndLine);
+        Assert.Equal(4, second.EndLine);
+        Assert.Equal("first", Assert.Single(references, reference =>
+            reference.SymbolName == "helper1" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Equal("second", Assert.Single(references, reference =>
+            reference.SymbolName == "helper2" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JuliaTransposeBeforeBlockCommentDoesNotMaskFollowingCalls_Issue4738()
+    {
+        const string content = """"
+            function run(value)
+                value' #=
+                """
+                =#
+                helper()
+            end
+            """";
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
+
     public static TheoryData<string, string> ScientificNativeMultilineLiteralCases => new()
     {
         {
@@ -419,7 +551,7 @@ public partial class ReferenceExtractorTests
             """
             void run() {
                 auto text = q{
-                    /+ tokenOnly();
+                    /* tokenOnly();
                 };
                 helper();
             }

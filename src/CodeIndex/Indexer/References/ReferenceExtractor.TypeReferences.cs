@@ -2998,9 +2998,9 @@ public static partial class ReferenceExtractor
     }
 
     private static bool UsesCStyleBlockComments(string language) =>
-        language is "c" or "cpp" or "go" or "objc" or "dart" or "d";
+        language is "c" or "cpp" or "go" or "objc" or "dart";
 
-    private static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
+    internal static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
     {
         if (lines is string[] lineArray && !MayContainCStyleMaskingTrigger(language, lines))
             return lineArray;

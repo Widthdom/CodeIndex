@@ -15,13 +15,15 @@ public static partial class SymbolExtractor
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindScientificEndRange(
         string[] scannerLines,
         int startIndex,
-        string language)
+        string language,
+        int? openingTokenLineIndex = null)
     {
         var tokenRegex = language == "julia"
             ? JuliaScientificBlockTokenRegex
             : MatlabScientificBlockTokenRegex;
         var depth = 1;
         int? bodyStartLine = null;
+        var declarationColumn = GetFirstNonWhitespaceColumn(scannerLines[startIndex]);
 
         for (var lineIndex = startIndex; lineIndex < scannerLines.Length; lineIndex++)
         {
@@ -29,11 +31,22 @@ public static partial class SymbolExtractor
             if (string.IsNullOrWhiteSpace(code))
                 continue;
 
-            var skipDeclarationToken = lineIndex == startIndex;
+            var skipDeclarationToken = lineIndex == (openingTokenLineIndex ?? startIndex);
+            var matches = tokenRegex.Matches(code);
+            if (language == "matlab"
+                && lineIndex > startIndex
+                && depth == 1
+                && IsMatlabPeerDeclaration(code, matches, declarationColumn))
+            {
+                return bodyStartLine == null
+                    ? (lineIndex, null, null)
+                    : (lineIndex, bodyStartLine, lineIndex);
+            }
+
             if (!skipDeclarationToken)
                 bodyStartLine ??= lineIndex + 1;
 
-            foreach (Match match in tokenRegex.Matches(code))
+            foreach (Match match in matches)
             {
                 if (skipDeclarationToken)
                 {
@@ -60,6 +73,96 @@ public static partial class SymbolExtractor
         return bodyStartLine == null
             ? (startIndex + 1, null, null)
             : (scannerLines.Length, bodyStartLine, scannerLines.Length);
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJuliaShortFunctionRange(
+        string[] scannerLines,
+        int startIndex)
+    {
+        if (!TryGetJuliaShortBlockExpressionStartLine(scannerLines, startIndex, out var blockStartLine))
+            return (startIndex + 1, startIndex + 1, startIndex + 1);
+
+        var blockRange = FindScientificEndRange(
+            scannerLines,
+            startIndex,
+            "julia",
+            openingTokenLineIndex: blockStartLine);
+        return blockRange.BodyStartLine == null
+            ? (startIndex + 1, startIndex + 1, startIndex + 1)
+            : (blockRange.EndLine, startIndex + 1, blockRange.BodyEndLine);
+    }
+
+    private static bool TryGetJuliaShortBlockExpressionStartLine(
+        string[] scannerLines,
+        int startIndex,
+        out int blockStartLine)
+    {
+        blockStartLine = startIndex;
+        var startLine = scannerLines[startIndex];
+        var parameterEnd = startLine.LastIndexOf(')');
+        var assignmentIndex = parameterEnd >= 0
+            ? startLine.IndexOf('=', parameterEnd + 1)
+            : -1;
+        if (assignmentIndex < 0)
+            return false;
+
+        var expression = startLine[(assignmentIndex + 1)..].TrimStart();
+        if (expression.Length == 0)
+        {
+            for (var lineIndex = startIndex + 1; lineIndex < scannerLines.Length; lineIndex++)
+            {
+                expression = scannerLines[lineIndex].TrimStart();
+                if (expression.Length != 0)
+                {
+                    blockStartLine = lineIndex;
+                    break;
+                }
+            }
+        }
+
+        foreach (var keyword in JuliaShortBlockExpressionKeywords)
+        {
+            if (expression.Equals(keyword, StringComparison.Ordinal)
+                || expression.StartsWith(keyword + " ", StringComparison.Ordinal)
+                || expression.StartsWith(keyword + ";", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static readonly string[] JuliaShortBlockExpressionKeywords =
+        ["begin", "for", "if", "let", "quote", "try", "while"];
+
+    private static bool IsMatlabPeerDeclaration(
+        string code,
+        MatchCollection matches,
+        int declarationColumn)
+    {
+        foreach (Match match in matches)
+        {
+            if (match.Index > declarationColumn)
+                return false;
+
+            var keyword = match.Groups["keyword"].Value;
+            return keyword.Equals("function", StringComparison.OrdinalIgnoreCase)
+                || keyword.Equals("classdef", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static int GetFirstNonWhitespaceColumn(string line)
+    {
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (!char.IsWhiteSpace(line[index]))
+                return index;
+        }
+
+        return 0;
     }
 
     private static string[] PrepareScientificBodyScannerLines(

@@ -180,7 +180,10 @@ public static partial class SymbolExtractor
             ? GetPythonModulePrefix(filePath)
             : null;
 
-        var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var structuralMaskLanguage = lang == "cython" ? "python" : lang;
+        var structuralLines = StructuralLineMasker.MaskLines(structuralMaskLanguage, lines);
+        if (lang is "d" or "julia" or "matlab" or "nim")
+            structuralLines = ScientificNativeCommentMasker.MaskBlockComments(lang, structuralLines);
         var scientificBodyScannerLines = lang is "julia" or "matlab"
             ? PrepareScientificBodyScannerLines(structuralLines, lang)
             : null;
