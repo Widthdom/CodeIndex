@@ -14541,8 +14541,9 @@ public partial class ReferenceExtractorTests
     {
         const string clojure = """
             (ns demo.core
-              (:require [demo.store :as store]))
-            (defprotocol Persist (save! [this value]))
+              (:require [demo.store :as store :refer [fetch]]))
+            (defprotocol Persist
+              (save! [this value]))
             (defrecord User [id] Persist)
             (defn load-user [id]
               "(fake-call id)"
@@ -14553,6 +14554,8 @@ public partial class ReferenceExtractorTests
             -module(sample).
             -behaviour(gen_server).
             -import(lists, [map/2]).
+            -spec run(
+                term()) -> term().
             run(Value) ->
                 "% fake_call()",
                 lists:map(fun normalize/1, Value),
@@ -14563,16 +14566,30 @@ public partial class ReferenceExtractorTests
                 0;
             count(Value) ->
                 count(Value - 1).
+            'run-me'() ->
+                'helper-fun'(),
+                'my-mod':'do-work'().
+            'helper-fun'() ->
+                ok.
             """;
         const string ocaml = """
             module Store = Demo.Store
             open Core
             type user = User.t
+            type wrapper = user
             let load id =
               "fake_call id";
               Store.fetch id
             let normalize value =
               value
+            let choose value =
+              match value with
+              | _ -> value
+            let check predicate =
+              if predicate then true else false
+            let render x =
+              {| raw_fake_call x |};
+              normalize x
             """;
         const string raku = """
             unit module Demo;
@@ -14583,6 +14600,20 @@ public partial class ReferenceExtractorTests
                 "# fake-call()";
                 Store::fetch($id);
             }
+            sub render($id) {
+                q[ quote-fake-call($id) ];
+                q/ slash-fake-call($id) /;
+                load-user($id);
+            }
+            class Worker {
+                method work() {}
+            }
+            sub split($worker)
+            {
+                $worker.work();
+            }
+            sub exported() is export {}
+            class Native is repr('CStruct') {}
             """;
 
         var clojureReferences = Extract("clojure", clojure);
@@ -14596,6 +14627,12 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "fetch"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "load-user");
+        Assert.DoesNotContain(clojureReferences, reference =>
+            reference.SymbolName == "fetch"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(clojureReferences, reference =>
+            reference.SymbolName == "save!"
+            && reference.ReferenceKind == "call");
         Assert.DoesNotContain(clojureReferences, reference => reference.SymbolName is "fake-call" or "comment-call");
 
         var erlangReferences = Extract("erlang", erlang);
@@ -14614,6 +14651,20 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "count"
             && reference.IsSelfReference);
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "'helper-fun'"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "'run-me'");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "'my-mod'"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "'run-me'");
+        Assert.Contains(erlangReferences, reference =>
+            reference.SymbolName == "'do-work'"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "'run-me'");
+        Assert.DoesNotContain(erlangReferences, reference =>
+            reference.SymbolName is "run" or "term");
         Assert.DoesNotContain(erlangReferences, reference => reference.SymbolName == "fake_call");
 
         var ocamlReferences = Extract("ocaml", ocaml);
@@ -14624,9 +14675,16 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "user");
         Assert.Contains(ocamlReferences, reference =>
+            reference.SymbolName == "user"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "wrapper");
+        Assert.Contains(ocamlReferences, reference =>
             reference.SymbolName == "fetch"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "load");
+        Assert.DoesNotContain(ocamlReferences, reference =>
+            reference.SymbolName is "value" or "predicate" or "raw_fake_call"
+            && reference.ReferenceKind == "call");
         Assert.DoesNotContain(ocamlReferences, reference => reference.SymbolName == "fake_call");
 
         var rakuReferences = Extract("raku", raku);
@@ -14640,7 +14698,16 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "fetch"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "load-user");
-        Assert.DoesNotContain(rakuReferences, reference => reference.SymbolName == "fake-call");
+        Assert.Contains(rakuReferences, reference =>
+            reference.SymbolName == "work"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "split");
+        Assert.DoesNotContain(rakuReferences, reference =>
+            reference.SymbolName is "fake-call" or "quote-fake-call" or "slash-fake-call"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(rakuReferences, reference =>
+            reference.SymbolName is "export" or "repr"
+            && reference.ReferenceKind is "call" or "type_reference");
 
         var capped = ReferenceExtractor.Extract(
             1,
