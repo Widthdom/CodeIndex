@@ -68,6 +68,25 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_AmbiguousPl_PreservesPerlAndPrologStructure_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            use Shared::Tools;
+            sub perl_helper { return 1; }
+            :- module(hybrid, [prolog_helper/0]).
+            :- use_module(library(lists)).
+            prolog_helper :- perl_helper().
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ambiguous_pl", content);
+
+        AssertSymbolsContain(symbols, "namespace", "Hybrid", "hybrid");
+        AssertSymbolsContain(symbols, "import", "Shared::Tools", "library(lists)");
+        AssertSymbolsContain(symbols, "function", "perl_helper", "prolog_helper");
+    }
+
+    [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {
         using var cancellation = new CancellationTokenSource();
@@ -1301,6 +1320,7 @@ public partial class SymbolExtractorTests
         var samples = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["ada"] = "with Ada.Text_IO;\npackage Demo is\nprocedure Run;\nend Demo;\n",
+            ["ambiguous_pl"] = "package Demo;\nsub run { return 1; }\nrun(Result) :- Result is 1.\n",
             ["assembly"] = "Start:\n    call Target\nTarget:\n    ret\n",
             ["batch"] = ":run\necho ok\n",
             ["c"] = "int answer(void) { return 42; }\n",

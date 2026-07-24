@@ -189,6 +189,10 @@ public static partial class ReferenceExtractor
             : default;
         var shellCallableNames = shellNameSets.CallableNames;
         var shellGlobalAliasNames = shellNameSets.GlobalAliasNames;
+        var dynamicDeclarativeState = DynamicDeclarativeReferenceExtractor.CreateState(
+            language,
+            preparedLines,
+            symbols);
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
             ? BuildCSharpNamespaceScopes(symbols)
             : Array.Empty<(int StartLine, int EndLine)>();
@@ -1445,7 +1449,7 @@ public static partial class ReferenceExtractor
                     }
                 }
 
-                return container;
+                return dynamicDeclarativeState?.ResolveContainer(lineNumber, container) ?? container;
             }
 
             SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
@@ -2588,11 +2592,27 @@ public static partial class ReferenceExtractor
                         GetMatchedCallIndices(),
                         AddCallLikeReference);
                 }
-                else if (language == "perl")
+                else if (language is "perl" or "ambiguous_pl")
                 {
                     PerlReferenceExtractor.EmitAdditionalReferences(
                         preparedLine,
                         originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        AddCallLikeReference);
+                }
+
+                if (dynamicDeclarativeState != null)
+                {
+                    DynamicDeclarativeReferenceExtractor.EmitAdditionalReferences(
+                        language,
+                        preparedLine,
+                        originalLine,
+                        dynamicDeclarativeState,
                         references,
                         seen,
                         fileId,

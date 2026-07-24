@@ -1051,6 +1051,137 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Crystal_IndexesImportsParenthesizedAndCommandCalls_Issue4746()
+    {
+        const string content = """
+            require "./support"
+
+            def helper(value)
+              value
+            end
+
+            def run(value)
+              helper value
+              helper(value)
+            end
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("crystal", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        AssertReferencesContain(references, "type_reference", null, "support");
+        AssertReferencesContain(references, "call", "run", "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "require" or "def");
+    }
+
+    [Fact]
+    public void Extract_Groovy_IndexesImportsParenthesizedAndCommandCalls_Issue4746()
+    {
+        const string content = """
+            import demo.Support
+
+            class Runner {
+                static def helper(value) {
+                    value
+                }
+
+                def run(value) {
+                    helper value
+                    helper(value)
+                }
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("groovy", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        AssertReferencesContain(references, "type_reference", null, "Support");
+        AssertReferencesContain(references, "call", "run", "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "import" or "def");
+    }
+
+    [Fact]
+    public void Extract_Tcl_IndexesPackagesAndProcCommandCallsWithCaller_Issue4746()
+    {
+        const string content = """
+            package require json
+
+            proc helper {value} {
+                return $value
+            }
+
+            proc run {value} {
+                helper $value
+                set result [helper $value]
+            }
+
+            proc variadic args {
+                helper
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        AssertReferencesContain(references, "type_reference", null, "json");
+        AssertReferencesContain(references, "call", "run", "helper");
+        AssertReferencesContain(references, "call", "variadic", "helper");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "package" or "proc" or "set");
+    }
+
+    [Fact]
+    public void Extract_Prolog_IndexesModulesImportsAndPredicateCallsWithCaller_Issue4746()
+    {
+        const string content = """
+            :- module(family, [ancestor/2]).
+            :- use_module(library(lists)).
+              parent(alice, bob).
+              ready.
+            ancestor(X, Y) :-
+                parent(X, Y),
+                ready.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("prolog", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "ancestor");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "parent");
+        Assert.Single(symbols, symbol => symbol.Kind == "function" && symbol.Name == "ready");
+        AssertReferencesContain(references, "type_reference", null, "lists");
+        AssertReferencesContain(references, "call", "ancestor", "parent", "ready");
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName is "module" or "use_module" or "ancestor");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_IndexesPerlAndPrologReferencesWithoutReclassification_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            use Shared::Tools;
+            sub perl_helper { return 1; }
+            :- module(hybrid, [prolog_helper/0]).
+            prolog_helper :- perl_helper().
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "Hybrid");
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "hybrid");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Shared::Tools"
+            && reference.ReferenceKind == "reference");
+        AssertReferencesContain(references, "call", "prolog_helper", "perl_helper");
+    }
+
+    [Fact]
     public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
     {
         const string content = """

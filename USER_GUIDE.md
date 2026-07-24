@@ -2375,7 +2375,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - SQL: query-time `--lang tsql` is accepted as a SQL alias, and T-SQL aggregate, assembly, and XML schema collection declarations are searchable.
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
 - Functional symbol-only languages: Clojure, Erlang, OCaml, and Raku expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
-- Dynamic symbol-only languages: Crystal, Groovy, Julia, and Tcl expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
+- Dynamic symbol-only languages: Julia exposes conservative declarations as symbols. References and graph queries are not advertised for Julia yet.
+- Dynamic/declarative graph languages: Crystal, Groovy, Tcl, and Prolog expose conservative declarations, imports, and call relationships. Parenthesized calls use the shared extractor; command-style calls are limited to callables declared in the same file, and Tcl proc / Prolog predicate bodies preserve caller containers.
 - Systems symbol-only languages: Ada, D, and Nim expose conservative declarations as symbols. References and graph queries are not advertised for these languages yet.
 - Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
@@ -2389,7 +2390,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. `Directory.Packages.props`, `packages.config`, `requirements.txt`, `pyproject.toml`, `packages.lock.json`, and npm `package-lock.json` / `npm-shrinkwrap.json` expose package symbols and `dependency` references with version, scope, and direct/transitive metadata where the format provides it.
 - Solution and application manifests: `.sln` files expose project entries as symbols and project path references; `.manifest` files expose assembly identity, requested execution level, supported OS, and long-path settings as symbols.
 - Shebang scripts: recognized first-line shebangs index extensionless and unknown-extension files for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Perl, Tcl (`tclsh`, `wish`), Node.js, PHP, Lua, and PowerShell. Explicit language-map overrides remain authoritative; for ambiguous `.t` files, a recognized shebang overrides the Perl default, while strong known extensions continue to win conflicts.
-- Ambiguous `.m` / `.pl`: recognized shebangs win first, then bounded content checks use only strong Objective-C/MATLAB or Perl/Prolog markers, followed by conservative project markers. Scoped updates that add, change, or remove one of those markers automatically rescan the workspace so unchanged ambiguous files do not retain stale classifications. Weak or conflicting evidence remains searchable under `ambiguous_m` or `ambiguous_pl` instead of being assigned unconditionally. MATLAB and Prolog expose declaration symbols but no reference or graph support yet.
+- Ambiguous `.m` / `.pl`: recognized shebangs win first, then bounded content checks use only strong Objective-C/MATLAB or Perl/Prolog markers, followed by conservative project markers. Scoped updates that add, change, or remove one of those markers automatically rescan the workspace so unchanged ambiguous files do not retain stale classifications. Weak or conflicting evidence remains under `ambiguous_m` or `ambiguous_pl` instead of being assigned unconditionally. MATLAB exposes declaration symbols without reference or graph support. Prolog and `ambiguous_pl` expose conservative symbols, references, and graph queries after classification; `ambiguous_pl` uses a safe union of Perl and Prolog constructs without overriding the content-based language decision.
 
 ### Language extraction matrix
 
@@ -5521,7 +5522,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - SQL: クエリ時の `--lang tsql` は SQL の別名です。T-SQL の aggregate、assembly、XML schema collection 宣言も検索対象です。
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
 - 関数型言語のシンボル専用対応: Clojure、Erlang、OCaml、Raku は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
-- 動的言語のシンボル専用対応: Crystal、Groovy、Julia、Tcl は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
+- 動的言語のシンボル専用対応: Julia は保守的な宣言をシンボルとして公開します。Julia の references と graph queries はまだ対応として広告しません。
+- 動的・宣言型言語の graph 対応: Crystal、Groovy、Tcl、Prolog は保守的な宣言、import、call relationship を公開します。括弧付き call は共通 extractor を使い、command-style call は同一ファイルで宣言済みの callable に限定し、Tcl proc / Prolog predicate の本体では caller container を保持します。
 - システム系言語のシンボル専用対応: Ada、D、Nim は保守的な宣言をシンボルとして公開します。これらの言語では references と graph queries はまだ対応として広告しません。
 - Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
@@ -5535,7 +5537,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。`Directory.Packages.props`、`packages.config`、`requirements.txt`、`pyproject.toml`、`packages.lock.json`、npm の `package-lock.json` / `npm-shrinkwrap.json` は、format が提供する範囲で version、scope、direct/transitive metadata を持つ package symbol と `dependency` reference を公開します。
 - ソリューションとアプリケーションマニフェスト: `.sln` は project entry をシンボルとして公開し、project path を参照として記録します。`.manifest` は assembly identity、requested execution level、supported OS、long-path 設定をシンボルとして公開します。
 - shebang script: 先頭行の shebang を認識できる拡張子なし/未知拡張子ファイルは、shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Perl、Tcl (`tclsh`, `wish`)、Node.js、PHP、Lua、PowerShell として index 対象です。明示的な language-map override は常に優先し、曖昧な `.t` では認識済み shebang が Perl の既定値を上書きします。一方、曖昧でない既知拡張子は競合する shebang より優先されます。
-- 曖昧な `.m` / `.pl`: 認識済み shebang を最優先し、その後は bounded content check で Objective-C/MATLAB または Perl/Prolog の強い marker だけを使い、最後に保守的な project marker を確認します。これらの marker を追加・変更・削除する scoped update は workspace を自動的に再 scan し、未変更の曖昧ファイルに古い分類を残しません。弱い証拠や競合する証拠は無条件に言語を割り当てず、`ambiguous_m` / `ambiguous_pl` として全文検索可能なまま残します。MATLAB と Prolog は宣言 symbol を公開しますが、reference / graph はまだ未対応です。
+- 曖昧な `.m` / `.pl`: 認識済み shebang を最優先し、その後は bounded content check で Objective-C/MATLAB または Perl/Prolog の強い marker だけを使い、最後に保守的な project marker を確認します。これらの marker を追加・変更・削除する scoped update は workspace を自動的に再 scan し、未変更の曖昧ファイルに古い分類を残しません。弱い証拠や競合する証拠は無条件に言語を割り当てず、`ambiguous_m` / `ambiguous_pl` のまま保持します。MATLAB は宣言 symbol を公開しますが reference / graph は未対応です。Prolog と `ambiguous_pl` は分類後に保守的な symbol、reference、graph query を公開し、`ambiguous_pl` は content-based の言語判定を上書きせず Perl / Prolog 構文の安全な和集合を使います。
 
 ### 言語別 extraction matrix
 

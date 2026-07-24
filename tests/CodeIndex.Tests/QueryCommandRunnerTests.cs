@@ -3145,7 +3145,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsMatlabAndPrologSymbolOnlyCapabilities_Issue4612()
+    public void RunLanguages_JsonReportsMatlabSymbolOnlyAndPrologGraphCapabilities_Issues4612And4746()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
@@ -3155,12 +3155,15 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
-        foreach (var language in new[] { "matlab", "prolog" })
-        {
-            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean());
-            Assert.False(languages[language].GetProperty("reference_extraction").GetBoolean());
-            Assert.False(languages[language].GetProperty("graph_queries").GetBoolean());
-        }
+        Assert.True(languages["matlab"].GetProperty("symbol_extraction").GetBoolean());
+        Assert.False(languages["matlab"].GetProperty("reference_extraction").GetBoolean());
+        Assert.False(languages["matlab"].GetProperty("graph_queries").GetBoolean());
+        Assert.True(languages["prolog"].GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(languages["prolog"].GetProperty("reference_extraction").GetBoolean());
+        Assert.True(languages["prolog"].GetProperty("graph_queries").GetBoolean());
+        Assert.True(languages["ambiguous_pl"].GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(languages["ambiguous_pl"].GetProperty("reference_extraction").GetBoolean());
+        Assert.True(languages["ambiguous_pl"].GetProperty("graph_queries").GetBoolean());
 
         Assert.Contains(".m", languages["ambiguous_m"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains(".pl", languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
@@ -3296,7 +3299,7 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var symbolOnly in new[] { "ada", "clojure", "crystal", "d", "erlang", "groovy", "julia", "nim", "ocaml", "raku", "tcl" })
+        foreach (var symbolOnly in new[] { "ada", "clojure", "d", "erlang", "julia", "nim", "ocaml", "raku" })
         {
             Assert.True(languages.ContainsKey(symbolOnly), $"expected '{symbolOnly}' to be listed");
             var entry = languages[symbolOnly];
@@ -3331,6 +3334,18 @@ public partial class QueryCommandRunnerTests
             Assert.True(languages[stylesheetPreprocessor].GetProperty("graph_queries").GetBoolean(),
                 $"{stylesheetPreprocessor} must advertise graph_queries=true");
             Assert.Empty(languages[stylesheetPreprocessor].GetProperty("capability_gaps").EnumerateArray());
+        }
+
+        foreach (var dynamicGraph in new[] { "crystal", "groovy", "tcl", "prolog", "ambiguous_pl" })
+        {
+            Assert.True(languages.ContainsKey(dynamicGraph), $"expected '{dynamicGraph}' to be listed");
+            Assert.True(languages[dynamicGraph].GetProperty("symbol_extraction").GetBoolean(),
+                $"{dynamicGraph} must advertise symbol_extraction=true");
+            Assert.True(languages[dynamicGraph].GetProperty("reference_extraction").GetBoolean(),
+                $"{dynamicGraph} must advertise reference_extraction=true");
+            Assert.True(languages[dynamicGraph].GetProperty("graph_queries").GetBoolean(),
+                $"{dynamicGraph} must advertise graph_queries=true");
+            Assert.Empty(languages[dynamicGraph].GetProperty("capability_gaps").EnumerateArray());
         }
 
         Assert.True(languages["xml"].GetProperty("symbol_extraction").GetBoolean(),

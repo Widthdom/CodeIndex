@@ -156,6 +156,9 @@ public static partial class SymbolExtractor
         var shellScannerLines = lang == "shell"
             ? MaskShellHeredocLines(lines)
             : null;
+        var prologClauseContinuationLines = lang is "prolog" or "ambiguous_pl"
+            ? BuildPrologClauseContinuationLines(structuralLines)
+            : null;
         var powershellEnumBodyLines = lang == "powershell"
             ? FindPowerShellEnumBodyLines(structuralLines)
             : null;
@@ -399,6 +402,8 @@ public static partial class SymbolExtractor
                 CSharpPropertyMatchCandidate? csharpPropertyCandidateForLine = null;
                 foreach (var pattern in patterns)
                 {
+                    if (prologClauseContinuationLines?[i] == true && pattern.Kind == "function")
+                        continue;
                     if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
                         continue;
                     if (lang == "powershell"
@@ -2150,6 +2155,49 @@ public static partial class SymbolExtractor
             ExpandShellAliasSymbols(fileId, lines, symbols, extractionState);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static readonly Regex PrologOpenClauseRegex = new(
+        @"^\s*(?:(?:[a-z][A-Za-z0-9_]*\s*(?:\([^.\r\n]*\))?\s*(?::-|-->))|:-)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static bool[] BuildPrologClauseContinuationLines(IReadOnlyList<string> structuralLines)
+    {
+        var continuationLines = new bool[structuralLines.Count];
+        var clauseOpen = false;
+        for (var lineIndex = 0; lineIndex < structuralLines.Count; lineIndex++)
+        {
+            continuationLines[lineIndex] = clauseOpen;
+            var line = structuralLines[lineIndex];
+            if (clauseOpen)
+            {
+                if (HasPrologClauseTerminator(line))
+                    clauseOpen = false;
+                continue;
+            }
+
+            if (PrologOpenClauseRegex.IsMatch(line) && !HasPrologClauseTerminator(line))
+                clauseOpen = true;
+        }
+
+        return continuationLines;
+    }
+
+    private static bool HasPrologClauseTerminator(string line)
+    {
+        for (var column = 0; column < line.Length; column++)
+        {
+            if (line[column] != '.')
+                continue;
+
+            var previousIsDigit = column > 0 && char.IsDigit(line[column - 1]);
+            var nextIsIdentifier = column + 1 < line.Length
+                && (char.IsLetterOrDigit(line[column + 1]) || line[column + 1] == '_');
+            if (!previousIsDigit && !nextIsIdentifier)
+                return true;
+        }
+
+        return false;
     }
 
     private const int CSharpFieldInitializerSignatureLimit = 1024;

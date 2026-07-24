@@ -270,6 +270,41 @@ public static partial class ReferenceExtractor
             "print", "say", "die", "warn", "open", "close", "defined", "exists", "delete",
             "bless", "ref", "scalar", "wantarray", "eval", "do",
         },
+        ["ambiguous_pl"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "use", "require", "package", "sub", "my", "our", "local", "state",
+            "if", "elsif", "unless", "while", "until", "foreach", "for", "given", "when",
+            "print", "say", "die", "warn", "open", "close", "defined", "exists", "delete",
+            "bless", "ref", "scalar", "wantarray", "eval", "do",
+            "module", "use_module", "library", "initialization", "dynamic", "multifile",
+            "discontiguous", "op",
+        },
+        ["crystal"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "abstract", "alias", "annotation", "begin", "case", "class", "def", "do", "else",
+            "elsif", "end", "ensure", "enum", "extend", "for", "fun", "if", "include", "lib",
+            "macro", "module", "next", "of", "private", "protected", "require", "rescue",
+            "return", "select", "struct", "then", "unless", "until", "when", "while", "with", "yield",
+        },
+        ["groovy"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "apply", "as", "assert", "break", "case", "catch", "class", "continue", "def", "do",
+            "else", "enum", "extends", "finally", "for", "if", "implements", "import", "in",
+            "instanceof", "interface", "new", "package", "return", "switch", "this", "throw",
+            "throws", "trait", "try", "while",
+        },
+        ["tcl"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "append", "array", "break", "catch", "concat", "continue", "dict", "error", "eval",
+            "expr", "for", "foreach", "global", "if", "incr", "info", "lappend", "lindex",
+            "list", "namespace", "oo::class", "package", "proc", "rename", "return", "set",
+            "string", "switch", "unset", "upvar", "uplevel", "variable", "while",
+        },
+        ["prolog"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "module", "use_module", "library", "initialization", "dynamic", "multifile",
+            "discontiguous", "op", "true", "fail", "false", "is", "not",
+        },
         // F# contextual keywords / F# 文脈キーワード
         ["fsharp"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -849,7 +884,7 @@ public static partial class ReferenceExtractor
     // `impact` に metadata edge が混入する。
     private static readonly HashSet<string> AnnotationLanguages = new(StringComparer.Ordinal)
     {
-        "java", "kotlin", "scala", "typescript", "javascript", "swift", "gradle", "dart",
+        "java", "kotlin", "scala", "typescript", "javascript", "swift", "gradle", "groovy", "dart",
     };
 
     // Kotlin use-site target prefixes for annotations (e.g. `@field:Deprecated("msg")`,
