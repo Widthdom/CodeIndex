@@ -2289,6 +2289,7 @@ public static partial class SymbolExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private const int PrologMultilineHeadLookaheadLineLimit = 256;
     private readonly record struct PrologMultilineHead(string Name, int StartColumn);
+    private readonly record struct PrologSourcePosition(int LineIndex, int Column);
 
     private static bool TryGetNextPrologClauseOffset(
         string line,
@@ -2323,6 +2324,7 @@ public static partial class SymbolExtractor
         Dictionary<int, PrologMultilineHead> multilineHeads)
     {
         var continuationLines = new bool[structuralLines.Count];
+        var matchingParentheses = BuildPrologMatchingParentheses(structuralLines);
         var clauseOpen = false;
         for (var lineIndex = 0; lineIndex < structuralLines.Count; lineIndex++)
         {
@@ -2345,9 +2347,10 @@ public static partial class SymbolExtractor
             var multilineHead = PrologMultilineHeadStartRegex.Match(clauseCandidate);
             if (multilineHead.Success
                 && IsValidatedMultilinePrologHead(
-                    structuralLines,
-                    lineIndex,
-                    clauseCandidateOffset + multilineHead.Groups["open"].Index))
+                     structuralLines,
+                     lineIndex,
+                     clauseCandidateOffset + multilineHead.Groups["open"].Index,
+                     matchingParentheses))
             {
                 multilineHeads[lineIndex] = new PrologMultilineHead(
                     multilineHead.Groups["name"].Value,
@@ -2368,6 +2371,37 @@ public static partial class SymbolExtractor
         }
 
         return continuationLines;
+    }
+
+    private static IReadOnlyDictionary<PrologSourcePosition, PrologSourcePosition>
+        BuildPrologMatchingParentheses(IReadOnlyList<string> structuralLines)
+    {
+        var openParentheses = new Stack<PrologSourcePosition>();
+        var matchingParentheses = new Dictionary<PrologSourcePosition, PrologSourcePosition>();
+        for (var lineIndex = 0; lineIndex < structuralLines.Count; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            for (var column = 0; column < line.Length; column++)
+            {
+                var ch = line[column];
+                if (ch is '\'' or '"')
+                {
+                    column = SkipPrologQuotedTerm(line, column, ch) - 1;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    openParentheses.Push(new PrologSourcePosition(lineIndex, column));
+                }
+                else if (ch == ')' && openParentheses.TryPop(out var openingParenthesis))
+                {
+                    matchingParentheses[openingParenthesis] = new PrologSourcePosition(lineIndex, column);
+                }
+            }
+        }
+
+        return matchingParentheses;
     }
 
     private static int FindLastTopLevelPrologClauseTerminator(string line)
@@ -2463,37 +2497,32 @@ public static partial class SymbolExtractor
     private static bool IsValidatedMultilinePrologHead(
         IReadOnlyList<string> structuralLines,
         int startLineIndex,
-        int openingParenthesisColumn)
+        int openingParenthesisColumn,
+        IReadOnlyDictionary<PrologSourcePosition, PrologSourcePosition> matchingParentheses)
     {
-        var parenthesisDepth = 0;
-        var headClosed = false;
         var endLineExclusive = Math.Min(
             structuralLines.Count,
             startLineIndex + PrologMultilineHeadLookaheadLineLimit);
-        for (var lineIndex = startLineIndex; lineIndex < endLineExclusive; lineIndex++)
+        if (!matchingParentheses.TryGetValue(
+                new PrologSourcePosition(startLineIndex, openingParenthesisColumn),
+                out var closingParenthesis)
+            || closingParenthesis.LineIndex >= endLineExclusive)
+        {
+            return false;
+        }
+
+        for (var lineIndex = closingParenthesis.LineIndex; lineIndex < endLineExclusive; lineIndex++)
         {
             var line = structuralLines[lineIndex];
-            var startColumn = lineIndex == startLineIndex ? openingParenthesisColumn : 0;
+            var startColumn = lineIndex == closingParenthesis.LineIndex
+                ? closingParenthesis.Column + 1
+                : 0;
             for (var column = startColumn; column < line.Length; column++)
             {
                 var ch = line[column];
                 if (ch is '\'' or '"')
                 {
                     column = SkipPrologQuotedTerm(line, column, ch) - 1;
-                    continue;
-                }
-
-                if (!headClosed)
-                {
-                    if (ch == '(')
-                    {
-                        parenthesisDepth++;
-                    }
-                    else if (ch == ')' && parenthesisDepth > 0)
-                    {
-                        parenthesisDepth--;
-                        headClosed = parenthesisDepth == 0;
-                    }
                     continue;
                 }
 

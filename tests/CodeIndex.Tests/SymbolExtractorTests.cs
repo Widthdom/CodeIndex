@@ -58,13 +58,18 @@ public partial class SymbolExtractorTests
             :- use_module(library(lists)).
             parent(alice, bob).
             ancestor(X, Y) :- parent(X, Y).
+            multiline_parent(
+                X,
+                Y
+            ) :-
+                parent(X, Y).
             """;
 
         var symbols = SymbolExtractor.Extract(1, "prolog", content);
 
         AssertSymbolsContain(symbols, "namespace", "family");
         AssertSymbolsContain(symbols, "import", "library(lists)");
-        AssertSymbolsContain(symbols, "function", "parent", "ancestor");
+        AssertSymbolsContain(symbols, "function", "parent", "ancestor", "multiline_parent");
     }
 
     [Fact]

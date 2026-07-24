@@ -34,6 +34,8 @@ public partial class QueryCommandRunnerTests
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
+    private const string SearchOnlyTestLanguage = "searchonlytest";
+    private const string SearchOnlyTestExtension = ".searchonly";
 
     [Fact]
     public void ParseArgs_ParsesFiltersFlagsAndAcceptsMaxSnippetLines()
@@ -2576,6 +2578,27 @@ public partial class QueryCommandRunnerTests
             => [];
     }
 
+    private static TestProjectHelper.TempProjectScope CreateSearchOnlyLanguageProject(
+        string prefix,
+        out string dbPath)
+    {
+        var project = TestProjectHelper.CreateTempProjectScope(prefix);
+        try
+        {
+            dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+            TestProjectHelper.WriteTextFile(
+                project.Root,
+                LanguageMapOverrides.WorkspaceFileName,
+                $"entries:\n- extension: {SearchOnlyTestExtension}\n  language: {SearchOnlyTestLanguage}\n");
+            return project;
+        }
+        catch
+        {
+            project.Dispose();
+            throw;
+        }
+    }
+
     [Theory]
     [InlineData("--language", "C#", "csharp", 2)]
     [InlineData("--extension", ".cs", "csharp", 2)]
@@ -2687,8 +2710,13 @@ public partial class QueryCommandRunnerTests
     [InlineData("missing-graph", "graph_queries")]
     public void RunLanguages_JsonCapabilityMissingFiltersCapabilityGaps(string capability, string propertyName)
     {
+        using var project = CreateSearchOnlyLanguageProject(
+            "cdidx_languages_missing_capability",
+            out var dbPath);
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
-            QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
+            QueryCommandRunner.RunLanguages(
+                ["--json", "--capability", capability, "--db", dbPath],
+                _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -2696,7 +2724,7 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
 
-        Assert.NotEmpty(languages);
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == SearchOnlyTestLanguage);
         Assert.All(languages, lang =>
         {
             Assert.False(lang.GetProperty(propertyName).GetBoolean());
@@ -2707,10 +2735,15 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_FormatCountReturnsCapabilitySummary_Issue4316()
     {
-        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_format_count_issue4316");
-        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var project = CreateSearchOnlyLanguageProject(
+            "cdidx_languages_format_count_issue4316",
+            out var dbPath);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.pl", "prolog", "main :- true.\n");
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "config/settings.searchonly",
+            SearchOnlyTestLanguage,
+            "enabled = true\n");
 
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
             QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
@@ -2722,7 +2755,7 @@ public partial class QueryCommandRunnerTests
         var root = document.RootElement;
 
         Assert.Equal("count", root.GetProperty("format").GetString());
-        Assert.True(root.GetProperty("count").GetInt32() > 0);
+        Assert.Equal(1, root.GetProperty("count").GetInt32());
         Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("language_count").GetInt32());
         Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("indexed_language_count").GetInt32());
         Assert.True(root.GetProperty("indexed_file_count").GetInt64() > 0);
@@ -2782,8 +2815,11 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_JsonIncludesUnsupportedCapabilityGuidance_Issue4122()
     {
+        using var project = CreateSearchOnlyLanguageProject(
+            "cdidx_languages_unsupported_guidance",
+            out var dbPath);
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
-            QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+            QueryCommandRunner.RunLanguages(["--json", "--db", dbPath], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -2791,15 +2827,20 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
-        var prologGuidance = languages["prolog"].GetProperty("unsupported_guidance").EnumerateArray().ToList();
+        var searchOnlyGuidance = languages[SearchOnlyTestLanguage]
+            .GetProperty("unsupported_guidance")
+            .EnumerateArray()
+            .ToList();
 
-        var referenceGuidance = prologGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "references");
-        Assert.Contains("Reference extraction is not advertised for 'prolog'", referenceGuidance.GetProperty("message").GetString());
+        var referenceGuidance = searchOnlyGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "references");
+        Assert.Contains(
+            $"Reference extraction is not advertised for '{SearchOnlyTestLanguage}'",
+            referenceGuidance.GetProperty("message").GetString());
         var referenceCommands = referenceGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
         Assert.Contains("search", referenceCommands);
-        Assert.Contains("definition", referenceCommands);
+        Assert.Contains("excerpt", referenceCommands);
 
-        var graphGuidance = prologGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "graph");
+        var graphGuidance = searchOnlyGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "graph");
         Assert.Contains("empty callers, callees, or impact results are not authoritative", graphGuidance.GetProperty("message").GetString());
         var graphCommands = graphGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
         Assert.Contains("search", graphCommands);
@@ -2813,8 +2854,13 @@ public partial class QueryCommandRunnerTests
     [InlineData("none")]
     public void RunLanguages_JsonCapabilityNoneFiltersAllExtractionGaps_Issue4316(string capability)
     {
+        using var project = CreateSearchOnlyLanguageProject(
+            "cdidx_languages_no_extraction_capability",
+            out var dbPath);
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
-            QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
+            QueryCommandRunner.RunLanguages(
+                ["--json", "--capability", capability, "--db", dbPath],
+                _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -2823,7 +2869,7 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
         var names = languages.Select(lang => lang.GetProperty("lang").GetString()).ToList();
 
-        Assert.NotEmpty(languages);
+        Assert.Contains(SearchOnlyTestLanguage, names);
         Assert.DoesNotContain("groovy", names);
         Assert.All(languages, lang =>
         {
