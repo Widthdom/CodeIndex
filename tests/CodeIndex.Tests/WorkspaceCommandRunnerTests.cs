@@ -201,6 +201,37 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceStatus_PropagatesCancellationToMemberHealthScan_Issue4726()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_cancel");
+        var root = project.Root;
+        Directory.CreateDirectory(Path.Combine(root, "member"));
+        File.WriteAllText(
+            Path.Combine(root, "cdidx.workspace.json"),
+            """{ "members": ["member"] }""");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(
+                () => ProgramRunner.Run(
+                    ["workspace", "status", "--json"],
+                    _jsonOptions,
+                    cancellationToken: cancellation.Token));
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Contains("cancelled", stderr);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
     public void CheckedInWorkspaceManifest_ResolvesExistingProjectMembers_Issue4476()
     {
         var repositoryRoot = RepositoryTestPaths.Root;
@@ -1463,6 +1494,51 @@ public class WorkspaceCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceUse_RelativePathPersistsManifestCasing_Issue4726()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_relative_casing");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_relative_casing_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        lock (PathCasingTestLock.Gate)
+        {
+            PathCasing.ResetCacheForTests();
+            Directory.CreateDirectory(Path.Combine(root, "Apps", "App"));
+            File.WriteAllText(
+                Path.Combine(root, "cdidx.workspace.json"),
+                """{ "members": ["Apps/App"] }""");
+            using var env = EnvironmentVariableScope.Capture(
+                ActiveWorkspace.EnvironmentVariable,
+                "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            PathCasing.SeedFromWorkspace(root, ignoreCase: true);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(
+                    () => WorkspaceCommandRunner.Run(
+                        ["use", "apps/app"],
+                        _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                var state = ActiveWorkspace.Load();
+                Assert.NotNull(state);
+                Assert.Equal("Apps/App", state.Name);
+                Assert.True(state.ManifestMember);
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+                PathCasing.ResetCacheForTests();
+            }
         }
     }
 

@@ -11,7 +11,10 @@ internal static class WorkspaceCommandRunner
     private const int MaxAmbiguousMemberPathChars = 160;
     internal const int MaxMemberHealthDatabaseProbes = 64;
 
-    internal static int Run(string[] args, JsonSerializerOptions jsonOptions)
+    internal static int Run(
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken = default)
     {
         var json = args.Contains("--json", StringComparer.Ordinal);
         args = args.Where(a => a != "--json").ToArray();
@@ -21,7 +24,11 @@ internal static class WorkspaceCommandRunner
         return args[0] switch
         {
             "list" => List(json, jsonOptions),
-            "status" => List(json, jsonOptions, includeActiveWorkspaceStatus: true),
+            "status" => List(
+                json,
+                jsonOptions,
+                includeActiveWorkspaceStatus: true,
+                cancellationToken: cancellationToken),
             "current" => Current(json, jsonOptions),
             "use" => Use(args[1..], json, jsonOptions),
             "clear" or "deactivate" => Clear(args[1..], json, jsonOptions),
@@ -29,7 +36,11 @@ internal static class WorkspaceCommandRunner
         };
     }
 
-    private static int List(bool json, JsonSerializerOptions jsonOptions, bool includeActiveWorkspaceStatus = false)
+    private static int List(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        bool includeActiveWorkspaceStatus = false,
+        CancellationToken cancellationToken = default)
     {
         var discovery = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
         if (discovery.Path == null)
@@ -69,7 +80,7 @@ internal static class WorkspaceCommandRunner
         if (json)
         {
             var memberHealth = includeActiveWorkspaceStatus
-                ? BuildMemberHealth(manifest)
+                ? BuildMemberHealth(manifest, cancellationToken)
                 : null;
             var manifestStatus = new WorkspaceManifestStatusJsonResult(
                 "loaded",
@@ -91,7 +102,7 @@ internal static class WorkspaceCommandRunner
         Console.WriteLine($"Manifest : {manifest.Path}");
         Console.WriteLine($"Strategy : {manifest.IndexStrategy}");
         var humanMembers = includeActiveWorkspaceStatus
-            ? BuildMemberHealth(manifest).Members
+            ? BuildMemberHealth(manifest, cancellationToken).Members
             : manifest.Members;
         foreach (var member in humanMembers)
         {
@@ -178,14 +189,18 @@ internal static class WorkspaceCommandRunner
                     manifest,
                     name,
                     out var selectedPath,
-                    out var selectedRelativePath))
+                    out _))
             {
                 matches = manifest.Members
                     .Where(m => string.Equals(m.Path, selectedPath, memberNameComparison))
                     .Take(1)
                     .ToArray();
                 if (matches.Length == 1)
-                    selectedName = selectedRelativePath!;
+                {
+                    selectedName = WorkspaceManifestLoader.GetManifestRelativeMemberPath(
+                        manifest,
+                        matches[0]);
+                }
             }
             else
             {
@@ -251,7 +266,9 @@ internal static class WorkspaceCommandRunner
             ? path
             : path[..(MaxAmbiguousMemberPathChars - 3)] + "...";
 
-    private static MemberHealthBuildResult BuildMemberHealth(WorkspaceManifest manifest)
+    private static MemberHealthBuildResult BuildMemberHealth(
+        WorkspaceManifest manifest,
+        CancellationToken cancellationToken)
     {
         var members = new List<WorkspaceMember>(manifest.Members.Count);
         var cache = new Dictionary<string, WorkspaceMemberIndexHealth>(
@@ -262,6 +279,7 @@ internal static class WorkspaceCommandRunner
 
         foreach (var member in manifest.Members)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             WorkspaceMemberIndexHealth health;
             var dbExists = File.Exists(LongPath.EnsureWindowsPrefix(member.DbPath));
             if (!member.Exists)
@@ -297,7 +315,10 @@ internal static class WorkspaceCommandRunner
             {
                 databaseProbeCount++;
                 var projectRoot = singleStrategy ? manifest.Root : member.Path;
-                health = ProbeMemberHealth(member.DbPath, projectRoot);
+                health = ProbeMemberHealth(
+                    member.DbPath,
+                    projectRoot,
+                    cancellationToken);
                 cache[member.DbPath] = health;
             }
 
@@ -314,11 +335,17 @@ internal static class WorkspaceCommandRunner
                 unprobedMemberCount > 0));
     }
 
-    private static WorkspaceMemberIndexHealth ProbeMemberHealth(string dbPath, string projectRoot)
+    private static WorkspaceMemberIndexHealth ProbeMemberHealth(
+        string dbPath,
+        string projectRoot,
+        CancellationToken cancellationToken)
     {
         try
         {
-            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var db = new DbContext(
+                DbOpenIntent.QueryOnly,
+                dbPath,
+                cancellationToken);
             if (!db.TryValidateIsCodeIndexDb(out _))
             {
                 return new WorkspaceMemberIndexHealth(
@@ -329,7 +356,7 @@ internal static class WorkspaceCommandRunner
                     SchemaCompatible: false);
             }
 
-            using var reader = new DbReader(db);
+            using var reader = new DbReader(db, cancellationToken);
             var snapshot = reader.GetWorkspaceIndexHealth();
             var schemaCompatible = !snapshot.IndexNewerThanReader;
             var graphReady = snapshot.GraphTableAvailable
@@ -358,6 +385,7 @@ internal static class WorkspaceCommandRunner
             var freshness = IndexFreshnessChecker.Check(
                 reader,
                 projectRoot,
+                cancellationToken,
                 internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(dbPath));
             var status = "ready";
             var reason = "ready";
