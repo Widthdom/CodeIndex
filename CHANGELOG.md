@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.40.1] - 2026-07-25
+
+#### Fixed
+
+- **Release validation no longer flakes when macOS runners are heavily loaded** — LSP cancellation coverage now awaits an asynchronous signal without blocking thread-pool progress, and post-extraction hook timeout coverage keeps a wider separation between the callback budget and the delayed worker completion.
+
 ### [1.40.0] - 2026-07-25
 
 #### Added
@@ -6185,6 +6191,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.40.1] - 2026-07-25
+
+#### 修正
+
+- **macOS runner の高負荷時にも release validation が不安定に失敗しないようになりました** — LSP cancellation coverage は thread pool の進行を block しない非同期 signal を待機し、post-extraction hook timeout coverage は callback budget と遅延 worker の完了時刻に十分な間隔を確保します。
+
 ### [1.40.0] - 2026-07-25
 
 #### 追加
@@ -12337,7 +12349,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.40.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.40.1...HEAD
+[1.40.1]: https://github.com/Widthdom/CodeIndex/compare/v1.40.0...v1.40.1
 [1.40.0]: https://github.com/Widthdom/CodeIndex/compare/v1.39.4...v1.40.0
 [1.39.4]: https://github.com/Widthdom/CodeIndex/compare/v1.39.3...v1.39.4
 [1.39.3]: https://github.com/Widthdom/CodeIndex/compare/v1.39.2...v1.39.3
