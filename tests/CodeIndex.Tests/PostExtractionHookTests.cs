@@ -22,8 +22,8 @@ public class PostExtractionHookTests
     internal const string ModuleInitializerDelayEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
     internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_PERSISTENT_PID_PATH";
     internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
-    private const string TimedOutHookDelayMilliseconds = "150";
-    private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(400);
+    private const string TimedOutHookDelayMilliseconds = "800";
+    private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(900);
     private static readonly TimeSpan DuplicateHookCallbackBudget = TimeSpan.FromSeconds(1);
 
     [Fact]

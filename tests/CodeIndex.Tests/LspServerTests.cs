@@ -1567,7 +1567,8 @@ public class LspServerTests
     public async Task RunAsync_CancelledPartialResultsReportAlreadyEmittedCount_Issue4721()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_cancel_emitted_count");
-        using var cancellationObserved = new ManualResetEventSlim();
+        var cancellationObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1583,7 +1584,7 @@ public class LspServerTests
             {
                 BeforeSymbolRequestForTesting = cancellationToken =>
                 {
-                    cancellationToken.Register(cancellationObserved.Set);
+                    cancellationToken.Register(() => cancellationObserved.TrySetResult());
                 },
             };
             var request = JsonSerializer.Serialize(new
@@ -1611,7 +1612,7 @@ public class LspServerTests
 
             await output.WaitForMarkerAsync().WaitAsync(TimeSpan.FromSeconds(5));
             input.ReleaseSuffix();
-            Assert.True(cancellationObserved.Wait(TimeSpan.FromSeconds(5)));
+            await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
             output.ReleaseMarker();
             Assert.Equal(CommandExitCodes.Success, await runTask.WaitAsync(TimeSpan.FromSeconds(5)));
 
