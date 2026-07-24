@@ -327,6 +327,7 @@ public static partial class IndexCommandRunner
                     DbContext.CSharpSymbolNameContractVersionMetaKey,
                     DbContext.GetMetadataTargetVersionMetaKey("csharp"),
                     DbContext.SqlGraphContractVersionMetaKey,
+                    DbContext.HdlGraphContractVersionMetaKey,
                     DbContext.SymbolsOnlyGraphOmittedMetaKey,
                     DbContext.IndexedProjectRootMetaKey,
                     SymbolKindFilterMetaKey,
@@ -341,6 +342,7 @@ public static partial class IndexCommandRunner
                 var priorCSharpSymbolNameContractVersion = PriorMeta(DbContext.CSharpSymbolNameContractVersionMetaKey);
                 var priorMetadataTargetCsharp = PriorMeta(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
                 var priorSqlGraphContractVersion = PriorMeta(DbContext.SqlGraphContractVersionMetaKey);
+                var priorHdlGraphContractVersion = PriorMeta(DbContext.HdlGraphContractVersionMetaKey);
                 var priorSymbolsOnlyGraphOmitted = string.Equals(
                     PriorMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey),
                     "true",
@@ -393,8 +395,8 @@ public static partial class IndexCommandRunner
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
-                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorFileIndexIncomplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
-                    : RunFullScan(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
+                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorFileIndexIncomplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
+                    : RunFullScan(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                 {
                     try

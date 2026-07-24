@@ -812,6 +812,8 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
     public string? SqlGraphContractDegradedReason { get; init; }
+    public bool HdlGraphContractReady { get; init; }
+    public string? HdlGraphContractDegradedReason { get; init; }
     public bool HotspotFamilyReady { get; init; }
     public string? HotspotFamilyDegradedReason { get; init; }
     [JsonPropertyName("csharp_symbol_name_ready")]

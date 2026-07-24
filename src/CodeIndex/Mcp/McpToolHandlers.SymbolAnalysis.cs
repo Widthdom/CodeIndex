@@ -46,6 +46,7 @@ public partial class McpServer
                 bucketFilter: bucket,
                 minConfidence: minConfidence);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var hdlGraphSignal = reader.GetHdlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
@@ -73,6 +74,7 @@ public partial class McpServer
             if (byBucket)
                 payload["symbols_by_bucket"] = BuildUnusedSymbolsByBucket(results);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
+            AddHdlGraphContractSignal(payload, hdlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {ConsoleUi.Counted(results.Count, "potentially unused symbol")} across {ConsoleUi.Counted(bucketCounts.Count, "returned bucket")} and {ConsoleUi.Counted(contractDomainCounts.Count, "contract domain")}. Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
