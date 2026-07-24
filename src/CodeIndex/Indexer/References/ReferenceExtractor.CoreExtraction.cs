@@ -2562,6 +2562,12 @@ public static partial class ReferenceExtractor
                     {
                         continue;
                     }
+                    if (language == "ada"
+                        && callIndex > 0
+                        && preparedLine[callIndex - 1] == '\'')
+                    {
+                        continue;
+                    }
                     if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
                         continue;
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))

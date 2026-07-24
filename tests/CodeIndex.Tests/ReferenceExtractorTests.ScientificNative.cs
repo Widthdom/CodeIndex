@@ -467,6 +467,8 @@ public partial class ReferenceExtractorTests
     [InlineData("run(x) = helper(x)\nhelper(x) = x\n", 1)]
     [InlineData("run(x) = begin\n    helper(x)\nend\nhelper(x) = x\n", 3)]
     [InlineData("run(x) =\nbegin\n    helper(x)\nend\nhelper(x) = x\n", 4)]
+    [InlineData("run(x) = map(x) do item\n    helper(item)\nend\nhelper(x) = x\n", 3)]
+    [InlineData("run(x) = (if x\n    helper(x)\nend)\nhelper(x) = x\n", 3)]
     public void Extract_JuliaShortFunctionsOwnTheirCallReferences_Issue4738(
         string content,
         int expectedEndLine)
@@ -479,6 +481,36 @@ public partial class ReferenceExtractorTests
         Assert.Equal(expectedEndLine, run.EndLine);
         Assert.Equal("run", Assert.Single(references, reference =>
             reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JuliaExpressionPositionBlocksKeepOuterFunctionRange_Issue4738()
+    {
+        const string content = """
+            function outer(xs)
+                map(function (item)
+                    inner(item)
+                end, xs)
+                push!(xs, begin
+                    nested()
+                end)
+                values = [item for item in xs if item > 0]
+                after()
+            end
+            outside()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Equal(10, Assert.Single(symbols, symbol => symbol.Name == "outer").EndLine);
+        foreach (var name in new[] { "inner", "nested", "after" })
+        {
+            Assert.Equal("outer", Assert.Single(references, reference =>
+                reference.SymbolName == name && reference.ReferenceKind == "call").ContainerName);
+        }
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
     }
 
     [Fact]
@@ -502,6 +534,31 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "helper1" && reference.ReferenceKind == "call").ContainerName);
         Assert.Equal("second", Assert.Single(references, reference =>
             reference.SymbolName == "helper2" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_MatlabSameIndentNestedFunctionKeepsExplicitOuterRange_Issue4738()
+    {
+        const string content = """
+            function outer()
+            helper1();
+            function nested()
+            inner();
+            end
+            helper2();
+            end
+            outside();
+            """;
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        var references = ReferenceExtractor.Extract(1, "matlab", content, symbols);
+
+        Assert.Equal(7, Assert.Single(symbols, symbol => symbol.Name == "outer").EndLine);
+        Assert.Equal(5, Assert.Single(symbols, symbol => symbol.Name == "nested").EndLine);
+        Assert.Equal("outer", Assert.Single(references, reference =>
+            reference.SymbolName == "helper2" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
     }
 
     [Fact]
@@ -594,6 +651,75 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "helper" && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "tokenOnly");
+    }
+
+    [Fact]
+    public void Extract_DCommentTextCannotOpenTokenStrings_Issue4738()
+    {
+        const string content = """
+            /* documentation mentions q{ without a closing brace */
+            /* documentation mentions an unmatched ` delimiter */
+            void run() {
+                helper();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "d", content);
+
+        var references = ReferenceExtractor.Extract(1, "d", content, symbols);
+
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Theory]
+    [InlineData(
+        "d",
+        """
+        void run() {
+            auto text = r"fake()\";
+            helper();
+        }
+        """)]
+    [InlineData(
+        "nim",
+        """
+        proc run() =
+          let text = r"fake()\"
+          helper()
+        """)]
+    public void Extract_DAndNimRawStringsUseLiteralBackslashRules_Issue4738(
+        string language,
+        string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake");
+    }
+
+    [Fact]
+    public void Extract_AdaAttributesPreserveNestedCallsWithoutPhantomAttributeCalls_Issue4738()
+    {
+        const string content = """
+            procedure Run is
+            begin
+              First(Integer'Image(helper()) & Float'Image(other()));
+            end Run;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "ada", content);
+
+        var references = ReferenceExtractor.Extract(1, "ada", content, symbols);
+
+        foreach (var name in new[] { "First", "helper", "other" })
+        {
+            Assert.Equal("Run", Assert.Single(references, reference =>
+                reference.SymbolName == name && reference.ReferenceKind == "call").ContainerName);
+        }
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Image" && reference.ReferenceKind == "call");
     }
 
     [Fact]

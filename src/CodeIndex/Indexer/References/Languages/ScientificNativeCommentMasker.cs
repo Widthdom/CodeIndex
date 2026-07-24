@@ -5,13 +5,7 @@ internal static class ScientificNativeCommentMasker
     internal static string[] MaskBlockComments(string language, string[] lines) =>
         language switch
         {
-            "d" => ReferenceExtractor.MaskCStyleBlockCommentLines(
-                "d",
-                MaskNestedBlockComments(
-                    MaskDMultilineStrings(lines),
-                    "/+",
-                    "+/",
-                    "//")),
+            "d" => MaskDNonCodeRegions(lines),
             "julia" => MaskNestedBlockComments(
                 MaskTripleQuotedStrings(lines, "#=", "=#", "#", singleQuoteCanBePostfix: true),
                 "#=",
@@ -202,25 +196,60 @@ internal static class ScientificNativeCommentMasker
         return result;
     }
 
-    private static string[] MaskDMultilineStrings(string[] lines)
+    internal static string MaskNimRawStringLiterals(string line)
     {
-        if (!MayContain(lines, "q{")
-            && !MayContain(lines, "q\"")
-            && !MayContain(lines, "`"))
+        if (!line.Contains("r\"", StringComparison.Ordinal))
+            return line;
+
+        char[]? chars = null;
+        for (var cursor = 0; cursor + 1 < line.Length; cursor++)
         {
-            return lines;
+            if (line[cursor] != 'r'
+                || line[cursor + 1] != '"'
+                || (cursor > 0 && IsIdentifierChar(line[cursor - 1])))
+            {
+                continue;
+            }
+
+            chars ??= line.ToCharArray();
+            chars[cursor++] = ' ';
+            chars[cursor++] = ' ';
+            while (cursor < line.Length)
+            {
+                var current = line[cursor];
+                chars[cursor++] = ' ';
+                if (current != '"')
+                    continue;
+
+                if (cursor < line.Length && line[cursor] == '"')
+                {
+                    chars[cursor++] = ' ';
+                    continue;
+                }
+
+                break;
+            }
+
+            cursor--;
         }
 
+        return chars is null ? line : new string(chars);
+    }
+
+    private static string[] MaskDNonCodeRegions(string[] lines)
+    {
         var result = new string[lines.Length];
         var tokenStringDepth = 0;
-        var blockCommentDepth = 0;
+        var nestedCommentDepth = 0;
+        var inCStyleBlockComment = false;
         var inBacktickString = false;
         string? tokenStringClosing = null;
+        var quote = '\0';
+        var quoteUsesEscapes = false;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
             char[]? chars = null;
-            var quote = '\0';
 
             void MaskAt(int index) =>
                 (chars ??= line.ToCharArray())[index] = ' ';
@@ -261,47 +290,72 @@ internal static class ScientificNativeCommentMasker
                     continue;
                 }
 
-                if (blockCommentDepth > 0)
+                if (nestedCommentDepth > 0)
                 {
                     if (StartsWith(line, cursor, "/+"))
                     {
-                        blockCommentDepth++;
-                        cursor += 2;
+                        MaskToken("/+");
+                        nestedCommentDepth++;
                         continue;
                     }
 
                     if (StartsWith(line, cursor, "+/"))
                     {
-                        blockCommentDepth--;
-                        cursor += 2;
+                        MaskToken("+/");
+                        nestedCommentDepth--;
                         continue;
                     }
 
-                    cursor++;
+                    MaskAt(cursor++);
+                    continue;
+                }
+
+                if (inCStyleBlockComment)
+                {
+                    if (StartsWith(line, cursor, "*/"))
+                    {
+                        MaskToken("*/");
+                        inCStyleBlockComment = false;
+                        continue;
+                    }
+
+                    MaskAt(cursor++);
                     continue;
                 }
 
                 if (quote != '\0')
                 {
-                    if (line[cursor] == '\\' && cursor + 1 < line.Length)
+                    var current = line[cursor];
+                    MaskAt(cursor++);
+                    if (quoteUsesEscapes && current == '\\' && cursor < line.Length)
                     {
-                        cursor += 2;
+                        MaskAt(cursor++);
                         continue;
                     }
 
-                    if (line[cursor] == quote)
+                    if (current == quote)
                         quote = '\0';
-                    cursor++;
                     continue;
                 }
 
                 if (StartsWith(line, cursor, "//"))
+                {
+                    while (cursor < line.Length)
+                        MaskAt(cursor++);
                     break;
+                }
+
+                if (StartsWith(line, cursor, "/*"))
+                {
+                    MaskToken("/*");
+                    inCStyleBlockComment = true;
+                    continue;
+                }
 
                 if (StartsWith(line, cursor, "/+"))
                 {
-                    blockCommentDepth++;
-                    cursor += 2;
+                    MaskToken("/+");
+                    nestedCommentDepth++;
                     continue;
                 }
 
@@ -331,9 +385,21 @@ internal static class ScientificNativeCommentMasker
                     continue;
                 }
 
+                if (StartsWith(line, cursor, "r\"")
+                    && (cursor == 0 || !IsIdentifierChar(line[cursor - 1])))
+                {
+                    MaskAt(cursor++);
+                    MaskAt(cursor++);
+                    quote = '"';
+                    quoteUsesEscapes = false;
+                    continue;
+                }
+
                 if (line[cursor] is '"' or '\'')
                 {
-                    quote = line[cursor++];
+                    quote = line[cursor];
+                    quoteUsesEscapes = true;
+                    MaskAt(cursor++);
                     continue;
                 }
 

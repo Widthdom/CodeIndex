@@ -2713,6 +2713,7 @@ public static partial class ReferenceExtractor
         bool UseCSharpTriggerFastPath,
         bool MaskRustLifetimes,
         bool MaskStringLiterals,
+        bool MaskNimRawStrings,
         bool IncludeBacktickStringDelimiter,
         bool PreservePostfixSingleQuotes,
         bool UseMatlabStringRules,
@@ -2730,8 +2731,9 @@ public static partial class ReferenceExtractor
             UseCSharpTriggerFastPath: lang == "csharp",
             MaskRustLifetimes: lang == "rust",
             MaskStringLiterals: lang != "cobol",
+            MaskNimRawStrings: lang == "nim",
             IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
-            PreservePostfixSingleQuotes: lang is "julia" or "matlab",
+            PreservePostfixSingleQuotes: lang is "ada" or "julia" or "matlab",
             UseMatlabStringRules: lang == "matlab",
             UsesHashComments: UsesHashComments(lang),
             UsesRHashComments: lang == "r",
@@ -2756,6 +2758,8 @@ public static partial class ReferenceExtractor
         var result = line;
         if (options.MaskRustLifetimes)
             result = MaskRustLifetimeTokens(result);
+        if (options.MaskNimRawStrings)
+            result = ScientificNativeCommentMasker.MaskNimRawStringLiterals(result);
         if (options.MaskStringLiterals && MayContainStringLiteralDelimiter(result, options.IncludeBacktickStringDelimiter))
         {
             if (options.PreservePostfixSingleQuotes)
@@ -3000,7 +3004,7 @@ public static partial class ReferenceExtractor
     private static bool UsesCStyleBlockComments(string language) =>
         language is "c" or "cpp" or "go" or "objc" or "dart";
 
-    internal static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
+    private static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
     {
         if (lines is string[] lineArray && !MayContainCStyleMaskingTrigger(language, lines))
             return lineArray;

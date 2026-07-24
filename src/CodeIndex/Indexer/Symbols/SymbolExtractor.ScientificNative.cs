@@ -36,7 +36,12 @@ public static partial class SymbolExtractor
             if (language == "matlab"
                 && lineIndex > startIndex
                 && depth == 1
-                && IsMatlabPeerDeclaration(code, matches, declarationColumn))
+                && IsMatlabPeerDeclaration(
+                    scannerLines,
+                    lineIndex,
+                    code,
+                    matches,
+                    declarationColumn))
             {
                 return bodyStartLine == null
                     ? (lineIndex, null, null)
@@ -99,20 +104,20 @@ public static partial class SymbolExtractor
     {
         blockStartLine = startIndex;
         var startLine = scannerLines[startIndex];
-        var parameterEnd = startLine.LastIndexOf(')');
+        var parameterEnd = startLine.IndexOf(')');
         var assignmentIndex = parameterEnd >= 0
             ? startLine.IndexOf('=', parameterEnd + 1)
             : -1;
         if (assignmentIndex < 0)
             return false;
 
-        var expression = startLine[(assignmentIndex + 1)..].TrimStart();
-        if (expression.Length == 0)
+        var expression = startLine[(assignmentIndex + 1)..];
+        if (string.IsNullOrWhiteSpace(expression))
         {
             for (var lineIndex = startIndex + 1; lineIndex < scannerLines.Length; lineIndex++)
             {
-                expression = scannerLines[lineIndex].TrimStart();
-                if (expression.Length != 0)
+                expression = scannerLines[lineIndex];
+                if (!string.IsNullOrWhiteSpace(expression))
                 {
                     blockStartLine = lineIndex;
                     break;
@@ -120,23 +125,20 @@ public static partial class SymbolExtractor
             }
         }
 
-        foreach (var keyword in JuliaShortBlockExpressionKeywords)
+        foreach (Match match in JuliaScientificBlockTokenRegex.Matches(expression))
         {
-            if (expression.Equals(keyword, StringComparison.Ordinal)
-                || expression.StartsWith(keyword + " ", StringComparison.Ordinal)
-                || expression.StartsWith(keyword + ";", StringComparison.Ordinal))
-            {
+            var keyword = match.Groups["keyword"].Value;
+            if (IsJuliaExpressionPositionBlockOpener(expression, match.Index, keyword)
+                || (keyword == "for" && IsJuliaShortForBlockStart(expression, match.Index)))
                 return true;
-            }
         }
 
         return false;
     }
 
-    private static readonly string[] JuliaShortBlockExpressionKeywords =
-        ["begin", "for", "if", "let", "quote", "try", "while"];
-
     private static bool IsMatlabPeerDeclaration(
+        string[] scannerLines,
+        int lineIndex,
         string code,
         MatchCollection matches,
         int declarationColumn)
@@ -147,8 +149,49 @@ public static partial class SymbolExtractor
                 return false;
 
             var keyword = match.Groups["keyword"].Value;
-            return keyword.Equals("function", StringComparison.OrdinalIgnoreCase)
-                || keyword.Equals("classdef", StringComparison.OrdinalIgnoreCase);
+            if (!keyword.Equals("function", StringComparison.OrdinalIgnoreCase)
+                && !keyword.Equals("classdef", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return !HasMatlabExplicitOuterClosure(scannerLines, lineIndex);
+        }
+
+        return false;
+    }
+
+    private static bool HasMatlabExplicitOuterClosure(string[] scannerLines, int nestedDeclarationLineIndex)
+    {
+        var depth = 1;
+        for (var lineIndex = nestedDeclarationLineIndex; lineIndex < scannerLines.Length; lineIndex++)
+        {
+            var code = scannerLines[lineIndex];
+            var skipNestedDeclaration = lineIndex == nestedDeclarationLineIndex;
+            foreach (Match match in MatlabScientificBlockTokenRegex.Matches(code))
+            {
+                if (skipNestedDeclaration)
+                {
+                    skipNestedDeclaration = false;
+                    depth++;
+                    continue;
+                }
+
+                var keyword = match.Groups["keyword"].Value;
+                if (!IsScientificBlockTokenAtStatementBoundary(code, match.Index, keyword, "matlab"))
+                    continue;
+
+                if (keyword.Equals("end", StringComparison.OrdinalIgnoreCase))
+                {
+                    depth--;
+                    if (depth == 0)
+                        return true;
+                }
+                else
+                {
+                    depth++;
+                }
+            }
         }
 
         return false;
@@ -193,7 +236,7 @@ public static partial class SymbolExtractor
         string keyword,
         string language)
     {
-        if (language == "julia" && keyword == "do")
+        if (language == "julia" && IsJuliaExpressionPositionBlockOpener(line, tokenIndex, keyword))
             return true;
 
         for (var index = tokenIndex - 1; index >= 0; index--)
@@ -209,6 +252,41 @@ public static partial class SymbolExtractor
 
             return language == "julia"
                 && (line[index] == '=' || IsJuliaMacroBlockPrefix(line, tokenIndex));
+        }
+
+        return true;
+    }
+
+    private static bool IsJuliaExpressionPositionBlockOpener(
+        string line,
+        int tokenIndex,
+        string keyword)
+    {
+        if (keyword is "begin" or "do" or "function" or "let" or "quote" or "try" or "while")
+            return true;
+        if (keyword != "if")
+            return false;
+
+        var index = tokenIndex - 1;
+        while (index >= 0 && char.IsWhiteSpace(line[index]))
+            index--;
+        if (index < 0 || line[index] is '(' or ',' or '=' or ';')
+            return true;
+
+        var tokenEnd = index + 1;
+        while (index >= 0 && (char.IsLetterOrDigit(line[index]) || line[index] == '_'))
+            index--;
+        var precedingToken = line.AsSpan(index + 1, tokenEnd - index - 1);
+        return precedingToken.Equals("else", StringComparison.Ordinal)
+            || precedingToken.Equals("return", StringComparison.Ordinal);
+    }
+
+    private static bool IsJuliaShortForBlockStart(string expression, int tokenIndex)
+    {
+        for (var index = 0; index < tokenIndex; index++)
+        {
+            if (!char.IsWhiteSpace(expression[index]) && expression[index] != '(')
+                return false;
         }
 
         return true;
