@@ -43,10 +43,10 @@ internal static class ScientificNativeReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex DImportListRegex = new(
-        @"^\s*(?:(?:public|static)\s+)*import\s+(?<names>[^;\r\n]+)",
+        @"^\s*(?:(?:public|private|protected|package|static|export)\s+)*import\s+(?<names>[^;\r\n]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex DBaseTypeListRegex = new(
-        @"^\s*(?:class|interface)\s+[A-Za-z_]\w*(?:\s*\([^)]*\))?\s*:\s*(?<names>[^{\r\n]+)",
+        @"^\s*(?:(?:public|private|protected|package|static|abstract|final|extern)\s+)*(?:class|interface)\s+[A-Za-z_]\w*(?:\s*\([^)]*\))?\s*:\s*(?<names>[^{\r\n]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex DTemplateInvocationRegex = new(
         @"(?<![\w$])(?:(?:[A-Za-z_]\w*)\s*\.\s*)*(?<name>[A-Za-z_]\w*)\s*!\s*(?:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*|\([^()\r\n]*\))\s*\(",
@@ -59,7 +59,7 @@ internal static class ScientificNativeReferenceExtractor
         @"^\s*(?:cimport|import)\s+(?<names>[^\r\n]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CythonBaseTypeListRegex = new(
-        @"^\s*cdef\s+class\s+[A-Za-z_]\w*\s*\(\s*(?<names>[^)\r\n]+)",
+        @"^\s*(?:cdef\s+)?class\s+[A-Za-z_]\w*\s*\(\s*(?<names>[^)\r\n]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex AdaImportListRegex = new(

@@ -13,7 +13,8 @@ internal static class ScientificNativeCommentMasker
                     "=#",
                     "#",
                     singleQuoteCanBePostfix: true,
-                    tripleQuoteUsesBackslashEscapes: true),
+                    tripleQuoteUsesBackslashEscapes: true,
+                    maskMultilineBacktickStrings: true),
                 "#=",
                 "=#",
                 "#",
@@ -90,13 +91,18 @@ internal static class ScientificNativeCommentMasker
         string blockClosing,
         string lineComment,
         bool singleQuoteCanBePostfix = false,
-        bool tripleQuoteUsesBackslashEscapes = false)
+        bool tripleQuoteUsesBackslashEscapes = false,
+        bool maskMultilineBacktickStrings = false)
     {
-        if (!MayContain(lines, "\"\"\""))
+        if (!MayContain(lines, "\"\"\"")
+            && (!maskMultilineBacktickStrings || !MayContain(lines, "`")))
+        {
             return lines;
+        }
 
         var result = new string[lines.Length];
         var inTripleQuotedString = false;
+        var inBacktickString = false;
         var blockCommentDepth = 0;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
@@ -110,6 +116,15 @@ internal static class ScientificNativeCommentMasker
             var cursor = 0;
             while (cursor < line.Length)
             {
+                if (inBacktickString)
+                {
+                    var current = line[cursor];
+                    MaskAt(cursor++);
+                    if (current == '`' && !HasOddBackslashPrefix(line, cursor - 1))
+                        inBacktickString = false;
+                    continue;
+                }
+
                 if (inTripleQuotedString)
                 {
                     if (StartsWith(line, cursor, "\"\"\"")
@@ -173,6 +188,13 @@ internal static class ScientificNativeCommentMasker
                 {
                     MaskToken("\"\"\"");
                     inTripleQuotedString = true;
+                    continue;
+                }
+
+                if (maskMultilineBacktickStrings && line[cursor] == '`')
+                {
+                    MaskAt(cursor++);
+                    inBacktickString = true;
                     continue;
                 }
 
@@ -262,6 +284,12 @@ internal static class ScientificNativeCommentMasker
         var inCStyleBlockComment = false;
         var inBacktickString = false;
         string? tokenStringClosing = null;
+        var tokenStringQuote = '\0';
+        var tokenStringQuoteUsesEscapes = false;
+        var tokenStringInBacktickString = false;
+        var tokenStringNestedCommentDepth = 0;
+        var tokenStringInCStyleBlockComment = false;
+        string? nestedTokenStringClosing = null;
         var quote = '\0';
         var quoteUsesEscapes = false;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
@@ -299,11 +327,143 @@ internal static class ScientificNativeCommentMasker
 
                 if (tokenStringDepth > 0)
                 {
-                    var current = line[cursor];
+                    if (nestedTokenStringClosing != null)
+                    {
+                        if (StartsWith(line, cursor, nestedTokenStringClosing))
+                        {
+                            MaskToken(nestedTokenStringClosing);
+                            nestedTokenStringClosing = null;
+                            continue;
+                        }
+
+                        MaskAt(cursor++);
+                        continue;
+                    }
+
+                    if (tokenStringInBacktickString)
+                    {
+                        var backtickCurrent = line[cursor];
+                        MaskAt(cursor++);
+                        if (backtickCurrent == '`')
+                            tokenStringInBacktickString = false;
+                        continue;
+                    }
+
+                    if (tokenStringNestedCommentDepth > 0)
+                    {
+                        if (StartsWith(line, cursor, "/+"))
+                        {
+                            MaskToken("/+");
+                            tokenStringNestedCommentDepth++;
+                            continue;
+                        }
+
+                        if (StartsWith(line, cursor, "+/"))
+                        {
+                            MaskToken("+/");
+                            tokenStringNestedCommentDepth--;
+                            continue;
+                        }
+
+                        MaskAt(cursor++);
+                        continue;
+                    }
+
+                    if (tokenStringInCStyleBlockComment)
+                    {
+                        if (StartsWith(line, cursor, "*/"))
+                        {
+                            MaskToken("*/");
+                            tokenStringInCStyleBlockComment = false;
+                            continue;
+                        }
+
+                        MaskAt(cursor++);
+                        continue;
+                    }
+
+                    if (tokenStringQuote != '\0')
+                    {
+                        var quotedCurrent = line[cursor];
+                        MaskAt(cursor++);
+                        if (tokenStringQuoteUsesEscapes
+                            && quotedCurrent == '\\'
+                            && cursor < line.Length)
+                        {
+                            MaskAt(cursor++);
+                            continue;
+                        }
+
+                        if (quotedCurrent == tokenStringQuote)
+                            tokenStringQuote = '\0';
+                        continue;
+                    }
+
+                    if (StartsWith(line, cursor, "//"))
+                    {
+                        while (cursor < line.Length)
+                            MaskAt(cursor++);
+                        break;
+                    }
+
+                    if (StartsWith(line, cursor, "/*"))
+                    {
+                        MaskToken("/*");
+                        tokenStringInCStyleBlockComment = true;
+                        continue;
+                    }
+
+                    if (StartsWith(line, cursor, "/+"))
+                    {
+                        MaskToken("/+");
+                        tokenStringNestedCommentDepth++;
+                        continue;
+                    }
+
+                    if (StartsWith(line, cursor, "q\"")
+                        && (cursor == 0 || !IsIdentifierChar(line[cursor - 1]))
+                        && TryGetDTokenStringClosing(
+                            line,
+                            cursor + 2,
+                            out var nestedOpeningLength,
+                            out var nestedClosing))
+                    {
+                        for (var openingIndex = 0; openingIndex < 2 + nestedOpeningLength; openingIndex++)
+                            MaskAt(cursor++);
+                        nestedTokenStringClosing = nestedClosing;
+                        continue;
+                    }
+
+                    if (line[cursor] == '`')
+                    {
+                        MaskAt(cursor++);
+                        tokenStringInBacktickString = true;
+                        continue;
+                    }
+
+                    if (StartsWith(line, cursor, "r\"")
+                        && (cursor == 0 || !IsIdentifierChar(line[cursor - 1])))
+                    {
+                        MaskAt(cursor++);
+                        MaskAt(cursor++);
+                        tokenStringQuote = '"';
+                        tokenStringQuoteUsesEscapes = false;
+                        continue;
+                    }
+
+                    if (line[cursor] is '"' or '\'')
+                    {
+                        tokenStringQuote = line[cursor];
+                        tokenStringQuoteUsesEscapes = true;
+                        MaskAt(cursor++);
+                        continue;
+                    }
+
+                    var structuralCurrent = line[cursor];
                     MaskAt(cursor++);
-                    if (current == '{')
+                    if (structuralCurrent == '{')
                         tokenStringDepth++;
-                    else if (current == '}')
+                    else if (structuralCurrent == '}')
                         tokenStringDepth--;
                     continue;
                 }

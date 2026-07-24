@@ -737,7 +737,7 @@ public partial class ReferenceExtractorTests
             """
             void run() {
                 auto text = q{
-                    /* tokenOnly();
+                    /* tokenOnly(); */
                 };
                 helper();
             }
@@ -780,6 +780,68 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "helper" && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "tokenOnly");
+    }
+
+    [Fact]
+    public void Extract_JuliaMultilineCommandLiteralDoesNotEmitOrRescopePhantomCode_Issue4738()
+    {
+        const string content = """
+            function real()
+                command = `echo
+                    phantomCall()
+                    function Phantom()
+                `
+                helper()
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "Phantom");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "phantomCall");
+        Assert.Equal("real", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JuliaShortFunctionOperatorContinuationKeepsReferenceContainer_Issue4738()
+    {
+        const string content = """
+            f(x) = first(x) +
+                second(x)
+            """;
+        var symbol = Assert.Single(SymbolExtractor.Extract(1, "julia", content));
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, [symbol]);
+
+        Assert.Equal(2, symbol.EndLine);
+        Assert.Equal("f", Assert.Single(references, reference =>
+            reference.SymbolName == "second" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_DTokenStringNestedLiteralsAndCommentsDoNotChangeBraceDepth_Issue4738()
+    {
+        const string content = """
+            void run() {
+                enum code = q{
+                    auto first = "}";
+                    auto second = q"[}]";
+                    /* } */
+                    /+ { } +/
+                    phantomCall();
+                };
+                helper();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "d", content);
+
+        var references = ReferenceExtractor.Extract(1, "d", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "phantomCall");
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
     }
 
     [Fact]
@@ -855,7 +917,8 @@ public partial class ReferenceExtractorTests
     public void Extract_DMultipleBaseTypesAndCastSyntaxStayGraphAccurate_Issue4738()
     {
         const string content = """
-            class Child : Base, IFace {
+            private import pkg.mod;
+            public abstract class Child : Base, IFace {
                 void run() {
                     auto value = cast(int)(helper());
                 }
@@ -870,9 +933,27 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "IFace" && reference.ReferenceKind == "type_reference");
         Assert.Contains(references, reference =>
+            reference.SymbolName == "pkg.mod" && reference.ReferenceKind == "import");
+        Assert.Contains(references, reference =>
             reference.SymbolName == "helper" && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "cast" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CythonRegularClassEmitsBaseTypeReference_Issue4738()
+    {
+        const string content = """
+            class Child(Base):
+                def run(self):
+                    helper()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "cython", content);
+
+        var references = ReferenceExtractor.Extract(1, "cython", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Base" && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -935,6 +1016,8 @@ public partial class ReferenceExtractorTests
                 int first = left % helper();
                 int second = left % -other();
                 int third = left % *pointer();
+                value %= divisor;
+                afterAssignment();
             }
             @end
             """;
@@ -942,7 +1025,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ambiguous_m", content, "unknown.m");
         var references = ReferenceExtractor.Extract(1, "ambiguous_m", content, symbols, "unknown.m");
 
-        foreach (var name in new[] { "helper", "other", "pointer" })
+        foreach (var name in new[] { "helper", "other", "pointer", "afterAssignment" })
         {
             Assert.Single(references, reference =>
                 reference.SymbolName == name && reference.ReferenceKind == "call");

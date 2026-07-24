@@ -194,6 +194,9 @@ internal static class AmbiguousMContentMasker
         }
 
         var nextIndex = percentIndex + 1;
+        if (nextIndex < content.Length && content[nextIndex] == '=')
+            nextIndex++;
+
         while (nextIndex < content.Length
             && content[nextIndex] is not '\r' and not '\n'
             && char.IsWhiteSpace(content[nextIndex]))

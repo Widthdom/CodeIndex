@@ -116,6 +116,11 @@ public static partial class SymbolExtractor
                 return (expressionEndLine, startIndex + 1, expressionEndLine);
             }
 
+            if (TryFindJuliaShortContinuationEnd(scannerLines, startIndex, out expressionEndLine))
+            {
+                return (expressionEndLine, startIndex + 1, expressionEndLine);
+            }
+
             return (startIndex + 1, startIndex + 1, startIndex + 1);
         }
 
@@ -182,12 +187,21 @@ public static partial class SymbolExtractor
         if (assignmentIndex < 0)
             return false;
 
+        var expressionStart = assignmentIndex + 1;
+        while (expressionStart < startLine.Length && char.IsWhiteSpace(startLine[expressionStart]))
+            expressionStart++;
+        if (expressionStart >= startLine.Length
+            || startLine[expressionStart] is not ('(' or '[' or '{'))
+        {
+            return false;
+        }
+
         var delimiters = new Stack<char>();
         var sawOpeningDelimiter = false;
         for (var lineIndex = startIndex; lineIndex < scannerLines.Length; lineIndex++)
         {
             var line = scannerLines[lineIndex];
-            var cursor = lineIndex == startIndex ? assignmentIndex + 1 : 0;
+            var cursor = lineIndex == startIndex ? expressionStart : 0;
             for (; cursor < line.Length; cursor++)
             {
                 var value = line[cursor];
@@ -219,6 +233,66 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool TryFindJuliaShortContinuationEnd(
+        string[] scannerLines,
+        int startIndex,
+        out int expressionEndLine)
+    {
+        expressionEndLine = startIndex + 1;
+        var startLine = scannerLines[startIndex];
+        var parameterEnd = startLine.IndexOf(')');
+        var assignmentIndex = parameterEnd >= 0
+            ? startLine.IndexOf('=', parameterEnd + 1)
+            : -1;
+        if (assignmentIndex < 0
+            || !EndsWithJuliaContinuationOperator(startLine[(assignmentIndex + 1)..]))
+        {
+            return false;
+        }
+
+        var declarationColumn = GetFirstNonWhitespaceColumn(startLine);
+        for (var lineIndex = startIndex + 1; lineIndex < scannerLines.Length; lineIndex++)
+        {
+            var line = scannerLines[lineIndex];
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            if (GetFirstNonWhitespaceColumn(line) <= declarationColumn)
+                return expressionEndLine > startIndex + 1;
+
+            expressionEndLine = lineIndex + 1;
+            if (!EndsWithJuliaContinuationOperator(line))
+                return true;
+        }
+
+        return expressionEndLine > startIndex + 1;
+    }
+
+    private static bool EndsWithJuliaContinuationOperator(string expression)
+    {
+        var trimmed = expression.AsSpan().TrimEnd();
+        if (trimmed.IsEmpty)
+            return false;
+
+        return trimmed[^1] is '+'
+            or '-'
+            or '*'
+            or '/'
+            or '\\'
+            or '^'
+            or '%'
+            or '&'
+            or '|'
+            or '<'
+            or '>'
+            or '='
+            or '?'
+            or ':'
+            or ','
+            or '÷'
+            or '⊻';
     }
 
     private static bool IsMatlabPeerDeclaration(
