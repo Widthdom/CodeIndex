@@ -222,21 +222,21 @@ public partial class QueryCommandRunnerTests
         using var firstRecordEmitted = new ManualResetEventSlim();
         using var stdout = new NotifyingStringWriter(firstRecordEmitted);
         using var stderr = new StringWriter();
-        var originalIn = Console.In;
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
+        using var cancellation = new CancellationTokenSource();
         Task<int>? runTask = null;
         var emittedBeforeEof = false;
         var exitCode = CommandExitCodes.UnhandledException;
 
-        Console.SetIn(input);
-        Console.SetOut(stdout);
-        Console.SetError(stderr);
         try
         {
-            runTask = Task.Run(() => QueryCommandRunner.RunBatch(
-                ["--db", dbPath, "--json-summary", "--parallel", "2"],
-                _jsonOptions));
+            runTask = Task.Run(() =>
+            {
+                using var capture = ConsoleCapture.Start(stdout, stderr, input);
+                return QueryCommandRunner.RunBatch(
+                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                    _jsonOptions,
+                    cancellationToken: cancellation.Token);
+            });
             input.WriteLine("""{"command":"languages","args":["--format","count"]}""");
 
             emittedBeforeEof = firstRecordEmitted.Wait(TimeSpan.FromSeconds(15));
@@ -248,20 +248,20 @@ public partial class QueryCommandRunnerTests
         finally
         {
             input.Complete();
-            if (runTask is not null && !runTask.IsCompleted)
+            if (runTask is not null)
             {
+                var cleanupCancellationRequested = !runTask.IsCompleted;
+                if (cleanupCancellationRequested)
+                    cancellation.Cancel();
                 try
                 {
-                    await runTask.WaitAsync(TimeSpan.FromSeconds(15));
+                    await runTask;
                 }
-                catch
+                catch (OperationCanceledException) when (cleanupCancellationRequested)
                 {
-                    // Preserve the primary assertion while still making cleanup bounded.
+                    // The worker is fully joined before captured writers leave scope.
                 }
             }
-            Console.SetIn(originalIn);
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
         }
 
         Assert.True(emittedBeforeEof);

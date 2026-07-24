@@ -1125,6 +1125,7 @@ internal static partial class ProgramRunner
 
     internal static void EnsureRedirectedStdoutUsesUtf8()
     {
+        using var ownership = ConsoleStreamOwnership.Enter();
         if (!Console.IsOutputRedirected || Console.Out is StringWriter || Console.Out.GetType().Assembly != typeof(Console).Assembly)
             return;
 
@@ -1766,23 +1767,47 @@ internal static partial class ProgramRunner
     private sealed class QuietStderrScope : IDisposable
     {
         private readonly TextWriter _originalError;
+        private readonly TextWriter _replacementError;
+        private readonly IDisposable _ownership;
 
-        private QuietStderrScope(TextWriter originalError)
+        private QuietStderrScope(
+            TextWriter originalError,
+            TextWriter replacementError,
+            IDisposable ownership)
         {
             _originalError = originalError;
+            _replacementError = replacementError;
+            _ownership = ownership;
         }
 
         public static QuietStderrScope Start()
         {
-            var originalError = Console.Error;
-            Console.SetError(new ErrorOnlyTextWriter(originalError));
-            return new QuietStderrScope(originalError);
+            var ownership = ConsoleStreamOwnership.Enter();
+            try
+            {
+                var originalError = Console.Error;
+                var replacementError = new ErrorOnlyTextWriter(originalError);
+                Console.SetError(replacementError);
+                return new QuietStderrScope(originalError, replacementError, ownership);
+            }
+            catch
+            {
+                ownership.Dispose();
+                throw;
+            }
         }
 
         public void Dispose()
         {
-            Console.Error.Flush();
-            Console.SetError(_originalError);
+            try
+            {
+                _replacementError.Flush();
+                ConsoleStreamOwnership.RestoreError(_originalError);
+            }
+            finally
+            {
+                _ownership.Dispose();
+            }
         }
     }
 
@@ -2631,13 +2656,19 @@ internal static partial class ProgramRunner
     private sealed class QueryTraceOutputCapture : TextWriter
     {
         private readonly TextWriter _inner;
+        private readonly IDisposable _ownership;
         private readonly bool _countNumericOutput;
         private readonly bool _countJsonLines;
         private bool _disposed;
 
-        private QueryTraceOutputCapture(TextWriter inner, bool countNumericOutput, bool countJsonLines)
+        private QueryTraceOutputCapture(
+            TextWriter inner,
+            IDisposable ownership,
+            bool countNumericOutput,
+            bool countJsonLines)
         {
             _inner = inner;
+            _ownership = ownership;
             _countNumericOutput = countNumericOutput;
             _countJsonLines = countJsonLines;
         }
@@ -2650,12 +2681,22 @@ internal static partial class ProgramRunner
             if (traceMode == "none")
                 return null;
 
-            var capture = new QueryTraceOutputCapture(
-                Console.Out,
-                HasFlag(args, "--count"),
-                HasFlag(args, "--json") && !HasInlineValue(args, "--json", "array"));
-            Console.SetOut(capture);
-            return capture;
+            var ownership = ConsoleStreamOwnership.Enter();
+            try
+            {
+                var capture = new QueryTraceOutputCapture(
+                    Console.Out,
+                    ownership,
+                    HasFlag(args, "--count"),
+                    HasFlag(args, "--json") && !HasInlineValue(args, "--json", "array"));
+                Console.SetOut(capture);
+                return capture;
+            }
+            catch
+            {
+                ownership.Dispose();
+                throw;
+            }
         }
 
         public override void Write(char value) => _inner.Write(value);
@@ -2677,8 +2718,15 @@ internal static partial class ProgramRunner
         {
             if (!_disposed && disposing)
             {
-                Console.SetOut(_inner);
-                _disposed = true;
+                try
+                {
+                    ConsoleStreamOwnership.RestoreOut(_inner);
+                    _disposed = true;
+                }
+                finally
+                {
+                    _ownership.Dispose();
+                }
             }
             base.Dispose(disposing);
         }

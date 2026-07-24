@@ -298,6 +298,7 @@ public static class ConsoleUi
 
     internal static void EnsureConsoleWritersSynchronized()
     {
+        using var ownership = ConsoleStreamOwnership.Enter();
         lock (TerminalLock)
         {
             var output = Console.Out;
