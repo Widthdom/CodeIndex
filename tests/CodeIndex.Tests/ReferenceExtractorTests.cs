@@ -1064,6 +1064,8 @@ public partial class ReferenceExtractorTests
               helper value
               helper(value)
               text = "123456789"; helper(value)
+              multiline = "helper()
+            continued"
               divided = value // 2; helper(value)
               helper = 1
             end
@@ -1406,6 +1408,9 @@ public partial class ReferenceExtractorTests
             proc fake {} { helper }
             proc helper {} { return 1 }
             # [helper]
+            if {1} { # continued script comment \
+            proc script_comment_fake {} { helper }
+            }
             proc run {helper} {
                 set literal {helper}
                 set substituted [helper]
@@ -1446,9 +1451,15 @@ public partial class ReferenceExtractorTests
                     helper
                 set callback helper()
                 puts helper()
+                set escaped_command \[helper]
+                set escaped_separator \; helper
                 helper
             }
             proc split {value}
+            {
+                helper
+            }
+            proc continued {} \
             {
                 helper
             }
@@ -1458,11 +1469,13 @@ public partial class ReferenceExtractorTests
         var (symbols, references) = ExtractSymbolsAndReferences("tcl", content);
 
         Assert.DoesNotContain(symbols, symbol => symbol.Name == "fake");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "script_comment_fake");
         AssertReferencesContain(references, "call", "run", "helper");
         AssertReferencesContain(references, "call", "multiline", "helper");
         AssertReferencesContain(references, "call", "split", "helper");
+        AssertReferencesContain(references, "call", "continued", "helper");
         AssertReferencesContain(references, "call", "sameLine", "helper");
-        Assert.Equal(19, references.Count(reference =>
+        Assert.Equal(20, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName == "helper"));
         Assert.Single(references, reference =>

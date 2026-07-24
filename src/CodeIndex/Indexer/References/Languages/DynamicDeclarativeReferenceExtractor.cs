@@ -447,6 +447,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                         && ch is '"' or '`'
                         && !HasClosingQuotedDelimiter(line, column, ch))
                     {
+                        FillWithSpaces(buffer, column);
                         crystalMultilineQuote = ch;
                         column = line.Length;
                         continue;
@@ -575,37 +576,21 @@ internal static class DynamicDeclarativeReferenceExtractor
         IReadOnlyList<string> rawLines,
         IReadOnlyList<string> maskedLines)
     {
-        var result = maskedLines as string[] ?? maskedLines.ToArray();
-        var cloned = false;
-        var commentContinued = false;
-        for (var lineIndex = 0; lineIndex < rawLines.Count; lineIndex++)
+        if (rawLines.Count == 0)
+            return maskedLines as string[] ?? maskedLines.ToArray();
+
+        var commentColumns = new Dictionary<int, int>();
+        _ = BuildTclCallLines(
+            maskedLines,
+            BuildTclBraceEndPositions(maskedLines),
+            new HashSet<long>(),
+            commentColumns);
+        if (commentColumns.Count == 0)
+            return maskedLines as string[] ?? maskedLines.ToArray();
+
+        var result = maskedLines.ToArray();
+        foreach (var (lineIndex, commentColumn) in commentColumns)
         {
-            var rawLine = rawLines[lineIndex];
-            if (commentContinued)
-            {
-                if (!cloned)
-                {
-                    result = result.ToArray();
-                    cloned = true;
-                }
-                result[lineIndex] = new string(' ', rawLine.Length);
-                commentContinued = HasTclEscapedNewline(rawLine);
-                continue;
-            }
-
-            var commentColumn = FindTclCommentStart(rawLine);
-            if (commentColumn < 0)
-                continue;
-
-            commentContinued = HasTclEscapedNewline(rawLine);
-            if (!commentContinued)
-                continue;
-
-            if (!cloned)
-            {
-                result = result.ToArray();
-                cloned = true;
-            }
             var buffer = result[lineIndex].ToCharArray();
             FillWithSpaces(buffer, commentColumn);
             result[lineIndex] = new string(buffer);
@@ -1314,6 +1299,12 @@ internal static class DynamicDeclarativeReferenceExtractor
             var column = lineIndex == startLine ? startColumn : 0;
             if (TryFindNextNonWhitespace(lines[lineIndex], column, out foundColumn))
             {
+                if (foundColumn == lines[lineIndex].Length - 1
+                    && lines[lineIndex][foundColumn] == '\\')
+                {
+                    continue;
+                }
+
                 foundLine = lineIndex;
                 return true;
             }
@@ -1410,7 +1401,8 @@ internal static class DynamicDeclarativeReferenceExtractor
     private static string[] BuildTclCallLines(
         IReadOnlyList<string> lines,
         IReadOnlyDictionary<long, TclBraceEnd> braceEnds,
-        IReadOnlySet<long> scriptBodyOpenings)
+        IReadOnlySet<long> scriptBodyOpenings,
+        IDictionary<int, int>? commentColumns = null)
     {
         var result = new string[lines.Count];
         var frames = new Stack<TclLexicalFrame>();
@@ -1423,6 +1415,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             if (commentContinued)
             {
                 result[lineIndex] = new string(' ', line.Length);
+                commentColumns?.TryAdd(lineIndex, 0);
                 commentContinued = HasTclEscapedNewline(line);
                 continue;
             }
@@ -1551,10 +1544,19 @@ internal static class DynamicDeclarativeReferenceExtractor
                 }
                 if (ch == '\\')
                 {
+                    buffer[column] = ' ';
+                    if (column + 1 >= line.Length)
+                    {
+                        lineContinued = true;
+                        frame.WordStart = true;
+                        column++;
+                        continue;
+                    }
+
                     if (frame.WordStart)
                         frame.WordIndex++;
-                    lineContinued = column + 1 >= line.Length;
-                    column += Math.Min(2, line.Length - column);
+                    buffer[column + 1] = ' ';
+                    column += 2;
                     frame.CommandStart = false;
                     frame.WordStart = false;
                     continue;
@@ -1562,6 +1564,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                 if (ch == '#' && frame.CommandStart)
                 {
                     FillWithSpaces(buffer, column);
+                    commentColumns?.TryAdd(lineIndex, column);
                     commentContinued = HasTclEscapedNewline(line);
                     break;
                 }
@@ -1795,6 +1798,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             "while" => wordIndex == 2,
             "catch" => wordIndex == 1,
             "for" => wordIndex is 1 or 3 or 4,
+            "proc" => wordIndex == 3,
             "eval" => wordIndex >= 1,
             "after" => wordIndex == 2,
             "uplevel" => wordIndex is 1 or 2,
