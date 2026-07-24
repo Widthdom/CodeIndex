@@ -154,6 +154,22 @@ public static partial class QueryCommandRunner
                 .Where(kv => options.LanguageCapabilities.All(capability => LanguageMatchesCapability(kv.Value, capability)))
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .ToList();
+            if (json && (options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount))
+            {
+                var payload = BuildLanguageSummaryPayload(
+                    filtered,
+                    totalLanguageCount,
+                    indexedLanguageCounts,
+                    options,
+                    languageMapDiagnostics);
+                payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
+                    ReferenceExtractor.GetSafetyLimits(),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceExtractionSafetyLimits);
+                AddActiveSqliteDiagnostics(payload);
+                CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
+                return CommandExitCodes.Success;
+            }
+
             var boundedLimit = JsonEnvelopeWrapper.GetBoundedResponseLimit("languages");
             if (!boundedLimit.HasValue
                 && cmdArgs.Any(arg => string.Equals(arg, "--limit", StringComparison.Ordinal)
@@ -169,22 +185,6 @@ public static partial class QueryCommandRunner
                     .Skip(JsonEnvelopeWrapper.GetBoundedResponseOffset("languages"))
                     .Take(boundedLimit.Value)
                     .ToList();
-            }
-
-            if (json && (options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount))
-            {
-                var payload = BuildLanguageSummaryPayload(
-                    filtered,
-                    totalLanguageCount,
-                    indexedLanguageCounts,
-                    options,
-                    languageMapDiagnostics);
-                payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
-                    ReferenceExtractor.GetSafetyLimits(),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceExtractionSafetyLimits);
-                AddActiveSqliteDiagnostics(payload);
-                CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
-                return CommandExitCodes.Success;
             }
 
             if (json)

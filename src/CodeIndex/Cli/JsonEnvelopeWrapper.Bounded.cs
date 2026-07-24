@@ -78,6 +78,8 @@ internal static partial class JsonEnvelopeWrapper
     {
         if (!BoundedResponseCommands.Contains(command))
             return false;
+        if (command == "search" && IsSearchAggregateResponseRequest(args))
+            return false;
         if (HasArgument(args, "--fields") || HasArgument(args, "--cursor"))
             return true;
         if (command == "languages"
@@ -95,6 +97,8 @@ internal static partial class JsonEnvelopeWrapper
     {
         if (!BoundedResponseCommands.Contains(command))
             return false;
+        if (command == "search" && IsSearchAggregateResponseRequest(args))
+            return false;
 
         return HasArgument(args, "--fields")
                || HasArgument(args, "--cursor")
@@ -102,6 +106,16 @@ internal static partial class JsonEnvelopeWrapper
                || (command != "search" && HasEnvelopeFlag(args) && HasArgument(args, "--max-json-bytes"))
                || ShouldAutoWrapBoundedResponse(command, args);
     }
+
+    private static bool IsSearchAggregateResponseRequest(string[] args)
+        => HasArgument(args, "--recipe")
+           || HasArgument(args, "--list-recipes")
+           || HasArgument(args, "--named-query")
+           || HasArgument(args, "--count")
+           || HasArgument(args, "--group-by")
+           || HasArgument(args, "--unique")
+           || HasArgument(args, "--count-by")
+           || HasArgument(args, "--summary-only");
 
     private static bool HasJsonOutputSelection(string[] args)
         => args.Any(arg => string.Equals(arg, "--json", StringComparison.Ordinal)

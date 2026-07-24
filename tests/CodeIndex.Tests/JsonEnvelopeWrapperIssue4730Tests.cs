@@ -152,6 +152,52 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
     }
 
     [Fact]
+    public void Search_CompactAggregateModesKeepNativeContracts_Issue4730()
+    {
+        var (listExitCode, listStdout, listStderr) = CaptureConsole(() =>
+            ProgramRunner.Run(
+                ["search", "--list-recipes", "--format", "compact"],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.Success, listExitCode);
+        Assert.Equal(string.Empty, listStderr);
+        using (var listDocument = JsonDocument.Parse(listStdout))
+        {
+            Assert.True(listDocument.RootElement.TryGetProperty("recipes", out var recipes));
+            Assert.NotEmpty(recipes.EnumerateArray());
+            Assert.False(listDocument.RootElement.TryGetProperty("results", out _));
+        }
+
+        var projectRoot = TestProjectHelper.CreateTempProject("discovery_search_aggregate_contract_4730");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/One.txt", "text", "AggregateNeedle\n");
+
+            var (batchExitCode, batchStdout, batchStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    [
+                        "search", "--named-query", "one=AggregateNeedle",
+                        "--db", dbPath, "--format", "compact",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, batchExitCode);
+            Assert.Equal(string.Empty, batchStderr);
+            using var batchDocument = JsonDocument.Parse(batchStdout);
+            Assert.True(batchDocument.RootElement.TryGetProperty("queries", out var queries));
+            Assert.NotEmpty(queries.EnumerateArray());
+            Assert.False(batchDocument.RootElement.TryGetProperty("results", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void SymbolsFilesAndLanguages_PageWithGenerationBoundCursors_Issue4730()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("discovery_catalog_paging_4730");
