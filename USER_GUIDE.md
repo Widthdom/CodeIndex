@@ -2794,6 +2794,10 @@ root when possible and uses `[outside workspace]` for absolute paths outside the
 known roots.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
+Disk-backed position-line materialization is also streamed through a 4194304-byte
+limit. If the file grows beyond that limit after its initial length check, the
+reader stops before decoding the over-limit bytes and reports
+`position_file_too_large`.
 `textDocument/references` honors `context.includeDeclaration`; when true, the
 definition locations are prepended to the reference result without duplicating
 identical locations. `declaration`, `typeDefinition`, and `implementation`
@@ -5935,6 +5939,9 @@ cancel された symbol request に LSP `RequestCancelled` (`-32800`) を返し�
 表示し、既知の root 外の absolute path は `[outside workspace]` に置き換えます。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
+disk 上の position-line materialization も 4194304-byte 上限付きで stream 処理します。
+最初の length check 後に file がこの上限を超えて増大した場合、上限超過 byte を decode する前に
+読み取りを停止し、`position_file_too_large` を報告します。
 `textDocument/references` は `context.includeDeclaration` を尊重し、true の場合は definition location を
 重複なしで reference result の先頭に追加します。`declaration`、`typeDefinition`、`implementation`
 request は同じ indexed definition lookup を再利用し、`definition` と同じ location shape を返します。

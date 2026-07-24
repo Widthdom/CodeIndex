@@ -426,6 +426,10 @@ must read that live cache before disk so unsaved editor buffers can identify the
 requested token, but provider results remain conservative and index-backed:
 return empty arrays or null when the database cannot answer safely instead of
 inventing language-server analysis.
+Disk-backed position-line caching must enforce its 4 MiB input limit while
+streaming, not only through a pre-read `Length` check. Bytes beyond the limit
+must never reach text decoding, including when a shared file grows concurrently,
+and the bounded failure reason remains `position_file_too_large`.
 
 LSP references resolve an indexed definition or call-site target through the same
 identity-scoped candidate path as CLI symbol analysis; `includeDeclaration` adds
@@ -3404,6 +3408,9 @@ editor integration は標準的な location 形状を直接要求できる。`de
 request token を特定できるよう disk より先に live cache を読む必要があるが、provider result は
 保守的かつ index-backed のままにする。database が安全に答えられない場合は、language-server
 analysis を作り上げず、空配列または null を返す。
+disk 上の position-line cache は、事前の `Length` check だけでなく streaming 中も 4 MiB の
+input 上限を強制する必要がある。共有 file が同時に増大する場合も上限超過 byte を text decode に
+渡してはならず、bounded な failure reason は `position_file_too_large` のままとする。
 
 LSP reference は、indexed definition または call site の target を CLI の symbol analysis と
 同じ identity-scoped candidate 経路で解決する。`includeDeclaration` が追加するのは、その選択済み

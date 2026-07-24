@@ -22,6 +22,53 @@ public class LspServerTests
     }
 
     [Fact]
+    public void TryReadAllPositionLinesFromFile_PreservesUtf8AndRejectsGrowthAfterLengthCheck_Issue4750()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_growing_position_file");
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        try
+        {
+            var unicodePath = Path.Combine(projectRoot, "unicode.cs");
+            var unicodeText = new string('x', BoundedFile.SmallReadBufferSize - 1) + "日本語\r\n次の行\n";
+            File.WriteAllText(unicodePath, unicodeText, utf8);
+
+            Assert.True(LspServer.TryReadAllPositionLinesFromFile(
+                unicodePath,
+                out var unicodeLines,
+                out var unicodeFailureReason));
+            Assert.Null(unicodeFailureReason);
+            Assert.Equal(
+                new string?[] { new string('x', BoundedFile.SmallReadBufferSize - 1) + "日本語", "次の行", string.Empty },
+                unicodeLines);
+
+            const string prefix = "日本語\n";
+            var growingPath = Path.Combine(projectRoot, "growing.cs");
+            var initialText = prefix + new string(
+                'x',
+                LspServer.MaxPositionDocumentBytes - 1 - utf8.GetByteCount(prefix));
+            File.WriteAllText(growingPath, initialText, utf8);
+            Assert.Equal(LspServer.MaxPositionDocumentBytes - 1, new FileInfo(growingPath).Length);
+            LspServer.PositionFileLengthCheckedForTesting = checkedPath =>
+            {
+                if (checkedPath == growingPath)
+                    File.AppendAllText(checkedPath, "界", utf8);
+            };
+
+            Assert.False(LspServer.TryReadAllPositionLinesFromFile(
+                growingPath,
+                out var growingLines,
+                out var growingFailureReason));
+            Assert.Empty(growingLines);
+            Assert.Equal("position_file_too_large", growingFailureReason);
+        }
+        finally
+        {
+            LspServer.PositionFileLengthCheckedForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void TryReadMessage_ReadsContentLengthFramedPayload()
     {
         const string payload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}";
