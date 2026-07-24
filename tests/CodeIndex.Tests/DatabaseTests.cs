@@ -4724,11 +4724,11 @@ public class DatabaseTests : IDisposable
     }
 
     [Theory]
-    [InlineData("crystal", 6)]
-    [InlineData("groovy", 6)]
-    [InlineData("tcl", 6)]
-    [InlineData("prolog", 5)]
-    [InlineData("ambiguous_pl", 5)]
+    [InlineData("crystal", 7)]
+    [InlineData("groovy", 7)]
+    [InlineData("tcl", 7)]
+    [InlineData("prolog", 6)]
+    [InlineData("ambiguous_pl", 6)]
     public void GetUnchangedFileId_InvalidatesPriorDynamicGraphContracts_Issue4746(
         string language,
         int previousContractVersion)

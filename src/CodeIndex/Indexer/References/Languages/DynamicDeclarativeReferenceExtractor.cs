@@ -270,6 +270,19 @@ internal static class DynamicDeclarativeReferenceExtractor
         public bool AwaitingNextOpeningDelimiter { get; set; }
     }
 
+    private readonly record struct AmbiguousPerlHeredocDelimiter(
+        string Value,
+        bool AllowIndent)
+    {
+        public bool MatchesTerminator(string line)
+        {
+            var candidate = line.AsSpan().TrimEnd();
+            if (AllowIndent)
+                candidate = candidate.TrimStart();
+            return candidate.SequenceEqual(Value);
+        }
+    }
+
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<int>> PrologMetaGoalArguments =
         new Dictionary<string, IReadOnlySet<int>>(StringComparer.Ordinal)
         {
@@ -313,6 +326,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         public bool SwitchOptionValuePending { get; set; }
         public int TryClauseWordIndex { get; set; } = 2;
         public int TryScriptWordIndex { get; set; } = 1;
+        public int DictScriptWordIndex { get; set; } = -1;
         public int UplevelScriptWordIndex { get; set; } = -1;
         public TclLexicalFrame? ConcatenatedScriptState { get; set; }
 
@@ -330,6 +344,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             SwitchOptionValuePending = source.SwitchOptionValuePending;
             TryClauseWordIndex = source.TryClauseWordIndex;
             TryScriptWordIndex = source.TryScriptWordIndex;
+            DictScriptWordIndex = source.DictScriptWordIndex;
             UplevelScriptWordIndex = source.UplevelScriptWordIndex;
             ConcatenatedScriptState = source.ConcatenatedScriptState;
         }
@@ -348,6 +363,7 @@ internal static class DynamicDeclarativeReferenceExtractor
             SwitchOptionValuePending = false;
             TryClauseWordIndex = 2;
             TryScriptWordIndex = 1;
+            DictScriptWordIndex = -1;
             UplevelScriptWordIndex = -1;
             ConcatenatedScriptState = null;
         }
@@ -364,6 +380,8 @@ internal static class DynamicDeclarativeReferenceExtractor
         string? crystalHeredocDelimiter = null;
         var insideAmbiguousPerlPod = false;
         var insideAmbiguousPerlData = false;
+        var ambiguousPerlHeredocDelimiters =
+            new Queue<AmbiguousPerlHeredocDelimiter>();
         AmbiguousPerlQuoteLikeState? ambiguousPerlQuoteLikeState = null;
         var insideSlashyLiteral = false;
         var insideGroovyDollarSlashyLiteral = false;
@@ -393,6 +411,14 @@ internal static class DynamicDeclarativeReferenceExtractor
             if (language == "ambiguous_pl")
             {
                 var trimmed = line.AsSpan().TrimStart();
+                if (ambiguousPerlHeredocDelimiters.TryPeek(out var heredocDelimiter))
+                {
+                    result[lineIndex] = new string(' ', line.Length);
+                    if (heredocDelimiter.MatchesTerminator(line))
+                        ambiguousPerlHeredocDelimiters.Dequeue();
+                    continue;
+                }
+
                 if (insideAmbiguousPerlData)
                 {
                     result[lineIndex] = new string(' ', line.Length);
@@ -729,6 +755,13 @@ internal static class DynamicDeclarativeReferenceExtractor
             }
 
             result[lineIndex] = new string(buffer);
+            if (language == "ambiguous_pl")
+            {
+                EnqueueAmbiguousPerlHeredocDelimiters(
+                    line,
+                    result[lineIndex],
+                    ambiguousPerlHeredocDelimiters);
+            }
         }
 
         return result;
@@ -1511,6 +1544,101 @@ internal static class DynamicDeclarativeReferenceExtractor
             || token.SequenceEqual("unless")
             || token.SequenceEqual("while")
             || token.SequenceEqual("until");
+    }
+
+    private static void EnqueueAmbiguousPerlHeredocDelimiters(
+        string line,
+        string maskedLine,
+        Queue<AmbiguousPerlHeredocDelimiter> delimiters)
+    {
+        for (var column = 0; column + 1 < line.Length;)
+        {
+            if (line[column] is '\'' or '"' or '`')
+            {
+                column = SkipQuotedToken(line, column, line[column]);
+                continue;
+            }
+
+            if (line[column] != '<'
+                || line[column + 1] != '<'
+                || maskedLine[column] != '<'
+                || maskedLine[column + 1] != '<')
+            {
+                column++;
+                continue;
+            }
+
+            var delimiterColumn = column + 2;
+            var allowIndent = delimiterColumn < line.Length
+                && line[delimiterColumn] == '~';
+            if (allowIndent)
+                delimiterColumn++;
+
+            var beforeWhitespace = delimiterColumn;
+            delimiterColumn = SkipWhitespace(line, delimiterColumn);
+            var hasWhitespace = delimiterColumn > beforeWhitespace;
+            if (delimiterColumn >= line.Length)
+                break;
+
+            string? delimiter = null;
+            var nextColumn = delimiterColumn + 1;
+            if (line[delimiterColumn] is '\'' or '"' or '`')
+            {
+                var quote = line[delimiterColumn];
+                var closingColumn = delimiterColumn + 1;
+                while (closingColumn < line.Length
+                    && line[closingColumn] != quote)
+                {
+                    if (line[closingColumn] == '\\'
+                        && closingColumn + 1 < line.Length)
+                    {
+                        closingColumn += 2;
+                    }
+                    else
+                    {
+                        closingColumn++;
+                    }
+                }
+
+                if (closingColumn < line.Length)
+                {
+                    delimiter = line[(delimiterColumn + 1)..closingColumn];
+                    nextColumn = closingColumn + 1;
+                }
+            }
+            else
+            {
+                if (line[delimiterColumn] == '\\')
+                {
+                    delimiterColumn++;
+                }
+                else if (hasWhitespace)
+                {
+                    column += 2;
+                    continue;
+                }
+
+                var delimiterEnd = delimiterColumn;
+                while (delimiterEnd < line.Length
+                    && (char.IsLetterOrDigit(line[delimiterEnd])
+                        || line[delimiterEnd] == '_'))
+                {
+                    delimiterEnd++;
+                }
+
+                if (delimiterEnd > delimiterColumn
+                    && (char.IsLetter(line[delimiterColumn])
+                        || line[delimiterColumn] == '_'))
+                {
+                    delimiter = line[delimiterColumn..delimiterEnd];
+                    nextColumn = delimiterEnd;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(delimiter))
+                delimiters.Enqueue(new AmbiguousPerlHeredocDelimiter(delimiter, allowIndent));
+            column = Math.Max(nextColumn, column + 2);
+        }
     }
 
     private static bool TryBeginAmbiguousPerlQuoteLikeLiteral(
@@ -2494,6 +2622,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                                 lines,
                                 braceEnd: null);
                         UpdateTclFirstArgument(frame, wordIndex, token);
+                        UpdateTclDictArgumentState(frame, wordIndex, token);
                         UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
                         UpdateTclTryArgumentState(frame, wordIndex, string.Empty, isScriptArgument);
                     }
@@ -2517,6 +2646,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                     if (frame.WordStart)
                     {
                         var wordIndex = frame.WordIndex++;
+                        UpdateTclDictArgumentState(frame, wordIndex, token: null);
                         UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
                         UpdateTclTryArgumentState(
                             frame,
@@ -2564,6 +2694,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                             lines,
                             braceEnd));
                     UpdateTclFirstArgument(frame, wordIndex, token);
+                    UpdateTclDictArgumentState(frame, wordIndex, token);
                     UpdateTclSwitchArgumentState(frame, wordIndex, string.Empty);
                     UpdateTclTryArgumentState(
                         frame,
@@ -2636,6 +2767,7 @@ internal static class DynamicDeclarativeReferenceExtractor
                     else
                     {
                         UpdateTclFirstArgument(frame, wordIndex, token);
+                        UpdateTclDictArgumentState(frame, wordIndex, token);
                         UpdateTclSwitchArgumentState(frame, wordIndex, token);
                         UpdateTclTryArgumentState(
                             frame,
@@ -2753,14 +2885,8 @@ internal static class DynamicDeclarativeReferenceExtractor
             "catch" => wordIndex == 1,
             "for" => wordIndex is 1 or 3 or 4,
             "proc" => wordIndex == 3,
-            "after" => wordIndex == 2
-                && frame.FirstArgument is not null
-                && frame.FirstArgument is not ("cancel" or "info"),
             "try" => wordIndex == frame.TryScriptWordIndex,
-            "namespace" => wordIndex == 3
-                && frame.FirstArgument == "eval",
-            "dict" => frame.LastBareWord == "for"
-                && wordIndex == frame.LastBareWordIndex + 3,
+            "dict" => wordIndex == frame.DictScriptWordIndex,
             "switch" => frame.SwitchStringWordIndex >= 0
                 && wordIndex - frame.SwitchStringWordIndex >= 2
                 && (wordIndex - frame.SwitchStringWordIndex) % 2 == 0,
@@ -2804,6 +2930,14 @@ internal static class DynamicDeclarativeReferenceExtractor
     {
         if (frame.CommandName == "eval")
             return wordIndex >= 1;
+        if (frame.CommandName == "after")
+        {
+            return wordIndex >= 2
+                && frame.FirstArgument is not null
+                && frame.FirstArgument is not ("cancel" or "info");
+        }
+        if (frame.CommandName == "namespace")
+            return wordIndex >= 3 && frame.FirstArgument == "eval";
         if (frame.CommandName != "uplevel")
             return false;
         if (frame.UplevelScriptWordIndex >= 0)
@@ -2889,6 +3023,7 @@ internal static class DynamicDeclarativeReferenceExtractor
         else
         {
             UpdateTclFirstArgument(state, wordIndex, token);
+            UpdateTclDictArgumentState(state, wordIndex, token);
             UpdateTclSwitchArgumentState(state, wordIndex, token);
             UpdateTclTryArgumentState(
                 state,
@@ -2940,6 +3075,19 @@ internal static class DynamicDeclarativeReferenceExtractor
     {
         if (wordIndex == 1 && token != null)
             frame.FirstArgument = token;
+    }
+
+    private static void UpdateTclDictArgumentState(
+        TclLexicalFrame frame,
+        int wordIndex,
+        string? token)
+    {
+        if (frame.CommandName == "dict"
+            && wordIndex == 1
+            && token == "for")
+        {
+            frame.DictScriptWordIndex = wordIndex + 3;
+        }
     }
 
     private static void MarkTclBareScriptCommandBoundary(char[] buffer, int commandColumn)

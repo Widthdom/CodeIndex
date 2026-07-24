@@ -1220,12 +1220,13 @@ public partial class ReferenceExtractorTests
                 uplevel #0 helper arg
                 foreach value {1 2} helper
                 lmap value {1 2} helper
+                dict for {key value} key\ value { helper }
             }
             """;
 
         var (_, references) = ExtractSymbolsAndReferences("tcl", content);
 
-        Assert.Equal(6, references.Count(reference =>
+        Assert.Equal(7, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper"));
@@ -1269,6 +1270,8 @@ public partial class ReferenceExtractorTests
             proc run {} {
                 after idle helper
                 namespace eval ::tmp { helper }
+                after 1 {set pending 1;} {helper}
+                namespace eval ::tmp {set pending 1;} {helper}
                 after cancel helper
                 after info helper
                 namespace export alpha helper
@@ -1277,7 +1280,7 @@ public partial class ReferenceExtractorTests
 
         var (_, references) = ExtractSymbolsAndReferences("tcl", content);
 
-        Assert.Equal(2, references.Count(reference =>
+        Assert.Equal(4, references.Count(reference =>
             reference.ReferenceKind == "call"
             && reference.ContainerName == "run"
             && reference.SymbolName == "helper"));
@@ -2023,6 +2026,42 @@ public partial class ReferenceExtractorTests
             && symbol.Name == "fake");
         Assert.DoesNotContain(references, reference =>
             reference.ContainerName == "fake");
+    }
+
+    [Fact]
+    public void Extract_AmbiguousPl_MasksPerlHeredocBodies_Issue4746()
+    {
+        const string content = """
+            package Hybrid;
+            sub helper { return 1; }
+            :- module(hybrid, [entry/0, after_payloads/0]).
+            entry :- helper.
+            my $quoted = <<'QUOTED_PAYLOAD';
+            helper();
+            sub quoted_fake { helper(); }
+            quoted_fake_predicate :- helper.
+            QUOTED_PAYLOAD
+            my $bare = <<BARE_PAYLOAD;
+            helper();
+            sub bare_fake { helper(); }
+            BARE_PAYLOAD
+            my $indented = <<~"INDENTED_PAYLOAD";
+                helper();
+                sub indented_fake { helper(); }
+                INDENTED_PAYLOAD
+            after_payloads :- helper.
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("ambiguous_pl", content);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "helper"));
+        AssertReferencesContain(references, "call", "entry", "helper");
+        AssertReferencesContain(references, "call", "after_payloads", "helper");
+        Assert.DoesNotContain(symbols, symbol =>
+            symbol.Name is "quoted_fake" or "quoted_fake_predicate"
+                or "bare_fake" or "indented_fake");
     }
 
     [Fact]
