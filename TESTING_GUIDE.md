@@ -405,6 +405,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - C# lambda-capture coverage keeps positive enclosing-local capture, parameter shadowing, and same-named-method isolation in one source fixture; a single capture assertion proves the negative regions did not leak.
 - Escaped-brace coverage for regular and verbatim interpolated C# strings shares one extraction fixture because both variants assert the same phantom-call exclusion.
 - Direct and nested interpolations inside C# raw strings share one source fixture and one extraction pass while retaining distinct container assertions.
+- C# nested-interpolation regression coverage keeps raw SQL, a completion template containing another interpolated string, following expression-bodied properties, same-line siblings, and enclosing-class range assertions in one fixture and extraction pass.
 - Generic C# attribute classification and custom type-argument references share one fixture across assembly-targeted, single-line, and multi-line forms.
 - Nested generic attribute forms extend that shared fixture instead of running a second parser pass solely for deeper angle-bracket nesting.
 - No-argument parameter attributes on methods, delegates, and lambdas share one C# fixture because all three exercise the same section-local parenthesis-depth rule.
@@ -1230,6 +1231,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - C# lambda capture coverage は、外側 local の正例、parameter shadowing、同名 method 間の分離を1つの source fixture にまとめます。capture が1件だけである assertion により、negative region からの漏れも同時に検証します。
 - C# interpolated string の escaped-brace coverage は、通常形式と逐語形式で同じ phantom call 除外を検証するため、1回の抽出 fixture を共有します。
 - C# raw string 内の direct interpolation と nested interpolation は1つの source fixture と抽出 pass を共有し、container assertion は個別に維持します。
+- C# nested interpolation の regression coverage は、raw SQL、別の interpolated string を含む completion template、後続の expression-bodied property、same-line sibling、enclosing class range の assertion を1つの fixture と抽出 pass にまとめます。
 - generic C# attribute の分類と custom type-argument reference は、assembly target、single-line、multi-line の各形式で1つの fixture を共有します。
 - nested generic attribute 形式も同じ共有 fixture に含め、山括弧の深い入れ子だけのために2回目の parser pass を実行しません。
 - method、delegate、lambda の no-argument parameter attribute は、同じ section-local parenthesis-depth 規則を通るため1つの C# fixture を共有します。
