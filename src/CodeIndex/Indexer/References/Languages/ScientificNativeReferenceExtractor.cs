@@ -302,7 +302,7 @@ internal static class ScientificNativeReferenceExtractor
                 : segmentStart;
             EmitName(
                 names[emittedNameStart..nameEnd],
-                absoluteOffset + segmentStart,
+                absoluteOffset + emittedNameStart,
                 referenceKind);
             return true;
         }

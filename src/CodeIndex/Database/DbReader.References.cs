@@ -8,6 +8,9 @@ public partial class DbReader
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
     private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName, bool IsSelfReference, bool IsMutualRecursion, long? TargetSymbolId, string? TargetSymbolKey, string? ResolutionState, int ResolutionCandidateCount);
+    private static bool IncludeAmbiguousMSourceForIdentityTarget(string? language, long? targetSymbolId) =>
+        targetSymbolId != null && language is "matlab" or "objc";
+
     internal sealed record ReferencePositionCandidate(SymbolResult Definition, bool Authoritative);
     internal sealed record ReferencePositionResolution(
         bool IdentityAvailable,
@@ -379,7 +382,11 @@ public partial class DbReader
                 )";
         }
         if (lang != null)
-            sql += " AND f.lang = @lang";
+        {
+            sql += IncludeAmbiguousMSourceForIdentityTarget(lang, targetSymbolId)
+                ? " AND (f.lang = @lang OR f.lang = 'ambiguous_m')"
+                : " AND f.lang = @lang";
+        }
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
         {

@@ -196,6 +196,23 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_MatlabPreservesCallsAfterDotTranspose_Issue4738()
+    {
+        const string content = """
+            function run(A)
+              value = A.'; helper();
+            end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        var references = ReferenceExtractor.Extract(1, "matlab", content, symbols);
+
+        var helperReference = Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.Equal("run", helperReference.ContainerName);
+    }
+
+    [Fact]
     public void Extract_NimExpandsGroupedImports_Issue4738()
     {
         const string content = """
@@ -235,6 +252,10 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "Utils" && reference.ReferenceKind == "import");
         Assert.Contains(references, reference =>
             reference.SymbolName == "Parent" && reference.ReferenceKind == "import");
+        Assert.Equal(8, Assert.Single(references, reference =>
+            reference.SymbolName == "Utils" && reference.ReferenceKind == "import").Column);
+        Assert.Equal(17, Assert.Single(references, reference =>
+            reference.SymbolName == "Parent" && reference.ReferenceKind == "import").Column);
         var helperReference = Assert.Single(references, reference =>
             reference.SymbolName == "helper" && reference.ReferenceKind == "call");
         Assert.Equal("run", helperReference.ContainerName);
@@ -307,6 +328,69 @@ public partial class ReferenceExtractorTests
         Assert.Null(topLevelReference.ContainerName);
     }
 
+    [Theory]
+    [InlineData("matlab", "function run(), helper(), end\noutside();\n")]
+    [InlineData("julia", "function run(); helper(); end\noutside()\n")]
+    public void Extract_CompactScientificFunctionEndsOnDeclarationLine_Issue4738(
+        string language,
+        string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        var function = Assert.Single(symbols, symbol => symbol.Name == "run");
+        Assert.Equal(1, function.EndLine);
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_MatlabIndexEndDoesNotCloseFunction_Issue4738()
+    {
+        const string content = """
+            function run(A)
+              value = A(:, end);
+              helper();
+            end
+            outside();
+            """;
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        var references = ReferenceExtractor.Extract(1, "matlab", content, symbols);
+
+        Assert.Equal(4, Assert.Single(symbols, symbol => symbol.Name == "run").EndLine);
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "helper" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JuliaMacroBlockDoesNotCloseFunctionEarly_Issue4738()
+    {
+        const string content = """
+            function run()
+                @async begin
+                    helper()
+                end
+                after()
+            end
+            outside()
+            """;
+        var symbols = SymbolExtractor.Extract(1, "julia", content);
+
+        var references = ReferenceExtractor.Extract(1, "julia", content, symbols);
+
+        Assert.Equal(6, Assert.Single(symbols, symbol => symbol.Name == "run").EndLine);
+        Assert.Equal("run", Assert.Single(references, reference =>
+            reference.SymbolName == "after" && reference.ReferenceKind == "call").ContainerName);
+        Assert.Null(Assert.Single(references, reference =>
+            reference.SymbolName == "outside" && reference.ReferenceKind == "call").ContainerName);
+    }
+
     public static TheoryData<string, string> ScientificNativeMultilineLiteralCases => new()
     {
         {
@@ -337,6 +421,28 @@ public partial class ReferenceExtractorTests
                 auto text = q{
                     /+ tokenOnly();
                 };
+                helper();
+            }
+            """
+        },
+        {
+            "d",
+            """
+            void run() {
+                auto text = `literal
+                    tokenOnly()
+                literal`;
+                helper();
+            }
+            """
+        },
+        {
+            "d",
+            """
+            void run() {
+                auto text = q"EOS
+                    tokenOnly()
+                EOS";
                 helper();
             }
             """

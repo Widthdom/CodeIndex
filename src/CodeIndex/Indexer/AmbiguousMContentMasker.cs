@@ -153,7 +153,10 @@ internal static class AmbiguousMContentMasker
         var previousIndex = quoteIndex - 1;
         return previousIndex < 0
             || content[previousIndex] is '\r' or '\n'
-            || !IsTransposeOperandEnd(content[previousIndex]);
+            || (!IsTransposeOperandEnd(content[previousIndex])
+                && !(content[previousIndex] == '.'
+                    && previousIndex > 0
+                    && IsTransposeOperandEnd(content[previousIndex - 1])));
     }
 
     private static bool IsStandaloneMatlabBlockDelimiter(string content, int percentIndex)

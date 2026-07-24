@@ -712,6 +712,44 @@ public class DatabaseTests : IDisposable
             WHERE file_id = {callerId.ToString(CultureInfo.InvariantCulture)}
               AND resolution_state = 'resolved'
             """));
+
+        _writer.MarkGraphReady();
+        _writer.MarkReferenceIdentityContractReady();
+        var reader = new DbReader(_db.Connection);
+        foreach (var (name, language, path) in new[]
+        {
+            ("MatlabTarget", "matlab", "src/matlab-target.m"),
+            ("ObjectiveCTarget", "objc", "src/objective-c-target.m"),
+        })
+        {
+            var symbolId = ExecuteScalarLong($"""
+                SELECT id
+                FROM symbols
+                WHERE name = '{name}'
+                """);
+            var definition = new DefinitionResult
+            {
+                SymbolId = symbolId,
+                Path = path,
+                Lang = language,
+                Kind = "function",
+                Name = name,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            };
+            Assert.Equal(1, ExecuteScalarLong($"""
+                SELECT COUNT(*)
+                FROM symbol_reference_candidates
+                WHERE symbol_id = {symbolId.ToString(CultureInfo.InvariantCulture)}
+                """));
+
+            var identityScopedReference = Assert.Single(
+                reader.GetReferencesForDefinition(definition, limit: 20));
+            Assert.Equal("src/caller.m", identityScopedReference.Path);
+            Assert.Equal("ambiguous_m", identityScopedReference.Lang);
+            Assert.Equal(name, identityScopedReference.SymbolName);
+        }
     }
 
     [Fact]

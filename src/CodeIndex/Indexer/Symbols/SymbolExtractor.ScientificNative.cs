@@ -23,15 +23,24 @@ public static partial class SymbolExtractor
         var depth = 1;
         int? bodyStartLine = null;
 
-        for (var lineIndex = startIndex + 1; lineIndex < scannerLines.Length; lineIndex++)
+        for (var lineIndex = startIndex; lineIndex < scannerLines.Length; lineIndex++)
         {
             var code = scannerLines[lineIndex];
             if (string.IsNullOrWhiteSpace(code))
                 continue;
 
-            bodyStartLine ??= lineIndex + 1;
+            var skipDeclarationToken = lineIndex == startIndex;
+            if (!skipDeclarationToken)
+                bodyStartLine ??= lineIndex + 1;
+
             foreach (Match match in tokenRegex.Matches(code))
             {
+                if (skipDeclarationToken)
+                {
+                    skipDeclarationToken = false;
+                    continue;
+                }
+
                 var keyword = match.Groups["keyword"].Value;
                 if (!IsScientificBlockTokenAtStatementBoundary(code, match.Index, keyword, language))
                     continue;
@@ -40,7 +49,7 @@ public static partial class SymbolExtractor
                 {
                     depth--;
                     if (depth == 0)
-                        return (lineIndex + 1, bodyStartLine, lineIndex + 1);
+                        return (lineIndex + 1, bodyStartLine ?? lineIndex + 1, lineIndex + 1);
                     continue;
                 }
 
@@ -91,9 +100,77 @@ public static partial class SymbolExtractor
 
             if (line[index] == ';'
                 || (language == "matlab" && line[index] == ','))
-                return true;
+            {
+                return IsScientificStatementSeparatorAtTopLevel(line, index);
+            }
 
-            return language == "julia" && line[index] == '=';
+            return language == "julia"
+                && (line[index] == '=' || IsJuliaMacroBlockPrefix(line, tokenIndex));
+        }
+
+        return true;
+    }
+
+    private static bool IsScientificStatementSeparatorAtTopLevel(string line, int separatorIndex)
+    {
+        var parentheses = 0;
+        var brackets = 0;
+        var braces = 0;
+        for (var index = 0; index < separatorIndex; index++)
+        {
+            switch (line[index])
+            {
+                case '(':
+                    parentheses++;
+                    break;
+                case ')':
+                    parentheses = Math.Max(0, parentheses - 1);
+                    break;
+                case '[':
+                    brackets++;
+                    break;
+                case ']':
+                    brackets = Math.Max(0, brackets - 1);
+                    break;
+                case '{':
+                    braces++;
+                    break;
+                case '}':
+                    braces = Math.Max(0, braces - 1);
+                    break;
+            }
+        }
+
+        return parentheses == 0 && brackets == 0 && braces == 0;
+    }
+
+    private static bool IsJuliaMacroBlockPrefix(string line, int tokenIndex)
+    {
+        var index = tokenIndex - 1;
+        while (index >= 0 && char.IsWhiteSpace(line[index]))
+            index--;
+        if (index < 0)
+            return false;
+
+        var tokenEnd = index + 1;
+        while (index >= 0
+            && (char.IsLetterOrDigit(line[index]) || line[index] is '_' or '.' or '@'))
+        {
+            index--;
+        }
+
+        var token = line.AsSpan(index + 1, tokenEnd - index - 1);
+        var atIndex = token.LastIndexOf('@');
+        if (atIndex < 0 || atIndex == token.Length - 1)
+            return false;
+
+        for (var tokenIndexOffset = 0; tokenIndexOffset < token.Length; tokenIndexOffset++)
+        {
+            if (!(char.IsLetterOrDigit(token[tokenIndexOffset])
+                || token[tokenIndexOffset] is '_' or '.' or '@'))
+            {
+                return false;
+            }
         }
 
         return true;

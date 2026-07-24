@@ -5,7 +5,7 @@ internal static class ScientificNativeCommentMasker
     internal static string[] MaskBlockComments(string language, string[] lines) =>
         language switch
         {
-            "d" => MaskNestedBlockComments(MaskDTokenBraceStrings(lines), "/+", "+/", "//"),
+            "d" => MaskNestedBlockComments(MaskDMultilineStrings(lines), "/+", "+/", "//"),
             "julia" => MaskNestedBlockComments(
                 MaskTripleQuotedStrings(lines, "#=", "=#", "#"),
                 "#=",
@@ -187,14 +187,20 @@ internal static class ScientificNativeCommentMasker
         return result;
     }
 
-    private static string[] MaskDTokenBraceStrings(string[] lines)
+    private static string[] MaskDMultilineStrings(string[] lines)
     {
-        if (!MayContain(lines, "q{"))
+        if (!MayContain(lines, "q{")
+            && !MayContain(lines, "q\"")
+            && !MayContain(lines, "`"))
+        {
             return lines;
+        }
 
         var result = new string[lines.Length];
         var tokenStringDepth = 0;
         var blockCommentDepth = 0;
+        var inBacktickString = false;
+        string? tokenStringClosing = null;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
@@ -207,6 +213,28 @@ internal static class ScientificNativeCommentMasker
             var cursor = 0;
             while (cursor < line.Length)
             {
+                if (inBacktickString)
+                {
+                    var current = line[cursor];
+                    MaskAt(cursor++);
+                    if (current == '`')
+                        inBacktickString = false;
+                    continue;
+                }
+
+                if (tokenStringClosing != null)
+                {
+                    if (StartsWith(line, cursor, tokenStringClosing))
+                    {
+                        MaskToken(tokenStringClosing);
+                        tokenStringClosing = null;
+                        continue;
+                    }
+
+                    MaskAt(cursor++);
+                    continue;
+                }
+
                 if (tokenStringDepth > 0)
                 {
                     var current = line[cursor];
@@ -262,12 +290,6 @@ internal static class ScientificNativeCommentMasker
                     continue;
                 }
 
-                if (line[cursor] is '"' or '\'' or '`')
-                {
-                    quote = line[cursor++];
-                    continue;
-                }
-
                 if (StartsWith(line, cursor, "q{")
                     && (cursor == 0 || !IsIdentifierChar(line[cursor - 1])))
                 {
@@ -277,13 +299,81 @@ internal static class ScientificNativeCommentMasker
                     continue;
                 }
 
+                if (StartsWith(line, cursor, "q\"")
+                    && (cursor == 0 || !IsIdentifierChar(line[cursor - 1]))
+                    && TryGetDTokenStringClosing(line, cursor + 2, out var openingLength, out var closing))
+                {
+                    for (var openingIndex = 0; openingIndex < 2 + openingLength; openingIndex++)
+                        MaskAt(cursor++);
+                    tokenStringClosing = closing;
+                    continue;
+                }
+
+                if (line[cursor] == '`')
+                {
+                    MaskAt(cursor++);
+                    inBacktickString = true;
+                    continue;
+                }
+
+                if (line[cursor] is '"' or '\'')
+                {
+                    quote = line[cursor++];
+                    continue;
+                }
+
                 cursor++;
             }
 
             result[lineIndex] = chars is null ? line : new string(chars);
+
+            void MaskToken(string token)
+            {
+                for (var tokenIndex = 0; tokenIndex < token.Length; tokenIndex++)
+                    MaskAt(cursor++);
+            }
         }
 
         return result;
+    }
+
+    private static bool TryGetDTokenStringClosing(
+        string line,
+        int delimiterIndex,
+        out int openingLength,
+        out string closing)
+    {
+        openingLength = 0;
+        closing = string.Empty;
+        if (delimiterIndex >= line.Length)
+            return false;
+
+        closing = line[delimiterIndex] switch
+        {
+            '[' => "]\"",
+            '(' => ")\"",
+            '{' => "}\"",
+            '<' => ">\"",
+            _ => string.Empty,
+        };
+        if (closing.Length != 0)
+        {
+            openingLength = 1;
+            return true;
+        }
+
+        var end = delimiterIndex;
+        while (end < line.Length && IsIdentifierChar(line[end]))
+            end++;
+        if (end == delimiterIndex
+            || (end < line.Length && !char.IsWhiteSpace(line[end])))
+        {
+            return false;
+        }
+
+        openingLength = end - delimiterIndex;
+        closing = line[delimiterIndex..end] + '"';
+        return true;
     }
 
     private static string[] MaskNestedBlockComments(
@@ -393,7 +483,13 @@ internal static class ScientificNativeCommentMasker
             if (skipWhitespace && char.IsWhiteSpace(line[index]))
                 continue;
 
-            return char.IsLetterOrDigit(line[index]) || line[index] is '_' or ')' or ']' or '}';
+            if (char.IsLetterOrDigit(line[index]) || line[index] is '_' or ')' or ']' or '}')
+                return true;
+
+            return line[index] == '.'
+                && index > 0
+                && (char.IsLetterOrDigit(line[index - 1])
+                    || line[index - 1] is '_' or ')' or ']' or '}');
         }
 
         return false;

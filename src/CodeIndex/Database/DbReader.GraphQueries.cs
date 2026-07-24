@@ -166,7 +166,11 @@ public partial class DbReader
                 ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
                 : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
-            sql += " AND f.lang = @lang";
+        {
+            sql += IncludeAmbiguousMSourceForIdentityTarget(lang, targetSymbolId)
+                ? " AND (f.lang = @lang OR f.lang = 'ambiguous_m')"
+                : " AND f.lang = @lang";
+        }
         sql += BuildCSharpBareMemberGraphReferenceFilter(query, lang, exact, contextSql, "f", "r");
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += @"
