@@ -122,10 +122,10 @@ public static partial class SymbolExtractor
         Func<CSharpCallableParameterScope> GetCSharpCallableParameterScope = scanInputs.GetCSharpCallableParameterScope;
         var getCSharpSwitchExpressionLines = scanInputs.GetCSharpSwitchExpressionLines;
         var getCssQualifiedRuleAncestors = scanInputs.GetCssQualifiedRuleAncestors;
-        var fsharpTypeBodyState = FSharpTypeBodyState.None;
         var initialSymbolCapacity = EstimateSymbolListInitialCapacity(lines.Length);
         var symbols = new SymbolExtractionList(initialSymbolCapacity);
         var extractionState = symbols.ExtractionState;
+        var scanState = new PatternScanState();
         List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents = null;
         RecordPrimaryComponentParentIndex? recordPrimaryComponentParentIndex = null;
         var cssSeenSymbols = lang == "css"
@@ -134,188 +134,34 @@ public static partial class SymbolExtractor
         var dockerfileStageNames = lang == "dockerfile"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
-        var csharpSuppressedContinuationUntil = -1;
-        var csharpSuppressedContinuationResumeLine = -1;
-        var csharpSuppressedContinuationResumeRawColumn = 0;
-        var goImportBlock = false;
-
         for (int i = 0; i < lines.Length; i++)
         {
             if ((i & 0x3f) == 0)
                 cancellationToken.ThrowIfCancellationRequested();
 
-            if (lang == "csharp" && i <= csharpSuppressedContinuationUntil)
-                continue;
-
-            var line = lines[i];
-            if (lang == "csharp" && IsCSharpLineCommentOnly(line))
-                continue;
-
-            if (lang == "go"
-                && TryHandleGoBlockLine(fileId, line, i, symbols, extractionState, ref goImportBlock))
-            {
-                continue;
-            }
-            if (lang == "go")
-                TryAddGoLabelSymbol(fileId, line, i, symbols, extractionState);
-            if (lang == "r" && TryAddRPacmanPackageLoaderSymbols(fileId, line, i + 1, symbols, extractionState))
-                continue;
-
-            if (lang == "dockerfile")
-            {
-                AddDockerfileAdditionalSymbols(fileId, line, i + 1, symbols, dockerfileStageNames!);
-            }
-
-            var structuralLine = structuralLines[i];
-            var cssScannerLine = cssScannerLines?[i];
-            var sassStylusScannerLine = sassStylusScannerLines?[i];
-            var shellScannerLine = shellScannerLines?[i];
-            var matchLine = structuralLine;
-            if (lang == "css" && cssScannerLine != null)
-            {
-                // Use raw CSS text for symbol-name matching so quoted selector payloads and
-                // @import values stay queryable, while brace/depth scans still rely on the
-                // separately masked scanner lines.
-                // CSS のシンボル名マッチは raw line を使い、引用付きセレクタや @import 値を
-                // 保持する。brace/depth 判定だけ別の scanner line を使う。
-                matchLine = line;
-            }
-            else if (lang is "sass" or "stylus" && sassStylusScannerLine != null)
-            {
-                matchLine = sassStylusScannerLine;
-            }
-            else if (lang == "shell" && shellScannerLine != null)
-            {
-                matchLine = shellScannerLine;
-            }
-            else if (lang == "csharp")
-            {
-                matchLine = csharpMatchLines![i];
-            }
-
-            var fortranContinuationCandidate = lang == "fortran"
-                ? TryBuildFortranContinuationMatchLine(lines, i)
-                : null;
-            if (fortranContinuationCandidate != null)
-                matchLine = fortranContinuationCandidate.Value.MatchLine;
-
-            if (lang == "fsharp")
-                TryAddFSharpTypeMemberSymbols(symbols, fileId, line, i + 1, ref fsharpTypeBodyState);
-
-            if (lang == "fsharp"
-                && TryAddFSharpRecordFieldsFromContext(symbols, fileId, lines, i, line, i + 1))
+            if (!TryPreparePatternLine(
+                    fileId,
+                    lang,
+                    filePath,
+                    projectRoot,
+                    lines,
+                    scanInputs,
+                    scanState,
+                    symbols,
+                    extractionState,
+                    dockerfileStageNames,
+                    i,
+                    out var preparedLine))
             {
                 continue;
             }
 
-            if (lang == "fsharp" && TryAddFSharpActivePatternSymbols(symbols, fileId, line, i + 1))
-                continue;
-
-            if (lang == "fsharp" && TryAddFSharpOperatorSymbols(symbols, fileId, line, i + 1))
-                continue;
-
-            if (lang == "php")
-                ExtractPhpImportSymbols(symbols, line, i + 1);
-
-            if (lang is "javascript" or "typescript")
-            {
-                if (line.IndexOf("import", StringComparison.Ordinal) >= 0
-                    || line.IndexOf("require", StringComparison.Ordinal) >= 0
-                    || line.IndexOf("URL", StringComparison.Ordinal) >= 0
-                    || line.IndexOf("importScripts", StringComparison.Ordinal) >= 0
-                    || line.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
-                    || line.IndexOf("register", StringComparison.Ordinal) >= 0
-                    || line.IndexOf("addModule", StringComparison.Ordinal) >= 0
-                    || line.IndexOf("Worker", StringComparison.Ordinal) >= 0)
-                {
-                    var jsTsSanitizedLines = GetJavaScriptTypeScriptSanitizedLines();
-                    var sanitizedLine = jsTsSanitizedLines[i];
-                    if (sanitizedLine.IndexOf("import", StringComparison.Ordinal) >= 0)
-                    {
-                        ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                        ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                        ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    }
-
-                    if (sanitizedLine.IndexOf("require", StringComparison.Ordinal) >= 0)
-                        ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    if (sanitizedLine.IndexOf("URL", StringComparison.Ordinal) >= 0)
-                        ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    if (sanitizedLine.IndexOf("importScripts", StringComparison.Ordinal) >= 0)
-                        ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    if (sanitizedLine.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
-                        || sanitizedLine.IndexOf("register", StringComparison.Ordinal) >= 0)
-                    {
-                        ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    }
-
-                    if (sanitizedLine.IndexOf("addModule", StringComparison.Ordinal) >= 0)
-                        ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    if (sanitizedLine.IndexOf("Worker", StringComparison.Ordinal) >= 0)
-                        ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                }
-            }
-
-            if (lang is "javascript" or "typescript"
-                && TryHandleJavaScriptTypeScriptImportEqualsLine(fileId, lang, filePath, projectRoot, line, i + 1, symbols))
-            {
-                continue;
-            }
-
-            if (lang == "cpp" && TryAddCppIndentedAlias(fileId, line, i + 1, symbols))
-                continue;
-
-            // Batch `rem` / `@rem` / `::` comment lines contain the same `&` / `(` / `else` /
-            // `do` boundary tokens that the property regex now accepts for inline `set`
-            // capture, so `REM & set FAKE=1` or `:: else set FAKE=2` would otherwise leak a
-            // phantom property. Short-circuit those lines before any pattern fires — batch
-            // labels never match on `::` / `rem` lines anyway because the label regex
-            // requires `:<name-char>`, not `::` or `r`.
-            // batch の `rem` / `@rem` / `::` コメント行は、inline `set` 捕捉のために property 正規表現が
-            // 受け付ける `&` / `(` / `else` / `do` の境界トークンを含みうるため、`REM & set FAKE=1` や
-            // `:: else set FAKE=2` が偽 property を出す恐れがある。パターン適用前に当該行ごと
-            // 早期スキップする — batch ラベル側は `::` / `rem` 行ではそもそも `:<名前文字>` の要件を
-            // 満たさないため影響を受けない。
-            if (lang == "batch" && IsBatchCommentLine(line))
-                continue;
-
-            if (string.IsNullOrWhiteSpace(matchLine))
-                continue;
-
-            var patternStartOffset = lang is "javascript" or "typescript"
-                ? FindNextJavaScriptTypeScriptStatementStart(matchLine, 0)
-                : 0;
-            if (lang == "csharp" && patternStartOffset == 0)
-            {
-                var firstNonWhitespace = 0;
-                while (firstNonWhitespace < matchLine.Length && char.IsWhiteSpace(matchLine[firstNonWhitespace]))
-                    firstNonWhitespace++;
-
-                if (firstNonWhitespace < matchLine.Length
-                    && matchLine[firstNonWhitespace] is '}' or ';' or '"')
-                    patternStartOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, firstNonWhitespace + 1, lang);
-            }
-            if (lang == "csharp" && i == csharpSuppressedContinuationResumeLine)
-            {
-                patternStartOffset = Math.Max(
-                    patternStartOffset,
-                    TranslateCSharpRawColumnToCollapsed(
-                        csharpMatchColumnToRaw,
-                        i,
-                        csharpSuppressedContinuationResumeRawColumn,
-                        matchLine.Length,
-                        line.Length));
-            }
-            var prologContinuationResumeOffset = -1;
-            if (prologClauseContinuationLines?[i] == true)
-            {
-                var clauseTerminatorColumn = FindFirstTopLevelPrologClauseTerminator(matchLine);
-                if (clauseTerminatorColumn >= 0)
-                {
-                    prologContinuationResumeOffset = clauseTerminatorColumn + 1;
-                    patternStartOffset = Math.Max(patternStartOffset, prologContinuationResumeOffset);
-                }
-            }
+            var line = preparedLine.SourceLine;
+            var matchLine = preparedLine.MatchLine;
+            var cssScannerLine = preparedLine.CssScannerLine;
+            var fortranContinuationCandidate = preparedLine.FortranContinuationCandidate;
+            var patternStartOffset = preparedLine.PatternStartOffset;
+            var prologContinuationResumeOffset = preparedLine.PrologContinuationResumeOffset;
             while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
             {
                 var stopAfterFirstPatternMatch = false;
@@ -1589,17 +1435,17 @@ public static partial class SymbolExtractor
                                 // terminating semicolon so a valid same-line sibling remains visible.
                                 // 完全な continuation 行だけを抑止し、終端 semicolon の後から
                                 // 再開して有効な same-line sibling を維持する。
-                                csharpSuppressedContinuationUntil = Math.Max(
-                                    csharpSuppressedContinuationUntil,
+                                scanState.CSharpSuppressedContinuationUntil = Math.Max(
+                                    scanState.CSharpSuppressedContinuationUntil,
                                     expressionEndLineIndex - 1);
-                                csharpSuppressedContinuationResumeLine = expressionEndLineIndex;
-                                csharpSuppressedContinuationResumeRawColumn =
+                                scanState.CSharpSuppressedContinuationResumeLine = expressionEndLineIndex;
+                                scanState.CSharpSuppressedContinuationResumeRawColumn =
                                     csharpPropertyCandidate.ExpressionBodyEndLineExclusiveEndColumn.Value;
                             }
                             else
                             {
-                                csharpSuppressedContinuationUntil = Math.Max(
-                                    csharpSuppressedContinuationUntil,
+                                scanState.CSharpSuppressedContinuationUntil = Math.Max(
+                                    scanState.CSharpSuppressedContinuationUntil,
                                     expressionEndLineIndex);
                             }
                         }
