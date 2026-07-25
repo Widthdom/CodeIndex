@@ -470,7 +470,76 @@ public static partial class IndexCommandRunner
         var csharpTargetAffected =
             csharpPreflight.CSharpTargetAffected;
 
-        bool TryValidateCSharpWorkspaceInputSnapshot(out string? changedPath)
+        var csharpMutationGuard = GuardUpdateCSharpMutationInputs(
+            new UpdateCSharpMutationGuardContext
+            {
+                Writer = writer,
+                Indexer = indexer,
+                ProjectRoot = projectRoot,
+                TargetPaths = targetPaths,
+                ScannedUpdateLanguages = scannedUpdateLanguages,
+                ScopedCleanupPlan = scopedCleanupPlan,
+                CSharpWorkspaceInputSnapshot =
+                    csharpWorkspaceInputSnapshot,
+                CSharpWorkspaceSnapshots = csharpWorkspaceSnapshots,
+                CSharpWorkspace = csharpWorkspace,
+                DeferCSharpMutationsForIncompleteWorkspace =
+                    deferCSharpMutationsForIncompleteWorkspace,
+                CSharpSourceEvidenceForStamp =
+                    csharpSourceEvidenceForStamp,
+                CSharpSourceEvidenceCompleteForStamp =
+                    csharpSourceEvidenceCompleteForStamp,
+                CancellationToken = cancellationToken,
+                RecordCSharpWorkspaceDrift = (path, detail) =>
+                    RecordCSharpWorkspaceDrift(path, detail),
+            });
+        if (csharpMutationGuard.InputSnapshotFailurePath != null)
+        {
+            return WriteUpdateSnapshotFailure(
+                csharpMutationGuard.InputSnapshotFailurePath,
+                new UpdateSnapshotFailureContext
+                {
+                    Writer = writer,
+                    Options = options,
+                    Stopwatch = stopwatch,
+                    JsonContext = jsonContext,
+                    ProjectRoot = projectRoot,
+                    PriorReadiness = priorReadiness,
+                    CSharpSymbolNameContractMatchesCurrent =
+                        csharpSymbolNameContractMatchesCurrent,
+                    PriorMetadataTargetCsharpMatchesCurrent =
+                        priorMetadataTargetCsharpMatchesCurrent,
+                    PriorFoldVersion = priorFoldVersion,
+                    PriorFoldFingerprint = priorFoldFingerprint,
+                    CurrentFoldVersion = currentFoldVersion,
+                    CurrentFoldFingerprint = currentFoldFingerprint,
+                    MemorySamples = memorySamples,
+                    Skipped = skipped,
+                    Warnings = warnings,
+                    SymbolsDroppedByKindFilter =
+                        symbolsDroppedByKindFilter,
+                    ErrorList = errorList,
+                    FileErrorList = fileErrorList,
+                    WarningList = warningList,
+                    RecordCSharpWorkspaceDrift =
+                        RecordCSharpWorkspaceDrift,
+                    GetErrorCount = () => errors,
+                });
+        }
+
+        deferCSharpMutationsForIncompleteWorkspace =
+            csharpMutationGuard
+                .DeferCSharpMutationsForIncompleteWorkspace;
+        csharpSourceEvidenceForStamp =
+            csharpMutationGuard.CSharpSourceEvidenceForStamp;
+        csharpSourceEvidenceCompleteForStamp =
+            csharpMutationGuard.CSharpSourceEvidenceCompleteForStamp;
+        csharpWorkspaceSnapshots =
+            csharpMutationGuard.CSharpWorkspaceSnapshots;
+        csharpWorkspace = csharpMutationGuard.CSharpWorkspace;
+
+        bool TryValidateCSharpWorkspaceInputSnapshot(
+            out string? changedPath)
         {
             if (csharpWorkspaceInputSnapshot == null)
             {
@@ -478,143 +547,16 @@ public static partial class IndexCommandRunner
                 return true;
             }
 
-            var stable = indexer.TryValidateScanInputSnapshot(
+            return indexer.TryValidateScanInputSnapshot(
                 csharpWorkspaceInputSnapshot,
-                out var changedInputPath,
-                cancellationToken);
-            changedPath = changedInputPath;
-            return stable;
-        }
-
-        if (csharpWorkspaceInputSnapshot != null)
-        {
-            UpdateScanInputSnapshotBarrierForTesting?.Invoke("before_write");
-            if (!TryValidateCSharpWorkspaceInputSnapshot(out var changedInputPath))
-                return WriteUpdateSnapshotFailure(
-                    changedInputPath ?? projectRoot,
-                    new UpdateSnapshotFailureContext
-                    {
-                        Writer = writer,
-                        Options = options,
-                        Stopwatch = stopwatch,
-                        JsonContext = jsonContext,
-                        ProjectRoot = projectRoot,
-                        PriorReadiness = priorReadiness,
-                        CSharpSymbolNameContractMatchesCurrent = csharpSymbolNameContractMatchesCurrent,
-                        PriorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharpMatchesCurrent,
-                        PriorFoldVersion = priorFoldVersion,
-                        PriorFoldFingerprint = priorFoldFingerprint,
-                        CurrentFoldVersion = currentFoldVersion,
-                        CurrentFoldFingerprint = currentFoldFingerprint,
-                        MemorySamples = memorySamples,
-                        Skipped = skipped,
-                        Warnings = warnings,
-                        SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
-                        ErrorList = errorList,
-                        FileErrorList = fileErrorList,
-                        WarningList = warningList,
-                        RecordCSharpWorkspaceDrift = RecordCSharpWorkspaceDrift,
-                        GetErrorCount = () => errors,
-                    });
-        }
-
-        string? changedCSharpTargetPath = null;
-        var stableCSharpWorkspaceBeforeMutation = csharpWorkspaceSnapshots == null
-            || TryValidateCurrentCSharpTargetSet(
-                projectRoot,
-                targetPaths,
-                scannedUpdateLanguages,
-                csharpWorkspaceSnapshots,
-                out changedCSharpTargetPath,
-                cancellationToken);
-        if (!deferCSharpMutationsForIncompleteWorkspace
-            && !stableCSharpWorkspaceBeforeMutation)
-        {
-            deferCSharpMutationsForIncompleteWorkspace = true;
-            RecordCSharpWorkspaceDrift(
-                changedCSharpTargetPath ?? "<csharp_workspace>",
-                "The C# workspace target set changed after contract preflight.");
-            csharpSourceEvidenceForStamp = null;
-            csharpSourceEvidenceCompleteForStamp = false;
-            csharpWorkspaceSnapshots = null;
-            csharpWorkspace = csharpWorkspace with
-            {
-                HasStaticInterfaceContracts = true,
-                SourceContractEvidenceComplete = false,
-            };
-            DeferCSharpTargetsAfterIncompleteWorkspace(
-                writer,
-                projectRoot,
-                targetPaths,
+                out changedPath,
                 cancellationToken);
         }
 
-        // The workspace lookup was built with these immutable IDs excluded. Apply exactly
-        // that snapshot only after complete C# discovery/preflight; fatal scans leave the
-        // old rows and references untouched for the retry.
-        // workspace lookup から除外した immutable ID snapshot は complete な C# discovery
-        // 後だけ適用し、fatal scan 時は旧 row/ref を retry まで保持する。
-        if (!deferCSharpMutationsForIncompleteWorkspace && scopedCleanupPlan.Count > 0)
-        {
-            UpdateScanInputSnapshotBarrierForTesting?.Invoke("before_cleanup_apply");
-            Dictionary<string, HashSet<FileIndexer.FileIdentity>>?
-                retainedFileIdentitiesByCaseFold = null;
-            var retainedPathsExact = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var retainedTargetPath in targetPaths)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var retainedTarget = UpdateFileTarget.Create(projectRoot, retainedTargetPath);
-                retainedPathsExact.Add(retainedTarget.IndexPath);
-                var ioPath = LongPath.EnsureWindowsPrefix(retainedTarget.FilePath);
-                if (!File.Exists(ioPath))
-                    continue;
-
-                if (FileIndexer.TryGetFileIdentity(ioPath, out var retainedIdentity))
-                {
-                    retainedFileIdentitiesByCaseFold ??= new Dictionary<
-                        string,
-                        HashSet<FileIndexer.FileIdentity>>(StringComparer.OrdinalIgnoreCase);
-                    if (!retainedFileIdentitiesByCaseFold.TryGetValue(
-                            retainedTarget.IndexPath,
-                            out var retainedIdentities))
-                    {
-                        retainedIdentities = [];
-                        retainedFileIdentitiesByCaseFold.Add(
-                            retainedTarget.IndexPath,
-                            retainedIdentities);
-                    }
-
-                    retainedIdentities.Add(retainedIdentity);
-                }
-            }
-
-            var reappearedCleanupPath = writer.FindReappearedFileInScopedCleanupPlan(
-                projectRoot,
-                scopedCleanupPlan.FileIds,
-                retainedPathsExact,
-                retainedFileIdentitiesByCaseFold,
-                cancellationToken);
-            if (reappearedCleanupPath != null)
-            {
-                deferCSharpMutationsForIncompleteWorkspace = true;
-                RecordCSharpWorkspaceDrift(
-                    reappearedCleanupPath,
-                    "A cleanup-planned path reappeared after C# workspace discovery.");
-                csharpSourceEvidenceForStamp = null;
-                csharpSourceEvidenceCompleteForStamp = false;
-                csharpWorkspaceSnapshots = null;
-                csharpWorkspace = csharpWorkspace with
-                {
-                    HasStaticInterfaceContracts = true,
-                    SourceContractEvidenceComplete = false,
-                };
-                DeferCSharpTargetsAfterIncompleteWorkspace(
-                    writer,
-                    projectRoot,
-                    targetPaths,
-                    cancellationToken);
-            }
-        }
+        // The workspace lookup was built with immutable cleanup IDs excluded.
+        // The guard above applies target and path authority checks before mutation.
+        // workspace lookup から除外した immutable cleanup ID は、上のguardで
+        // target/path authorityを検証してから適用する。
 
         // Expanded discovery has crossed its sole pre-write snapshot barrier. Start graph
         // tracking only now, then publish conservative C# evidence immediately before the
@@ -641,7 +583,8 @@ public static partial class IndexCommandRunner
                     : null);
         }
 
-        if (!deferCSharpMutationsForIncompleteWorkspace && scopedCleanupPlan.Count > 0)
+        if (!deferCSharpMutationsForIncompleteWorkspace
+            && scopedCleanupPlan.Count > 0)
         {
             using var cleanupTxn = writer.BeginTransaction(
                 cancellationToken,
