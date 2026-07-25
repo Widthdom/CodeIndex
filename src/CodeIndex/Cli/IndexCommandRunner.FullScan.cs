@@ -2313,207 +2313,54 @@ public static partial class IndexCommandRunner
                 writer.SetCSharpStaticInterfaceSourceEvidence(true);
             }
         }
-        if (errors > 0)
+        var readiness = FinalizeFullScanReadiness(new FullScanReadinessContext
         {
-            if (!options.SymbolsOnly)
-            {
-                // Keep successfully committed graph generations queryable while the separate
-                // completeness/currentness signals remain false for the failed-file coverage.
-                writer.MarkGraphReady();
-                graphTableAvailableAfter = true;
-            }
-            writer.MarkIndexIncomplete(["file_index_error"]);
-            writer.SetMetaValues(
-                (DbContext.LastFailedIndexRunStatusMetaKey, "partial"),
-                (DbContext.LastFailedIndexRunModeMetaKey, options.Rebuild ? "rebuild" : "incremental"),
-                (DbContext.LastFailedIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunDurationMsMetaKey, stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunFilesProcessedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunFilesTotalMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunErrorCodeMetaKey, CommandErrorCodes.IndexPartial),
-                (DbContext.LastFailedIndexRunReasonMetaKey, "file_index_error"),
-                (DbContext.LastFailedIndexRunProgressPersistedMetaKey, true.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunRecoveryHintMetaKey, "Fix the reported file/extractor error, then rerun the same index command. Successful files and graph edges remain persisted; a rebuild is not required."),
-                (DbContext.LastFailedIndexRunFileErrorsMetaKey, JsonSerializer.Serialize(fileErrorList, StatusMetadataJsonContext.Default.ListStatusIndexFileError)));
-        }
-        if (errors == 0)
-        {
-            // Full-scan covers the whole repo, so it may always stamp Graph / Issues on
-            // success regardless of what the DB carried before. Fold still gates on the
-            // backfill verification below because incremental-by-default full scans skip
-            // unchanged legacy files whose folded columns remain NULL.
-            // full-scan は全repo をカバーするため、Graph / Issues は常に stamp。Fold のみ条件付き。
-            writer.MarkIssuesReady();
-            if (!options.SymbolsOnly)
-            {
-                writer.MarkGraphReady();
-                writer.MarkHdlGraphContractReady();
-            }
-            writer.MarkIndexReaderContractsReady(options.SymbolsOnly);
-            if (!options.SymbolsOnly
-                && !scanHadErrors
-                && csharpSourceEvidenceComplete
-                && !preservePriorPositiveCSharpSourceNoOp)
-                writer.SetCSharpStaticInterfaceSourceEvidence(csharpSourceEvidenceForStamp);
-            if (hasCSharpFilesAfter)
-            {
-                if (csharpMetadataTargetsNeedRefresh)
-                {
-                    FullScanCSharpMetadataResolveForTesting?.Invoke();
-                    writer.ResolveCSharpMetadataTargets(cancellationToken);
-                }
-                writer.MarkMetadataTargetReady("csharp");
-                csharpMetadataTargetReadyAfter = true;
-            }
-            else
-            {
-                csharpMetadataTargetReadyAfter = true;
-            }
-            graphTableAvailableAfter = !options.SymbolsOnly;
-            issuesTableAvailableAfter = true;
-            csharpSymbolNameReadyAfter = true;
-            if (!options.SymbolsOnly)
-            {
-                if (typeScriptAugmentationNeedsRefresh
-                    || typeScriptAugmentationDirtyNames?.RequiresRefresh == true)
-                {
-                    if (startedWithNoIndexedFiles && !languageCounts.ContainsKey("typescript"))
-                    {
-                        writer.MarkTypeScriptAugmentationReady();
-                    }
-                    else
-                    {
-                        FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
-                        var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(
-                            projectRoot,
-                            useScopedTypeScriptAugmentationRefresh
-                                ? typeScriptAugmentationDirtyNames?.DirtyNames
-                                : null,
-                            cancellationToken);
-                        if (startedWithNoIndexedFiles)
-                            freshCountReferences += augmentationReferences;
-                    }
-                }
-            }
-            RestampHotspotFamilyTrustForFullScan(
-                writer,
-                reusedHotspotFamilyLanguages,
-                priorHotspotFamilyVersions,
-                priorHotspotFamilyMarkerFingerprints,
-                currentHotspotFamilyMarkerFingerprints);
-            // Extractor versions describe rows regenerated during this successful run and
-            // must not depend on whether the independent fold-key contract can be restamped.
-            // extractor version は今回再生成した row の契約であり、独立した fold-key
-            // 契約を restamp できるかどうかに依存させない。
-            writer.StampSymbolExtractorVersions(indexedSymbolExtractorLanguages);
-            writer.StampDynamicReferenceGraphContracts(indexedSymbolExtractorLanguages);
-            // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
-            // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
-            // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip
-            // readers onto the folded-equality path and silently miss those rows. Verify
-            // every existing row has its folded column populated before stamping, and tell
-            // the user how to upgrade when not (only --rebuild / a truly-fresh index can
-            // guarantee 100% backfill on a legacy DB).
-            // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
-            // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            IReadOnlyCollection<string> skippedSymbolExtractorLanguageSet = skippedSymbolExtractorLanguages is null
-                ? Array.Empty<string>()
-                : skippedSymbolExtractorLanguages;
-            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var currentFoldFingerprint = NameFold.Fingerprint();
-            var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
-            var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
-            var canRestampExistingFoldTrust = foldVersionMatchesCurrent
-                && foldFingerprintMatchesCurrent
-                && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguageSet);
-            // A normal `index .` run still skips unchanged files. If the prior fold metadata
-            // is stale, those skipped rows keep the old physical folded keys, so stamping the
-            // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
-            // every row was regenerated this run (skipped==0) or when the carried metadata is
-            // already known-good for the current runtime, even if user_version was cleared by
-            // an interrupted refresh before MarkFoldReady ran. Issue #97 codex review.
-            // 通常の `index .` は unchanged 行を skip するため、事前 metadata が stale なら
-            // skipped 行は旧 key のまま残る。全件再生成済み（skipped==0）か、事前 metadata が
-            // current と一致しているときだけ FoldReady を stamp する。途中中断で
-            // user_version だけ落ちた current DB もここで回復させる。
-            if (skipped == 0 || canRestampExistingFoldTrust)
-            {
-                // Validate once inside BEGIN IMMEDIATE and retain the precise failure category.
-                // This avoids scanning every folded value before MarkFoldReady repeats the same
-                // work, while preserving the concurrent-writer safety from Issue #1535.
-                // BEGIN IMMEDIATE 内で一度だけ検証し、Issue #1535 の concurrent-writer safety と
-                // 失敗理由を維持しながら、stamp 前後の重複した全 folded-value scan を避ける。
-                var foldStampResult = writer.MarkFoldReadyWithResult(
-                    stampCurrentSymbolExtractorVersions: skipped == 0,
-                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
-                foldReadyAfter = foldStampResult == FoldReadyStampResult.Ready;
-                if (foldStampResult == FoldReadyStampResult.MissingBackfill)
-                {
-                    foldReadyReasonAfter = GetFoldReadyReason(false, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
-                }
-                else if (foldStampResult == FoldReadyStampResult.NonCurrentFoldValues)
-                {
-                    foldReadyReasonAfter = DegradationReasonCodes.FoldRowsNotRestamped;
-                }
-            }
-            else
-            {
-                var backfillReady = writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguageSet);
-                foldReadyReasonAfter = GetFoldReadyReason(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
-            }
-
-            StampWriterVersionAndSymbolKindFilter(writer, ConsoleUi.LoadVersion(), options.SymbolKindFilter.Signature);
-
-            // Successful no-op full scans should repair stale / missing explicit-DB roots
-            // only after readiness stamps succeed, so an interruption cannot rewrite trust
-            // metadata ahead of the success markers.
-            // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
-            WriteProjectRootOnce();
-            writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
-            // Persist the current HEAD only after the run is fully successful (errors == 0).
-            // We deliberately only stamp on full scans (rebuild or default incremental). Update
-            // mode (`--commits` / `--files`) leaves the captured HEAD untouched so the next
-            // default scan can still detect "branch moved since the last full scan." A
-            // best-effort `null` from a non-git workspace simply clears the field. Issue #1508.
-            // フル成功時のみ HEAD を記録する。partial update は HEAD を触らないので、後続の
-            // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
-            // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
-            var currentHeadBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
-            var lastFullScanElapsedMs = stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            writer.SetMetaValues(
-                (DbContext.IndexedHeadCommitMetaKey, currentHeadCommit),
-                (DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch),
-                (DbContext.LastFullScanElapsedMsMetaKey, lastFullScanElapsedMs));
-            // #1509: also stamp the always-updated "last indexed HEAD" triple (SHA + branch +
-            // timestamp). Unlike #1508's IndexedHeadCommitMetaKey which only fires here on
-            // full scans, this triple is also stamped at the end of incremental update runs
-            // (see RunUpdateMode) so cross-session `commits_ahead_of_indexed_head` always
-            // reflects the true HEAD at the time of the most recent successful index.
-            // #1509: あらゆる成功 index の終端で更新する HEAD トリプル (SHA + branch + 時刻) も
-            // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
-            TryStampIndexedHeadMetadata(writer, currentHeadCommit, currentHeadBranch, indexRunDiagnostics);
-            StampWorkspacePathCaseSensitivity(writer, projectRoot, indexRunDiagnostics, cancellationToken);
-            StampIndexedSymlinkPolicy(writer, options.SymlinkPolicy, indexRunDiagnostics);
-            if (options.MemoryTrace)
-                memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
-            var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
-            var bytesRead = readableFileBytes.MeasureRemaining();
-            StampLastIndexRunMetadata(
-                writer,
-                options.Rebuild ? "rebuild" : "incremental",
-                runStartedAtUtc,
-                stopwatch.ElapsedMilliseconds,
-                files.Count,
-                skipped,
-                errors,
-                bytesRead.BytesRead,
-                bytesRead.SkippedFileCount,
-                processed,
-                purged,
-                memoryTimelineForStamp,
-                indexRunDiagnostics,
-                writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter));
-        }
+            Writer = writer,
+            Options = options,
+            Stopwatch = stopwatch,
+            RunStartedAtUtc = runStartedAtUtc,
+            ProjectRoot = projectRoot,
+            CurrentHeadCommit = currentHeadCommit,
+            IndexRunDiagnostics = indexRunDiagnostics,
+            CancellationToken = cancellationToken,
+            Errors = errors,
+            FileErrorList = fileErrorList,
+            Processed = processed,
+            FileCount = files.Count,
+            Skipped = skipped,
+            Purged = purged,
+            ScanHadErrors = scanHadErrors,
+            StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+            HasCSharpFilesAfter = hasCSharpFilesAfter,
+            CSharpSourceEvidenceComplete = csharpSourceEvidenceComplete,
+            CSharpSourceEvidenceForStamp = csharpSourceEvidenceForStamp,
+            PreservePriorPositiveCSharpSourceNoOp = preservePriorPositiveCSharpSourceNoOp,
+            CSharpMetadataTargetsNeedRefresh = csharpMetadataTargetsNeedRefresh,
+            TypeScriptAugmentationNeedsRefresh = typeScriptAugmentationNeedsRefresh,
+            TypeScriptAugmentationDirtyNames = typeScriptAugmentationDirtyNames,
+            UseScopedTypeScriptAugmentationRefresh = useScopedTypeScriptAugmentationRefresh,
+            LanguageCounts = languageCounts,
+            ReusedHotspotFamilyLanguages = reusedHotspotFamilyLanguages,
+            PriorHotspotFamilyVersions = priorHotspotFamilyVersions,
+            PriorHotspotFamilyMarkerFingerprints = priorHotspotFamilyMarkerFingerprints,
+            CurrentHotspotFamilyMarkerFingerprints = currentHotspotFamilyMarkerFingerprints,
+            IndexedSymbolExtractorLanguages = indexedSymbolExtractorLanguages,
+            SkippedSymbolExtractorLanguages = skippedSymbolExtractorLanguages,
+            PriorFoldVersion = priorFoldVersion,
+            PriorFoldFingerprint = priorFoldFingerprint,
+            ScanResult = scanResult,
+            ReadableFileBytes = readableFileBytes,
+            MemorySamples = memorySamples,
+            FreshCountReferences = freshCountReferences,
+            WriteProjectRootOnce = WriteProjectRootOnce,
+        });
+        graphTableAvailableAfter = readiness.GraphTableAvailable;
+        issuesTableAvailableAfter = readiness.IssuesTableAvailable;
+        csharpSymbolNameReadyAfter = readiness.CSharpSymbolNameReady;
+        csharpMetadataTargetReadyAfter = readiness.CSharpMetadataTargetReady;
+        foldReadyAfter = readiness.FoldReady;
+        foldReadyReasonAfter = readiness.FoldReadyReason;
+        freshCountReferences = readiness.FreshCountReferences;
         hotspotAggregateRefresh.Complete(cancellationToken);
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();

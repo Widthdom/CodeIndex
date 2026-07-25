@@ -1912,186 +1912,50 @@ public static partial class IndexCommandRunner
                 };
             }
         }
-        // Only stamp readiness on a fully successful run (errors == 0). A partial / error
-        // run leaves the DB unstamped so readers correctly treat graph / issues data as
-        // degraded rather than authoritative. Interrupted runs also stay unstamped because
-        // readiness was demoted before the first committed mutation.
-        // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
-        var hasSqlFilesAfter = writer.HasAnyFilesWithLanguage("sql");
-        var graphTableAvailableAfter = !readinessDemoted
-            ? (priorReadiness & DbContext.GraphReadyFlag) != 0
-            : false;
-        var issuesTableAvailableAfter = !readinessDemoted
-            ? (priorReadiness & DbContext.IssuesReadyFlag) != 0
-            : false;
-        var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter
-            || (!readinessDemoted && csharpSymbolNameContractMatchesCurrent);
-        var csharpMetadataTargetReadyAfter = !hasCSharpFilesAfter
-            || (!readinessDemoted && priorMetadataTargetCsharpMatchesCurrent);
-        var foldReadyAfter = !readinessDemoted
-            && (priorReadiness & DbContext.FoldReadyFlag) != 0
-            && priorFoldVersion == currentFoldVersion
-            && priorFoldFingerprint == currentFoldFingerprint
-            && priorSymbolExtractorVersionsMatchCurrent;
-        string? foldReadyReasonAfter = foldReadyAfter
-            ? null
-            : GetFoldReadyReason(
-                (priorReadiness & DbContext.FoldReadyFlag) != 0,
-                priorFoldVersion == currentFoldVersion,
-                priorFoldFingerprint == currentFoldFingerprint);
-        if (errors > 0)
+        var readiness = FinalizeUpdateReadiness(new UpdateReadinessContext
         {
-            if (!options.SymbolsOnly && (priorReadiness & DbContext.GraphReadyFlag) != 0)
-            {
-                // Successful file transactions remain a useful graph generation. Keep the
-                // presence signal while completeness/currentness identifies the failed files.
-                writer.MarkGraphReady();
-                graphTableAvailableAfter = true;
-            }
-            writer.MarkIndexIncomplete(["file_index_error"]);
-            writer.SetMetaValues(
-                (DbContext.LastFailedIndexRunStatusMetaKey, "partial"),
-                (DbContext.LastFailedIndexRunModeMetaKey, "update"),
-                (DbContext.LastFailedIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunDurationMsMetaKey, stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunFilesProcessedMetaKey, (updated + removed + skipped).ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunFilesTotalMetaKey, targetPaths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunErrorCodeMetaKey, CommandErrorCodes.IndexPartial),
-                (DbContext.LastFailedIndexRunReasonMetaKey, "file_index_error"),
-                (DbContext.LastFailedIndexRunProgressPersistedMetaKey, true.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunRecoveryHintMetaKey, "Fix the reported file/extractor error, then rerun the same index command. Successful files and graph edges remain persisted; a rebuild is not required."),
-                (DbContext.LastFailedIndexRunFileErrorsMetaKey, JsonSerializer.Serialize(fileErrorList, StatusMetadataJsonContext.Default.ListStatusIndexFileError)));
-        }
-        var fullyRefreshedDynamicGraphLanguages = errors == 0 && readinessDemoted
-            ? GetFullyRefreshedDynamicGraphLanguages()
-            : [];
-        if (readinessDemoted && errors == 0)
-        {
-            writer.MarkBatchInProgress();
-            using var readinessTxn = writer.BeginTransaction(cancellationToken, "update readiness restamp");
-            // Restore each readiness bit independently based on what the DB carried BEFORE
-            // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
-            // no Fold) must keep Graph+Issues after a successful partial update, even though
-            // FoldReady can't be restamped. Codex #86 second-pass review: the old single-flag
-            // `wasFullyReady` gate silently dropped Graph/Issues for the whole workspace on
-            // such DBs, breaking references/callers/callees/impact.
-            // Fold is the only bit that needs the runtime verify: the other two only require
-            // that the DB previously reached end-of-run for those subsystems. Fold also
-            // requires name_folded to be populated for every row, but the invariant holds
-            // when the prior bit was set AND this update rewrote its touched rows with
-            // name_folded populated, so no extra scan is needed here.
-            // update mode は事前 bit を個別に復元。Graph/Issues は prior bit があれば復元、
-            // Fold も prior bit があれば invariant を信じて restamp（codex 2nd review 対応）。
-            // unreadable ignore file の true no-op skip は ClearReadyFlags 自体を避けるので、
-            // ここでは通常どおり errors==0 の成功 run だけを復元対象にする。
-            if ((priorReadiness & DbContext.GraphReadyFlag) != 0)
-            {
-                writer.MarkGraphReady();
-                graphTableAvailableAfter = true;
-            }
-            if (!options.SymbolsOnly
-                && !mutualRecursionRefreshNeeded
-                && referenceIdentityContractMatchedBeforeMutation)
-            {
-                writer.MarkReferenceIdentityContractReady();
-            }
-            // A scoped update can certify a per-language graph contract only when every
-            // remaining file in that language was regenerated by this run. This covers a
-            // newly introduced language and an explicitly complete language refresh without
-            // hiding stale graph rows from untouched files of the same language.
-            // scoped update では、対象言語の現存ファイルを今回すべて再生成した場合だけ
-            // graph contract を stamp する。新規言語と全件更新を復元しつつ、未更新の
-            // stale row を current と誤認しない。
-            writer.StampSymbolExtractorVersions(fullyRefreshedDynamicGraphLanguages);
-            writer.StampDynamicReferenceGraphContracts(fullyRefreshedDynamicGraphLanguages);
-            if ((priorReadiness & DbContext.IssuesReadyFlag) != 0)
-            {
-                writer.MarkIssuesReady();
-                issuesTableAvailableAfter = true;
-            }
-            if (sqlGraphContractMatchesCurrent || !hasSqlFilesAfter)
-                writer.MarkSqlGraphContractReady();
-            var hasHdlFilesAfter = writer.HasAnyFilesWithLanguage("verilog")
-                || writer.HasAnyFilesWithLanguage("systemverilog")
-                || writer.HasAnyFilesWithLanguage("vhdl");
-            if (hdlGraphContractMatchesCurrent || !hasHdlFilesAfter)
-                writer.MarkHdlGraphContractReady();
-            if (csharpSymbolNameContractMatchesCurrent || !hasCSharpFilesAfter)
-            {
-                writer.MarkCSharpSymbolNameContractReady();
-                csharpSymbolNameReadyAfter = true;
-            }
-            // Issue #435: run the metadata-target resolver across all currently-indexed C#
-            // class rows. This is always safe because the resolver classifies every row and
-            // rewrites only values that differ from the authoritative result, so
-            // legacy NULL rows from a pre-#435 DB and untouched rows from this partial
-            // update both end up authoritative. Only stamp readiness when the resolver
-            // actually ran (i.e. there are C# files to resolve).
-            // Issue #435: 成功 update の末尾で全 csharp class 行を resolver で再分類する。
-            // resolver は全行を再分類し、authoritative な結果と異なる値だけを書き直すため、
-            // pre-#435 DB の NULL 行と未更新行の両方を正規化できる。csharp ファイルがある場合のみ readiness も立てる。
-            if (hasCSharpFilesAfter)
-            {
-                if (csharpMetadataTargetsNeedRefresh)
-                {
-                    UpdateCSharpMetadataResolveForTesting?.Invoke();
-                    writer.ResolveCSharpMetadataTargets(cancellationToken);
-                }
-                writer.MarkMetadataTargetReady("csharp");
-                csharpMetadataTargetReadyAfter = true;
-            }
-            else
-            {
-                csharpMetadataTargetReadyAfter = true;
-            }
-            // Keep hotspot-family maintenance rewrites and readiness restamps in one rollback
-            // boundary. If the process dies after SetMeta but before commit, SQLite rolls back
-            // the version stamp along with any maintenance rows, so readers never see a partial
-            // family_key/container_qualified_name state as authoritative (#1488).
-            using (var hotspotFamilyTxn = writer.BeginTransaction(cancellationToken, "update hotspot-family restamp"))
-            {
-                if (!options.SymbolsOnly
-                    && (typeScriptAugmentationNeedsRefresh
-                        || typeScriptAugmentationDirtyNames?.RequiresRefresh == true))
-                {
-                    UpdateTypeScriptAugmentationRebuildForTesting?.Invoke();
-                    writer.RebuildTypeScriptAugmentationReferences(
-                        projectRoot,
-                        useScopedTypeScriptAugmentationRefresh
-                            ? typeScriptAugmentationDirtyNames?.DirtyNames
-                            : null,
-                        cancellationToken);
-                }
-                RestampHotspotFamilyTrustForUpdate(
-                    writer,
-                    priorHotspotFamilyVersions,
-                    priorHotspotFamilyMarkerFingerprints,
-                    currentHotspotFamilyMarkerFingerprints);
-                HotspotFamilyUpdateRestampReadyForCommitForTesting?.Invoke();
-                hotspotFamilyTxn.Commit();
-            }
-            // FoldReady restamp requires both the prior stored version and fingerprint to
-            // match the current binary/runtime. Otherwise untouched rows still carry keys
-            // from an older fold implementation or runtime table set, and advertising
-            // FoldReady would silently mismatch on --exact. Only full rebuild can re-fold all rows.
-            // fold は version / fingerprint の両一致時のみ restamp。ズレた DB は rebuild まで
-            // fold_ready=false のまま残す。
-            if ((priorReadiness & DbContext.FoldReadyFlag) != 0
-                && priorFoldVersion == currentFoldVersion
-                && priorFoldFingerprint == currentFoldFingerprint
-                && priorSymbolExtractorVersionsMatchCurrent)
-            {
-                // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
-                // insert during this restamp window leaves foldReadyAfter=false. Issue #1535.
-                // MarkFoldReady は BEGIN IMMEDIATE 内で再検証する。restamp 窓の concurrent
-                // 書き込みで NULL 行が残った場合は foldReadyAfter=false のまま。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady();
-            }
-            StampWriterVersionAndSymbolKindFilter(writer, ConsoleUi.LoadVersion(), options.SymbolKindFilter.Signature);
-            writer.ClearBatchInProgress();
-            readinessTxn.Commit();
-        }
+            Writer = writer,
+            Options = options,
+            Stopwatch = stopwatch,
+            RunStartedAtUtc = runStartedAtUtc,
+            ProjectRoot = projectRoot,
+            CancellationToken = cancellationToken,
+            PriorReadiness = priorReadiness,
+            PriorFoldVersion = priorFoldVersion,
+            PriorFoldFingerprint = priorFoldFingerprint,
+            CurrentFoldVersion = currentFoldVersion,
+            CurrentFoldFingerprint = currentFoldFingerprint,
+            PriorSymbolExtractorVersionsMatchCurrent = priorSymbolExtractorVersionsMatchCurrent,
+            CSharpSymbolNameContractMatchesCurrent = csharpSymbolNameContractMatchesCurrent,
+            PriorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharpMatchesCurrent,
+            SqlGraphContractMatchesCurrent = sqlGraphContractMatchesCurrent,
+            HdlGraphContractMatchesCurrent = hdlGraphContractMatchesCurrent,
+            PriorHotspotFamilyVersions = priorHotspotFamilyVersions,
+            PriorHotspotFamilyMarkerFingerprints = priorHotspotFamilyMarkerFingerprints,
+            CurrentHotspotFamilyMarkerFingerprints = currentHotspotFamilyMarkerFingerprints,
+            ReadinessDemoted = readinessDemoted,
+            MutualRecursionRefreshNeeded = mutualRecursionRefreshNeeded,
+            ReferenceIdentityContractMatchedBeforeMutation = referenceIdentityContractMatchedBeforeMutation,
+            CSharpMetadataTargetsNeedRefresh = csharpMetadataTargetsNeedRefresh,
+            TypeScriptAugmentationNeedsRefresh = typeScriptAugmentationNeedsRefresh,
+            TypeScriptAugmentationDirtyNames = typeScriptAugmentationDirtyNames,
+            UseScopedTypeScriptAugmentationRefresh = useScopedTypeScriptAugmentationRefresh,
+            Updated = updated,
+            Removed = removed,
+            Skipped = skipped,
+            TargetCount = targetPaths.Count,
+            Errors = errors,
+            FileErrorList = fileErrorList,
+            FullyRefreshedDynamicGraphLanguages = errors == 0 && readinessDemoted
+                ? GetFullyRefreshedDynamicGraphLanguages()
+                : [],
+        });
+        var graphTableAvailableAfter = readiness.GraphTableAvailable;
+        var issuesTableAvailableAfter = readiness.IssuesTableAvailable;
+        var csharpSymbolNameReadyAfter = readiness.CSharpSymbolNameReady;
+        var csharpMetadataTargetReadyAfter = readiness.CSharpMetadataTargetReady;
+        var foldReadyAfter = readiness.FoldReady;
+        var foldReadyReasonAfter = readiness.FoldReadyReason;
         if (postExtractionHooks.ValueIfCreated?.SawCSharpStaticInterfaceSourceContract == true
             && !csharpWorkspaceDriftDetected)
         {
