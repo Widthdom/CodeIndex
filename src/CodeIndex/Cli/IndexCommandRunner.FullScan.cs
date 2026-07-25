@@ -642,107 +642,72 @@ public static partial class IndexCommandRunner
             extractionFileIndexes,
             () => ThrowIfFullScanCancelled(processed, files.Count));
 
-        if (preservePriorPositiveCSharpSourceNoOp
-            && (extractionWorkItemCount > 0 || staleFilePurgePlan.Count > 0))
-        {
-            // The dirty-byte pass can be long on a mixed-language monorepo. Revalidate C#
-            // once more at the final read-only boundary, then undo the tentative stat skips
-            // and promote every C# target if any source changed.
-            // mixed-language dirty-byte pass後の最終read-only境界でC#を再statする。
-            FullScanCSharpFinalStatRevalidationForTesting?.Invoke();
-            var invalidatedCSharpFileIndexes = new List<int>();
-            for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
-            {
-                var target = fileTargets[fileIndex];
-                if (target.Language != "csharp")
-                    continue;
-
-                cancellationToken.ThrowIfCancellationRequested();
-                if (IndexedFileStatReuse.TryGetReusableUnchangedFile(
+        var finalCSharpRevalidation =
+            RevalidateFinalFullScanCSharpNoOp(
+                new FullScanCSharpFinalRevalidationContext
+                {
+                    Writer = writer,
+                    Indexer = indexer,
+                    Options = options,
+                    ProjectRoot = projectRoot,
+                    FileTargets = fileTargets,
+                    CSharpPrepassTargets = csharpPrepassTargets,
+                    StaleFilePurgePlan = staleFilePurgePlan,
+                    StartedWithNoIndexedFiles =
+                        startedWithNoIndexedFiles,
+                    CSharpIndexedProjectRootCompatible =
+                        csharpIndexedProjectRootCompatible,
+                    ExtractionParallelism = extractionParallelism,
+                    PriorCSharpStaticInterfaceSourceEvidence =
+                        priorCSharpStaticInterfaceSourceEvidence,
+                    ReusableIndexedFileStats =
                         reusableIndexedFileStats!,
-                        target.FilePath,
-                        target.IndexPath,
-                        target.Language,
-                        target.GeneratedExtractionSuppressed) == null)
-                {
-                    invalidatedCSharpFileIndexes.Add(fileIndex);
-                }
-            }
-
-            if (invalidatedCSharpFileIndexes.Count > 0)
-            {
-                csharpWorkspace = BuildStableFullScanCSharpWorkspace(
-                    projectRoot,
-                    csharpPrepassTargets,
-                    out csharpWorkspaceFileSnapshots,
-                    () =>
-                    CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                        writer,
-                        indexer,
-                        csharpPrepassTargets,
-                        includeExistingSymbols: csharpIndexedProjectRootCompatible && !options.Rebuild && !startedWithNoIndexedFiles,
-                        canReuseExistingSymbolsWithoutRead: null,
-                        parallelism: extractionParallelism,
-                        excludedExistingFileIds: staleFilePurgePlan.FileIds,
-                        isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
-                        cancellationToken: cancellationToken),
-                    cancellationToken);
-                preservePriorPositiveCSharpSourceNoOp = false;
-                if (!csharpWorkspace.SourceContractEvidenceComplete)
-                {
-                    var incompleteSourcePaths = csharpWorkspace.IncompleteSourcePaths;
-                    DeferCSharpMutationsForIncompleteWorkspace(csharpWorkspace);
-                    csharpSourceEvidenceForStamp = false;
-                    csharpSourceEvidenceComplete = false;
-                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                        [],
-                        false,
-                        SourceContractEvidenceComplete: false,
-                        IncompleteSourcePaths: incompleteSourcePaths);
-                    useFtsBulkLoad = false;
-                }
-                else
-                {
-                    var requiresFullCSharpRefresh =
-                        priorCSharpStaticInterfaceSourceEvidence == true
-                        || csharpWorkspace.HasStaticInterfaceContracts;
-                    forceFullCSharpRefreshFromInvalidatedNoOp = requiresFullCSharpRefresh;
-                    csharpSourceEvidenceForStamp = csharpWorkspace.HasSourceStaticInterfaceContracts;
-                    csharpSourceEvidenceComplete = true;
-                    IReadOnlyList<int> csharpFileIndexesToRefresh;
-                    if (requiresFullCSharpRefresh)
-                    {
-                        csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-                        var allCSharpFileIndexes = new List<int>(csharpPrepassTargets.Count);
-                        for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
-                        {
-                            if (fileTargets[fileIndex].Language == "csharp")
-                                allCSharpFileIndexes.Add(fileIndex);
-                        }
-                        csharpFileIndexesToRefresh = allCSharpFileIndexes;
-                    }
-                    else
-                    {
-                        // A previously authoritative negative workspace only needs the
-                        // stat-invalidated files when the raw fallback is still negative.
-                        // prior negative のraw fallbackもnegativeなら変更fileだけを更新する。
-                        csharpFileIndexesToRefresh = invalidatedCSharpFileIndexes;
-                    }
-
-                    skipped -= csharpFileIndexesToRefresh.Count;
-                    processed -= csharpFileIndexesToRefresh.Count;
-                    if (csharpFileIndexesToRefresh.Count == csharpPrepassTargets.Count)
-                    {
-                        skippedSymbolExtractorLanguages?.Remove("csharp");
-                        reusedHotspotFamilyLanguages?.Remove("csharp");
-                    }
-                    foreach (var fileIndex in csharpFileIndexesToRefresh)
-                        extractionFileIndexes!.Add(fileIndex);
-                    extractionFileIndexes!.Sort();
-                    extractionWorkItemCount = extractionFileIndexes.Count;
-                    useFtsBulkLoad = false;
-                }
-            }
+                    ExtractionFileIndexes =
+                        extractionFileIndexes,
+                    ExtractionWorkItemCount =
+                        extractionWorkItemCount,
+                    UseFtsBulkLoad = useFtsBulkLoad,
+                    CSharpWorkspace = csharpWorkspace,
+                    CSharpWorkspaceFileSnapshots =
+                        csharpWorkspaceFileSnapshots,
+                    ForceFullCSharpRefreshFromInvalidatedNoOp =
+                        forceFullCSharpRefreshFromInvalidatedNoOp,
+                    PreservePriorPositiveCSharpSourceNoOp =
+                        preservePriorPositiveCSharpSourceNoOp,
+                    CSharpSourceEvidenceForStamp =
+                        csharpSourceEvidenceForStamp,
+                    CSharpSourceEvidenceComplete =
+                        csharpSourceEvidenceComplete,
+                    CancellationToken = cancellationToken,
+                    DeferCSharpMutationsForIncompleteWorkspace =
+                        DeferCSharpMutationsForIncompleteWorkspace,
+                    IsExistingCSharpSymbolPathNowNonCSharp =
+                        IsExistingCSharpSymbolPathNowNonCSharp,
+                });
+        extractionFileIndexes =
+            finalCSharpRevalidation.ExtractionFileIndexes;
+        extractionWorkItemCount =
+            finalCSharpRevalidation.ExtractionWorkItemCount;
+        useFtsBulkLoad = finalCSharpRevalidation.UseFtsBulkLoad;
+        csharpWorkspace = finalCSharpRevalidation.CSharpWorkspace;
+        csharpWorkspaceFileSnapshots =
+            finalCSharpRevalidation.CSharpWorkspaceFileSnapshots;
+        forceFullCSharpRefreshFromInvalidatedNoOp =
+            finalCSharpRevalidation
+                .ForceFullCSharpRefreshFromInvalidatedNoOp;
+        preservePriorPositiveCSharpSourceNoOp =
+            finalCSharpRevalidation
+                .PreservePriorPositiveCSharpSourceNoOp;
+        csharpSourceEvidenceForStamp =
+            finalCSharpRevalidation.CSharpSourceEvidenceForStamp;
+        csharpSourceEvidenceComplete =
+            finalCSharpRevalidation.CSharpSourceEvidenceComplete;
+        skipped -= finalCSharpRevalidation.PromotedCSharpTargetCount;
+        processed -= finalCSharpRevalidation.PromotedCSharpTargetCount;
+        if (finalCSharpRevalidation.PromotedAllCSharpTargets)
+        {
+            skippedSymbolExtractorLanguages?.Remove("csharp");
+            reusedHotspotFamilyLanguages?.Remove("csharp");
         }
 
         if (discovery.InputSnapshot != null)
