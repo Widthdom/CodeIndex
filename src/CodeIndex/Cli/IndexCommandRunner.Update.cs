@@ -1427,49 +1427,43 @@ public static partial class IndexCommandRunner
 
                         DemoteReadinessOnce();
                         currentUpdatePhase = "writing";
-                        writer.MarkBatchInProgress();
-                        var skippedBinaryBatchMarkerOwned = true;
                         try
                         {
-                            using var txn = writer.BeginTransaction(cancellationToken, "update skipped binary");
-                            var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
-                            UpdateSkippedFileRecordBuiltForTesting?.Invoke(relPath);
-                            if (hasCSharpWorkspaceSnapshot
-                                && (skippedRecord.Lang != "csharp"
-                                    || !CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                                        absPath,
-                                        dbPath,
-                                        relPath,
-                                        skippedRecord.Size,
-                                        skippedRecord.Modified,
-                                        csharpWorkspaceSnapshots!,
-                                        out _,
-                                        cancellationToken)))
-                            {
-                                throw new CSharpWorkspaceChangedException(
-                                    "The C# file changed while recording its binary skip state.");
-                            }
-                            readableFileBytes.Remember(targetIndex, skippedRecord.Size);
-                            var stalePurged = PurgeStaleUpdateCleanupPaths(
-                                skippedRecord.Path,
-                                skippedRecord.Checksum,
-                                includeDirectoryAndStem: projectRootWritten);
-                            if (skippedRecord.Lang == "typescript" || stalePurged > 0)
-                                RequireTypeScriptAugmentationRefresh();
-                            if (!options.SymbolsOnly && stalePurged > 0)
-                                mutualRecursionRefreshNeeded = true;
-                            WriteProjectRootOnce();
-                            var fileId = writer.UpsertFile(skippedRecord, out var referenceIdentityChanged);
-                            if (!options.SymbolsOnly && referenceIdentityChanged)
-                                mutualRecursionRefreshNeeded = true;
-                            writer.InsertChunks([], cancellationToken);
-                            writer.InsertSymbols([], cancellationToken);
-                            writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
-                            writer.InsertIssues(fileId, [BuildNullByteIssue(binaryFile)]);
-                            writer.ClearBatchInProgress();
-                            txn.Commit();
-                            RecordDynamicGraphFileRefresh(skippedRecord.Lang);
-                            skippedBinaryBatchMarkerOwned = false;
+                            var skippedPersistence = PersistSkippedUpdateFile(
+                                new SkippedUpdateFilePersistenceContext
+                                {
+                                    Writer = writer,
+                                    Indexer = indexer,
+                                    Options = options,
+                                    AbsolutePath = absPath,
+                                    RelativePath = relPath,
+                                    KnownLanguage = knownLanguage,
+                                    ProjectRootWritten = projectRootWritten,
+                                    TransactionName = "update skipped binary",
+                                    WorkspaceChangedMessage = "The C# file changed while recording its binary skip state.",
+                                    Issue = BuildNullByteIssue(binaryFile),
+                                    TargetIndex = targetIndex,
+                                    ReadableFileBytes = readableFileBytes,
+                                    CancellationToken = cancellationToken,
+                                    ValidateSkippedRecord = skippedRecord =>
+                                        !hasCSharpWorkspaceSnapshot
+                                        || (skippedRecord.Lang == "csharp"
+                                            && CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
+                                                absPath,
+                                                dbPath,
+                                                relPath,
+                                                skippedRecord.Size,
+                                                skippedRecord.Modified,
+                                                csharpWorkspaceSnapshots!,
+                                                out _,
+                                                cancellationToken)),
+                                    PurgeStaleUpdateCleanupPaths = PurgeStaleUpdateCleanupPaths,
+                                    RequireTypeScriptAugmentationRefresh = RequireTypeScriptAugmentationRefresh,
+                                    WriteProjectRootOnce = WriteProjectRootOnce,
+                                    RecordDynamicGraphFileRefresh = RecordDynamicGraphFileRefresh,
+                                });
+                            mutualRecursionRefreshNeeded |=
+                                skippedPersistence.MutualRecursionRefreshNeeded;
                         }
                         catch (CSharpWorkspaceChangedException workspaceChanged)
                         {
@@ -1489,18 +1483,6 @@ public static partial class IndexCommandRunner
                             RecordUpdateFileFailure(relPath, currentUpdatePhase, skippedWriteException);
                             continue;
                         }
-                        finally
-                        {
-                            // MarkBatchInProgress is committed before the nested file
-                            // transaction. Any in-process unwind must clear it only after that
-                            // transaction has committed or disposed/rolled back. A process crash
-                            // intentionally leaves the durable marker for startup repair.
-                            // marker は file transaction の外で先に永続化されるため、正常 commit
-                            // または rollback/dispose 後の全 unwind で durable に解除する。
-                            if (skippedBinaryBatchMarkerOwned)
-                                writer.ClearBatchInProgress();
-                        }
-
                         updated++;
                         ftsMutated = true;
                         continue;
@@ -1531,58 +1513,49 @@ public static partial class IndexCommandRunner
 
                         DemoteReadinessOnce();
                         currentUpdatePhase = "writing";
-                        writer.MarkBatchInProgress();
-                        var skippedOversizedBatchMarkerOwned = true;
                         try
                         {
-                            using var txn = writer.BeginTransaction(cancellationToken, "update skipped oversized file");
-                            var skippedRecord = indexer.BuildSkippedFileRecord(absPath, relPath, knownLanguage);
-                            UpdateSkippedFileRecordBuiltForTesting?.Invoke(relPath);
-                            if (hasCSharpWorkspaceSnapshot
-                                && (skippedRecord.Lang != "csharp"
-                                    || !CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                                        absPath,
-                                        dbPath,
-                                        relPath,
-                                        skippedRecord.Size,
-                                        skippedRecord.Modified,
-                                        csharpWorkspaceSnapshots!,
-                                        out _,
-                                        cancellationToken)))
-                            {
-                                throw new CSharpWorkspaceChangedException(
-                                    "The C# file changed while recording its oversized skip state.");
-                            }
-                            readableFileBytes.Remember(targetIndex, skippedRecord.Size);
-                            var stalePurged = PurgeStaleUpdateCleanupPaths(
-                                skippedRecord.Path,
-                                skippedRecord.Checksum,
-                                includeDirectoryAndStem: projectRootWritten);
-                            if (skippedRecord.Lang == "typescript" || stalePurged > 0)
-                                RequireTypeScriptAugmentationRefresh();
-                            if (!options.SymbolsOnly && stalePurged > 0)
-                                mutualRecursionRefreshNeeded = true;
-                            WriteProjectRootOnce();
-                            var fileId = writer.UpsertFile(skippedRecord, out var referenceIdentityChanged);
-                            if (!options.SymbolsOnly && referenceIdentityChanged)
-                                mutualRecursionRefreshNeeded = true;
-                            writer.InsertChunks([], cancellationToken);
-                            writer.InsertSymbols([], cancellationToken);
-                            writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
-                            writer.InsertIssues(fileId,
-                            [
-                                new FileIssue
+                            var skippedPersistence = PersistSkippedUpdateFile(
+                                new SkippedUpdateFilePersistenceContext
                                 {
-                                    Path = fileTooLarge.RelativePath,
-                                    Kind = "file_too_large",
-                                    Line = 0,
-                                    Message = fileTooLarge.Message,
-                                },
-                            ]);
-                            writer.ClearBatchInProgress();
-                            txn.Commit();
-                            RecordDynamicGraphFileRefresh(skippedRecord.Lang);
-                            skippedOversizedBatchMarkerOwned = false;
+                                    Writer = writer,
+                                    Indexer = indexer,
+                                    Options = options,
+                                    AbsolutePath = absPath,
+                                    RelativePath = relPath,
+                                    KnownLanguage = knownLanguage,
+                                    ProjectRootWritten = projectRootWritten,
+                                    TransactionName = "update skipped oversized file",
+                                    WorkspaceChangedMessage = "The C# file changed while recording its oversized skip state.",
+                                    Issue = new FileIssue
+                                    {
+                                        Path = fileTooLarge.RelativePath,
+                                        Kind = "file_too_large",
+                                        Line = 0,
+                                        Message = fileTooLarge.Message,
+                                    },
+                                    TargetIndex = targetIndex,
+                                    ReadableFileBytes = readableFileBytes,
+                                    CancellationToken = cancellationToken,
+                                    ValidateSkippedRecord = skippedRecord =>
+                                        !hasCSharpWorkspaceSnapshot
+                                        || (skippedRecord.Lang == "csharp"
+                                            && CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
+                                                absPath,
+                                                dbPath,
+                                                relPath,
+                                                skippedRecord.Size,
+                                                skippedRecord.Modified,
+                                                csharpWorkspaceSnapshots!,
+                                                out _,
+                                                cancellationToken)),
+                                    PurgeStaleUpdateCleanupPaths = PurgeStaleUpdateCleanupPaths,
+                                    RequireTypeScriptAugmentationRefresh = RequireTypeScriptAugmentationRefresh,
+                                    WriteProjectRootOnce = WriteProjectRootOnce,
+                                    RecordDynamicGraphFileRefresh = RecordDynamicGraphFileRefresh,
+                                });
+                            mutualRecursionRefreshNeeded |=
+                                skippedPersistence.MutualRecursionRefreshNeeded;
                         }
                         catch (CSharpWorkspaceChangedException workspaceChanged)
                         {
@@ -1602,15 +1575,6 @@ public static partial class IndexCommandRunner
                             RecordUpdateFileFailure(relPath, currentUpdatePhase, skippedWriteException);
                             continue;
                         }
-                        finally
-                        {
-                            // Match the binary path: rollback preserves the prior row and the
-                            // independently committed marker is cleared after transaction disposal.
-                            // binary 経路と同様、旧 row を rollback で保持し、marker は dispose 後に解除する。
-                            if (skippedOversizedBatchMarkerOwned)
-                                writer.ClearBatchInProgress();
-                        }
-
                         updated++;
                         ftsMutated = true;
                         continue;
