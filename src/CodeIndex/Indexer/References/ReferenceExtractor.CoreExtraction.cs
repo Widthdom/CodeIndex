@@ -124,13 +124,9 @@ public static partial class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = BuildReferenceContainerCandidates(symbols, request.ReportDiagnostic);
         var containerResolver = new InnermostContainerResolver(containerCandidates);
-        Dictionary<int, List<SymbolRecord>>? csharpSameLineContainerCandidatesByLine = null;
-        var csharpSameLineContainerCandidatesResolved = false;
         if (language == "solidity")
             return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
 
-        IReadOnlyList<SymbolRecord>? csharpXmlDocAttachmentScopeCandidates = null;
-        var csharpXmlDocAttachmentScopeCandidatesResolved = false;
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
@@ -138,20 +134,6 @@ public static partial class ReferenceExtractor
         // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
         // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
-        IReadOnlyList<SymbolRecord>? enclosingTypeCandidates = null;
-        var enclosingTypeCandidatesResolved = false;
-        IReadOnlyList<SymbolRecord>? rustEnumCandidates = null;
-        var rustEnumCandidatesResolved = false;
-        (
-            IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
-            IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) pythonSymbolLookups = default;
-        var pythonSymbolLookupsResolved = false;
-        HashSet<string>? pythonClassNames = null;
-        var pythonClassNamesResolved = false;
-        PythonImportBindingResolver.ImportedTypeCallLookup? pythonImportedTypeCallLookup = null;
-        HashSet<(string Container, string Name)>? csharpPrivateProperties = null;
-        var csharpPrivatePropertiesResolved = false;
-        Dictionary<string, List<SymbolRecord>>? csharpContainerCandidatesByName = null;
         var swiftPropertyDefinitionsByLine = language == "swift"
             ? BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic)
             : null;
@@ -162,8 +144,6 @@ public static partial class ReferenceExtractor
         // later line are covered. Later lines inside the body keep their real innermost containers.
         // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
-        List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)>? recordPrimaryCtorRanges = null;
-        var recordPrimaryCtorRangesResolved = false;
         var csharpTypeNameSets = language == "csharp"
             ? BuildCSharpTypeNameSets(language, symbols)
             : (KnownTypeNames: EmptyCSharpStringSet, NonEnumTypeNames: EmptyCSharpStringSet);
@@ -220,447 +200,20 @@ public static partial class ReferenceExtractor
         var csharpUsingAliases = csharpUsingImports.Aliases;
         var csharpUsingNamespaces = csharpUsingImports.Namespaces;
         var csharpUsingStatics = csharpUsingImports.Statics;
-        (
-            IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
-            IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine)? csharpValueReceiverLookups = null;
-        var csharpValueReceiverLookupsResolved = false;
-        IReadOnlyDictionary<string, List<PowerShellReferenceExtractor.SplatAssignment>>? powershellSplatAssignments = null;
-        var powershellSplatAssignmentsResolved = false;
+        var lookups = new CoreExtractionLookups(
+            request,
+            language,
+            symbols,
+            containerCandidates,
+            csharpLinesInsideMultilineStringContent,
+            preparedLines,
+            structuralLines,
+            lines,
+            csharpKnownTypeNames,
+            csharpUsingAliases,
+            csharpUsingNamespaces);
 
-        bool HasSameFilePythonClass(string candidate, string leaf)
-        {
-            if (!pythonClassNamesResolved)
-            {
-                foreach (var symbol in symbols)
-                {
-                    if (symbol.Kind == "class")
-                        (pythonClassNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
-                }
-                pythonClassNamesResolved = true;
-            }
 
-            return pythonClassNames != null
-                && (pythonClassNames.Contains(candidate) || pythonClassNames.Contains(leaf));
-        }
-
-        PythonImportBindingResolver.ImportedTypeCallLookup GetPythonImportedTypeCallLookup()
-            => pythonImportedTypeCallLookup ??= PythonImportBindingResolver.BuildImportedTypeCallLookup(symbols);
-
-        bool HasCSharpPrivateProperty(string containingType, string propertyName)
-        {
-            if (!csharpPrivatePropertiesResolved)
-            {
-                foreach (var symbol in symbols)
-                {
-                    if (symbol.Kind == "property"
-                        && symbol.ContainerQualifiedName != null
-                        && string.Equals(symbol.Visibility, "private", StringComparison.OrdinalIgnoreCase))
-                    {
-                        (csharpPrivateProperties ??= []).Add((symbol.ContainerQualifiedName, symbol.Name));
-                    }
-                }
-                csharpPrivatePropertiesResolved = true;
-            }
-
-            return csharpPrivateProperties?.Contains((containingType, propertyName)) == true;
-        }
-
-        SymbolRecord? FindCSharpContainerCandidate(string? containerName, int lineNumber)
-        {
-            if (containerName == null)
-                return null;
-
-            if (csharpContainerCandidatesByName == null)
-            {
-                csharpContainerCandidatesByName = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
-                foreach (var candidate in containerCandidates)
-                {
-                    if (!csharpContainerCandidatesByName.TryGetValue(candidate.Name, out var candidates))
-                    {
-                        candidates = [];
-                        csharpContainerCandidatesByName.Add(candidate.Name, candidates);
-                    }
-                    candidates.Add(candidate);
-                }
-            }
-
-            if (!csharpContainerCandidatesByName.TryGetValue(containerName, out var namedCandidates))
-                return null;
-
-            foreach (var candidate in namedCandidates)
-            {
-                if (candidate.BodyStartLine <= lineNumber && candidate.BodyEndLine >= lineNumber)
-                    return candidate;
-            }
-
-            return null;
-        }
-
-        // Workspace-wide same-name type rescue needs cross-file visibility, so the
-        // extractor leaves ambiguous unqualified using-static pattern heads for the
-        // read path to disambiguate.
-        // ワークスペース全体の同名型 rescue には cross-file 可視性が必要なため、
-        // extractor は曖昧な unqualified using-static pattern head を残し、
-        // read path 側で判定させる。
-        bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber)
-        {
-            var normalized = NormalizeCSharpAliasTargetForTypeLookup(typeExpression);
-            if (string.IsNullOrWhiteSpace(normalized))
-                return false;
-
-            normalized = TrimLeadingCSharpGlobalQualifier(normalized);
-            if (csharpKnownTypeNames.Contains(normalized))
-                return true;
-
-            var shortName = GetLastQualifiedSegment(normalized);
-            for (var aliasIndex = csharpUsingAliases.Count - 1; aliasIndex >= 0; aliasIndex--)
-            {
-                var alias = csharpUsingAliases[aliasIndex];
-                if (alias.TargetsType
-                    && alias.Line <= lineNumber
-                    && lineNumber >= alias.ScopeStartLine
-                    && lineNumber <= alias.ScopeEndLine
-                    && string.Equals(alias.AliasName, shortName, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        Dictionary<int, List<SymbolRecord>>? GetCSharpSameLineContainerCandidatesByLine()
-        {
-            if (!csharpSameLineContainerCandidatesResolved)
-            {
-                csharpSameLineContainerCandidatesByLine = BuildCSharpSameLineContainerCandidatesByLine(language, containerCandidates);
-                csharpSameLineContainerCandidatesResolved = true;
-            }
-
-            return csharpSameLineContainerCandidatesByLine;
-        }
-
-        IReadOnlyList<SymbolRecord>? GetCSharpXmlDocAttachmentScopeCandidates()
-        {
-            if (!csharpXmlDocAttachmentScopeCandidatesResolved)
-            {
-                csharpXmlDocAttachmentScopeCandidates = csharpLinesInsideMultilineStringContent != null
-                    ? BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic)
-                    : null;
-                csharpXmlDocAttachmentScopeCandidatesResolved = true;
-            }
-
-            return csharpXmlDocAttachmentScopeCandidates;
-        }
-
-        IReadOnlyList<SymbolRecord> GetEnclosingTypeCandidates()
-        {
-            if (!enclosingTypeCandidatesResolved)
-            {
-                enclosingTypeCandidates = language is "csharp" or "java" or "kotlin"
-                    ? BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic)
-                    : [];
-                enclosingTypeCandidatesResolved = true;
-            }
-
-            return enclosingTypeCandidates!;
-        }
-
-        IReadOnlyList<SymbolRecord>? GetRustEnumCandidates()
-        {
-            if (!rustEnumCandidatesResolved)
-            {
-                rustEnumCandidates = language == "rust"
-                    ? BuildRustEnumCandidates(symbols)
-                    : null;
-                rustEnumCandidatesResolved = true;
-            }
-
-            return rustEnumCandidates;
-        }
-
-        (
-            IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
-            IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) GetPythonSymbolLookups()
-        {
-            if (!pythonSymbolLookupsResolved)
-            {
-                pythonSymbolLookups = language == "python"
-                    ? BuildPythonSymbolLookups(symbols)
-                    : default;
-                pythonSymbolLookupsResolved = true;
-            }
-
-            return pythonSymbolLookups;
-        }
-
-        IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? GetPythonDefinitionContainersByLineAndKind() =>
-            GetPythonSymbolLookups().DefinitionContainersByLineAndKind;
-
-        IReadOnlyDictionary<int, SymbolRecord>? GetPythonHeaderSymbolsByLine() =>
-            GetPythonSymbolLookups().HeaderSymbolsByLine;
-
-        IReadOnlyDictionary<string, List<PowerShellReferenceExtractor.SplatAssignment>> GetPowerShellSplatAssignments()
-        {
-            if (!powershellSplatAssignmentsResolved)
-            {
-                powershellSplatAssignments = PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines);
-                powershellSplatAssignmentsResolved = true;
-            }
-
-            return powershellSplatAssignments!;
-        }
-
-        List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
-        {
-            if (!recordPrimaryCtorRangesResolved)
-            {
-                recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
-                recordPrimaryCtorRangesResolved = true;
-            }
-
-            return recordPrimaryCtorRanges!;
-        }
-
-        (
-            IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
-            IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) GetCSharpValueReceiverLookups()
-        {
-            if (!csharpValueReceiverLookupsResolved)
-            {
-                csharpValueReceiverLookups = BuildCSharpValueReceiverNameLookups(
-                    language,
-                    symbols,
-                    structuralLines,
-                    csharpKnownTypeNames,
-                    csharpUsingAliases);
-                csharpValueReceiverLookupsResolved = true;
-            }
-
-            return csharpValueReceiverLookups!.Value;
-        }
-
-        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> GetCSharpValueReceiverNames() =>
-            GetCSharpValueReceiverLookups().ByContainingType;
-
-        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> GetCSharpFunctionValueReceiverNames() =>
-            GetCSharpValueReceiverLookups().ByFunctionStartLine;
-
-        string ResolveCSharpUsingAliasReferenceName(string referenceName, int lineNumber)
-        {
-            if (language != "csharp")
-                return referenceName;
-
-            for (var aliasIndex = csharpUsingAliases.Count - 1; aliasIndex >= 0; aliasIndex--)
-            {
-                var alias = csharpUsingAliases[aliasIndex];
-                if (alias.Line > lineNumber
-                    || lineNumber < alias.ScopeStartLine
-                    || lineNumber > alias.ScopeEndLine
-                    || !string.Equals(alias.AliasName, referenceName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var targetName = GetLastQualifiedSegment(TrimLeadingCSharpGlobalQualifier(alias.TargetQualifiedName));
-                return string.IsNullOrWhiteSpace(targetName) ? referenceName : targetName;
-            }
-
-            return referenceName;
-        }
-
-        void ApplyCSharpUsingAliasReferenceNames(List<ReferenceRecord> references)
-        {
-            if (language != "csharp")
-                return;
-
-            var aliasNameChanged = false;
-            foreach (var reference in references)
-            {
-                if (reference.ReferenceKind is not ("instantiate" or "attribute"))
-                    continue;
-                if (reference.Line <= 0 || reference.Line > lines.Length || reference.Column <= 0)
-                    continue;
-                if (!IsUnqualifiedCSharpTokenAtColumn(reference.Line, reference.Column, reference.SymbolName))
-                    continue;
-
-                var resolvedName = ResolveCSharpUsingAliasReferenceName(reference.SymbolName, reference.Line);
-                if (string.Equals(resolvedName, reference.SymbolName, StringComparison.Ordinal))
-                    continue;
-
-                reference.SymbolName = resolvedName;
-                reference.IsSelfReference = IsSameReferenceName(reference.ContainerName, resolvedName);
-                aliasNameChanged = true;
-            }
-
-            if (aliasNameChanged)
-                CompactCSharpUsingAliasReferences(references, language);
-        }
-
-        bool IsUnqualifiedCSharpTokenAtColumn(int lineNumber, int column, string symbolName)
-        {
-            if (lineNumber <= 0
-                || lineNumber > lines.Length
-                || column <= 0
-                || string.IsNullOrWhiteSpace(symbolName))
-                return false;
-
-            var line = lines[lineNumber - 1];
-            var tokenStart = column - 1;
-            if (tokenStart >= line.Length)
-                return false;
-
-            var tokenNameStart = tokenStart;
-            if (line[tokenNameStart] == '@')
-                tokenNameStart++;
-
-            if (tokenNameStart + symbolName.Length > line.Length)
-                return false;
-            if (!line.AsSpan(tokenNameStart, symbolName.Length).Equals(symbolName, StringComparison.Ordinal))
-                return false;
-
-            var previousIndex = tokenStart - 1;
-            var nextIndex = tokenNameStart + symbolName.Length;
-            var hasQualifiedPrefix = HasCSharpQualifiedSeparatorBeforeToken(line, tokenStart)
-                || (previousIndex >= 0 && IsCSharpIdentifierPart(line[previousIndex]));
-            var hasIdentifierSuffix = nextIndex < line.Length && IsCSharpIdentifierPart(line[nextIndex]);
-            return !hasQualifiedPrefix && !hasIdentifierSuffix;
-        }
-
-        bool HasActiveCSharpUsingNamespace(string targetQualifiedName, int lineNumber)
-        {
-            var normalizedTarget = NormalizeCSharpBclRegexQualifiedName(targetQualifiedName);
-            for (var importIndex = csharpUsingNamespaces.Count - 1; importIndex >= 0; importIndex--)
-            {
-                var import = csharpUsingNamespaces[importIndex];
-                if (import.Line > lineNumber
-                    || lineNumber < import.ScopeStartLine
-                    || lineNumber > import.ScopeEndLine)
-                {
-                    continue;
-                }
-
-                if (string.Equals(NormalizeCSharpBclRegexQualifiedName(import.TargetQualifiedName), normalizedTarget, StringComparison.Ordinal))
-                    return true;
-            }
-
-            return false;
-        }
-
-        CSharpUsingAliasRecord? FindActiveCSharpUsingAlias(string aliasName, int lineNumber)
-        {
-            for (var aliasIndex = csharpUsingAliases.Count - 1; aliasIndex >= 0; aliasIndex--)
-            {
-                var alias = csharpUsingAliases[aliasIndex];
-                if (alias.Line > lineNumber
-                    || lineNumber < alias.ScopeStartLine
-                    || lineNumber > alias.ScopeEndLine
-                    || !string.Equals(alias.AliasName, aliasName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                return alias;
-            }
-
-            return null;
-        }
-
-        void EmitCSharpBclRegexWithoutTimeoutReferences(List<ReferenceRecord> references, ReferenceDedupeSet seen)
-        {
-            if (language != "csharp")
-                return;
-
-            var referenceCount = references.Count;
-            for (var referenceIndex = 0; referenceIndex < referenceCount; referenceIndex++)
-            {
-                var reference = references[referenceIndex];
-                if (reference.ReferenceKind != "instantiate"
-                    || !string.Equals(reference.SymbolName, "Regex", StringComparison.Ordinal)
-                    || reference.Line <= 0
-                    || reference.Line > lines.Length
-                    || reference.Column <= 0
-                    || !IsCSharpBclRegexInstantiateReference(reference)
-                    || !IsCSharpRegexConstructorWithoutTimeout(reference.Line, reference.Column, reference.SymbolName))
-                {
-                    continue;
-                }
-
-                var dedupeKey = CreateReferenceDedupeKey(
-                    reference.FileId,
-                    language,
-                    reference.Line,
-                    reference.Column,
-                    "bcl_regex_without_timeout",
-                    reference.SymbolName,
-                    reference.ContainerKind,
-                    reference.ContainerName);
-                if (!seen.Add(dedupeKey))
-                    continue;
-
-                if (!TryAddReference(references, new ReferenceRecord
-                {
-                    FileId = reference.FileId,
-                    SymbolName = reference.SymbolName,
-                    ReferenceKind = "bcl_regex_without_timeout",
-                    Line = reference.Line,
-                    Column = reference.Column,
-                    Context = reference.Context,
-                    ContainerKind = reference.ContainerKind,
-                    ContainerName = reference.ContainerName,
-                    IsSelfReference = reference.IsSelfReference,
-                }))
-                {
-                    return;
-                }
-            }
-        }
-
-        bool IsCSharpBclRegexInstantiateReference(ReferenceRecord reference)
-        {
-            var line = lines[reference.Line - 1];
-            if (!TryGetCSharpIdentifierAtColumn(line, reference.Column, out _, out _, out var tokenName))
-                return false;
-
-            if (TryGetCSharpQualifiedPrefixAtColumn(line, reference.Column, tokenName, out var prefix)
-                && string.Equals(NormalizeCSharpBclRegexQualifiedName($"{prefix}.{tokenName}"), "System.Text.RegularExpressions.Regex", StringComparison.Ordinal))
-            {
-                return true;
-            }
-
-            var alias = FindActiveCSharpUsingAlias(tokenName, reference.Line);
-            if (alias != null)
-            {
-                return string.Equals(
-                    NormalizeCSharpBclRegexQualifiedName(alias.TargetQualifiedName),
-                    "System.Text.RegularExpressions.Regex",
-                    StringComparison.Ordinal);
-            }
-
-            return string.Equals(tokenName, "Regex", StringComparison.Ordinal)
-                && !HasActiveSameFileCSharpTypeCandidate(tokenName, reference.Line)
-                && HasActiveCSharpUsingNamespace("System.Text.RegularExpressions", reference.Line);
-        }
-
-        bool IsCSharpRegexConstructorWithoutTimeout(int lineNumber, int column, string symbolName)
-        {
-            var line = lines[lineNumber - 1];
-            _ = symbolName;
-            if (!TryGetCSharpIdentifierAtColumn(line, column, out _, out var tokenNameStart, out var tokenName))
-                return false;
-
-            var cursor = tokenNameStart + tokenName.Length;
-            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
-                cursor++;
-            if (cursor >= line.Length || line[cursor] != '(')
-                return false;
-
-            if (!TryCollectCSharpInvocationArguments(lines, lineNumber - 1, cursor, out var args))
-                return false;
-
-            var argCount = CountTopLevelCSharpArguments(args.AsSpan(), out var hasNamedMatchTimeout);
-            return argCount is 1 or 2 && !hasNamedMatchTimeout;
-        }
 
 
         var references = CreateReferenceList(request.MaxReferenceCount, EstimateReferenceListInitialCapacity(lines.Length));
@@ -795,7 +348,7 @@ public static partial class ReferenceExtractor
                         && (docContainer.StartLine == lineNumber
                             || CanAttachCSharpXmlDocCommentToNextDeclaration(
                                 innermostContainer,
-                                GetCSharpXmlDocAttachmentScopeCandidates(),
+                                lookups.GetCSharpXmlDocAttachmentScopeCandidates(),
                                 csharpAttrRanges,
                                 preparedLines,
                                 lineNumber,
@@ -945,7 +498,7 @@ public static partial class ReferenceExtractor
                         csharpQualifiedConstantPatternMemberLookup,
                         csharpUsingAliases,
                         csharpUsingStatics,
-                        HasActiveSameFileCSharpTypeCandidate,
+                        lookups.HasActiveSameFileCSharpTypeCandidate,
                         references,
                         seen,
                         fileId);
@@ -986,7 +539,7 @@ public static partial class ReferenceExtractor
                 javaSameLineCtor = JavaReferenceExtractor.TryBuildSameLineCtorSpan(
                     preparedLine,
                     lineNumber,
-                    GetEnclosingTypeCandidates);
+                    lookups.GetEnclosingTypeCandidates);
             }
 
             // Per-call-site record primary-ctor override: only calls whose column sits inside the
@@ -1000,7 +553,7 @@ public static partial class ReferenceExtractor
             {
                 if (language == "csharp")
                 {
-                    foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in GetRecordPrimaryCtorRanges())
+                    foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in lookups.GetRecordPrimaryCtorRanges())
                     {
                         if (lineNumber < rangeStart || lineNumber > rangeEnd)
                             continue;
@@ -1045,7 +598,7 @@ public static partial class ReferenceExtractor
                     }
 
                     var sameLineContainer = FindInnermostSameLineCSharpContainer(
-                        GetCSharpSameLineContainerCandidatesByLine(),
+                        lookups.GetCSharpSameLineContainerCandidatesByLine(),
                         structuralLines[i],
                         lineNumber,
                         column);
@@ -1067,7 +620,7 @@ public static partial class ReferenceExtractor
 
             SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
             {
-                var pythonDefinitionContainersByLineAndKind = GetPythonDefinitionContainersByLineAndKind();
+                var pythonDefinitionContainersByLineAndKind = lookups.GetPythonDefinitionContainersByLineAndKind();
                 if (pythonDefinitionContainersByLineAndKind == null)
                     return null;
                 return pythonDefinitionContainersByLineAndKind.TryGetValue((line, kind), out var symbol)
@@ -1180,7 +733,7 @@ public static partial class ReferenceExtractor
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
-                    HasActiveSameFileCSharpTypeCandidate,
+                    lookups.HasActiveSameFileCSharpTypeCandidate,
                     references,
                     seen,
                     fileId,
@@ -1290,19 +843,19 @@ public static partial class ReferenceExtractor
             if (language is "csharp")
             {
                 CSharpReferenceExtractor.EmitCtorChainReferences(
-                    preparedLine, GetEnclosingTypeCandidates, containerCandidates,
+                    preparedLine, lookups.GetEnclosingTypeCandidates, containerCandidates,
                     structuralLines, references, seen, fileId, context, lineNumber, container);
             }
             else if (language is "java")
             {
                 JavaReferenceExtractor.EmitCtorChainReferences(
-                    preparedLine, GetEnclosingTypeCandidates, symbols, structuralLines,
+                    preparedLine, lookups.GetEnclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
             else if (language is "kotlin")
             {
                 KotlinReferenceExtractor.EmitCtorDelegationReferences(
-                    preparedLine, GetEnclosingTypeCandidates, symbols, structuralLines,
+                    preparedLine, lookups.GetEnclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
 
@@ -1393,7 +946,7 @@ public static partial class ReferenceExtractor
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
-                    HasActiveSameFileCSharpTypeCandidate,
+                    lookups.HasActiveSameFileCSharpTypeCandidate,
                     references,
                     seen,
                     fileId,
@@ -1506,7 +1059,7 @@ public static partial class ReferenceExtractor
             }
             else if (language == "rust")
             {
-                var rustEnumCandidatesForLine = GetRustEnumCandidates();
+                var rustEnumCandidatesForLine = lookups.GetRustEnumCandidates();
                 var rustEnumContainer = rustEnumCandidatesForLine != null
                     ? FindInnermostContainer(rustEnumCandidatesForLine, lineNumber)
                     : null;
@@ -2007,7 +1560,7 @@ public static partial class ReferenceExtractor
                     && callIndex + name.Length < preparedLine.Length
                     && preparedLine.AsSpan(callIndex + name.Length).TrimStart().StartsWith(".", StringComparison.Ordinal))
                 {
-                    var receiverLookups = GetCSharpValueReceiverLookups();
+                    var receiverLookups = lookups.GetCSharpValueReceiverLookups();
                     if (HasCSharpValueReceiverConflict(
                             normalizedName,
                             normalizedName,
@@ -2021,7 +1574,7 @@ public static partial class ReferenceExtractor
                         if (containingType != null
                             && receiverLookups.ByContainingType.TryGetValue(containingType, out var receiverNames)
                             && (receiverNames.InstanceNames.Contains(normalizedName) || receiverNames.StaticNames.Contains(normalizedName))
-                            && HasCSharpPrivateProperty(containingType, normalizedName))
+                            && lookups.HasCSharpPrivateProperty(containingType, normalizedName))
                         {
                             references.RemoveAll(reference =>
                                 reference.FileId == fileId
@@ -2147,7 +1700,7 @@ public static partial class ReferenceExtractor
                     if (leaf.Length == 0 || !char.IsUpper(leaf, 0))
                         return false;
 
-                    if (HasSameFilePythonClass(candidate, leaf))
+                    if (lookups.HasSameFilePythonClass(candidate, leaf))
                     {
                         return true;
                     }
@@ -2156,7 +1709,7 @@ public static partial class ReferenceExtractor
                         candidate,
                         preparedLine,
                         callIndex,
-                        GetPythonImportedTypeCallLookup(),
+                        lookups.GetPythonImportedTypeCallLookup(),
                         out canonicalName);
                 }
             }
@@ -2207,7 +1760,7 @@ public static partial class ReferenceExtractor
                 PowerShellReferenceExtractor.EmitCallReferences(preparedLine, AddCallLikeReference);
                 PowerShellReferenceExtractor.EmitSplatParameterReferences(
                     preparedLine,
-                    GetPowerShellSplatAssignments,
+                    lookups.GetPowerShellSplatAssignments,
                     lineNumber,
                     AddPowerShellParameterReference);
             }
@@ -2566,8 +2119,8 @@ public static partial class ReferenceExtractor
                     csharpQualifiedEnumMemberLookup,
                     csharpAttrRangesOnLine,
                     csharpUsingAliases,
-                    GetCSharpValueReceiverNames,
-                    GetCSharpFunctionValueReceiverNames,
+                    lookups.GetCSharpValueReceiverNames,
+                    lookups.GetCSharpFunctionValueReceiverNames,
                     references,
                     seen,
                     fileId,
@@ -2728,7 +2281,7 @@ public static partial class ReferenceExtractor
                 var pythonPreparedLine = preparedLine;
                 var pythonHeaderMap = default(PythonLogicalHeaderReferenceLine?);
                 SymbolRecord? pythonHeaderSymbol = null;
-                GetPythonHeaderSymbolsByLine()?.TryGetValue(lineNumber, out pythonHeaderSymbol);
+                lookups.GetPythonHeaderSymbolsByLine()?.TryGetValue(lineNumber, out pythonHeaderSymbol);
                 if (pythonHeaderSymbol?.Signature != null
                     && TryBuildPythonLogicalHeaderReferenceLine(lines, i, pythonHeaderSymbol.StartColumn ?? 0, out var builtPythonHeaderMap))
                 {
@@ -3139,7 +2692,7 @@ public static partial class ReferenceExtractor
                 csharpQualifiedTypePatternLookup,
                 csharpUsingAliases,
                 csharpUsingStatics,
-                HasActiveSameFileCSharpTypeCandidate,
+                lookups.HasActiveSameFileCSharpTypeCandidate,
                 references,
                 seen,
                 fileId);
@@ -3149,7 +2702,7 @@ public static partial class ReferenceExtractor
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
                 csharpUsingStatics,
-                HasActiveSameFileCSharpTypeCandidate,
+                lookups.HasActiveSameFileCSharpTypeCandidate,
                 references,
                 seen,
                 fileId);
@@ -3172,9 +2725,9 @@ public static partial class ReferenceExtractor
                 if (tokenEnd >= line.Length || !line.AsSpan(tokenEnd).TrimStart().StartsWith(".", StringComparison.Ordinal))
                     continue;
 
-                var owner = FindCSharpContainerCandidate(reference.ContainerName, reference.Line);
+                var owner = lookups.FindCSharpContainerCandidate(reference.ContainerName, reference.Line);
                 var containingType = GetContainingTypeQualifiedName(owner);
-                if (containingType == null || !HasCSharpPrivateProperty(containingType, reference.SymbolName))
+                if (containingType == null || !lookups.HasCSharpPrivateProperty(containingType, reference.SymbolName))
                 {
                     continue;
                 }
@@ -3184,9 +2737,9 @@ public static partial class ReferenceExtractor
             }
         }
 
-        ApplyCSharpUsingAliasReferenceNames(references);
+        lookups.ApplyCSharpUsingAliasReferenceNames(references);
         if (!ReferenceLimitReached(references))
-            EmitCSharpBclRegexWithoutTimeoutReferences(references, seen);
+            lookups.EmitCSharpBclRegexWithoutTimeoutReferences(references, seen);
         MarkMutualRecursionReferences(references);
         return references;
     }
