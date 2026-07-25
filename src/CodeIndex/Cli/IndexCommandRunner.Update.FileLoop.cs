@@ -634,191 +634,59 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    if (ex is FileIndexer.BinaryFileSkippedException binaryFile)
+                    if (ex is FileIndexer.BinaryFileSkippedException
+                        or FileIndexer.FileTooLargeSkippedException)
                     {
                         if (fileBatchMarked)
                             writer.ClearBatchInProgress();
 
-                        if (hasCSharpWorkspaceSnapshot
-                            && !CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                                absPath,
-                                dbPath,
-                                relPath,
-                                csharpWorkspaceSnapshot.Size,
-                                csharpWorkspaceSnapshot.ModifiedUtc,
-                                csharpWorkspaceSnapshots!,
-                                out _,
-                                cancellationToken))
-                        {
-                            RecordCSharpWorkspaceDrift(
-                                relPath,
-                                "The C# file changed to binary content after contract preflight.");
-                            skipped++;
-                            continue;
-                        }
-
-                        warnings++;
-                        var sanitizedMessage = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
-                        warningList.Add(new CliJsonMessage(relPath, sanitizedMessage));
-                        if (!options.Json && !options.Quiet)
-                        {
-                            updateProgress.Pause();
-                            ConsoleUi.PrintWarning(sanitizedMessage);
-                            updateProgress.Resume();
-                        }
-
-                        DemoteReadinessOnce();
-                        currentUpdatePhase = "writing";
-                        try
-                        {
-                            var skippedPersistence = PersistSkippedUpdateFile(
-                                new SkippedUpdateFilePersistenceContext
-                                {
-                                    Writer = writer,
-                                    Indexer = indexer,
-                                    Options = options,
-                                    AbsolutePath = absPath,
-                                    RelativePath = relPath,
-                                    KnownLanguage = knownLanguage,
-                                    ProjectRootWritten = context.IsProjectRootWritten(),
-                                    TransactionName = "update skipped binary",
-                                    WorkspaceChangedMessage = "The C# file changed while recording its binary skip state.",
-                                    Issue = BuildNullByteIssue(binaryFile),
-                                    TargetIndex = targetIndex,
-                                    ReadableFileBytes = readableFileBytes,
-                                    CancellationToken = cancellationToken,
-                                    ValidateSkippedRecord = skippedRecord =>
-                                        !hasCSharpWorkspaceSnapshot
-                                        || (skippedRecord.Lang == "csharp"
-                                            && CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                                                absPath,
-                                                dbPath,
-                                                relPath,
-                                                skippedRecord.Size,
-                                                skippedRecord.Modified,
-                                                csharpWorkspaceSnapshots!,
-                                                out _,
-                                                cancellationToken)),
-                                    PurgeStaleUpdateCleanupPaths = PurgeStaleUpdateCleanupPaths,
-                                    RequireTypeScriptAugmentationRefresh = RequireTypeScriptAugmentationRefresh,
-                                    WriteProjectRootOnce = WriteProjectRootOnce,
-                                    RecordDynamicGraphFileRefresh = RecordDynamicGraphFileRefresh,
-                                });
-                            mutualRecursionRefreshNeeded |=
-                                skippedPersistence.MutualRecursionRefreshNeeded;
-                        }
-                        catch (CSharpWorkspaceChangedException workspaceChanged)
-                        {
-                            RecordCSharpWorkspaceDrift(relPath, workspaceChanged.Message);
-                            skipped++;
-                            continue;
-                        }
-                        catch (Exception skippedWriteException)
-                        {
-                            if (skippedWriteException is IndexExtractionStalledException
-                                or IndexInterruptedException
-                                or OperationCanceledException)
+                        var skippedFile = HandleSkippedUpdateFile(
+                            new SkippedUpdateFileHandlingContext
                             {
-                                throw;
-                            }
-
-                            RecordUpdateFileFailure(relPath, currentUpdatePhase, skippedWriteException);
-                            continue;
-                        }
-                        updated++;
-                        ftsMutated = true;
-                        continue;
-                    }
-
-                    if (ex is FileIndexer.FileTooLargeSkippedException fileTooLarge)
-                    {
-                        if (fileBatchMarked)
-                            writer.ClearBatchInProgress();
-
-                        if (hasCSharpWorkspaceSnapshot
-                            && !CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                                absPath,
-                                dbPath,
-                                relPath,
-                                csharpWorkspaceSnapshot.Size,
-                                csharpWorkspaceSnapshot.ModifiedUtc,
-                                csharpWorkspaceSnapshots!,
-                                out _,
-                                cancellationToken))
+                                Writer = writer,
+                                Indexer = indexer,
+                                Options = options,
+                                AbsolutePath = absPath,
+                                RelativePath = relPath,
+                                IndexPath = dbPath,
+                                KnownLanguage = knownLanguage,
+                                ProjectRootWritten = context.IsProjectRootWritten(),
+                                TargetIndex = targetIndex,
+                                ReadableFileBytes = readableFileBytes,
+                                HasCSharpWorkspaceSnapshot =
+                                    hasCSharpWorkspaceSnapshot,
+                                CSharpWorkspaceSnapshot =
+                                    csharpWorkspaceSnapshot,
+                                CSharpWorkspaceSnapshots =
+                                    csharpWorkspaceSnapshots,
+                                WarningList = warningList,
+                                UpdateProgress = updateProgress,
+                                CancellationToken = cancellationToken,
+                                DemoteReadinessOnce = DemoteReadinessOnce,
+                                SetCurrentUpdatePhase =
+                                    phase => currentUpdatePhase = phase,
+                                RecordCSharpWorkspaceDrift =
+                                    RecordCSharpWorkspaceDrift,
+                                RecordUpdateFileFailure =
+                                    RecordUpdateFileFailure,
+                                PurgeStaleUpdateCleanupPaths =
+                                    PurgeStaleUpdateCleanupPaths,
+                                RequireTypeScriptAugmentationRefresh =
+                                    RequireTypeScriptAugmentationRefresh,
+                                WriteProjectRootOnce = WriteProjectRootOnce,
+                                RecordDynamicGraphFileRefresh =
+                                    RecordDynamicGraphFileRefresh,
+                            },
+                            ex);
+                        updated += skippedFile.Updated;
+                        skipped += skippedFile.Skipped;
+                        warnings += skippedFile.Warnings;
+                        mutualRecursionRefreshNeeded |=
+                            skippedFile.MutualRecursionRefreshNeeded;
+                        if (skippedFile.Updated > 0)
                         {
-                            RecordCSharpWorkspaceDrift(
-                                relPath,
-                                "The C# file changed size or timestamp after contract preflight.");
-                            skipped++;
-                            continue;
+                            ftsMutated = true;
                         }
-
-                        DemoteReadinessOnce();
-                        currentUpdatePhase = "writing";
-                        try
-                        {
-                            var skippedPersistence = PersistSkippedUpdateFile(
-                                new SkippedUpdateFilePersistenceContext
-                                {
-                                    Writer = writer,
-                                    Indexer = indexer,
-                                    Options = options,
-                                    AbsolutePath = absPath,
-                                    RelativePath = relPath,
-                                    KnownLanguage = knownLanguage,
-                                    ProjectRootWritten = context.IsProjectRootWritten(),
-                                    TransactionName = "update skipped oversized file",
-                                    WorkspaceChangedMessage = "The C# file changed while recording its oversized skip state.",
-                                    Issue = new FileIssue
-                                    {
-                                        Path = fileTooLarge.RelativePath,
-                                        Kind = "file_too_large",
-                                        Line = 0,
-                                        Message = fileTooLarge.Message,
-                                    },
-                                    TargetIndex = targetIndex,
-                                    ReadableFileBytes = readableFileBytes,
-                                    CancellationToken = cancellationToken,
-                                    ValidateSkippedRecord = skippedRecord =>
-                                        !hasCSharpWorkspaceSnapshot
-                                        || (skippedRecord.Lang == "csharp"
-                                            && CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                                                absPath,
-                                                dbPath,
-                                                relPath,
-                                                skippedRecord.Size,
-                                                skippedRecord.Modified,
-                                                csharpWorkspaceSnapshots!,
-                                                out _,
-                                                cancellationToken)),
-                                    PurgeStaleUpdateCleanupPaths = PurgeStaleUpdateCleanupPaths,
-                                    RequireTypeScriptAugmentationRefresh = RequireTypeScriptAugmentationRefresh,
-                                    WriteProjectRootOnce = WriteProjectRootOnce,
-                                    RecordDynamicGraphFileRefresh = RecordDynamicGraphFileRefresh,
-                                });
-                            mutualRecursionRefreshNeeded |=
-                                skippedPersistence.MutualRecursionRefreshNeeded;
-                        }
-                        catch (CSharpWorkspaceChangedException workspaceChanged)
-                        {
-                            RecordCSharpWorkspaceDrift(relPath, workspaceChanged.Message);
-                            skipped++;
-                            continue;
-                        }
-                        catch (Exception skippedWriteException)
-                        {
-                            if (skippedWriteException is IndexExtractionStalledException
-                                or IndexInterruptedException
-                                or OperationCanceledException)
-                            {
-                                throw;
-                            }
-
-                            RecordUpdateFileFailure(relPath, currentUpdatePhase, skippedWriteException);
-                            continue;
-                        }
-                        updated++;
-                        ftsMutated = true;
                         continue;
                     }
 
