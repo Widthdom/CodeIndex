@@ -1450,50 +1450,11 @@ public static partial class IndexCommandRunner
         var updateTargetIndex = 0;
         foreach (var targetPath in targetPaths)
             updateTargets[updateTargetIndex++] = UpdateFileTarget.Create(projectRoot, targetPath);
-        var knownReadableFileSizes = new long[updateTargets.Length];
-        var knownReadableFileSizeKnown = new bool[updateTargets.Length];
-        var knownReadableFileCount = 0;
-        long knownReadableBytesRead = 0;
-        void RememberReadableFileSize(int targetIndex, long size)
-        {
-            if (knownReadableFileSizeKnown[targetIndex])
-            {
-                var priorSize = knownReadableFileSizes[targetIndex];
-                knownReadableBytesRead += size - priorSize;
-            }
-            else
-            {
-                knownReadableFileSizeKnown[targetIndex] = true;
-                knownReadableFileCount++;
-                knownReadableBytesRead += size;
-            }
-            knownReadableFileSizes[targetIndex] = size;
-        }
-        FileByteReadSummary MeasureRemainingUpdateReadableFileBytes()
-        {
-            long total = knownReadableBytesRead;
-            long skippedSizeCount = 0;
-            for (var targetIndex = 0; targetIndex < updateTargets.Length; targetIndex++)
-            {
-                if (knownReadableFileSizeKnown[targetIndex])
-                    continue;
-
-                var path = updateTargets[targetIndex].FilePath;
-                try
-                {
-                    var info = new FileInfo(path);
-                    if (info.Exists)
-                        total += info.Length;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-                {
-                    skippedSizeCount++;
-                    RecordIndexRunDiagnostic(indexRunDiagnostics, "file_size_bytes_skipped", FormatDiagnosticPath(projectRoot, path), ex);
-                }
-            }
-
-            return new FileByteReadSummary(total, skippedSizeCount);
-        }
+        var readableFileBytes = new ReadableFileByteTracker(
+            updateTargets.Length,
+            targetIndex => updateTargets[targetIndex].FilePath,
+            projectRoot,
+            indexRunDiagnostics);
 
         WriteIndexJsonLiveness(options, $"updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
         string? currentUpdatePath = null;
@@ -1824,7 +1785,7 @@ public static partial class IndexCommandRunner
                     if (statMatchedFile != null)
                     {
                         skipped++;
-                        RememberReadableFileSize(targetIndex, statMatchedFile.Value.Size);
+                        readableFileBytes.Remember(targetIndex, statMatchedFile.Value.Size);
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
@@ -1864,7 +1825,7 @@ public static partial class IndexCommandRunner
                         skipped++;
                         continue;
                     }
-                    RememberReadableFileSize(targetIndex, record.Size);
+                    readableFileBytes.Remember(targetIndex, record.Size);
                     var content = loaded.Content;
                     var rawBytes = loaded.RawBytes;
                     var warning = loaded.Warning;
@@ -2173,7 +2134,7 @@ public static partial class IndexCommandRunner
                                 throw new CSharpWorkspaceChangedException(
                                     "The C# file changed while recording its binary skip state.");
                             }
-                            RememberReadableFileSize(targetIndex, skippedRecord.Size);
+                            readableFileBytes.Remember(targetIndex, skippedRecord.Size);
                             var stalePurged = PurgeStaleUpdateCleanupPaths(
                                 skippedRecord.Path,
                                 skippedRecord.Checksum,
@@ -2277,7 +2238,7 @@ public static partial class IndexCommandRunner
                                 throw new CSharpWorkspaceChangedException(
                                     "The C# file changed while recording its oversized skip state.");
                             }
-                            RememberReadableFileSize(targetIndex, skippedRecord.Size);
+                            readableFileBytes.Remember(targetIndex, skippedRecord.Size);
                             var stalePurged = PurgeStaleUpdateCleanupPaths(
                                 skippedRecord.Path,
                                 skippedRecord.Checksum,
@@ -2696,9 +2657,7 @@ public static partial class IndexCommandRunner
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
-            var bytesRead = knownReadableFileCount == updateTargets.Length
-                ? new FileByteReadSummary(knownReadableBytesRead, 0)
-                : MeasureRemainingUpdateReadableFileBytes();
+            var bytesRead = readableFileBytes.MeasureRemaining();
             StampLastIndexRunMetadata(
                 writer,
                 "update",

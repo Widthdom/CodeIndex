@@ -169,69 +169,11 @@ public static partial class IndexCommandRunner
                     indexedTarget.GeneratedExtractionSuppressed));
             }
         }
-        var knownReadableFileSizes = new long[files.Count];
-        var knownReadableFileSizeKnown = new bool[files.Count];
-        var knownReadableFileCount = 0;
-        long knownReadableBytesRead = 0;
-        var knownReadableByteEstimateComplete = true;
-        void RememberReadableFileSize(int fileIndex, long size)
-        {
-            long? priorSize = null;
-            if (knownReadableFileSizeKnown[fileIndex])
-            {
-                priorSize = knownReadableFileSizes[fileIndex];
-            }
-            else
-            {
-                knownReadableFileSizeKnown[fileIndex] = true;
-                knownReadableFileCount++;
-            }
-            if (knownReadableByteEstimateComplete
-                && !FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
-                    knownReadableBytesRead,
-                    priorSize,
-                    size,
-                    out knownReadableBytesRead))
-            {
-                knownReadableByteEstimateComplete = false;
-            }
-            knownReadableFileSizes[fileIndex] = size;
-        }
-        FileByteReadSummary MeasureRemainingReadableFileBytes()
-        {
-            long total = knownReadableBytesRead;
-            long skipped = knownReadableByteEstimateComplete ? 0 : 1;
-            var totalComplete = knownReadableByteEstimateComplete;
-            for (var fileIndex = 0; fileIndex < files.Count; fileIndex++)
-            {
-                if (knownReadableFileSizeKnown[fileIndex])
-                    continue;
-
-                var path = files[fileIndex];
-                try
-                {
-                    var info = new FileInfo(path);
-                    if (info.Exists
-                        && totalComplete
-                        && !FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
-                            total,
-                            previousBytes: null,
-                            info.Length,
-                            out total))
-                    {
-                        totalComplete = false;
-                        skipped++;
-                    }
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-                {
-                    skipped++;
-                    RecordIndexRunDiagnostic(indexRunDiagnostics, "file_size_bytes_skipped", FormatDiagnosticPath(projectRoot, path), ex);
-                }
-            }
-
-            return new FileByteReadSummary(total, skipped);
-        }
+        var readableFileBytes = new ReadableFileByteTracker(
+            files.Count,
+            fileIndex => files[fileIndex],
+            projectRoot,
+            indexRunDiagnostics);
         var errorList = discovery.ErrorList;
         var fileErrorList = errorList
             .Take(PartialIndexFileErrorLimit)
@@ -993,7 +935,7 @@ public static partial class IndexCommandRunner
             var language = target.Language;
             skipped++;
             processed++;
-            RememberReadableFileSize(fileIndex, existingFile.Size);
+            readableFileBytes.Remember(fileIndex, existingFile.Size);
             if (!string.IsNullOrWhiteSpace(language))
             {
                 skippedSymbolExtractorLanguages ??= new HashSet<string>(StringComparer.Ordinal);
@@ -1193,7 +1135,7 @@ public static partial class IndexCommandRunner
             var persistedSizeExcessBytes = 0L;
             var byteEstimateComplete = !scanHadErrors
                 && staleFilePurgePlan.ByteEstimateComplete
-                && knownReadableByteEstimateComplete;
+                && readableFileBytes.EstimateComplete;
 
             void AddDirtyFileBytes(int fileIndex)
             {
@@ -1207,7 +1149,7 @@ public static partial class IndexCommandRunner
                         return;
                     }
 
-                    RememberReadableFileSize(fileIndex, info.Length);
+                    readableFileBytes.Remember(fileIndex, info.Length);
                     var persistedSize = reusableIndexedFileStats!.GetPersistedSize(fileTargets[fileIndex].IndexPath);
                     if (!FtsBulkLoadTriggerGuard.TryAccumulateDirtyFileBytes(
                             dirtyBytes,
@@ -1237,9 +1179,9 @@ public static partial class IndexCommandRunner
                     AddDirtyFileBytes(fileIndex);
             }
 
-            byteEstimateComplete &= knownReadableByteEstimateComplete;
-            var totalBytes = knownReadableBytesRead;
-            if (!knownReadableByteEstimateComplete
+            byteEstimateComplete &= readableFileBytes.EstimateComplete;
+            var totalBytes = readableFileBytes.KnownBytes;
+            if (!readableFileBytes.EstimateComplete
                 || totalBytes > long.MaxValue - staleFilePurgePlan.DeletedBytes)
                 byteEstimateComplete = false;
             else
@@ -2128,7 +2070,7 @@ public static partial class IndexCommandRunner
                         }
 
                         var record = item.Record!;
-                        RememberReadableFileSize(item.FileIndex, record.Size);
+                        readableFileBytes.Remember(item.FileIndex, record.Size);
                         if (item.Warning != null && !options.Json && !options.Quiet)
                         {
                             PauseIndexSpinnerForConsoleWrite();
@@ -2842,11 +2784,7 @@ public static partial class IndexCommandRunner
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
-            var bytesRead = knownReadableFileCount == files.Count
-                ? new FileByteReadSummary(
-                    knownReadableBytesRead,
-                    knownReadableByteEstimateComplete ? 0 : 1)
-                : MeasureRemainingReadableFileBytes();
+            var bytesRead = readableFileBytes.MeasureRemaining();
             StampLastIndexRunMetadata(
                 writer,
                 options.Rebuild ? "rebuild" : "incremental",
