@@ -908,188 +908,111 @@ public static partial class IndexCommandRunner
 
         fullScanProgress.ReportJsonIndexProgressIfNeeded();
 
-        PostExtractionHookRunner? postExtractionHooks = null;
-        if (extractionWorkItemCount == 0)
-        {
-            FullScanExtractionSchedulingForTesting?.Invoke(false, null);
-        }
-        else
-        {
-            postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(
-                options.MaxFileSizeBytes,
-                maxSymbolCount: options.MaxSymbolsPerFile + 1,
-                maxReferenceCount: options.MaxReferencesPerFile + 1);
-            var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
-            var parallelizeExtraction = !options.SymbolKindFilter.IsActive
-                && !hasPostExtractionHooks;
-            var parallelizeExtractionReason = parallelizeExtraction
-                ? options.Rebuild
-                    ? "rebuild"
-                    : startedWithNoIndexedFiles
-                        ? "empty_index"
-                        : "incremental_changes"
-                : null;
-            FullScanExtractionSchedulingForTesting?.Invoke(
-                parallelizeExtraction,
-                parallelizeExtractionReason);
-
-            fullScanProgress.EnsureIndexingActivityVisible();
-            fullScanProgress.StartJsonHeartbeatIfNeeded();
-
-            try
+        var extractionPipeline = RunFullScanExtractionPipeline(
+            new FullScanExtractionPipelineContext
             {
-                if (!options.Json && !options.Quiet)
+                Writer = writer,
+                Indexer = indexer,
+                Options = options,
+                ProjectRoot = projectRoot,
+                FileTargets = fileTargets,
+                ExtractionFileIndexes = extractionFileIndexes,
+                ExtractionWorkItemCount = extractionWorkItemCount,
+                ExtractionParallelism = extractionParallelism,
+                FilesCount = files.Count,
+                ForceExtractorRefresh = forceExtractorRefresh,
+                StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+                PriorSymbolsOnlyGraphOmitted =
+                    priorSymbolsOnlyGraphOmitted,
+                SymbolKindFilterMatchesPrior =
+                    symbolKindFilterMatchesPrior,
+                CSharpIndexedProjectRootCompatible =
+                    csharpIndexedProjectRootCompatible,
+                CSharpSymbolNameContractMatchesCurrent =
+                    csharpSymbolNameContractMatchesCurrent,
+                SqlGraphContractMatchesCurrent =
+                    sqlGraphContractMatchesCurrent,
+                HdlGraphContractMatchesCurrent =
+                    hdlGraphContractMatchesCurrent,
+                ReadableFileBytes = readableFileBytes,
+                IndexProgress = indexProgress,
+                FullScanProgress = fullScanProgress,
+                CancellationToken = cancellationToken,
+                GetProcessedCount = () => processed,
+                PublishProcessedCount = value => processed = value,
+                ThrowIfFullScanCancelled =
+                    ThrowIfFullScanCancelled,
+                SetIndexProgressVisible =
+                    value => indexProgressVisible = value,
+                SetActiveExtractionPhases =
+                    phases => activeExtractionPhases = phases,
+                SetCurrentJsonIndexFile =
+                    path => currentJsonIndexFile = path,
+                GetCurrentJsonIndexFile =
+                    () => currentJsonIndexFile,
+                GetDeferCSharpMutationsForIncompleteScan =
+                    () => deferCSharpMutationsForIncompleteScan,
+                GetFtsMutated = () => ftsMutated,
+                GetCSharpWorkspace = () => csharpWorkspace,
+                GetCSharpWorkspaceFileSnapshots =
+                    () => csharpWorkspaceFileSnapshots,
+                DeferCSharpMutationsForLoadedSnapshotDrift =
+                    DeferCSharpMutationsForLoadedSnapshotDrift,
+                TargetRequiresJavaScriptTypeScriptRefresh =
+                    TargetRequiresJavaScriptTypeScriptRefresh,
+                AllowReuseWithCurrentHotspotFamilyTrust = language =>
+                    AllowReuseWithCurrentHotspotFamilyTrust(
+                        language,
+                        hotspotFamilyTrustMatchesCurrent),
+                RequireTypeScriptAugmentationRefresh =
+                    RequireTypeScriptAugmentationRefresh,
+                WriteProjectRootOnce = WriteProjectRootOnce,
+                InsertIssuesForIndexedFile =
+                    InsertIssuesForIndexedFile,
+                CountFreshInsertedRows = CountFreshInsertedRows,
+                ConsumerState = new FullScanExtractionConsumerState
                 {
-                    indexProgress.Pause();
-                    indexProgressVisible = true;
-                    ConsoleUi.PrintProgress(0, files.Count);
-                }
-
-                FullScanExtractionWorkStartedForTesting?.Invoke();
-                var extractionWorkerCount = Math.Min(extractionParallelism, extractionWorkItemCount);
-                activeExtractionPhases = new ActiveExtractionPhase?[extractionWorkerCount];
-                var extractionQueueCapacity = parallelizeExtraction
-                    ? Math.Max(1, extractionWorkerCount * 2)
-                    : 1;
-                FullScanExtractionQueueCapacityForTesting?.Invoke(extractionQueueCapacity);
-                using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(extractionQueueCapacity);
-                using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                using var mainSymbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(
-                    () => new SymbolExtractionWorkerClient(options.MaxFileSizeBytes));
-                var extractionCancellationToken = extractionStallCts.Token;
-                var workers = StartFullScanExtractionWorkers(new FullScanExtractionWorkerContext
-                {
-                    Indexer = indexer,
-                    Options = options,
-                    ProjectRoot = projectRoot,
-                    FileTargets = fileTargets,
-                    ExtractionFileIndexes = extractionFileIndexes,
-                    ExtractionWorkItemCount = extractionWorkItemCount,
-                    ExtractionWorkerCount = extractionWorkerCount,
-                    ParallelizeExtraction = parallelizeExtraction,
-                    CSharpWorkspace = csharpWorkspace,
-                    CSharpWorkspaceFileSnapshots = csharpWorkspaceFileSnapshots,
-                    PostExtractionHooks = postExtractionHooks,
-                    ActiveExtractionPhases = activeExtractionPhases,
-                    ExtractionResults = extractionResults,
-                    ExtractionCancellationToken = extractionCancellationToken,
-                    CancellationToken = cancellationToken,
-                });
-
-                _ = Task.WhenAll(workers).ContinueWith(
-                    task =>
-                    {
-                        extractionResults.CompleteAdding();
-                    },
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-
-                var processedBeforeExtraction = processed;
-                var extractionState = ConsumeFullScanExtractionResults(
-                    new FullScanExtractionConsumerContext
-                    {
-                        Writer = writer,
-                        Indexer = indexer,
-                        Options = options,
-                        ProjectRoot = projectRoot,
-                        FileTargets = fileTargets,
-                        FilesCount = files.Count,
-                        ProcessedBeforeExtraction = processedBeforeExtraction,
-                        ForceExtractorRefresh = forceExtractorRefresh,
-                        StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
-                        PriorSymbolsOnlyGraphOmitted = priorSymbolsOnlyGraphOmitted,
-                        SymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior,
-                        CSharpIndexedProjectRootCompatible = csharpIndexedProjectRootCompatible,
-                        CSharpSymbolNameContractMatchesCurrent =
-                            csharpSymbolNameContractMatchesCurrent,
-                        SqlGraphContractMatchesCurrent = sqlGraphContractMatchesCurrent,
-                        HdlGraphContractMatchesCurrent = hdlGraphContractMatchesCurrent,
-                        ReadableFileBytes = readableFileBytes,
-                        PostExtractionHooks = postExtractionHooks,
-                        SymbolExtractionWorker = mainSymbolExtractionWorker.Value,
-                        IndexProgress = indexProgress,
-                        ExtractionResults = extractionResults,
-                        Workers = workers,
-                        ExtractionStallTimeout =
-                            IndexExtractionStallTimeoutForTesting?.Invoke()
-                            ?? IndexExtractionStallTimeout,
-                        ActiveExtractionPhases = activeExtractionPhases,
-                        CancellationToken = cancellationToken,
-                        CancelExtraction = extractionStallCts.Cancel,
-                        EnsureIndexingActivityVisible =
-                            fullScanProgress.EnsureIndexingActivityVisible,
-                        ReportJsonIndexProgressIfNeeded =
-                            fullScanProgress.ReportJsonIndexProgressIfNeeded,
-                        ThrowIfFullScanCancelled = ThrowIfFullScanCancelled,
-                        PublishProcessedCount = value => processed = value,
-                        SetCurrentJsonIndexFile = path => currentJsonIndexFile = path,
-                        GetCurrentJsonIndexFile = () => currentJsonIndexFile,
-                        GetDeferCSharpMutationsForIncompleteScan =
-                            () => deferCSharpMutationsForIncompleteScan,
-                        GetFtsMutated = () => ftsMutated,
-                        GetCSharpWorkspace = () => csharpWorkspace,
-                        GetCSharpWorkspaceFileSnapshots =
-                            () => csharpWorkspaceFileSnapshots,
-                        DeferCSharpMutationsForLoadedSnapshotDrift =
-                            DeferCSharpMutationsForLoadedSnapshotDrift,
-                        TargetRequiresJavaScriptTypeScriptRefresh =
-                            TargetRequiresJavaScriptTypeScriptRefresh,
-                        AllowReuseWithCurrentHotspotFamilyTrust = language =>
-                            AllowReuseWithCurrentHotspotFamilyTrust(
-                                language,
-                                hotspotFamilyTrustMatchesCurrent),
-                        RequireTypeScriptAugmentationRefresh =
-                            RequireTypeScriptAugmentationRefresh,
-                        WriteProjectRootOnce = WriteProjectRootOnce,
-                        InsertIssuesForIndexedFile = InsertIssuesForIndexedFile,
-                        CountFreshInsertedRows = CountFreshInsertedRows,
-                        State = new FullScanExtractionConsumerState
-                        {
-                            FtsMutated = ftsMutated,
-                            MutualRecursionRefreshNeeded =
-                                mutualRecursionRefreshNeeded,
-                            CSharpMetadataTargetsNeedRefresh =
-                                csharpMetadataTargetsNeedRefresh,
-                            SymbolsDroppedByKindFilter =
-                                symbolsDroppedByKindFilter,
-                            ReusedHotspotFamilyLanguages =
-                                reusedHotspotFamilyLanguages,
-                            SkippedSymbolExtractorLanguages =
-                                skippedSymbolExtractorLanguages,
-                            IndexedSymbolExtractorLanguages =
-                                indexedSymbolExtractorLanguages,
-                            ErrorList = errorList,
-                            FileErrorList = fileErrorList,
-                            WarningList = warningList,
-                        },
-                    });
-                processed = processedBeforeExtraction + extractionState.Processed;
-                skipped += extractionState.Skipped;
-                warnings += extractionState.Warnings;
-                errors += extractionState.ErrorsAdded;
-                ftsMutated = extractionState.FtsMutated;
-                mutualRecursionRefreshNeeded =
-                    extractionState.MutualRecursionRefreshNeeded;
-                csharpMetadataTargetsNeedRefresh =
-                    extractionState.CSharpMetadataTargetsNeedRefresh;
-                symbolsDroppedByKindFilter =
-                    extractionState.SymbolsDroppedByKindFilter;
-                extractedFiles += extractionState.ExtractedFiles;
-                extractedChunks += extractionState.ExtractedChunks;
-                extractedSymbols += extractionState.ExtractedSymbols;
-                extractedReferences += extractionState.ExtractedReferences;
-                reusedHotspotFamilyLanguages =
-                    extractionState.ReusedHotspotFamilyLanguages;
-                skippedSymbolExtractorLanguages =
-                    extractionState.SkippedSymbolExtractorLanguages;
-            }
-            finally
-            {
-                currentJsonIndexFile = null;
-                fullScanProgress.StopJsonHeartbeat();
-                postExtractionHooks?.Dispose();
-            }
+                    FtsMutated = ftsMutated,
+                    MutualRecursionRefreshNeeded =
+                        mutualRecursionRefreshNeeded,
+                    CSharpMetadataTargetsNeedRefresh =
+                        csharpMetadataTargetsNeedRefresh,
+                    SymbolsDroppedByKindFilter =
+                        symbolsDroppedByKindFilter,
+                    ReusedHotspotFamilyLanguages =
+                        reusedHotspotFamilyLanguages,
+                    SkippedSymbolExtractorLanguages =
+                        skippedSymbolExtractorLanguages,
+                    IndexedSymbolExtractorLanguages =
+                        indexedSymbolExtractorLanguages,
+                    ErrorList = errorList,
+                    FileErrorList = fileErrorList,
+                    WarningList = warningList,
+                },
+            });
+        var postExtractionHooks =
+            extractionPipeline.PostExtractionHooks;
+        var extractionState = extractionPipeline.ConsumerState;
+        if (extractionState != null)
+        {
+            skipped += extractionState.Skipped;
+            warnings += extractionState.Warnings;
+            errors += extractionState.ErrorsAdded;
+            ftsMutated = extractionState.FtsMutated;
+            mutualRecursionRefreshNeeded =
+                extractionState.MutualRecursionRefreshNeeded;
+            csharpMetadataTargetsNeedRefresh =
+                extractionState.CSharpMetadataTargetsNeedRefresh;
+            symbolsDroppedByKindFilter =
+                extractionState.SymbolsDroppedByKindFilter;
+            extractedFiles += extractionState.ExtractedFiles;
+            extractedChunks += extractionState.ExtractedChunks;
+            extractedSymbols += extractionState.ExtractedSymbols;
+            extractedReferences += extractionState.ExtractedReferences;
+            reusedHotspotFamilyLanguages =
+                extractionState.ReusedHotspotFamilyLanguages;
+            skippedSymbolExtractorLanguages =
+                extractionState.SkippedSymbolExtractorLanguages;
         }
 
         indexProgress.Pause();
