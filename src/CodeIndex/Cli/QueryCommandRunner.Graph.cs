@@ -7,46 +7,25 @@ public static partial class QueryCommandRunner
 {
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("references", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
-        if (previewOptionError != null)
-        {
-            CommandErrorWriter.WriteStderr(previewOptionError);
-            return CommandExitCodes.UsageError;
-        }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("references", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("references"), options.Query))
-            return CommandExitCodes.UsageError;
+        if (!TryParseGraphCommandOptions("references", cmdArgs, out var options, out var optionExitCode))
+            return optionExitCode;
         if (TryWriteInvalidKindFilterError(options, "references", AllValidReferenceKinds, AllValidKinds))
             return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "references"))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "references"))
             return CommandExitCodes.UsageError;
-        if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
-        {
-            CommandErrorWriter.WriteStderr(exactError);
-            return CommandExitCodes.UsageError;
-        }
-        if (TryWriteBlankQueryError(options, "references"))
-            return CommandExitCodes.UsageError;
-        if (string.IsNullOrWhiteSpace(options.Query))
-        {
-            WriteUsageError(
+        if (!TryValidateGraphSymbolQuery(
+                "references",
+                options,
                 "references requires a symbol query argument",
-                GetUsageLineOrThrow("references"),
-                "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (IsBareVerbatimQueryToken(options.Query))
+                "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.",
+                out var exact,
+                out var queryExitCode))
         {
-            WriteUsageError(
-                "references requires a symbol query argument",
-                GetUsageLineOrThrow("references"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
-            return CommandExitCodes.UsageError;
+            return queryExitCode;
         }
-        if (TryWriteUnexpectedExtraPositionals("references", options))
-            return CommandExitCodes.UsageError;
+        var query = options.Query!;
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -54,7 +33,7 @@ public static partial class QueryCommandRunner
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactGraphLanguage = exact
-                ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
+                ? reader.GetExactGraphSupportedDefinitionLanguage(query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
                 : null;
             if (options.CountOnly)
             {
@@ -162,15 +141,8 @@ public static partial class QueryCommandRunner
 
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("callers", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
-        if (previewOptionError != null)
-        {
-            CommandErrorWriter.WriteStderr(previewOptionError);
-            return CommandExitCodes.UsageError;
-        }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("callers", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("callers"), options.Query))
-            return CommandExitCodes.UsageError;
+        if (!TryParseGraphCommandOptions("callers", cmdArgs, out var options, out var optionExitCode))
+            return optionExitCode;
         if (TryWriteParseError(options, "callers"))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "callers"))
@@ -179,31 +151,17 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "callers", CallGraphOnlyReferenceKinds, AllValidReferenceKinds, AllValidKinds))
             return CommandExitCodes.InvalidArgument;
-        if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
-        {
-            CommandErrorWriter.WriteStderr(exactError);
-            return CommandExitCodes.UsageError;
-        }
-        if (TryWriteBlankQueryError(options, "callers"))
-            return CommandExitCodes.UsageError;
-        if (string.IsNullOrWhiteSpace(options.Query))
-        {
-            WriteUsageError(
+        if (!TryValidateGraphSymbolQuery(
+                "callers",
+                options,
                 "callers requires a symbol query argument",
-                GetUsageLineOrThrow("callers"),
-                "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (IsBareVerbatimQueryToken(options.Query))
+                "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.",
+                out var exact,
+                out var queryExitCode))
         {
-            WriteUsageError(
-                "callers requires a symbol query argument",
-                GetUsageLineOrThrow("callers"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
-            return CommandExitCodes.UsageError;
+            return queryExitCode;
         }
-        if (TryWriteUnexpectedExtraPositionals("callers", options))
-            return CommandExitCodes.UsageError;
+        var query = options.Query!;
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -212,20 +170,20 @@ public static partial class QueryCommandRunner
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactGraphLanguage = exact
-                ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
+                ? reader.GetExactGraphSupportedDefinitionLanguage(query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
                 : null;
             if (options.CountOnly)
             {
-                var counts = reader.CountCallersTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds);
+                var counts = reader.CountCallersTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds);
                 var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
                     baseSqlGraphSignal,
                     counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
                 var exactSignalForCount = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
-                    () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds) > 0,
-                    () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds),
-                    () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode),
+                    () => reader.CountCallers(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds) > 0,
+                    () => reader.CountCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds),
+                    () => reader.GetCallers(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode),
                     r => r.CalleeName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
@@ -240,7 +198,7 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callers"));
+            var results = reader.GetCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callers"));
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(results, options.DbPath);
@@ -248,9 +206,9 @@ public static partial class QueryCommandRunner
             var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds) > 0,
-                () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds),
-                () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode),
+                () => reader.CountCallers(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds) > 0,
+                () => reader.CountCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds),
+                () => reader.GetCallers(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode),
                 r => r.CalleeName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
@@ -320,15 +278,8 @@ public static partial class QueryCommandRunner
 
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("callees", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
-        if (previewOptionError != null)
-        {
-            CommandErrorWriter.WriteStderr(previewOptionError);
-            return CommandExitCodes.UsageError;
-        }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("callees", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("callees"), options.Query))
-            return CommandExitCodes.UsageError;
+        if (!TryParseGraphCommandOptions("callees", cmdArgs, out var options, out var optionExitCode))
+            return optionExitCode;
         if (TryWriteParseError(options, "callees"))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "callees"))
@@ -337,31 +288,17 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "callees", CallGraphOnlyReferenceKinds, AllValidReferenceKinds, AllValidKinds))
             return CommandExitCodes.InvalidArgument;
-        if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
-        {
-            CommandErrorWriter.WriteStderr(exactError);
-            return CommandExitCodes.UsageError;
-        }
-        if (TryWriteBlankQueryError(options, "callees"))
-            return CommandExitCodes.UsageError;
-        if (string.IsNullOrWhiteSpace(options.Query))
-        {
-            WriteUsageError(
+        if (!TryValidateGraphSymbolQuery(
+                "callees",
+                options,
                 "callees requires a caller query argument",
-                GetUsageLineOrThrow("callees"),
-                "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (IsBareVerbatimQueryToken(options.Query))
+                "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.",
+                out var exact,
+                out var queryExitCode))
         {
-            WriteUsageError(
-                "callees requires a caller query argument",
-                GetUsageLineOrThrow("callees"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
-            return CommandExitCodes.UsageError;
+            return queryExitCode;
         }
-        if (TryWriteUnexpectedExtraPositionals("callees", options))
-            return CommandExitCodes.UsageError;
+        var query = options.Query!;
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -370,20 +307,20 @@ public static partial class QueryCommandRunner
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var hdlGraphSignal = reader.GetHdlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactGraphLanguage = exact
-                ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
+                ? reader.GetExactGraphSupportedDefinitionLanguage(query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
                 : null;
             if (options.CountOnly)
             {
-                var counts = reader.CountCalleesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds);
+                var counts = reader.CountCalleesTotal(query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds);
                 var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
                     baseSqlGraphSignal,
                     counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
                 var exactSignalForCount = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
-                    () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds) > 0,
-                    () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds),
-                    () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode),
+                    () => reader.CountCallees(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds) > 0,
+                    () => reader.CountCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds),
+                    () => reader.GetCallees(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode),
                     r => r.CallerName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
@@ -398,7 +335,7 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callees"));
+            var results = reader.GetCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callees"));
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(results, options.DbPath);
@@ -406,9 +343,9 @@ public static partial class QueryCommandRunner
             var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds) > 0,
-                () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds),
-                () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode),
+                () => reader.CountCallees(query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds) > 0,
+                () => reader.CountCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds),
+                () => reader.GetCallees(query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false, rawKinds: options.RawKinds, rankMode: options.RankMode),
                 r => r.CallerName);
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
@@ -472,6 +409,89 @@ public static partial class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static bool TryParseGraphCommandOptions(
+        string command,
+        string[] cmdArgs,
+        out QueryCommandOptions options,
+        out int exitCode)
+    {
+        var previewOptionError = ValidatePreviewOptions(
+            command,
+            cmdArgs,
+            allowMaxLineWidth: true,
+            allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            CommandErrorWriter.WriteStderr(previewOptionError);
+            options = null!;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError(
+                command,
+                cmdArgs,
+                CliFlagSchema.GetAcceptedFlagNamesForCommand(command),
+                options.Query))
+        {
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        exitCode = CommandExitCodes.Success;
+        return true;
+    }
+
+    private static bool TryValidateGraphSymbolQuery(
+        string command,
+        QueryCommandOptions options,
+        string requiredQueryMessage,
+        string querySuggestion,
+        out bool exact,
+        out int exitCode)
+    {
+        exact = false;
+        if (!TryResolveNameExactMode(options, command, out exact, out var exactError))
+        {
+            CommandErrorWriter.WriteStderr(exactError);
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        if (TryWriteBlankQueryError(options, command))
+        {
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.Query))
+        {
+            WriteUsageError(requiredQueryMessage, GetUsageLineOrThrow(command), querySuggestion);
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                requiredQueryMessage,
+                GetUsageLineOrThrow(command),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        if (TryWriteUnexpectedExtraPositionals(command, options))
+        {
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        exitCode = CommandExitCodes.Success;
+        return true;
     }
 
     // Human-readable reference_kind label for a grouped caller/callee row. Counts
