@@ -1,13 +1,11 @@
-using System.Text;
-using System.Text.RegularExpressions;
-using Regex = CodeIndex.Indexer.BoundedRegex;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
-    internal static List<ReferenceRecord> ExtractCore(ReferenceExtractionContext request)
+    internal static List<ReferenceRecord> ExtractCore(
+        ReferenceExtractionContext request)
     {
         request.CancellationToken.ThrowIfCancellationRequested();
         var fileId = request.FileId;
@@ -18,155 +16,161 @@ public static partial class ReferenceExtractor
         var workspaceSymbols = request.WorkspaceSymbols;
         var requestedLanguage = request.RequestedLanguage;
         var isJsxFile = IsJsxFilePath(path);
-        var isRazorFile = IsRazorFilePath(path) || requestedLanguage is "razor" or "blazor" or "cshtml";
+        var isRazorFile = IsRazorFilePath(path)
+            || requestedLanguage is "razor" or "blazor" or "cshtml";
 
         if (language == "ambiguous_m")
             return ExtractAmbiguousMReferences(request);
-
         if (language is "clojure" or "erlang" or "ocaml" or "raku")
             return ExtractFunctionalLanguageReferences(request);
 
         if (TryExtractStructuralMetadataReferences(
-            fileId,
-            language,
-            content,
-            symbols,
-            path,
-            request.ContentIsNormalized,
-            request.HasOversizeLine,
-            request.ConflictMarkerLine,
-            request.MaxReferenceCount,
-            request.CancellationToken,
-            out var structuralMetadataReferences))
+                fileId,
+                language,
+                content,
+                symbols,
+                path,
+                request.ContentIsNormalized,
+                request.HasOversizeLine,
+                request.ConflictMarkerLine,
+                request.MaxReferenceCount,
+                request.CancellationToken,
+                out var structuralMetadataReferences))
+        {
             return structuralMetadataReferences;
+        }
 
         if (!TryPrepareReferenceLines(
-            language,
-            content,
-            isRazorFile,
-            request.ContentIsNormalized,
-            request.HasOversizeLine,
-            request.ConflictMarkerLine,
-            out var preparedInput))
+                language,
+                content,
+                isRazorFile,
+                request.ContentIsNormalized,
+                request.HasOversizeLine,
+                request.ConflictMarkerLine,
+                out var preparedInput))
+        {
             return [];
+        }
         request.CancellationToken.ThrowIfCancellationRequested();
 
         content = preparedInput.Content;
         var lines = preparedInput.Lines;
-        var xamlReferenceEnabled = language == "xml" && XamlReferenceExtractor.IsXaml(lines);
+        var xamlReferenceEnabled = language == "xml"
+            && XamlReferenceExtractor.IsXaml(lines);
         if (language == "xml" && !xamlReferenceEnabled)
             return [];
 
         var structuralLines = preparedInput.StructuralLines;
-        var csharpLinesInsideMultilineStringContent = preparedInput.CSharpLinesInsideMultilineStringContent;
-        var csharpLinesInsideBlockComment = preparedInput.CSharpLinesInsideBlockComment;
-        var referenceStructuralLines = preparedInput.ReferenceStructuralLines;
+        var referenceStructuralLines =
+            preparedInput.ReferenceStructuralLines;
         var preparedLines = preparedInput.PreparedLines;
-        var scientificNativeDependencyLimit = ScientificNativeReferenceExtractor.Supports(language)
-            ? GetSafetyLimits().MaxNamesPerLine
-            : 0;
-        var goImportBlockLines = preparedInput.GoImportBlockLines;
-        var luaReferenceLines = preparedInput.LuaReferenceLines;
-        var luaPreparedLines = preparedInput.LuaPreparedLines;
-        var lispReferenceLines = preparedInput.LispReferenceLines;
-        var razorReferenceLines = preparedInput.RazorReferenceLines;
-        var razorImplementedTypeNames = preparedInput.RazorImplementedTypeNames;
-        var typeScriptNamespaceAliases = preparedInput.TypeScriptNamespaceAliases;
+        var scientificNativeDependencyLimit =
+            ScientificNativeReferenceExtractor.Supports(language)
+                ? GetSafetyLimits().MaxNamesPerLine
+                : 0;
         var typeScriptTypeAliases = language == "typescript"
             ? TypeScriptReferenceExtractor.BuildTypeAliasTargets(preparedLines)
             : null;
         var swiftTypeAliases = language == "swift"
             ? SwiftReferenceExtractor.BuildTypeAliasTargets(preparedLines)
             : null;
-        var jsTaggedTemplatesByLine = preparedInput.JsTaggedTemplatesByLine;
-        // Pre-pass C# attribute analysis so cross-line `[\n Foo("x")\n]` and parameter
-        // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
-        // 行を跨いだ `[\n Foo("x")\n]` やパラメータ属性 `void M([Attr] T x)` も、同一行の `[Foo]` と
-        // 同じ判定で属性として扱えるように、事前パスで C# 属性セクションの範囲を構築する。
-        var csharpAttrTables = language == "csharp" && content.Contains('[', StringComparison.Ordinal)
-            ? BuildCSharpAttributeRanges(preparedLines)
-            : (null, null);
+
+        var csharpAttrTables = language == "csharp"
+            && content.Contains('[', StringComparison.Ordinal)
+                ? BuildCSharpAttributeRanges(preparedLines)
+                : (null, null);
         var csharpAttrRanges = csharpAttrTables.Item1;
-        // Top-level (paren-depth 0) zones inside attribute sections. Used by the no-arg
-        // attribute regex so that enum / qualified-constant identifiers appearing inside
-        // attribute argument lists (e.g. `AllowNumbers` in `[JsonConverter(ConverterStrategy.AllowNumbers)]`)
-        // are not misclassified as no-arg attribute references.
-        // 属性セクション内で paren 深さ 0 の top-level ゾーンだけを別テーブルで持つ。複数行
-        // `[...]` の引数中に現れる enum / 修飾定数（`ConverterStrategy.AllowNumbers` など）が
-        // no-arg attribute として誤分類されないよう、no-arg 属性用ゲートに使う。
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
-        var definitionNamesComparer = GetDefinitionNamesComparer(language);
-        var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols, request.ReportDiagnostic);
-        var scientificDefinitionNameIndicesByLine = BuildScientificDefinitionNameIndicesByLine(
+        var definitionNamesComparer =
+            GetDefinitionNamesComparer(language);
+        var definitionNamesByLine = BuildDefinitionNamesByLine(
             language,
-            lines,
             symbols,
-            definitionNamesByLine);
+            request.ReportDiagnostic);
+        var scientificDefinitionNameIndicesByLine =
+            BuildScientificDefinitionNameIndicesByLine(
+                language,
+                lines,
+                symbols,
+                definitionNamesByLine);
         var allDefinitionNames = language == "stylus"
-            ? BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic)
+            ? BuildAllDefinitionNames(
+                language,
+                symbols,
+                request.ReportDiagnostic)
             : null;
         var fileDefinitionNames = isRazorFile
             ? BuildFileDefinitionNames(symbols)
             : null;
         var sqlDefinitionLeafSpansByLine = language == "sql"
-            ? SqlReferenceExtractor.BuildDefinitionLeafSpansByLine(lines, symbols)
+            ? SqlReferenceExtractor.BuildDefinitionLeafSpansByLine(
+                lines,
+                symbols)
             : null;
         var sqlWindowFunctionCallSiteSuppressions = language == "sql"
-            ? SqlReferenceExtractor.BuildWindowFunctionCallSiteSuppressions(structuralLines)
+            ? SqlReferenceExtractor
+                .BuildWindowFunctionCallSiteSuppressions(structuralLines)
             : null;
         var cobolCallableSymbols = language == "cobol"
             ? BuildCobolCallableSymbols(symbols)
             : null;
-        // Include 'property' so expression-bodied and block-bodied property accessors
-        // attribute their calls to the property rather than falling through to the
-        // enclosing class (see issue #233).
-        // 式本体・ブロック本体のプロパティアクセサ内の呼び出しを、外側のクラスではなく
-        // プロパティ自身に帰属させる (issue #233 参照)。
-        var containerCandidates = BuildReferenceContainerCandidates(symbols, request.ReportDiagnostic);
-        var containerResolver = new InnermostContainerResolver(containerCandidates);
+        var containerCandidates = BuildReferenceContainerCandidates(
+            symbols,
+            request.ReportDiagnostic);
+        var containerResolver =
+            new InnermostContainerResolver(containerCandidates);
         if (language == "solidity")
-            return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
+        {
+            return ExtractSolidityReferences(
+                fileId,
+                lines,
+                preparedLines,
+                containerResolver);
+        }
 
-        // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
-        // Ordered innermost-first via ascending body range. Java enums can declare constructors and
-        // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
-        // `CSharpCtorChainRegex` will not match inside them, so including `enum` is a no-op there.
-        // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
-        // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
-        // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
         var swiftPropertyDefinitionsByLine = language == "swift"
-            ? BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic)
+            ? BuildSwiftPropertyDefinitionsByLine(
+                language,
+                symbols,
+                request.ReportDiagnostic)
             : null;
-
-        // Synthetic function-kind container for C# primary-ctor declarations with a base
-        // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
-        // The range spans the entire declaration header so multi-line forms where `: Parent(x)` sits on a
-        // later line are covered. Later lines inside the body keep their real innermost containers.
-        // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
-        // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var csharpTypeNameSets = language == "csharp"
             ? BuildCSharpTypeNameSets(language, symbols)
-            : (KnownTypeNames: EmptyCSharpStringSet, NonEnumTypeNames: EmptyCSharpStringSet);
+            : (
+                KnownTypeNames: EmptyCSharpStringSet,
+                NonEnumTypeNames: EmptyCSharpStringSet);
         var csharpKnownTypeNames = csharpTypeNameSets.KnownTypeNames;
-        var csharpNonEnumTypeNames = csharpTypeNameSets.NonEnumTypeNames;
         var csharpQualifiedPatternLookups = language == "csharp"
-            ? BuildCSharpQualifiedPatternLookups(language, symbols, csharpNonEnumTypeNames)
+            ? BuildCSharpQualifiedPatternLookups(
+                language,
+                symbols,
+                csharpTypeNameSets.NonEnumTypeNames)
             : (
                 EnumMemberLookup: EmptyCSharpQualifiedEnumMemberLookup,
-                ConstantPatternMemberLookup: EmptyCSharpQualifiedPatternLookup,
+                ConstantPatternMemberLookup:
+                    EmptyCSharpQualifiedPatternLookup,
                 TypePatternLookup: EmptyCSharpQualifiedPatternLookup);
-        var csharpQualifiedEnumMemberLookup = csharpQualifiedPatternLookups.EnumMemberLookup;
-        var csharpQualifiedConstantPatternMemberLookup = csharpQualifiedPatternLookups.ConstantPatternMemberLookup;
-        var csharpQualifiedTypePatternLookup = csharpQualifiedPatternLookups.TypePatternLookup;
+        var csharpQualifiedEnumMemberLookup =
+            csharpQualifiedPatternLookups.EnumMemberLookup;
+        var csharpQualifiedConstantPatternMemberLookup =
+            csharpQualifiedPatternLookups.ConstantPatternMemberLookup;
+        var csharpQualifiedTypePatternLookup =
+            csharpQualifiedPatternLookups.TypePatternLookup;
+
         HashSet<string>? kotlinConstructorTypeNames = null;
         HashSet<string>? kotlinInfixFunctionNames = null;
         if (language == "kotlin")
         {
-            var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
-            kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
+            var kotlinNameSets =
+                KotlinReferenceExtractor.BuildNameSets(language, symbols);
+            kotlinConstructorTypeNames =
+                kotlinNameSets.ConstructorTypeNames;
             kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
-            KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(lines, kotlinInfixFunctionNames);
+            KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(
+                lines,
+                kotlinInfixFunctionNames);
         }
+
         var callableDefinitionNames = language == "csharp"
             ? BuildCallableDefinitionNames(language, symbols)
             : null;
@@ -176,51 +180,59 @@ public static partial class ReferenceExtractor
         var dockerfileNameSets = language == "dockerfile"
             ? DockerfileReferenceExtractor.BuildNameSets(language, symbols)
             : default;
-        var dockerfileStageNames = dockerfileNameSets.StageNames;
-        var dockerfileVariableNames = dockerfileNameSets.VariableNames;
         var shellNameSets = language == "shell"
             ? ShellReferenceExtractor.BuildNameSets(language, symbols)
             : default;
-        var shellCallableNames = shellNameSets.CallableNames;
-        var shellGlobalAliasNames = shellNameSets.GlobalAliasNames;
-        var dynamicDeclarativeState = DynamicDeclarativeReferenceExtractor.CreateState(
-            language,
-            preparedLines,
-            referenceStructuralLines,
-            symbols);
-        IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
-            ? BuildCSharpNamespaceScopes(symbols)
-            : Array.Empty<(int StartLine, int EndLine)>();
+        var dynamicDeclarativeState =
+            DynamicDeclarativeReferenceExtractor.CreateState(
+                language,
+                preparedLines,
+                referenceStructuralLines,
+                symbols);
+        IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes =
+            language == "csharp"
+                ? BuildCSharpNamespaceScopes(symbols)
+                : Array.Empty<(int StartLine, int EndLine)>();
         var csharpUsingImports = language == "csharp"
-            ? BuildCSharpUsingImports(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines)
+            ? BuildCSharpUsingImports(
+                language,
+                symbols,
+                csharpKnownTypeNames,
+                csharpNamespaceScopes,
+                lines,
+                structuralLines)
             : (
                 Aliases: Array.Empty<CSharpUsingAliasRecord>(),
                 Namespaces: Array.Empty<CSharpUsingNamespaceRecord>(),
                 Statics: Array.Empty<CSharpUsingStaticRecord>());
         var csharpUsingAliases = csharpUsingImports.Aliases;
-        var csharpUsingNamespaces = csharpUsingImports.Namespaces;
         var csharpUsingStatics = csharpUsingImports.Statics;
         var lookups = new CoreExtractionLookups(
             request,
             language,
             symbols,
             containerCandidates,
-            csharpLinesInsideMultilineStringContent,
+            preparedInput.CSharpLinesInsideMultilineStringContent,
             preparedLines,
             structuralLines,
             lines,
             csharpKnownTypeNames,
             csharpUsingAliases,
-            csharpUsingNamespaces);
+            csharpUsingImports.Namespaces);
 
-
-
-
-        var references = CreateReferenceList(request.MaxReferenceCount, EstimateReferenceListInitialCapacity(lines.Length));
+        var references = CreateReferenceList(
+            request.MaxReferenceCount,
+            EstimateReferenceListInitialCapacity(lines.Length));
         var seen = CreateReferenceSeenSet(lines.Length);
         if (language == "csharp")
         {
-            EmitCSharpAsyncIteratorReferences(fileId, lines, structuralLines, symbols, references, seen);
+            EmitCSharpAsyncIteratorReferences(
+                fileId,
+                lines,
+                structuralLines,
+                symbols,
+                references,
+                seen);
             EmitCSharpStaticInterfaceMemberImplementationReferences(
                 fileId,
                 lines,
@@ -238,554 +250,69 @@ public static partial class ReferenceExtractor
                 references,
                 seen,
                 fileId,
-                (lineNumber, _) => FindInnermostContainer(containerCandidates, lineNumber));
+                (lineNumber, _) =>
+                    FindInnermostContainer(
+                        containerCandidates,
+                        lineNumber));
         }
-        var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
-        var pendingCSharpWhereConstraint = language == "csharp" ? new CSharpWhereConstraintState() : null;
-        var csharpLocalNamesByFunction = language == "csharp"
-            ? new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
-            : null;
-        var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
-        var csharpInDelimitedDocComment = false;
-        var jvmInDelimitedDocComment = false;
-        var phpInDocblock = false;
-        var markupSchemaState = language is "graphql" or "html" or "markdown"
-            ? new MarkupSchemaReferenceExtractor.MarkupState()
-            : null;
-        var xamlInXmlComment = false;
-        var xamlBindingPropertyElementState = language == "xml"
-            ? new XamlReferenceExtractor.BindingPropertyElementState()
-            : null;
-        var xamlBindingMarkupExtensionState = language == "xml"
-            ? new XamlReferenceExtractor.BindingMarkupExtensionState()
-            : null;
-        SymbolRecord? phpDocblockContainer = null;
-        HashSet<string>? phpDocblockPropertyNames = null;
-        var sassPreparedCommentState = language == "sass"
-            ? new CssReferenceExtractor.SassLoudCommentState()
-            : null;
-        var sassOriginalCommentState = language == "sass"
-            ? new CssReferenceExtractor.SassLoudCommentState()
-            : null;
-        var sassStylusPreparedInBlockComment = false;
-        var sassStylusOriginalInBlockComment = false;
-        var shaderState = ShaderReferenceExtractor.CreateState(
-            language,
-            preparedLines,
-            symbols,
-            workspaceSymbols,
-            request.ReportDiagnostic);
 
-        for (int i = 0; i < lines.Length; i++)
-        {
-            if (ReferenceLimitReached(references))
-                break;
-
-            if ((i & 0x3f) == 0)
-                request.CancellationToken.ThrowIfCancellationRequested();
-
-            var lineNumber = i + 1;
-            var originalLine = lines[i];
-            var preparedLine = luaPreparedLines?[i] ?? lispReferenceLines?[i] ?? preparedLines[i];
-            var originalLineForLanguage = originalLine;
-            if (language == "sass")
-            {
-                preparedLine = CssReferenceExtractor.MaskSassBlockCommentLine(preparedLine, sassPreparedCommentState!);
-                originalLineForLanguage = CssReferenceExtractor.MaskSassBlockCommentLine(originalLine, sassOriginalCommentState!);
-            }
-            else if (language == "stylus")
-            {
-                preparedLine = CssReferenceExtractor.MaskSassStylusBlockCommentLine(
-                    preparedLine,
-                    ref sassStylusPreparedInBlockComment);
-                originalLineForLanguage = CssReferenceExtractor.MaskSassStylusBlockCommentLine(
-                    originalLine,
-                    ref sassStylusOriginalInBlockComment);
-            }
-            var csharpAttrRangesOnLine = csharpAttrRanges?[i];
-            var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
-            SymbolRecord? phpLineContainer = null;
-            var phpLineContainerResolved = false;
-
-            SymbolRecord? GetPhpLineContainer()
-            {
-                if (!phpLineContainerResolved)
+        var pendingCSharpMultiLineTypePattern =
+            EmitCoreReferenceLines(
+                new CoreReferenceLoopContext
                 {
-                    phpLineContainer = containerResolver.Find(lineNumber);
-                    phpLineContainerResolved = true;
-                }
-
-                return phpLineContainer;
-            }
-
-            var documentationLine = new CoreDocumentationLineContext(
-                fileId,
-                language,
-                lines,
-                preparedLines,
-                structuralLines,
-                i,
-                lineNumber,
-                originalLine,
-                preparedLine,
-                references,
-                seen,
-                containerCandidates,
-                containerResolver,
-                lookups,
-                csharpLinesInsideMultilineStringContent,
-                csharpLinesInsideBlockComment,
-                csharpAttrRangesOnLine,
-                csharpAttrRanges,
-                GetPhpLineContainer);
-            EmitCoreDocumentationReferences(
-                documentationLine,
-                ref csharpInDelimitedDocComment,
-                ref jvmInDelimitedDocComment,
-                ref phpInDocblock,
-                ref phpDocblockContainer,
-                ref phpDocblockPropertyNames);
-
-            var context = originalLine.Trim();
-            if (language is "cmake" or "justfile" or "makefile" or "msbuild"
-                && context.Length > 0)
-            {
-                var buildAutomationContainer = containerResolver.Find(lineNumber);
-                BuildAutomationReferenceExtractor.EmitReferences(
-                    language,
-                    originalLine,
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    buildAutomationContainer);
-                continue;
-            }
-
-            if (language is "graphql" or "html" or "markdown"
-                && context.Length > 0)
-            {
-                var markupContainer = containerResolver.Find(lineNumber);
-                MarkupSchemaReferenceExtractor.EmitReferences(
-                    language,
-                    originalLine,
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    markupContainer,
-                    markupSchemaState);
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(preparedLine))
-            {
-                if (language == "csharp"
-                    && (pendingCSharpMultiLineTypePattern.WaitingForHead
-                        || pendingCSharpMultiLineTypePattern.PendingTypeExpression != null))
-                {
-                    continue;
-                }
-
-                if (language == "csharp")
-                    CSharpReferenceExtractor.FlushPendingMultiLineTypePatternReference(
-                        ref pendingCSharpMultiLineTypePattern,
+                    Request = request,
+                    Preparation = preparedInput,
+                    IsJsxFile = isJsxFile,
+                    IsRazorFile = isRazorFile,
+                    XamlReferenceEnabled = xamlReferenceEnabled,
+                    ScientificNativeDependencyLimit =
+                        scientificNativeDependencyLimit,
+                    CSharpAttributeRanges = csharpAttrRanges,
+                    CSharpAttributeTopLevelRanges =
+                        csharpAttrTopLevelRanges,
+                    DefinitionNamesComparer = definitionNamesComparer,
+                    DefinitionNamesByLine = definitionNamesByLine,
+                    ScientificDefinitionNameIndicesByLine =
+                        scientificDefinitionNameIndicesByLine,
+                    AllDefinitionNames = allDefinitionNames,
+                    FileDefinitionNames = fileDefinitionNames,
+                    SqlDefinitionLeafSpansByLine =
+                        sqlDefinitionLeafSpansByLine,
+                    SqlWindowFunctionCallSiteSuppressions =
+                        sqlWindowFunctionCallSiteSuppressions,
+                    CobolCallableSymbols = cobolCallableSymbols,
+                    ContainerCandidates = containerCandidates,
+                    ContainerResolver = containerResolver,
+                    SwiftPropertyDefinitionsByLine =
+                        swiftPropertyDefinitionsByLine,
+                    CSharpQualifiedEnumMemberLookup =
+                        csharpQualifiedEnumMemberLookup,
+                    CSharpQualifiedConstantPatternMemberLookup =
                         csharpQualifiedConstantPatternMemberLookup,
-                        csharpUsingAliases,
-                        csharpUsingStatics,
-                        lookups.HasActiveSameFileCSharpTypeCandidate,
-                        references,
-                        seen,
-                        fileId);
-                continue;
-            }
-
-            if (context.Length == 0)
-                continue;
-
-            var definitionNames = definitionNamesByLine.TryGetValue(lineNumber, out var namesOnLine)
-                ? namesOnLine
-                : null;
-            Dictionary<string, HashSet<int>>? scientificDefinitionNameIndices = null;
-            scientificDefinitionNameIndicesByLine?.TryGetValue(
-                lineNumber,
-                out scientificDefinitionNameIndices);
-            List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
-            if (language == "sql")
-                sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
-            var container = containerResolver.Find(lineNumber);
-            var definitionState = new CoreLineDefinitionState(
-                language,
-                context,
-                preparedLine,
-                definitionNames,
-                definitionNamesComparer,
-                scientificDefinitionNameIndices,
-                sqlDefinitionLeafSpans);
-            var csharpLineHasWhereClause = language == "csharp"
-                && preparedLine.IndexOf("where", StringComparison.Ordinal) >= 0
-                && CSharpWhereClauseRegex.IsMatch(preparedLine);
-
-            // Per-line Java same-line ctor synthesis. When `public Leaf(){super(0); doWork();}`
-            // is entirely on one line, SymbolExtractor does not emit a function symbol for the
-            // ctor (its method regex requires the line to end with `{`), so `FindInnermostContainer`
-            // returns the enclosing `class:Leaf`. Body-level calls such as `doWork()` would then
-            // attach to the class rather than the ctor. We pre-compute a synthetic function-kind
-            // container covering the body `{ ... }` region on the current line, so those calls
-            // land on `function:Leaf` and `callers Leaf` reflects what the ctor actually does.
-            // 同一行 ctor は function symbol が作られないため、body `{ ... }` 内の通常 call が
-            // 外側クラスに吸われてしまう。合成 function コンテナを per-line で構築して差し替える。
-            (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex, int CloseBraceIndex)? javaSameLineCtor = null;
-            if (language == "java")
-            {
-                javaSameLineCtor = JavaReferenceExtractor.TryBuildSameLineCtorSpan(
-                    preparedLine,
-                    lineNumber,
-                    lookups.GetEnclosingTypeCandidates);
-            }
-
-            // Per-call-site record primary-ctor override: only calls whose column sits inside the
-            // record header (not in a braced body on the same line) should land on the synthetic
-            // ctor. Overriding `container` for the whole line would steal body-level calls such as
-            // `record Child(int V) : Parent(V) { public int Sum() => Add(V, 1); }` where `Add(...)`
-            // lives past the header-terminating `{` and must stay with its real innermost container.
-            // 同一行 record で `{` より後ろの本体呼び出しまで合成 ctor に奪われないよう、コール単位で
-            // ヘッダ範囲（end line の end column より前）に入っているかを判定して差し替える。
-            SymbolRecord? ResolveContainerForCall(int column)
-            {
-                if (language == "csharp")
-                {
-                    foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in lookups.GetRecordPrimaryCtorRanges())
-                    {
-                        if (lineNumber < rangeStart || lineNumber > rangeEnd)
-                            continue;
-                        if (lineNumber == rangeStart && column < rangeStartColumn)
-                            continue;
-                        if (lineNumber == rangeEnd && column >= rangeEndColumn)
-                            continue;
-                        return syntheticRecordCtor;
-                    }
-                }
-
-                // Java same-line ctor body override: calls whose column sits strictly inside the
-                // `{ ... }` block on the ctor declaration line attach to the synthetic function-kind
-                // ctor instead of the enclosing class container. When no matching `}` is found on
-                // the same line (CloseBraceIndex < 0), the body extends beyond the current line —
-                // in that case SymbolExtractor emits a real ctor function symbol (its regex matches
-                // because the line ends with `{`), so this override is only needed for the fully
-                // same-line shape where the matching `}` exists on the same line.
-                // Java の same-line ctor では `{ ... }` 内の call を合成 function コンテナに振り向ける。
-                if (javaSameLineCtor != null)
-                {
-                    var info = javaSameLineCtor.Value;
-                    if (info.CloseBraceIndex >= 0
-                        && column > info.OpenBraceIndex
-                        && column < info.CloseBraceIndex)
-                    {
-                        return info.Synthetic;
-                    }
-                }
-
-                if (language == "csharp")
-                {
-                    if (csharpLineHasWhereClause)
-                    {
-                        var declarationRangeContainer = FindInnermostCSharpDeclarationRangeContainer(
-                            containerCandidates,
-                            structuralLines[i],
-                            lineNumber,
-                            column);
-                        if (declarationRangeContainer != null)
-                            return declarationRangeContainer;
-                    }
-
-                    var sameLineContainer = FindInnermostSameLineCSharpContainer(
-                        lookups.GetCSharpSameLineContainerCandidatesByLine(),
-                        structuralLines[i],
-                        lineNumber,
-                        column);
-                    if (sameLineContainer != null)
-                        return sameLineContainer;
-
-                    if (csharpLineHasWhereClause
-                        && container?.Kind == "function"
-                        && container.StartLine == lineNumber
-                        && (!TryFindCSharpFunctionNameColumn(structuralLines[i], container.Name, out var containerNameColumn)
-                            || column < containerNameColumn))
-                    {
-                        return null;
-                    }
-                }
-
-                return dynamicDeclarativeState?.ResolveContainer(lineNumber, column, container) ?? container;
-            }
-
-            SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
-            {
-                var pythonDefinitionContainersByLineAndKind = lookups.GetPythonDefinitionContainersByLineAndKind();
-                if (pythonDefinitionContainersByLineAndKind == null)
-                    return null;
-                return pythonDefinitionContainersByLineAndKind.TryGetValue((line, kind), out var symbol)
-                    ? symbol
-                    : null;
-            }
-
-            SymbolRecord? ResolveSwiftPropertyContainerForCall(int column)
-            {
-                if (swiftPropertyDefinitionsByLine != null
-                    && swiftPropertyDefinitionsByLine.TryGetValue(lineNumber, out var sameLineProperties))
-                {
-                    foreach (var property in sameLineProperties)
-                    {
-                        if ((property.StartColumn ?? 0) <= column)
-                            return property;
-                    }
-                }
-
-                return ResolveContainerForCall(column);
-            }
-
-            var lineContext = new CoreReferenceLineContext(
-                fileId,
-                language,
-                lines,
-                preparedLines,
-                i,
-                preparedLine,
-                originalLine,
-                context,
-                lineNumber,
-                references,
-                seen,
-                container,
-                definitionNames,
-                ResolveContainerForCall);
-
-            if (shaderState is not null)
-            {
-                ShaderReferenceExtractor.EmitLineReferences(
-                    shaderState,
-                    preparedLine,
-                    originalLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-            }
-
-            if (isJsxFile && (language is "javascript" or "typescript"))
-                EmitJsxElementReferences(lineContext);
-
-            var typeContext = new CoreTypeReferenceContext(
-                lineContext,
-                lookups,
-                containerCandidates,
-                symbols,
-                structuralLines,
-                csharpQualifiedConstantPatternMemberLookup,
-                csharpQualifiedTypePatternLookup,
-                csharpUsingAliases,
-                csharpUsingStatics,
-                csharpLocalNamesByFunction,
-                pendingCSharpWhereConstraint,
-                kotlinConstructorTypeNames,
-                typeScriptNamespaceAliases,
-                typeScriptTypeAliases,
-                swiftTypeAliases,
-                ResolveSwiftPropertyContainerForCall,
-                goImportBlockLines,
-                luaReferenceLines,
-                originalLineForLanguage,
-                allDefinitionNames,
-                stylusVariableDefinitionNames,
-                xamlReferenceEnabled,
-                xamlBindingPropertyElementState,
-                xamlBindingMarkupExtensionState);
-            if (EmitCoreTypeReferences(
-                    typeContext,
-                    ref pendingCSharpMultiLineTypePattern,
-                    ref xamlInXmlComment))
-            {
-                continue;
-            }
-
-            EmitInfrastructureLineReferences(
-                lineContext,
-                dockerfileStageNames,
-                dockerfileVariableNames,
-                cobolCallableSymbols);
-
-            var sqlSuppressedCallIndices = EmitSqlLineReferences(
-                lineContext,
-                structuralLines[i],
-                sqlState,
-                definitionState);
-
-
-
-            // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
-            // `new T[] { ... }` etc. CallRegex requires a trailing `(`, so these forms slip
-            // through and the type is otherwise never recorded as instantiated. Emit an
-            // `instantiate` row here so `references` / `callers` / `impact` see the edge.
-            // See issue #286.
-            // 括弧省略の C# / Java インスタンス化 (`new T { ... }` 等) は CallRegex で拾えないため、
-            // 専用パスで `instantiate` を発行する。issue #286 参照。
-            if (language is "csharp" or "java")
-                EmitParenlessInitializerReferences(lineContext);
-
-            EmitPhpAndScssLineReferences(lineContext);
-
-            var callContext = new CoreCallReferenceContext(
-                lineContext,
-                lookups,
-                javaSameLineCtor,
-                csharpAttrRangesOnLine,
-                kotlinConstructorTypeNames,
-                kotlinInfixFunctionNames,
-                shellCallableNames,
-                shellGlobalAliasNames,
-                dynamicDeclarativeState,
-                referenceStructuralLines[i],
-                scientificNativeDependencyLimit,
-                request.ReportDiagnostic,
-                sqlSuppressedCallIndices,
-                sqlWindowFunctionCallSiteSuppressions,
-                definitionState);
-            EmitCoreCallReferences(callContext);
-
-            if (language == "csharp")
-            {
-                EmitMethodGroupReferences(
-                    language,
-                    preparedLine,
-                    callableDefinitionNames,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-            }
-            else if (language is "java")
-            {
-                JavaReferenceExtractor.EmitMethodReferenceReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-            }
-            else if (language is "kotlin")
-            {
-                KotlinReferenceExtractor.EmitMethodReferenceReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-            }
-            else if (language is "scala")
-            {
-                ScalaReferenceExtractor.EmitMethodReferenceReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-            }
-
-            if (language == "csharp")
-            {
-                CSharpReferenceExtractor.EmitStaticMemberQualifierReferences(
-                    preparedLine,
-                    csharpAttrRangesOnLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-            }
-
-            // Qualified C# enum-member access such as `Nested.A` or `Outer.First.None` is not
-            // a method call, but downstream symbol workflows (`references`, `callers`,
-            // `callees`, `inspect`, `impact`) still need an edge anchored to the narrowest
-            // real owner symbol. Ordinary code paths stay `call` so existing graph readers
-            // keep working, while C# attribute metadata sites are downgraded to `attribute`
-            // to stay out of runtime call-graph traversals (issue #293 / #492).
-            // `Nested.A` や `Outer.First.None` のような C# enum member の修飾アクセスは
-            // メソッド呼び出しではないが、下流の symbol workflow では実 owner に紐づく edge が必要。
-            // 通常コードでは既存 reader / SQL 契約を守るため kind は `call` を維持し、C# 属性メタデータ内だけ
-            // `attribute` に落として runtime call-graph への混入を防ぐ (issue #293 / #492)。
-            if (language == "csharp" && csharpQualifiedEnumMemberLookup.Count > 0)
-            {
-                CSharpReferenceExtractor.EmitQualifiedEnumMemberReferences(
-                    preparedLine,
-                    csharpQualifiedEnumMemberLookup,
-                    csharpAttrRangesOnLine,
-                    csharpUsingAliases,
-                    lookups.GetCSharpValueReceiverNames,
-                    lookups.GetCSharpFunctionValueReceiverNames,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-            }
-
-            // issue #268: JS/TS tagged template literal call sites. The structural masker
-            // already located each template opener and captured its preceding tag identifier;
-            // emit one `call` row per hit so `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\``
-            // surface in references / callers / callees / impact just like `fn()` call sites.
-            // issue #268: JS/TS タグ付きテンプレートリテラルの呼び出し位置。構造マスカーが
-            // テンプレート opener を検出済みで先行する tag 識別子を記録しているため、そのまま
-            // `call` として発行し、`gql\`...\``・`styled.div\`...\``・`sql\`...${x}...\`` を
-            // references / callers / callees / impact に反映する。
-            if (jsTaggedTemplatesByLine != null
-                && jsTaggedTemplatesByLine.TryGetValue(lineNumber, out var tagHitsOnLine))
-            {
-                EmitJavaScriptTaggedTemplateReferences(lineContext, tagHitsOnLine);
-            }
-
-            // issue #293: bare no-arg attributes / annotations are invisible to CallRegex because
-            // it requires `(`. Emit them from dedicated regexes so `[Serializable]` / `@Deprecated`
-            // and their siblings still populate the reference table.
-            // issue #293: 引数なしの属性・アノテーションは `(` が必須な CallRegex では拾えないため、
-            // 専用 regex から `[Serializable]` / `@Deprecated` などの素形を reference テーブルへ反映する。
-            EmitMetadataLineReferences(lineContext, csharpAttrTopLevelOnLine);
-
-            if (isRazorFile && language == "csharp")
-            {
-                RazorReferenceExtractor.EmitReferences(
-                    razorReferenceLines?[i] ?? originalLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall,
-                    definitionNames,
-                    fileDefinitionNames,
-                    razorImplementedTypeNames);
-            }
-
-            if (language == "python")
-                EmitPythonLineReferences(lineContext, lookups, ResolvePythonDefinitionContainer);
-
-            if (language == "r")
-                EmitRLineReferences(lineContext);
-        }
+                    CSharpQualifiedTypePatternLookup =
+                        csharpQualifiedTypePatternLookup,
+                    KotlinConstructorTypeNames =
+                        kotlinConstructorTypeNames,
+                    KotlinInfixFunctionNames = kotlinInfixFunctionNames,
+                    CallableDefinitionNames = callableDefinitionNames,
+                    StylusVariableDefinitionNames =
+                        stylusVariableDefinitionNames,
+                    DockerfileStageNames =
+                        dockerfileNameSets.StageNames,
+                    DockerfileVariableNames =
+                        dockerfileNameSets.VariableNames,
+                    ShellCallableNames = shellNameSets.CallableNames,
+                    ShellGlobalAliasNames =
+                        shellNameSets.GlobalAliasNames,
+                    DynamicDeclarativeState = dynamicDeclarativeState,
+                    CSharpUsingAliases = csharpUsingAliases,
+                    CSharpUsingStatics = csharpUsingStatics,
+                    Lookups = lookups,
+                    TypeScriptTypeAliases = typeScriptTypeAliases,
+                    SwiftTypeAliases = swiftTypeAliases,
+                    References = references,
+                    Seen = seen,
+                });
 
         if (!ReferenceLimitReached(references) && language == "csharp")
         {
@@ -802,51 +329,78 @@ public static partial class ReferenceExtractor
                 seen,
                 fileId);
 
-            CSharpReferenceExtractor.FlushPendingMultiLineTypePatternReference(
-                ref pendingCSharpMultiLineTypePattern,
-                csharpQualifiedConstantPatternMemberLookup,
-                csharpUsingAliases,
-                csharpUsingStatics,
-                lookups.HasActiveSameFileCSharpTypeCandidate,
-                references,
-                seen,
-                fileId);
+            CSharpReferenceExtractor
+                .FlushPendingMultiLineTypePatternReference(
+                    ref pendingCSharpMultiLineTypePattern,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    lookups.HasActiveSameFileCSharpTypeCandidate,
+                    references,
+                    seen,
+                    fileId);
         }
 
         if (language == "csharp")
         {
-            foreach (var reference in references)
-            {
-                if (reference.ReferenceKind != "type_reference"
-                    || reference.Line <= 0
-                    || reference.Line > preparedLines.Length
-                    || reference.Column <= 0)
-                {
-                    continue;
-                }
-
-                var line = preparedLines[reference.Line - 1];
-                var tokenEnd = reference.Column - 1 + reference.SymbolName.Length;
-                if (tokenEnd >= line.Length || !line.AsSpan(tokenEnd).TrimStart().StartsWith(".", StringComparison.Ordinal))
-                    continue;
-
-                var owner = lookups.FindCSharpContainerCandidate(reference.ContainerName, reference.Line);
-                var containingType = GetContainingTypeQualifiedName(owner);
-                if (containingType == null || !lookups.HasCSharpPrivateProperty(containingType, reference.SymbolName))
-                {
-                    continue;
-                }
-
-                reference.SymbolName = $"{containingType}.{reference.SymbolName}";
-                reference.ReferenceKind = "reference";
-            }
+            RewriteCSharpPrivatePropertyReceiverReferences(
+                preparedLines,
+                references,
+                lookups);
         }
 
         lookups.ApplyCSharpUsingAliasReferenceNames(references);
         if (!ReferenceLimitReached(references))
-            lookups.EmitCSharpBclRegexWithoutTimeoutReferences(references, seen);
+        {
+            lookups.EmitCSharpBclRegexWithoutTimeoutReferences(
+                references,
+                seen);
+        }
         MarkMutualRecursionReferences(references);
         return references;
     }
 
+    private static void RewriteCSharpPrivatePropertyReceiverReferences(
+        IReadOnlyList<string> preparedLines,
+        List<ReferenceRecord> references,
+        CoreExtractionLookups lookups)
+    {
+        foreach (var reference in references)
+        {
+            if (reference.ReferenceKind != "type_reference"
+                || reference.Line <= 0
+                || reference.Line > preparedLines.Count
+                || reference.Column <= 0)
+            {
+                continue;
+            }
+
+            var line = preparedLines[reference.Line - 1];
+            var tokenEnd =
+                reference.Column - 1 + reference.SymbolName.Length;
+            if (tokenEnd >= line.Length
+                || !line.AsSpan(tokenEnd)
+                    .TrimStart()
+                    .StartsWith(".", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var owner = lookups.FindCSharpContainerCandidate(
+                reference.ContainerName,
+                reference.Line);
+            var containingType = GetContainingTypeQualifiedName(owner);
+            if (containingType == null
+                || !lookups.HasCSharpPrivateProperty(
+                    containingType,
+                    reference.SymbolName))
+            {
+                continue;
+            }
+
+            reference.SymbolName =
+                $"{containingType}.{reference.SymbolName}";
+            reference.ReferenceKind = "reference";
+        }
+    }
 }
