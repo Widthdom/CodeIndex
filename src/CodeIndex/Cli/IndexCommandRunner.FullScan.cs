@@ -143,32 +143,17 @@ public static partial class IndexCommandRunner
         var scanResult = discovery.ScanResult;
         var scanHadErrors = scanResult.HadErrors;
         var files = discovery.Files;
-        var fileTargets = new FullScanFileTarget[files.Count];
         var languageCounts = scanResult.LanguageCounts;
         var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
-        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(
-            options.SymbolsOnly ? 0 : csharpPrepassCapacity);
-        var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
-        for (var i = 0; i < files.Count; i++)
-        {
-            var filePath = files[i];
-            var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
-            var target = FullScanFileTarget.Create(projectRoot, filePath, language);
-            fileTargets[i] = hasGeneratedCodeExtractionSuppressionPatterns
-                ? target with { GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath) }
-                : target;
-            if (!options.SymbolsOnly && language == "csharp")
-            {
-                var indexedTarget = fileTargets[i];
-                csharpPrepassTargets.Add(new CSharpStaticInterfacePrepass.FileTarget(
-                    indexedTarget.FilePath,
-                    indexedTarget.RelativePath,
-                    indexedTarget.DisplayRelativePath,
-                    indexedTarget.IndexPath,
-                    indexedTarget.Language,
-                    indexedTarget.GeneratedExtractionSuppressed));
-            }
-        }
+        var targetPreparation = PrepareFullScanTargets(
+            indexer,
+            projectRoot,
+            files,
+            scanResult.FileLanguages,
+            options.SymbolsOnly,
+            csharpPrepassCapacity);
+        var fileTargets = targetPreparation.FileTargets;
+        var csharpPrepassTargets = targetPreparation.CSharpPrepassTargets;
         var readableFileBytes = new ReadableFileByteTracker(
             files.Count,
             fileIndex => files[fileIndex],
@@ -618,53 +603,6 @@ public static partial class IndexCommandRunner
 
         Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? csharpWorkspaceFileSnapshots = null;
 
-        CSharpStaticInterfaceWorkspaceSymbols BuildStableCSharpWorkspace(
-            Func<CSharpStaticInterfaceWorkspaceSymbols> buildWorkspace)
-        {
-            csharpWorkspaceFileSnapshots = null;
-            Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot> fileSnapshots = [];
-            string? failedFilePath = null;
-            var capturedFiles = CSharpStaticInterfacePrepass.TryCaptureFileStatSnapshots(
-                csharpPrepassTargets,
-                out fileSnapshots,
-                out failedFilePath,
-                cancellationToken);
-            if (!capturedFiles)
-            {
-                return new CSharpStaticInterfaceWorkspaceSymbols(
-                    [],
-                    HasStaticInterfaceContracts: true,
-                    SourceContractEvidenceComplete: false,
-                    IncompleteSourcePaths:
-                    [
-                        FormatCSharpWorkspaceSnapshotPath(projectRoot, failedFilePath)
-                    ]);
-            }
-
-            FullScanCSharpPrepassForTesting?.Invoke();
-            var workspace = buildWorkspace();
-            var stableFiles = CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(
-                csharpPrepassTargets,
-                fileSnapshots,
-                out var changedFilePath,
-                cancellationToken);
-            if (!stableFiles || !workspace.SourceContractEvidenceComplete)
-            {
-                var incompletePath = workspace.IncompleteSourcePaths?.FirstOrDefault()
-                    ?? changedFilePath
-                    ?? "<csharp_workspace>";
-                return workspace with
-                {
-                    HasStaticInterfaceContracts = true,
-                    SourceContractEvidenceComplete = false,
-                    IncompleteSourcePaths = [FormatCSharpWorkspaceSnapshotPath(projectRoot, incompletePath)],
-                };
-            }
-
-            csharpWorkspaceFileSnapshots = fileSnapshots;
-            return workspace;
-        }
-
         priorPositiveCSharpSourceNoOpCandidate = csharpPositiveNoOpPolicyCandidate
             && !hasCSharpLanguageTransitions;
         if (priorPositiveCSharpSourceNoOpCandidate)
@@ -717,7 +655,11 @@ public static partial class IndexCommandRunner
                 }
                 else
                 {
-                    csharpWorkspace = BuildStableCSharpWorkspace(() =>
+                    csharpWorkspace = BuildStableFullScanCSharpWorkspace(
+                        projectRoot,
+                        csharpPrepassTargets,
+                        out csharpWorkspaceFileSnapshots,
+                        () =>
                         CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                             writer,
                             indexer,
@@ -731,7 +673,8 @@ public static partial class IndexCommandRunner
                             parallelism: extractionParallelism,
                             excludedExistingFileIds: staleFilePurgePlan.FileIds,
                             isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
-                            cancellationToken: cancellationToken));
+                            cancellationToken: cancellationToken),
+                        cancellationToken);
                     forceFullCSharpRefreshFromInvalidatedNoOp =
                         priorCSharpStaticInterfaceSourceEvidence == true
                         || csharpWorkspace.HasStaticInterfaceContracts;
@@ -961,7 +904,11 @@ public static partial class IndexCommandRunner
                 // If it invalidates the empty-workspace shortcut, rebuild raw C# evidence and
                 // make every C# target dirty before any stale row can be retained or rewritten.
                 // 最終target statでno-opが崩れた場合、write前に全C# raw prepassへ戻す。
-                csharpWorkspace = BuildStableCSharpWorkspace(() =>
+                csharpWorkspace = BuildStableFullScanCSharpWorkspace(
+                    projectRoot,
+                    csharpPrepassTargets,
+                    out csharpWorkspaceFileSnapshots,
+                    () =>
                     CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                         writer,
                         indexer,
@@ -971,7 +918,8 @@ public static partial class IndexCommandRunner
                         parallelism: extractionParallelism,
                         excludedExistingFileIds: staleFilePurgePlan.FileIds,
                         isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
-                        cancellationToken: cancellationToken));
+                        cancellationToken: cancellationToken),
+                    cancellationToken);
                 preservePriorPositiveCSharpSourceNoOp = false;
                 if (!csharpWorkspace.SourceContractEvidenceComplete)
                 {
@@ -1112,7 +1060,11 @@ public static partial class IndexCommandRunner
 
             if (invalidatedCSharpFileIndexes.Count > 0)
             {
-                csharpWorkspace = BuildStableCSharpWorkspace(() =>
+                csharpWorkspace = BuildStableFullScanCSharpWorkspace(
+                    projectRoot,
+                    csharpPrepassTargets,
+                    out csharpWorkspaceFileSnapshots,
+                    () =>
                     CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                         writer,
                         indexer,
@@ -1122,7 +1074,8 @@ public static partial class IndexCommandRunner
                         parallelism: extractionParallelism,
                         excludedExistingFileIds: staleFilePurgePlan.FileIds,
                         isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
-                        cancellationToken: cancellationToken));
+                        cancellationToken: cancellationToken),
+                    cancellationToken);
                 preservePriorPositiveCSharpSourceNoOp = false;
                 if (!csharpWorkspace.SourceContractEvidenceComplete)
                 {
