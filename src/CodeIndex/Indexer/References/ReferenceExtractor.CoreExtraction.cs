@@ -515,11 +515,18 @@ public static partial class ReferenceExtractor
             scientificDefinitionNameIndicesByLine?.TryGetValue(
                 lineNumber,
                 out scientificDefinitionNameIndices);
-            Dictionary<string, int>? definitionNameIndices = null;
             List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
             if (language == "sql")
                 sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
             var container = containerResolver.Find(lineNumber);
+            var definitionState = new CoreLineDefinitionState(
+                language,
+                context,
+                preparedLine,
+                definitionNames,
+                definitionNamesComparer,
+                scientificDefinitionNameIndices,
+                sqlDefinitionLeafSpans);
             var csharpLineHasWhereClause = language == "csharp"
                 && preparedLine.IndexOf("where", StringComparison.Ordinal) >= 0
                 && CSharpWhereClauseRegex.IsMatch(preparedLine);
@@ -738,93 +745,6 @@ public static partial class ReferenceExtractor
                     seen,
                     fileId,
                     ref pendingCSharpMultiLineTypePattern);
-            }
-
-            bool ShouldSuppressDefinitionCall(string resolvedName, string rawName, int callIndex)
-            {
-                if (definitionNames == null)
-                    return false;
-
-                if (language == "csharp")
-                {
-                    if (context.Contains("when", StringComparison.Ordinal))
-                        return false;
-
-                    // A verbatim definition such as `void @static()` normalizes to `static`.
-                    // Looking up only the normalized name can find an earlier modifier token on
-                    // the same line, so compare the raw declaration token before the shared path.
-                    // `void @static()` のような verbatim 定義は `static` に正規化される。
-                    // normalized name だけでは同じ行の先行 modifier を拾うため、共通処理より
-                    // 先に raw declaration token の位置を比較する。
-                    if (rawName.Length > 1
-                        && rawName[0] == '@'
-                        && definitionNames.Contains(resolvedName)
-                        && preparedLine.IndexOf(rawName, StringComparison.Ordinal) == callIndex)
-                    {
-                        return true;
-                    }
-                }
-
-                if (scientificDefinitionNameIndices != null
-                    && scientificDefinitionNameIndices.TryGetValue(
-                        resolvedName,
-                        out var scientificDefinitionIndices))
-                {
-                    return scientificDefinitionIndices.Contains(callIndex);
-                }
-
-                if (language == "julia")
-                {
-                    var targetQualifier =
-                        ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
-                            language,
-                            preparedLine,
-                            callIndex);
-                    if (targetQualifier != null)
-                    {
-                        var qualifiedName = $"{targetQualifier}.{resolvedName}";
-                        var qualifiedDefinitionIndex =
-                            preparedLine.IndexOf(qualifiedName, StringComparison.Ordinal);
-                        if (qualifiedDefinitionIndex >= 0
-                            && callIndex == qualifiedDefinitionIndex + targetQualifier.Length + 1
-                            && definitionNames.Contains(qualifiedName))
-                        {
-                            return true;
-                        }
-                    }
-                }
-
-                if (language != "sql")
-                    return TryGetDefinitionNameIndex(resolvedName, out var definitionIndex)
-                        && callIndex == definitionIndex;
-
-                return SqlReferenceExtractor.ShouldSuppressDefinitionCall(sqlDefinitionLeafSpans, resolvedName, callIndex);
-            }
-
-            bool TryGetDefinitionNameIndex(string resolvedName, out int definitionIndex)
-            {
-                definitionIndex = -1;
-                if (definitionNames == null)
-                    return false;
-                if (definitionNameIndices != null && definitionNameIndices.TryGetValue(resolvedName, out definitionIndex))
-                    return true;
-                if (!definitionNames.Contains(resolvedName))
-                    return false;
-
-                foreach (var definitionName in definitionNames)
-                {
-                    if (!definitionNamesComparer.Equals(definitionName, resolvedName))
-                        continue;
-
-                    definitionIndex = preparedLine.IndexOf(definitionName, StringComparison.Ordinal);
-                    if (definitionIndex < 0)
-                        return false;
-
-                    (definitionNameIndices ??= new Dictionary<string, int>(definitionNamesComparer))[definitionName] = definitionIndex;
-                    return true;
-                }
-
-                return false;
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
@@ -1201,7 +1121,11 @@ public static partial class ReferenceExtractor
                     sqlState!,
                     ResolveContainerForCall,
                     name => IsIgnoredCallName(language, name),
-                    (resolvedName, callIndex) => ShouldSuppressDefinitionCall(resolvedName, resolvedName, callIndex))
+                    (resolvedName, callIndex) =>
+                        definitionState.ShouldSuppressDefinitionCall(
+                            resolvedName,
+                            resolvedName,
+                            callIndex))
                 : null;
 
             if (language == "css")
@@ -1448,599 +1372,39 @@ public static partial class ReferenceExtractor
                     container);
             }
 
-            if (language is "javascript" or "typescript")
-            {
-                JavaScriptReferenceExtractor.EmitOptionalMemberChainReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-
-                JavaScriptReferenceExtractor.EmitDiscriminantStringGuardReferences(
-                    referenceStructuralLines[i],
-                    originalLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-
-                JavaScriptReferenceExtractor.EmitParenlessConstructorReferences(
-                    preparedLine,
-                    preparedLines,
-                    i,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-            }
-
-            void AddCallLikeReference(string name, int callIndex) =>
-                _ = TryAddCallLikeReference(
-                    name,
-                    callIndex,
-                    ScientificNativeReferenceExtractor.Supports(language)
-                        ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
-                            language,
-                            preparedLine,
-                            callIndex)
-                        : null);
-
-            void AddPowerShellParameterReference(string name, int callIndex)
-            {
-                var callContainer = ResolveContainerForCall(callIndex);
-                AddReference(references, seen, fileId, name, callIndex, "parameter", context, lineNumber, callContainer, language);
-            }
-
-            bool TryAddCallLikeReference(
-                string name,
-                int callIndex,
-                string? targetQualifier = null)
-            {
-                var normalizedName = language == "fsharp" && FSharpReferenceExtractor.IsOperatorCallName(name)
-                    ? $"operator {name}"
-                    : language == "rust"
-                        ? RustReferenceExtractor.NormalizeIdentifier(name)
-                        : NormalizeAtPrefixedIdentifier(name);
-
-                // In tuple-return declarations such as `private static (int Value, string Error)
-                // Resolve(...)`, CallRegex sees the modifier token as `static(`. It is a C# keyword,
-                // never a callable identifier, so suppress the phantom edge before graph ingestion.
-                // `private static (int Value, string Error) Resolve(...)` のような tuple return 宣言では
-                // CallRegex が modifier を `static(` と誤認する。C# keyword は呼び出し対象にならないため、
-                // graph に入る前に phantom edge を除外する。
-                if (language == "csharp" && name == "static")
-                    return false;
-
-                if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
-                    return false;
-                if (language == "rust" && RustReferenceExtractor.IsDeriveAttributeCallSite(preparedLine, normalizedName, callIndex))
-                    return false;
-                if (language == "wgsl" && name.StartsWith('@'))
-                    return false;
-                if (language == "kotlin" && KotlinReferenceExtractor.IsInfixFunctionDeclarationSite(preparedLine, callIndex))
-                    return false;
-
-                // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
-                // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
-                // site — not a call — so attributing it to `class:CtorName` produces a phantom
-                // `CtorName|call|class|CtorName` edge. `definitionNames` does not cover this
-                // because same-line ctors do not appear in the symbol table.
-                // 同一行 ctor の宣言子 `CtorName(` は呼び出しではないため CallRegex の対象から除外する。
-                if (javaSameLineCtor != null
-                    && callIndex == javaSameLineCtor.Value.NameIndex
-                    && string.Equals(normalizedName, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
-                {
-                    return false;
-                }
-
-                // C# positional patterns such as `case Point(var x, var y):` are type-pattern
-                // heads, not calls. `CallRegex` still sees `Point(` and would otherwise emit a
-                // phantom `call` edge alongside the real `type_reference`.
-                // C# の positional pattern (`case Point(var x, var y):`) は型パターンの先頭であり、
-                // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
-                // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
-                var isCSharpPatternHeadCallSite = language == "csharp"
-                    && CSharpReferenceExtractor.IsPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
-                if (isCSharpPatternHeadCallSite)
-                    return false;
-                if (language == "typescript" && TypeScriptReferenceExtractor.IsSatisfiesTypeOperand(preparedLine, callIndex))
-                    return false;
-                if (ShouldSuppressDefinitionCall(normalizedName, name, callIndex))
-                    return false;
-
-                var callContainer = ResolveContainerForCall(callIndex);
-                if (language == "csharp"
-                    && callIndex + name.Length < preparedLine.Length
-                    && preparedLine.AsSpan(callIndex + name.Length).TrimStart().StartsWith(".", StringComparison.Ordinal))
-                {
-                    var receiverLookups = lookups.GetCSharpValueReceiverLookups();
-                    if (HasCSharpValueReceiverConflict(
-                            normalizedName,
-                            normalizedName,
-                            lineNumber,
-                            callIndex,
-                            callContainer,
-                            receiverLookups.ByContainingType,
-                            receiverLookups.ByFunctionStartLine))
-                    {
-                        var containingType = GetContainingTypeQualifiedName(callContainer);
-                        if (containingType != null
-                            && receiverLookups.ByContainingType.TryGetValue(containingType, out var receiverNames)
-                            && (receiverNames.InstanceNames.Contains(normalizedName) || receiverNames.StaticNames.Contains(normalizedName))
-                            && lookups.HasCSharpPrivateProperty(containingType, normalizedName))
-                        {
-                            references.RemoveAll(reference =>
-                                reference.FileId == fileId
-                                && reference.Line == lineNumber
-                                && reference.Column == callIndex + 1
-                                && reference.ReferenceKind == "type_reference"
-                                && string.Equals(reference.SymbolName, normalizedName, StringComparison.Ordinal));
-                            AddReference(
-                                references,
-                                seen,
-                                fileId,
-                                $"{containingType}.{normalizedName}",
-                                callIndex,
-                                "reference",
-                                context,
-                                lineNumber,
-                                callContainer,
-                                language);
-                        }
-
-                        return false;
-                    }
-                }
-                if (IsConstructorCallName(language, preparedLine, callIndex))
-                {
-                    AddReference(
-                        references,
-                        seen,
-                        fileId,
-                        normalizedName,
-                        callIndex,
-                        "instantiate",
-                        context,
-                        lineNumber,
-                        callContainer,
-                        language,
-                        targetQualifier);
-                    return true;
-                }
-                if (language == "rust"
-                    && RustReferenceExtractor.IsLikelyInstantiationCallName(name, normalizedName, preparedLine, callIndex))
-                {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
-                    return true;
-                }
-                if (language == "python" && TryGetKnownPythonTypeCall(normalizedName, out var pythonTypeName))
-                {
-                    AddReference(references, seen, fileId, pythonTypeName, callIndex, "instantiate", context, lineNumber, callContainer, language);
-                    return true;
-                }
-                if (language == "csharp"
-                    && CSharpReferenceExtractor.ShouldSuppressQualifiedCommonMemberCall(preparedLine, normalizedName, callIndex))
-                {
-                    return false;
-                }
-                if (IsIgnoredCallName(language, name))
-                {
-                    if (!(language == "scala" && string.Equals(name, "foreach", StringComparison.Ordinal)))
-                        return false;
-                }
-
-                // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
-                // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
-                // issue #293: 引数付きの C# attribute と Java/Kotlin/Scala/TypeScript annotation 使用を
-                // `call` ではなく専用の種別に分類し、call-graph の phantom エッジを防ぐ。
-                var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
-                    && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
-                var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
-                if (metadataKind != null)
-                {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer, language);
-                    if (language == "csharp"
-                        && metadataKind == "attribute"
-                        && CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(name, preparedLine, callIndex) is { } callerInfoAttributeTypeName)
-                    {
-                        AddReference(
-                            references,
-                            seen,
-                            fileId,
-                            callerInfoAttributeTypeName,
-                            callIndex,
-                            "type_reference",
-                            context,
-                            lineNumber,
-                            callContainer,
-                            language);
-                    }
-                    return true;
-                }
-
-                if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames!))
-                {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
-                    return true;
-                }
-
-                if (language is "javascript" or "typescript"
-                    && SymbolExtractor.IsJavaScriptTypeScriptReactHookName(normalizedName))
-                {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "consumes_hook", context, lineNumber, callContainer);
-                    return true;
-                }
-
-                AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    normalizedName,
-                    callIndex,
-                    "call",
-                    context,
-                    lineNumber,
-                    callContainer,
-                    ScientificNativeReferenceExtractor.Supports(language) ? language : null,
-                    targetQualifier: targetQualifier);
-                return true;
-
-                bool TryGetKnownPythonTypeCall(string candidate, out string canonicalName)
-                {
-                    canonicalName = candidate;
-                    var separator = candidate.LastIndexOf('.');
-                    var leaf = separator >= 0 ? candidate[(separator + 1)..] : candidate;
-                    if (leaf.Length == 0 || !char.IsUpper(leaf, 0))
-                        return false;
-
-                    if (lookups.HasSameFilePythonClass(candidate, leaf))
-                    {
-                        return true;
-                    }
-
-                    return PythonImportBindingResolver.TryResolveImportedTypeCall(
-                        candidate,
-                        preparedLine,
-                        callIndex,
-                        lookups.GetPythonImportedTypeCallLookup(),
-                        out canonicalName);
-                }
-            }
-
-            if (language is "batch")
-                BatchReferenceExtractor.EmitJumpTargetReferences(
-                    originalLine,
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-
-            if (language is "assembly")
-                AssemblyReferenceExtractor.EmitInstructionTargetReferences(
-                    originalLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall);
-
-            HashSet<int>? matchedCallIndices = null;
-            HashSet<int> GetMatchedCallIndices() => matchedCallIndices ??= [];
-            var callScanLine = dynamicDeclarativeState?.GetCallScanLine(
+            var lineContext = new CoreReferenceLineContext(
+                fileId,
                 language,
+                lines,
+                preparedLines,
+                i,
+                preparedLine,
+                originalLine,
+                context,
                 lineNumber,
-                preparedLine) ?? preparedLine;
+                references,
+                seen,
+                container,
+                definitionNames,
+                ResolveContainerForCall);
 
-            if (language is "commonlisp" or "racket")
-            {
-                LispReferenceExtractor.EmitReferences(
-                    language,
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    ResolveContainerForCall,
-                    definitionNames);
-            }
-            else if (language is "powershell")
-            {
-                PowerShellReferenceExtractor.EmitCallReferences(preparedLine, AddCallLikeReference);
-                PowerShellReferenceExtractor.EmitSplatParameterReferences(
-                    preparedLine,
-                    lookups.GetPowerShellSplatAssignments,
-                    lineNumber,
-                    AddPowerShellParameterReference);
-            }
-            else if (language is "shell")
-            {
-                ShellReferenceExtractor.EmitReferences(
-                    preparedLine,
-                    originalLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    shellCallableNames,
-                    shellGlobalAliasNames,
-                    ResolveContainerForCall,
-                    AddCallLikeReference);
-            }
-            else if (language is "assembly")
-            {
-                // Assembly references are operand-driven, not `name(...)` call syntax.
-            }
-            else
-            {
-                IReadOnlyList<ScientificNativeReferenceExtractor.DTemplateArgumentCallSpan>?
-                    dTemplateArgumentCallSpans = null;
-                if (ScientificNativeReferenceExtractor.Supports(language))
-                {
-                    dTemplateArgumentCallSpans = ScientificNativeReferenceExtractor.EmitReferences(
-                        language,
-                        preparedLine,
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        context,
-                        lineNumber,
-                        ResolveContainerForCall,
-                        AddCallLikeReference,
-                        scientificNativeDependencyLimit,
-                        request.ReportDiagnostic);
-                }
-
-                var dTemplateArgumentCallSpanIndex = 0;
-                if (language is not ("tcl" or "prolog"))
-                {
-                    foreach (Match match in CallRegex.Matches(callScanLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        var callIndex = match.Groups["name"].Index;
-                        if (language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(preparedLine, callIndex))
-                            continue;
-                        if (language == "d"
-                            && ScientificNativeReferenceExtractor.IsDTemplateArgumentCall(
-                                dTemplateArgumentCallSpans,
-                                ref dTemplateArgumentCallSpanIndex,
-                                callIndex))
-                        {
-                            continue;
-                        }
-                        if (language == "ada"
-                            && callIndex > 0
-                            && preparedLine[callIndex - 1] == '\'')
-                        {
-                            continue;
-                        }
-                        if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
-                            continue;
-                        if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
-                            continue;
-                        if (sqlWindowFunctionCallSiteSuppressions != null
-                            && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
-                            continue;
-                        if (DynamicDeclarativeReferenceExtractor.ShouldSuppressGenericCall(
-                                language,
-                                callScanLine,
-                                name,
-                                callIndex,
-                                lineNumber,
-                                dynamicDeclarativeState,
-                                language == "groovy"
-                                    ? ResolveContainerForCall(callIndex)
-                                    : null))
-                        {
-                            continue;
-                        }
-                        GetMatchedCallIndices().Add(callIndex);
-                        if (TryAddCallLikeReference(
-                                name,
-                                callIndex,
-                                ScientificNativeReferenceExtractor.Supports(language)
-                                    ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
-                                        language,
-                                        preparedLine,
-                                        callIndex)
-                                    : null))
-                        {
-                            EmitGenericInvocationTypeArgumentReferences(
-                                language,
-                                preparedLine,
-                                callIndex,
-                                references,
-                                seen,
-                                fileId,
-                                context,
-                                lineNumber,
-                                ResolveContainerForCall(callIndex));
-                        }
-                        if (language == "ruby")
-                            RubyReferenceExtractor.EmitCommandTargetReferences(
-                                name,
-                                callIndex,
-                                originalLine,
-                                references,
-                                seen,
-                                fileId,
-                                context,
-                                lineNumber,
-                                ResolveContainerForCall);
-                    }
-                }
-
-                if (language == "ruby")
-                {
-                    RubyReferenceExtractor.EmitAdditionalCallReferences(
-                        preparedLine,
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        context,
-                        lineNumber,
-                        ResolveContainerForCall,
-                        GetMatchedCallIndices(),
-                        AddCallLikeReference);
-                }
-                else if (language is "perl" or "ambiguous_pl")
-                {
-                    PerlReferenceExtractor.EmitAdditionalReferences(
-                        language == "ambiguous_pl" ? callScanLine : preparedLine,
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        context,
-                        lineNumber,
-                        ResolveContainerForCall,
-                        AddCallLikeReference,
-                        emitArrowCallReferences: language != "ambiguous_pl"
-                            || dynamicDeclarativeState?.HasPrologContainer(lineNumber) != true);
-                }
-
-                if (dynamicDeclarativeState != null)
-                {
-                    DynamicDeclarativeReferenceExtractor.EmitAdditionalReferences(
-                        language,
-                        callScanLine,
-                        referenceStructuralLines[i],
-                        dynamicDeclarativeState,
-                        references,
-                        seen,
-                        fileId,
-                        context,
-                        lineNumber,
-                        ResolveContainerForCall,
-                        AddCallLikeReference);
-                }
-
-                if (language == "go")
-                    LanguageReferenceExtractionSupport.EmitGoBranchLabelReferences(preparedLine, AddCallLikeReference);
-
-                if (language == "swift")
-                    SwiftReferenceExtractor.EmitTrailingClosureReferences(preparedLine, AddCallLikeReference);
-                else if (language == "kotlin")
-                {
-                    KotlinReferenceExtractor.EmitInfixCallReferences(
-                        preparedLine,
-                        originalLine,
-                        kotlinInfixFunctionNames!,
-                        AddCallLikeReference);
-                    KotlinReferenceExtractor.EmitTrailingLambdaReferences(preparedLine, AddCallLikeReference);
-                }
-
-                if (language == "fsharp")
-                {
-                    FSharpReferenceExtractor.EmitAdditionalCallReferences(
-                        preparedLine,
-                        AddCallLikeReference);
-                }
-
-                if (language == "scala")
-                {
-                    ScalaReferenceExtractor.EmitTrailingBlockCallReferences(
-                        preparedLine,
-                        AddCallLikeReference);
-                    ScalaReferenceExtractor.EmitAdditionalReferences(
-                        preparedLine,
-                        references,
-                        seen,
-                        fileId,
-                        context,
-                        lineNumber,
-                        ResolveContainerForCall,
-                        AddCallLikeReference);
-                }
-                else if (language == "gradle")
-                {
-                    void AddGradleDslReference(string name, int callIndex)
-                    {
-                        var normalizedName = NormalizeAtPrefixedIdentifier(name);
-                        var callContainer = ResolveContainerForCall(callIndex);
-                        AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer, language);
-                    }
-
-                    GradleReferenceExtractor.EmitDslCallReferences(
-                        preparedLine,
-                        AddGradleDslReference);
-                }
-
-                if (language == "fortran")
-                    FortranReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference);
-                else if (language == "pascal")
-                    PascalReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
-                else if (language == "objc")
-                    ObjectiveCReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, references, seen, fileId, context, lineNumber, ResolveContainerForCall);
-                else if (language == "haskell")
-                    HaskellReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
-                else if (language == "elixir")
-                    ElixirReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
-                else if (language == "lua")
-                    LuaReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, references, seen, fileId, context, lineNumber, ResolveContainerForCall, definitionNames);
-                else if (language == "smalltalk")
-                    SmalltalkReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
-                else if (language == "vb")
-                    LanguageReferenceExtractionSupport.EmitAdditionalCallReferences(
-                        "vb",
-                        preparedLine,
-                        originalLine,
-                        AddCallLikeReference,
-                        references,
-                        seen,
-                        fileId,
-                        context,
-                        lineNumber,
-                        ResolveContainerForCall,
-                        definitionNames);
-
-                // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
-                // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
-                // `new Dict<K, List<V>>()` still emit call/instantiate rows. See issue #263.
-                // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
-                // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
-                // `call` / `instantiate` を発行する。issue #263 参照。
-                if (language is not ("tcl" or "prolog" or "ambiguous_pl")
-                    && MayContainNestedGenericSyntax(preparedLine))
-                {
-                    foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices ?? EmptyMatchedIndices))
-                    {
-                        if (TryAddCallLikeReference(candidate.Name, candidate.NameIndex))
-                        {
-                            EmitGenericInvocationTypeArgumentReferences(
-                                language,
-                                preparedLine,
-                                candidate.NameIndex,
-                                references,
-                                seen,
-                                fileId,
-                                context,
-                                lineNumber,
-                                ResolveContainerForCall(candidate.NameIndex));
-                        }
-                    }
-                }
-            }
-
-            if (language == "rust")
-            {
-                RustReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference);
-                RustReferenceExtractor.EmitAttributeReferences(preparedLine, references, seen, fileId, context, lineNumber, container);
-            }
+            var callContext = new CoreCallReferenceContext(
+                lineContext,
+                lookups,
+                javaSameLineCtor,
+                csharpAttrRangesOnLine,
+                kotlinConstructorTypeNames,
+                kotlinInfixFunctionNames,
+                shellCallableNames,
+                shellGlobalAliasNames,
+                dynamicDeclarativeState,
+                referenceStructuralLines[i],
+                scientificNativeDependencyLimit,
+                request.ReportDiagnostic,
+                sqlSuppressedCallIndices,
+                sqlWindowFunctionCallSiteSuppressions,
+                definitionState);
+            EmitCoreCallReferences(callContext);
 
             if (language == "csharp")
             {
@@ -2128,22 +1492,6 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
             }
-
-            var lineContext = new CoreReferenceLineContext(
-                fileId,
-                language,
-                lines,
-                preparedLines,
-                i,
-                preparedLine,
-                originalLine,
-                context,
-                lineNumber,
-                references,
-                seen,
-                container,
-                definitionNames,
-                ResolveContainerForCall);
 
             // issue #268: JS/TS tagged template literal call sites. The structural masker
             // already located each template opener and captured its preceding tag identifier;
