@@ -1365,295 +1365,102 @@ public static partial class IndexCommandRunner
                     TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
 
-                var extractionStallTimeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
-                var lastExtractionProgressAt = Stopwatch.GetTimestamp();
-                while (!extractionResults.IsCompleted)
-                {
-                    ThrowIfFullScanCancelled(processed, files.Count);
-                    if (!extractionResults.TryTake(out var item, millisecondsTimeout: 100))
+                var processedBeforeExtraction = processed;
+                var extractionState = ConsumeFullScanExtractionResults(
+                    new FullScanExtractionConsumerContext
                     {
-                        ThrowIfFullScanExtractionStalled(
-                            processed,
-                            files.Count,
-                            extractionStallTimeout,
-                            lastExtractionProgressAt,
-                            currentJsonIndexFile,
-                            activeExtractionPhases,
-                            extractionStallCts.Cancel);
-                        continue;
-                    }
-
-                    lastExtractionProgressAt = Stopwatch.GetTimestamp();
-                    currentJsonIndexFile = item.RelativePath;
-                    var indexFilePhase = item.FailurePhase ?? "preparing";
-                    var itemFileExtracted = item.Record == null ? 0L : 1L;
-                    var itemChunksExtracted = item.Chunks?.Count ?? 0L;
-                    var itemSymbolsExtracted = item.Symbols?.Count ?? 0L;
-                    var itemReferencesExtracted = item.References?.Count ?? 0L;
-                    EnsureIndexingActivityVisible();
-                    if (item.Exception is IndexExtractionStalledException stalledException)
-                        RethrowPreservingStackTrace(stalledException);
-
-                    try
-                    {
-                        var itemTargetsCSharp = item.FileIndex >= 0
-                            && fileTargets[item.FileIndex].Language == "csharp";
-                        if (itemTargetsCSharp)
+                        Writer = writer,
+                        Indexer = indexer,
+                        Options = options,
+                        ProjectRoot = projectRoot,
+                        FileTargets = fileTargets,
+                        FilesCount = files.Count,
+                        ProcessedBeforeExtraction = processedBeforeExtraction,
+                        ForceExtractorRefresh = forceExtractorRefresh,
+                        StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+                        PriorSymbolsOnlyGraphOmitted = priorSymbolsOnlyGraphOmitted,
+                        SymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior,
+                        CSharpIndexedProjectRootCompatible = csharpIndexedProjectRootCompatible,
+                        CSharpSymbolNameContractMatchesCurrent =
+                            csharpSymbolNameContractMatchesCurrent,
+                        SqlGraphContractMatchesCurrent = sqlGraphContractMatchesCurrent,
+                        HdlGraphContractMatchesCurrent = hdlGraphContractMatchesCurrent,
+                        ReadableFileBytes = readableFileBytes,
+                        PostExtractionHooks = postExtractionHooks,
+                        SymbolExtractionWorker = mainSymbolExtractionWorker.Value,
+                        IndexProgress = indexProgress,
+                        ExtractionResults = extractionResults,
+                        Workers = workers,
+                        ExtractionStallTimeout =
+                            IndexExtractionStallTimeoutForTesting?.Invoke()
+                            ?? IndexExtractionStallTimeout,
+                        ActiveExtractionPhases = activeExtractionPhases,
+                        CancellationToken = cancellationToken,
+                        CancelExtraction = extractionStallCts.Cancel,
+                        EnsureIndexingActivityVisible = EnsureIndexingActivityVisible,
+                        ReportJsonIndexProgressIfNeeded = ReportJsonIndexProgressIfNeeded,
+                        ThrowIfFullScanCancelled = ThrowIfFullScanCancelled,
+                        PublishProcessedCount = value => processed = value,
+                        SetCurrentJsonIndexFile = path => currentJsonIndexFile = path,
+                        GetCurrentJsonIndexFile = () => currentJsonIndexFile,
+                        GetDeferCSharpMutationsForIncompleteScan =
+                            () => deferCSharpMutationsForIncompleteScan,
+                        GetFtsMutated = () => ftsMutated,
+                        GetCSharpWorkspace = () => csharpWorkspace,
+                        GetCSharpWorkspaceFileSnapshots =
+                            () => csharpWorkspaceFileSnapshots,
+                        DeferCSharpMutationsForLoadedSnapshotDrift =
+                            DeferCSharpMutationsForLoadedSnapshotDrift,
+                        TargetRequiresJavaScriptTypeScriptRefresh =
+                            TargetRequiresJavaScriptTypeScriptRefresh,
+                        AllowReuseWithCurrentHotspotFamilyTrust = language =>
+                            AllowReuseWithCurrentHotspotFamilyTrust(
+                                language,
+                                hotspotFamilyTrustMatchesCurrent),
+                        RequireTypeScriptAugmentationRefresh =
+                            RequireTypeScriptAugmentationRefresh,
+                        WriteProjectRootOnce = WriteProjectRootOnce,
+                        InsertIssuesForIndexedFile = InsertIssuesForIndexedFile,
+                        CountFreshInsertedRows = CountFreshInsertedRows,
+                        State = new FullScanExtractionConsumerState
                         {
-                            var deferCurrentItem = deferCSharpMutationsForIncompleteScan;
-                            if (!deferCurrentItem
-                                && item.Exception is CSharpWorkspaceSnapshotDriftException driftException)
-                            {
-                                DeferCSharpMutationsForLoadedSnapshotDrift(driftException.Path);
-                                deferCurrentItem = true;
-                            }
-                            else if (!deferCurrentItem
-                                     && item.Record != null
-                                     && csharpWorkspaceFileSnapshots is { } workspaceFileSnapshots
-                                     && !CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                                         item.FilePath,
-                                         fileTargets[item.FileIndex].IndexPath,
-                                         fileTargets[item.FileIndex].DisplayRelativePath,
-                                         item.Record.Size,
-                                         item.Record.Modified,
-                                         workspaceFileSnapshots,
-                                         out var changedPath,
-                                         cancellationToken))
-                            {
-                                DeferCSharpMutationsForLoadedSnapshotDrift(
-                                    changedPath ?? fileTargets[item.FileIndex].DisplayRelativePath);
-                                deferCurrentItem = true;
-                            }
-
-                            if (deferCurrentItem)
-                            {
-                                skipped++;
-                                processed++;
-                                currentJsonIndexFile = null;
-                                ThrowIfFullScanCancelled(processed, files.Count);
-                                ReportJsonIndexProgressIfNeeded();
-                                if (!options.Json && !options.Quiet)
-                                {
-                                    indexProgress.Pause();
-                                    ConsoleUi.PrintProgress(processed, files.Count);
-                                    indexProgress.Resume();
-                                }
-                                continue;
-                            }
-                        }
-
-                        if (item.Exception != null)
-                            RethrowPreservingStackTrace(item.Exception);
-
-                        if (item.Record == null)
-                        {
-                            warnings++;
-                            warningList.Add(new CliJsonMessage(currentJsonIndexFile, item.Warning ?? "File skipped"));
-                            if (!options.Json && !options.Quiet && item.Warning != null)
-                            {
-                                indexProgress.Pause();
-                                ConsoleUi.PrintWarning(item.Warning);
-                                indexProgress.Resume();
-                            }
-
-                            if (writer.HasFileAtPath(currentJsonIndexFile))
-                            {
-                                using var deleteTxn = writer.BeginTransaction(cancellationToken, "full scan delete skipped file");
-                                if (writer.DeleteFileByPath(currentJsonIndexFile))
-                                {
-                                    csharpMetadataTargetsNeedRefresh = true;
-                                    RequireTypeScriptAugmentationRefresh();
-                                    WriteProjectRootOnce();
-                                    deleteTxn.Commit();
-                                    ftsMutated = true;
-                                }
-                            }
-                            else
-                            {
-                                skipped++;
-                            }
-                            processed++;
-                            currentJsonIndexFile = null;
-                            ThrowIfFullScanCancelled(processed, files.Count);
-                            ReportJsonIndexProgressIfNeeded();
-                            if (!options.Json && !options.Quiet)
-                            {
-                                indexProgress.Pause();
-                                ConsoleUi.PrintProgress(processed, files.Count);
-                                indexProgress.Resume();
-                            }
-                            continue;
-                        }
-
-                        var record = item.Record!;
-                        readableFileBytes.Remember(item.FileIndex, record.Size);
-                        if (item.Warning != null && !options.Json && !options.Quiet)
-                        {
-                            indexProgress.Pause();
-                            ConsoleUi.PrintWarning(item.Warning);
-                            indexProgress.Resume();
-                        }
-
-                        var generatedSuppressionIssue = item.GeneratedSuppressionChecked
-                            ? item.GeneratedSuppressionIssue
-                            : indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
-                        long? existingId = null;
-                        if (!forceExtractorRefresh && !options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
-                        {
-                            var targetRequiresRefresh = TargetRequiresJavaScriptTypeScriptRefresh(record.Lang, record.Path);
-                            existingId = writer.GetReusableUnchangedFileId(
-                                record.Path,
-                                record.Modified,
-                                record.Checksum,
-                                size: record.Size,
-                                lines: record.Lines,
-                                language: record.Lang,
-                                generated: record.Generated,
-                                maxSymbolsPerFile: options.MaxSymbolsPerFile,
-                                maxReferencesPerFile: options.MaxReferencesPerFile,
-                                generatedExtractionSuppressed: generatedSuppressionIssue != null,
-                                allowReuse: symbolKindFilterMatchesPrior
-                                    && !targetRequiresRefresh
-                                    && !priorSymbolsOnlyGraphOmitted
-                                    && (record.Lang != "csharp" || csharpIndexedProjectRootCompatible)
-                                    && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
-                                    && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                                    && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
-                                    && (record.Lang is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent)
-                                    && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                        }
-                        if (existingId != null)
-                        {
-                            var stalePurged = deferCSharpMutationsForIncompleteScan
-                                ? 0
-                                : writer.PurgeStaleFilesSharingChecksum(
-                                    projectRoot,
-                                    record.Path,
-                                    record.Checksum);
-                            if (stalePurged > 0)
-                            {
-                                ftsMutated = true;
-                                csharpMetadataTargetsNeedRefresh = true;
-                                RequireTypeScriptAugmentationRefresh();
-                                if (!options.SymbolsOnly)
-                                    mutualRecursionRefreshNeeded = true;
-                            }
-                            skipped++;
-                            processed++;
-                            if (!string.IsNullOrWhiteSpace(record.Lang))
-                            {
-                                skippedSymbolExtractorLanguages ??= new HashSet<string>(StringComparer.Ordinal);
-                                skippedSymbolExtractorLanguages.Add(record.Lang);
-                            }
-                            if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
-                            {
-                                reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
-                                reusedHotspotFamilyLanguages.Add(record.Lang);
-                            }
-                            if (options.Verbose && !options.Json && !options.Quiet)
-                            {
-                                indexProgress.Pause();
-                                ConsoleUi.ClearProgressLine();
-                                CommandOutputWriter.WriteLine($"  [SKIP] {record.Path}");
-                                indexProgress.Resume();
-                            }
-                            if (!options.Json && !options.Quiet)
-                            {
-                                indexProgress.Pause();
-                                ConsoleUi.PrintProgress(processed, files.Count);
-                                indexProgress.Resume();
-                            }
-                            ReportJsonIndexProgressIfNeeded();
-                            currentJsonIndexFile = null;
-                            continue;
-                        }
-
-                        if (record.Lang == "csharp")
-                            csharpMetadataTargetsNeedRefresh = true;
-                        if (record.Lang == "typescript")
-                            RequireTypeScriptAugmentationRefresh();
-
-                        var persistence = PersistFullScanFile(new FullScanFilePersistenceContext
-                        {
-                            Writer = writer,
-                            Indexer = indexer,
-                            Options = options,
-                            ProjectRoot = projectRoot,
-                            Item = item,
-                            Record = record,
-                            GeneratedSuppressionIssue = generatedSuppressionIssue,
-                            StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
-                            DeferCSharpMutationsForIncompleteScan = deferCSharpMutationsForIncompleteScan,
-                            CSharpWorkspace = csharpWorkspace,
-                            PostExtractionHooks = postExtractionHooks,
-                            SymbolExtractionWorker = mainSymbolExtractionWorker.Value,
-                            CancellationToken = cancellationToken,
-                            InsertIssuesForIndexedFile = InsertIssuesForIndexedFile,
-                            WriteProjectRootOnce = WriteProjectRootOnce,
-                            SetPhase = (path, phase) =>
-                            {
-                                currentJsonIndexFile = path;
-                                indexFilePhase = phase;
-                            },
-                        });
-                        itemChunksExtracted = persistence.ExtractedChunks;
-                        itemSymbolsExtracted = persistence.ExtractedSymbols;
-                        itemReferencesExtracted = persistence.ExtractedReferences;
-                        symbolsDroppedByKindFilter += persistence.SymbolsDroppedByKindFilter;
-                        mutualRecursionRefreshNeeded |= persistence.MutualRecursionRefreshNeeded;
-                        csharpMetadataTargetsNeedRefresh |= persistence.CSharpMetadataTargetsNeedRefresh;
-                        ftsMutated = true;
-                        if (persistence.StampSymbolExtractorLanguage
-                            && !string.IsNullOrWhiteSpace(record.Lang))
-                        {
-                            indexedSymbolExtractorLanguages.Add(record.Lang);
-                        }
-                        CountFreshInsertedRows(
-                            persistence.PersistedChunks,
-                            persistence.PersistedSymbols,
-                            persistence.PersistedReferences);
-                        indexProgress.WriteVerbose(persistence.VerboseMessage);
-                    }
-                    catch (IndexExtractionStalledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        LogIndexFileFailure("index_file_failed", item.FilePath, indexFilePhase, ex);
-                        errors++;
-                        var errorMessage = FormatIndexFileException(ex);
-                        errorList.Add(new CliJsonMessage(item.FilePath, errorMessage));
-                        if (fileErrorList.Count < PartialIndexFileErrorLimit)
-                            fileErrorList.Add(BuildIndexFileError(item.RelativePath, indexFilePhase, ex));
-                        if (!options.Json)
-                        {
-                            indexProgress.Pause();
-                            ConsoleUi.ClearProgressLine();
-                            ConsoleUi.TryWriteErrorLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
-                            indexProgress.Resume();
-                        }
-                    }
-                    finally
-                    {
-                        extractedFiles += itemFileExtracted;
-                        extractedChunks += itemChunksExtracted;
-                        extractedSymbols += itemSymbolsExtracted;
-                        extractedReferences += itemReferencesExtracted;
-                    }
-
-                    processed++;
-                    currentJsonIndexFile = null;
-                    ThrowIfFullScanCancelled(processed, files.Count);
-                    ReportJsonIndexProgressIfNeeded();
-                    if (!options.Json && !options.Quiet)
-                    {
-                        indexProgress.Pause();
-                        ConsoleUi.PrintProgress(processed, files.Count);
-                        indexProgress.Resume();
-                    }
-                }
-                Task.WaitAll(workers, cancellationToken);
+                            FtsMutated = ftsMutated,
+                            MutualRecursionRefreshNeeded =
+                                mutualRecursionRefreshNeeded,
+                            CSharpMetadataTargetsNeedRefresh =
+                                csharpMetadataTargetsNeedRefresh,
+                            SymbolsDroppedByKindFilter =
+                                symbolsDroppedByKindFilter,
+                            ReusedHotspotFamilyLanguages =
+                                reusedHotspotFamilyLanguages,
+                            SkippedSymbolExtractorLanguages =
+                                skippedSymbolExtractorLanguages,
+                            IndexedSymbolExtractorLanguages =
+                                indexedSymbolExtractorLanguages,
+                            ErrorList = errorList,
+                            FileErrorList = fileErrorList,
+                            WarningList = warningList,
+                        },
+                    });
+                processed = processedBeforeExtraction + extractionState.Processed;
+                skipped += extractionState.Skipped;
+                warnings += extractionState.Warnings;
+                errors += extractionState.ErrorsAdded;
+                ftsMutated = extractionState.FtsMutated;
+                mutualRecursionRefreshNeeded =
+                    extractionState.MutualRecursionRefreshNeeded;
+                csharpMetadataTargetsNeedRefresh =
+                    extractionState.CSharpMetadataTargetsNeedRefresh;
+                symbolsDroppedByKindFilter =
+                    extractionState.SymbolsDroppedByKindFilter;
+                extractedFiles += extractionState.ExtractedFiles;
+                extractedChunks += extractionState.ExtractedChunks;
+                extractedSymbols += extractionState.ExtractedSymbols;
+                extractedReferences += extractionState.ExtractedReferences;
+                reusedHotspotFamilyLanguages =
+                    extractionState.ReusedHotspotFamilyLanguages;
+                skippedSymbolExtractorLanguages =
+                    extractionState.SkippedSymbolExtractorLanguages;
             }
             finally
             {
