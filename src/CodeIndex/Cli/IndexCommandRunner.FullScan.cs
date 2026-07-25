@@ -295,16 +295,21 @@ public static partial class IndexCommandRunner
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
         var purgedRefs = 0;
 
-        CancellationTokenSource? indexCts = null;
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
         var ftsMutated = purged > 0;
         var symbolsDroppedByKindFilter = 0;
         var mutualRecursionRefreshNeeded = !options.SymbolsOnly
             && (!writer.ReferenceIdentityContractMatchesCurrent() || purged > 0);
 
-        var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
+        var indexProgress = new IndexProgressReporter(
+            options,
+            "Indexing...",
+            spinnerFrames,
+            ConsoleUi.TryWriteErrorLine,
+            canResume: () => processed < files.Count && !indexProgressVisible,
+            clearProgressLineBeforeWrite: true);
         HashSet<string>? reusedHotspotFamilyLanguages = null;
         HashSet<string>? skippedSymbolExtractorLanguages = null;
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
@@ -395,48 +400,6 @@ public static partial class IndexCommandRunner
                 && !startedWithNoIndexedFiles
                 && FullScanJavaScriptTypeScriptConfigChanged());
 
-        void StartIndexSpinnerIfNeeded()
-        {
-            if (!interactiveIndexSpinner || indexCts != null)
-                return;
-
-            indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
-        }
-
-        void PauseIndexSpinnerForConsoleWrite()
-        {
-            if (indexCts == null)
-                return;
-
-            ConsoleUi.StopSpinner(indexCts);
-            indexCts = null;
-        }
-
-        void ResumeIndexSpinnerAfterConsoleWrite()
-        {
-            if (!interactiveIndexSpinner || processed >= files.Count || indexProgressVisible)
-                return;
-
-            StartIndexSpinnerIfNeeded();
-        }
-
-        void WriteIndexVerboseStatus(string message)
-        {
-            if (!options.Verbose || options.Quiet)
-                return;
-
-            if (options.Json)
-            {
-                ConsoleUi.TryWriteErrorLine(message);
-                return;
-            }
-
-            PauseIndexSpinnerForConsoleWrite();
-            ConsoleUi.ClearProgressLine();
-            CommandOutputWriter.WriteLine(message);
-            ResumeIndexSpinnerAfterConsoleWrite();
-        }
-
         void EnsureIndexingActivityVisible()
         {
             if (options.Json || options.Quiet)
@@ -445,9 +408,9 @@ public static partial class IndexCommandRunner
             if (indexProgressVisible)
                 return;
 
-            if (interactiveIndexSpinner)
+            if (indexProgress.Interactive)
             {
-                StartIndexSpinnerIfNeeded();
+                indexProgress.Start();
                 return;
             }
 
@@ -1607,7 +1570,7 @@ public static partial class IndexCommandRunner
             {
                 if (!options.Json && !options.Quiet)
                 {
-                    PauseIndexSpinnerForConsoleWrite();
+                    indexProgress.Pause();
                     indexProgressVisible = true;
                     ConsoleUi.PrintProgress(0, files.Count);
                 }
@@ -2018,9 +1981,9 @@ public static partial class IndexCommandRunner
                                 ReportJsonIndexProgressIfNeeded();
                                 if (!options.Json && !options.Quiet)
                                 {
-                                    PauseIndexSpinnerForConsoleWrite();
+                                    indexProgress.Pause();
                                     ConsoleUi.PrintProgress(processed, files.Count);
-                                    ResumeIndexSpinnerAfterConsoleWrite();
+                                    indexProgress.Resume();
                                 }
                                 continue;
                             }
@@ -2035,9 +1998,9 @@ public static partial class IndexCommandRunner
                             warningList.Add(new CliJsonMessage(currentJsonIndexFile, item.Warning ?? "File skipped"));
                             if (!options.Json && !options.Quiet && item.Warning != null)
                             {
-                                PauseIndexSpinnerForConsoleWrite();
+                                indexProgress.Pause();
                                 ConsoleUi.PrintWarning(item.Warning);
-                                ResumeIndexSpinnerAfterConsoleWrite();
+                                indexProgress.Resume();
                             }
 
                             if (writer.HasFileAtPath(currentJsonIndexFile))
@@ -2062,9 +2025,9 @@ public static partial class IndexCommandRunner
                             ReportJsonIndexProgressIfNeeded();
                             if (!options.Json && !options.Quiet)
                             {
-                                PauseIndexSpinnerForConsoleWrite();
+                                indexProgress.Pause();
                                 ConsoleUi.PrintProgress(processed, files.Count);
-                                ResumeIndexSpinnerAfterConsoleWrite();
+                                indexProgress.Resume();
                             }
                             continue;
                         }
@@ -2073,9 +2036,9 @@ public static partial class IndexCommandRunner
                         readableFileBytes.Remember(item.FileIndex, record.Size);
                         if (item.Warning != null && !options.Json && !options.Quiet)
                         {
-                            PauseIndexSpinnerForConsoleWrite();
+                            indexProgress.Pause();
                             ConsoleUi.PrintWarning(item.Warning);
-                            ResumeIndexSpinnerAfterConsoleWrite();
+                            indexProgress.Resume();
                         }
 
                         var generatedSuppressionIssue = item.GeneratedSuppressionChecked
@@ -2136,16 +2099,16 @@ public static partial class IndexCommandRunner
                             }
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
-                                PauseIndexSpinnerForConsoleWrite();
+                                indexProgress.Pause();
                                 ConsoleUi.ClearProgressLine();
                                 CommandOutputWriter.WriteLine($"  [SKIP] {record.Path}");
-                                ResumeIndexSpinnerAfterConsoleWrite();
+                                indexProgress.Resume();
                             }
                             if (!options.Json && !options.Quiet)
                             {
-                                PauseIndexSpinnerForConsoleWrite();
+                                indexProgress.Pause();
                                 ConsoleUi.PrintProgress(processed, files.Count);
-                                ResumeIndexSpinnerAfterConsoleWrite();
+                                indexProgress.Resume();
                             }
                             ReportJsonIndexProgressIfNeeded();
                             currentJsonIndexFile = null;
@@ -2202,7 +2165,7 @@ public static partial class IndexCommandRunner
                                 generatedSuppressionIssue);
                             InsertIssuesForIndexedFile(fileId, generatedIssues);
                             if (options.Verbose)
-                                WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, generated-code extraction skipped)");
+                                indexProgress.WriteVerbose($"  [OK  ] {record.Path} ({chunks.Count} chunks, generated-code extraction skipped)");
                             currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                             WriteProjectRootOnce();
                             txn.Commit();
@@ -2214,9 +2177,9 @@ public static partial class IndexCommandRunner
                             processed++;
                             if (!options.Json && !options.Quiet)
                             {
-                                PauseIndexSpinnerForConsoleWrite();
+                                indexProgress.Pause();
                                 ConsoleUi.PrintProgress(processed, files.Count);
-                                ResumeIndexSpinnerAfterConsoleWrite();
+                                indexProgress.Resume();
                             }
                             ReportJsonIndexProgressIfNeeded();
                             currentJsonIndexFile = null;
@@ -2255,16 +2218,16 @@ public static partial class IndexCommandRunner
                             writer.InsertReferencesInAtomicFileScope([], cancellationToken);
                             InsertIssuesForIndexedFile(fileId, capIssues);
                             if (options.Verbose)
-                                WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
+                                indexProgress.WriteVerbose($"  [SKIP] {record.Path} ({issue.Message})");
                             txn.Commit();
                             ftsMutated |= fileFtsMutated;
                             CountFreshInsertedRows();
                             processed++;
                             if (!options.Json && !options.Quiet)
                             {
-                                PauseIndexSpinnerForConsoleWrite();
+                                indexProgress.Pause();
                                 ConsoleUi.PrintProgress(processed, files.Count);
-                                ResumeIndexSpinnerAfterConsoleWrite();
+                                indexProgress.Resume();
                             }
                             ReportJsonIndexProgressIfNeeded();
                             currentJsonIndexFile = null;
@@ -2286,16 +2249,16 @@ public static partial class IndexCommandRunner
                             writer.InsertReferencesInAtomicFileScope([], cancellationToken);
                             writer.InsertIssues(fileId, capIssues);
                             if (options.Verbose)
-                                WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
+                                indexProgress.WriteVerbose($"  [SKIP] {record.Path} ({issue.Message})");
                             txn.Commit();
                             ftsMutated |= fileFtsMutated;
                             CountFreshInsertedRows();
                             processed++;
                             if (!options.Json && !options.Quiet)
                             {
-                                PauseIndexSpinnerForConsoleWrite();
+                                indexProgress.Pause();
                                 ConsoleUi.PrintProgress(processed, files.Count);
-                                ResumeIndexSpinnerAfterConsoleWrite();
+                                indexProgress.Resume();
                             }
                             ReportJsonIndexProgressIfNeeded();
                             currentJsonIndexFile = null;
@@ -2386,7 +2349,7 @@ public static partial class IndexCommandRunner
                             indexedSymbolExtractorLanguages.Add(record.Lang);
                         CountFreshInsertedRows(chunks.Count, symbols.Count, references.Count);
 
-                        WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                        indexProgress.WriteVerbose($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                     }
                     catch (IndexExtractionStalledException)
                     {
@@ -2402,10 +2365,10 @@ public static partial class IndexCommandRunner
                             fileErrorList.Add(BuildIndexFileError(item.RelativePath, indexFilePhase, ex));
                         if (!options.Json)
                         {
-                            PauseIndexSpinnerForConsoleWrite();
+                            indexProgress.Pause();
                             ConsoleUi.ClearProgressLine();
                             ConsoleUi.TryWriteErrorLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
-                            ResumeIndexSpinnerAfterConsoleWrite();
+                            indexProgress.Resume();
                         }
                     }
                     finally
@@ -2422,9 +2385,9 @@ public static partial class IndexCommandRunner
                     ReportJsonIndexProgressIfNeeded();
                     if (!options.Json && !options.Quiet)
                     {
-                        PauseIndexSpinnerForConsoleWrite();
+                        indexProgress.Pause();
                         ConsoleUi.PrintProgress(processed, files.Count);
-                        ResumeIndexSpinnerAfterConsoleWrite();
+                        indexProgress.Resume();
                     }
                 }
                 Task.WaitAll(workers, cancellationToken);
@@ -2437,7 +2400,7 @@ public static partial class IndexCommandRunner
             }
         }
 
-        PauseIndexSpinnerForConsoleWrite();
+        indexProgress.Pause();
 
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("extraction", stopwatch));

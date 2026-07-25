@@ -168,9 +168,12 @@ public static partial class IndexCommandRunner
 
         if (!options.Json && !options.Quiet)
             CommandOutputWriter.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
-        CancellationTokenSource? updateCts = null;
-        var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
+        var updateProgress = new IndexProgressReporter(
+            options,
+            "Updating...",
+            spinnerFrames,
+            CommandErrorWriter.WriteStderr);
         var errorList = new List<CliJsonMessage>();
         var fileErrorList = new List<StatusIndexFileError>();
         var warningList = new List<CliJsonMessage>();
@@ -318,52 +321,11 @@ public static partial class IndexCommandRunner
 
                 if (!options.Json)
                 {
-                    PauseUpdateSpinnerForConsoleWrite();
+                    updateProgress.Pause();
                     ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
-                    ResumeUpdateSpinnerAfterConsoleWrite();
+                    updateProgress.Resume();
                 }
             }
-        }
-
-        void StartUpdateSpinnerIfNeeded()
-        {
-            if (!interactiveUpdateSpinner || updateCts != null)
-                return;
-
-            updateCts = ConsoleUi.StartSpinner("Updating...", spinnerFrames);
-        }
-
-        void PauseUpdateSpinnerForConsoleWrite()
-        {
-            if (updateCts == null)
-                return;
-
-            ConsoleUi.StopSpinner(updateCts);
-            updateCts = null;
-        }
-
-        void ResumeUpdateSpinnerAfterConsoleWrite()
-        {
-            if (!interactiveUpdateSpinner)
-                return;
-
-            StartUpdateSpinnerIfNeeded();
-        }
-
-        void WriteUpdateVerboseStatus(string message)
-        {
-            if (!options.Verbose || options.Quiet)
-                return;
-
-            if (options.Json)
-            {
-                CommandErrorWriter.WriteStderr(message);
-                return;
-            }
-
-            PauseUpdateSpinnerForConsoleWrite();
-            CommandOutputWriter.WriteLine(message);
-            ResumeUpdateSpinnerAfterConsoleWrite();
         }
 
         void RecordUpdateFileFailure(
@@ -381,10 +343,10 @@ public static partial class IndexCommandRunner
                 fileErrorList.Add(BuildIndexFileError(relativePath, phase, exception));
             if (!options.Json)
             {
-                PauseUpdateSpinnerForConsoleWrite();
+                updateProgress.Pause();
                 CommandErrorWriter.WriteStderr(
                     FormatPerFileErrorLine("ERR ", relativePath, exception, errorMessage));
-                ResumeUpdateSpinnerAfterConsoleWrite();
+                updateProgress.Resume();
             }
         }
 
@@ -393,7 +355,7 @@ public static partial class IndexCommandRunner
             if (!cancellationToken.IsCancellationRequested)
                 return;
 
-            PauseUpdateSpinnerForConsoleWrite();
+            updateProgress.Pause();
             throw new IndexInterruptedException(updated + removed, targetPaths.Count);
         }
 
@@ -1423,7 +1385,7 @@ public static partial class IndexCommandRunner
             ftsMutated = true;
             mutualRecursionRefreshNeeded = true;
             csharpMetadataTargetsNeedRefresh |= scopedCleanupHadCSharp;
-            WriteUpdateVerboseStatus(
+            updateProgress.WriteVerbose(
                 $"  [DEL ] purged {plannedPurged:N0} planned missing indexed path(s)");
         }
 
@@ -1444,7 +1406,7 @@ public static partial class IndexCommandRunner
             purgeTxn.Commit();
         }
 
-        StartUpdateSpinnerIfNeeded();
+        updateProgress.Start();
 
         var updateTargets = new UpdateFileTarget[targetPaths.Count];
         var updateTargetIndex = 0;
@@ -1476,7 +1438,7 @@ public static partial class IndexCommandRunner
             {
                 var target = updateTargets[targetIndex];
                 ThrowIfUpdateCancelled();
-                StartUpdateSpinnerIfNeeded();
+                updateProgress.Start();
                 var relPath = target.RelativePath;
                 currentUpdatePath = relPath;
                 currentUpdatePhase = "preparing";
@@ -1528,12 +1490,12 @@ public static partial class IndexCommandRunner
                             removed++;
                             ftsMutated = true;
                             mutualRecursionRefreshNeeded = true;
-                            WriteUpdateVerboseStatus($"  [DEL ] {relPath}");
+                            updateProgress.WriteVerbose($"  [DEL ] {relPath}");
                         }
                         else
                         {
                             skipped++;
-                            WriteUpdateVerboseStatus($"  [SKIP] {relPath} (not in DB)");
+                            updateProgress.WriteVerbose($"  [SKIP] {relPath} (not in DB)");
                         }
                         continue;
                     }
@@ -1547,9 +1509,9 @@ public static partial class IndexCommandRunner
                             skipped++;
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
-                                PauseUpdateSpinnerForConsoleWrite();
+                                updateProgress.Pause();
                                 CommandOutputWriter.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
+                                updateProgress.Resume();
                             }
                             continue;
                         }
@@ -1566,9 +1528,9 @@ public static partial class IndexCommandRunner
                             mutualRecursionRefreshNeeded = true;
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
-                                PauseUpdateSpinnerForConsoleWrite();
+                                updateProgress.Pause();
                                 CommandOutputWriter.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
+                                updateProgress.Resume();
                             }
                         }
                         else
@@ -1576,9 +1538,9 @@ public static partial class IndexCommandRunner
                             skipped++;
                             if (options.Verbose && !options.Json)
                             {
-                                PauseUpdateSpinnerForConsoleWrite();
+                                updateProgress.Pause();
                                 CommandOutputWriter.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
+                                updateProgress.Resume();
                             }
                         }
                         continue;
@@ -1616,9 +1578,9 @@ public static partial class IndexCommandRunner
                         warningList.Add(new CliJsonMessage(relPath, message));
                         if (!options.Json && !options.Quiet)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
+                            updateProgress.Pause();
                             ConsoleUi.PrintWarning(message);
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            updateProgress.Resume();
                         }
 
                         using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete missing during probe");
@@ -1657,12 +1619,12 @@ public static partial class IndexCommandRunner
                         }
                         if (!options.Json)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
+                            updateProgress.Pause();
                             if (options.Verbose)
                                 CommandErrorWriter.WriteStderr($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
                             else
                                 CommandErrorWriter.WriteStderr($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            updateProgress.Resume();
                         }
                         continue;
                     }
@@ -1687,9 +1649,9 @@ public static partial class IndexCommandRunner
                                 mutualRecursionRefreshNeeded = true;
                                 if (options.Verbose && !options.Json && !options.Quiet)
                                 {
-                                    PauseUpdateSpinnerForConsoleWrite();
+                                    updateProgress.Pause();
                                     CommandOutputWriter.WriteLine($"  [DEL ] {relPath} (unsupported renamed target)");
-                                    ResumeUpdateSpinnerAfterConsoleWrite();
+                                    updateProgress.Resume();
                                 }
                             }
                             else
@@ -1697,9 +1659,9 @@ public static partial class IndexCommandRunner
                                 skipped++;
                                 if (options.Verbose && !options.Json && !options.Quiet)
                                 {
-                                    PauseUpdateSpinnerForConsoleWrite();
+                                    updateProgress.Pause();
                                     CommandOutputWriter.WriteLine($"  [SKIP] {relPath} (unsupported type)");
-                                    ResumeUpdateSpinnerAfterConsoleWrite();
+                                    updateProgress.Resume();
                                 }
                             }
                             continue;
@@ -1717,9 +1679,9 @@ public static partial class IndexCommandRunner
                             mutualRecursionRefreshNeeded = true;
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
-                                PauseUpdateSpinnerForConsoleWrite();
+                                updateProgress.Pause();
                                 CommandOutputWriter.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
+                                updateProgress.Resume();
                             }
                         }
                         else
@@ -1727,9 +1689,9 @@ public static partial class IndexCommandRunner
                             skipped++;
                             if (options.Verbose && !options.Json)
                             {
-                                PauseUpdateSpinnerForConsoleWrite();
+                                updateProgress.Pause();
                                 CommandOutputWriter.WriteLine($"  [SKIP] {relPath} (unsupported type)");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
+                                updateProgress.Resume();
                             }
                         }
                         continue;
@@ -1744,9 +1706,9 @@ public static partial class IndexCommandRunner
                         warningList.Add(new CliJsonMessage(relPath, message));
                         if (!options.Json && !options.Quiet)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
+                            updateProgress.Pause();
                             ConsoleUi.PrintWarning($"{relPath}: {message}");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            updateProgress.Resume();
                         }
 
                         using var deleteTxn = writer.BeginTransaction();
@@ -1788,9 +1750,9 @@ public static partial class IndexCommandRunner
                         readableFileBytes.Remember(targetIndex, statMatchedFile.Value.Size);
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
+                            updateProgress.Pause();
                             CommandOutputWriter.WriteLine($"  [SKIP] {relPath} (unchanged)");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            updateProgress.Resume();
                         }
                         continue;
                     }
@@ -1835,9 +1797,9 @@ public static partial class IndexCommandRunner
 
                     if (warning != null && !options.Json && !options.Quiet)
                     {
-                        PauseUpdateSpinnerForConsoleWrite();
+                        updateProgress.Pause();
                         ConsoleUi.PrintWarning(warning);
-                        ResumeUpdateSpinnerAfterConsoleWrite();
+                        updateProgress.Resume();
                     }
 
                     var existingId = writer.GetReusableUnchangedFileId(
@@ -1876,11 +1838,11 @@ public static partial class IndexCommandRunner
                         skipped++;
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
+                            updateProgress.Pause();
                             CommandOutputWriter.WriteLine(purged > 0
                                 ? $"  [SKIP] {relPath} (unchanged; purged {purged:N0} stale renamed path(s))"
                                 : $"  [SKIP] {relPath} (unchanged)");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            updateProgress.Resume();
                         }
                         continue;
                     }
@@ -1930,7 +1892,7 @@ public static partial class IndexCommandRunner
                         RecordDynamicGraphFileRefresh(record.Lang);
                         updated++;
                         ftsMutated = true;
-                        WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, generated-code extraction skipped)");
+                        updateProgress.WriteVerbose($"  [OK  ] {relPath} ({chunks.Count} chunks, generated-code extraction skipped)");
                         continue;
                     }
                     currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
@@ -1978,7 +1940,7 @@ public static partial class IndexCommandRunner
                         RecordDynamicGraphFileRefresh(record.Lang);
                         updated++;
                         ftsMutated = true;
-                        WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
+                        updateProgress.WriteVerbose($"  [SKIP] {relPath} ({issue.Message})");
                         continue;
                     }
                     SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
@@ -1999,7 +1961,7 @@ public static partial class IndexCommandRunner
                         RecordDynamicGraphFileRefresh(record.Lang);
                         updated++;
                         ftsMutated = true;
-                        WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
+                        updateProgress.WriteVerbose($"  [SKIP] {relPath} ({issue.Message})");
                         continue;
                     }
                     writer.InsertChunks(chunks, cancellationToken);
@@ -2060,7 +2022,7 @@ public static partial class IndexCommandRunner
                         mutualRecursionRefreshNeeded = true;
                     UpdateFileCommittedForTesting?.Invoke(updated + removed, targetPaths.Count);
                     ThrowIfUpdateCancelled();
-                    WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                    updateProgress.WriteVerbose($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                 }
                 catch (IndexExtractionStalledException)
                 {
@@ -2105,9 +2067,9 @@ public static partial class IndexCommandRunner
                         warningList.Add(new CliJsonMessage(relPath, sanitizedMessage));
                         if (!options.Json && !options.Quiet)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
+                            updateProgress.Pause();
                             ConsoleUi.PrintWarning(sanitizedMessage);
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            updateProgress.Resume();
                         }
 
                         DemoteReadinessOnce();
@@ -2320,9 +2282,9 @@ public static partial class IndexCommandRunner
                         warningList.Add(new CliJsonMessage(relPath, message));
                         if (!options.Json && !options.Quiet)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
+                            updateProgress.Pause();
                             ConsoleUi.PrintWarning(message);
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            updateProgress.Resume();
                         }
 
                         if (writer.HasFileAtPath(dbPath))
@@ -2399,7 +2361,7 @@ public static partial class IndexCommandRunner
                     removed += purgedMissing;
                     ftsMutated = true;
                     mutualRecursionRefreshNeeded = true;
-                    WriteUpdateVerboseStatus(
+                    updateProgress.WriteVerbose(
                         $"  [DEL ] purged {purgedMissing:N0} missing indexed path(s) after --changed-between");
                 }
             }
@@ -2412,7 +2374,7 @@ public static partial class IndexCommandRunner
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfUpdateCancelled();
-        PauseUpdateSpinnerForConsoleWrite();
+        updateProgress.Pause();
 
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
             CommandOutputWriter.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
