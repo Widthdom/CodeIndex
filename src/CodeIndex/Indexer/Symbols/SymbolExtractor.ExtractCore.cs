@@ -40,96 +40,16 @@ public static partial class SymbolExtractor
             return preparedSymbols!;
         }
 
-        if (lang == "xml")
+        if (TryExtractSpecializedSymbols(
+            fileId,
+            lang,
+            content,
+            filePath,
+            projectRoot,
+            cancellationToken,
+            out var specializedSymbols))
         {
-            var xmlLines = SplitContentLines(content);
-            return ExtractXmlSymbols(fileId, content, xmlLines);
-        }
-
-        if (lang == "json")
-        {
-            return ExtractJsonSymbols(fileId, content, SplitContentLines(content));
-        }
-
-        if (lang == "jsonl")
-        {
-            return ExtractJsonLinesSymbols(fileId, content, SplitContentLines(content));
-        }
-
-        if (lang is "toml" or "gitignore" or "gitattributes" or "editorconfig" or "dockerignore" or "config")
-        {
-            return ExtractRepositoryMetadataSymbols(fileId, lang, SplitContentLines(content));
-        }
-
-        if (lang == "yaml")
-        {
-            return ExtractYamlSymbols(fileId, SplitContentLines(content));
-        }
-
-        if (lang == "msbuild")
-        {
-            return ExtractMsBuildSymbols(fileId, content, SplitContentLines(content));
-        }
-
-        if (lang == "solution")
-        {
-            return ExtractSolutionSymbols(fileId, SplitContentLines(content));
-        }
-
-        if (lang == "app_manifest")
-        {
-            return ExtractAppManifestSymbols(fileId, content, SplitContentLines(content));
-        }
-
-        if (lang is "dependency_manifest" or "dependency_lock")
-        {
-            return DependencyPackageExtractor.ExtractSymbols(fileId, content, SplitContentLines(content), filePath, lang);
-        }
-
-        if (lang == "ambiguous_m")
-        {
-            var matlabContent = AmbiguousMContentMasker.MaskComments(
-                content,
-                maskMatlabComments: true,
-                maskObjectiveCComments: true);
-            var objectiveCContent = AmbiguousMContentMasker.MaskComments(
-                content,
-                maskMatlabComments: true,
-                maskObjectiveCComments: true,
-                preserveObjectiveCModuloExpressions: true);
-            var matlabSymbols = ExtractCore(
-                fileId,
-                "matlab",
-                matlabContent,
-                contentIsNormalized: true,
-                hasOversizeLine: false,
-                conflictMarkerLine: 0,
-                filePath,
-                projectRoot,
-                patternConfigsAlreadyLoaded: true,
-                cancellationToken);
-            var objectiveCSymbols = ExtractCore(
-                fileId,
-                "objc",
-                objectiveCContent,
-                contentIsNormalized: true,
-                hasOversizeLine: false,
-                conflictMarkerLine: 0,
-                filePath,
-                projectRoot,
-                patternConfigsAlreadyLoaded: true,
-                cancellationToken);
-            matlabSymbols.AddRange(objectiveCSymbols);
-            return matlabSymbols;
-        }
-
-        if (lang == "markdown")
-        {
-            var markdownLines = SplitContentLines(content);
-            var markdownSymbols = ExtractMarkdownSymbols(fileId, markdownLines);
-            AssignContainers(markdownSymbols, markdownLines, null);
-            PopulateDeclaredContainerQualifiedNames(markdownSymbols);
-            return markdownSymbols;
+            return specializedSymbols;
         }
 
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
@@ -2158,123 +2078,30 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (lang == "javascript")
-            ExtractJavaScriptBareMethods(fileId, lines, symbols, getPrivateScopeColumns!, GetJavaScriptTypeScriptSanitizedLines);
-        else if (lang == "typescript")
-            ExtractTypeScriptBareMethods(fileId, lines, symbols, getPrivateScopeColumns!, GetJavaScriptTypeScriptSanitizedLines);
-        else if (lang == "csharp")
-            ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
-        else if (lang == "java")
-        {
-            ExtractJavaEnumMembers(fileId, lines, symbols);
-            ExtractJavaCompactConstructors(fileId, lines, symbols);
-            ExtractJavaModuleDirectiveSymbols(fileId, lines, structuralLines, symbols, extractionState);
-        }
-        else if (lang == "vb")
-            ExtractVisualBasicEnumMembers(fileId, lines, symbols);
-        if (lang == "cobol")
-            ExtractCobolParagraphSymbols(fileId, lines, symbols, extractionState);
-
-        if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
-            ExtractSvelteReactiveSymbols(fileId, lines, symbols);
-        if (lang == "rust")
-            ExtractRustUseSymbols(fileId, lines, symbols, extractionState);
-        if (lang == "rust")
-            ExtractRustMultilineImplSymbols(fileId, lines, symbols, extractionState);
-        if (lang == "rust")
-            ExtractRustAssociatedTypeDefaultSymbols(fileId, lines, structuralLines, symbols);
-        if (lang == "go")
-            ExtractGoGroupedDeclarations(fileId, lines, symbols, extractionState);
-        if (lang == "cpp")
-            ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
-        if (lang == "cpp")
-            ExtractCppBalancedCallableSymbols(fileId, lines, structuralLines, symbols, extractionState);
-        if (lang == "cpp")
-            ExtractCppFriendDeclarationSymbols(fileId, lines, symbols, extractionState);
-        if (lang is "verilog" or "systemverilog")
-            ExtractHdlInlineParameterSymbols(fileId, lines, symbols, extractionState);
-        if (string.Equals(NormalizePluginLanguage(originalLang), "cuda", StringComparison.Ordinal))
-            ClassifyCudaFunctionSubKinds(symbols);
-        if (lang == "python")
-            ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
-        if (lang == "python")
-            ExtractPythonClassAttributeSymbols(fileId, lines, symbols);
-        if (lang == "python")
-            ExtractPythonWalrusSymbols(fileId, lines, symbols);
-        if (lang == "perl")
-            ExtractPerlHashConstantSymbols(fileId, lines, symbols, extractionState);
-        if (lang == "php")
-            ExtractPhpAdditionalPropertySymbols(fileId, lines, symbols);
-        if (lang == "php")
-            ExtractPhpPromotedConstructorProperties(fileId, lines, symbols);
-        if (lang == "php")
-            ExtractPhpDocblockMethodSymbols(fileId, lines, symbols);
-        if (lang == "php")
-            ExtractPhpDocblockPropertySymbols(fileId, lines, symbols);
-        if (lang == "php")
-            ExtractPhpTraitAliasSymbols(fileId, lines, symbols);
-        if (lang == "php")
-            ExtractPhpDocblockTypeAliasSymbols(fileId, lines, symbols);
-        if (lang == "php")
-            ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
-        if (lang == "php")
-            ExtractPhpPropertyHookSupplementalSymbols(fileId, lines, structuralLines, symbols);
-        if (lang == "swift")
-            ExtractSwiftPropertySupplementalSymbols(fileId, lines, structuralLines, symbols);
-        if (lang == "sql")
-        {
-            var sqlSyntheticSymbolLines = MaskSqlSyntheticSymbolLines(lines);
-            ExtractSqlCteSymbols(fileId, content, lines, symbols, extractionState);
-            ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
-            ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
-            ExtractSqlGeneratedColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
-        }
-        if (lang == "graphql")
-            ExtractGraphQLMemberSymbols(fileId, content, lines, symbols);
-        if (lang is "csharp" or "python" or "javascript" or "typescript")
-            ExtractSectionHeadingSymbols(fileId, lang, lines, symbols);
-        if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
-            ExtractRazorDirectiveSymbols(fileId, lines, symbols);
-        if (prologMultilineHeads is { Count: > 0 })
-        {
-            AddPrologMultilineHeadSymbols(
-                fileId,
-                lines,
-                symbols,
-                extractionState,
-                prologMultilineHeads);
-        }
-        if (lang == "tcl")
-        {
-            DynamicDeclarativeReferenceExtractor.AddTclInlineProcSymbols(
-                fileId,
-                lines,
-                structuralLines,
-                symbols);
-        }
-        AssignContainers(symbols, lines, getCSharpLineStartStates);
-        if (lang is "shell" or "powershell")
-            AddScriptScopeSymbol(fileId, lines, symbols);
-        if (lang == "csharp")
-            NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
-        if (lang == "go")
-            AssignGoMethodReceiverContainers(symbols);
-        if (lang == "go")
-            ClassifyGoFunctionRoles(symbols, filePath);
-        MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
-        if (lang is "javascript" or "typescript")
-            ClassifyJavaScriptTypeScriptReactHooks(symbols);
-        if (lang == "scala")
-            ClassifyScalaCompanions(symbols);
-        KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);
-        if (lang == "shell")
-            ExpandShellAliasSymbols(fileId, lines, symbols, extractionState);
-        PopulateDeclaredContainerQualifiedNames(symbols);
-        if (lang == "nim")
-        {
-            foreach (var symbol in symbols)
-                symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
-        }
+        AddSupplementalSymbols(
+            fileId,
+            originalLang,
+            lang,
+            content,
+            filePath,
+            lines,
+            structuralLines,
+            symbols,
+            extractionState,
+            getPrivateScopeColumns,
+            GetJavaScriptTypeScriptSanitizedLines,
+            csharpMatchLines,
+            pythonModulePrefix,
+            prologMultilineHeads);
+        FinalizePatternSymbols(
+            fileId,
+            lang,
+            filePath,
+            lines,
+            symbols,
+            extractionState,
+            getCSharpLineStartStates,
+            pendingRecordPrimaryComponents);
         return symbols;
     }
 
