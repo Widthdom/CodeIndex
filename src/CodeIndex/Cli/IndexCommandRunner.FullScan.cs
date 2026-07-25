@@ -183,8 +183,6 @@ public static partial class IndexCommandRunner
         CancellationTokenSource? purgeCts = null;
         if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
-        var purged = 0;
-        var staleFilePurgePlan = FilePurgePlan.Empty;
         var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
         var priorCSharpStaticInterfaceSourceEvidence = options.Rebuild || startedWithNoIndexedFiles
             ? null
@@ -211,66 +209,24 @@ public static partial class IndexCommandRunner
             && typeScriptAugmentationVersionMatchesCurrent
                 ? writer.BeginTypeScriptAugmentationDirtyNameTracking(useScopedTypeScriptAugmentationRefresh)
                 : null;
-        var retainedPaths = startedWithNoIndexedFiles
-            ? null
-            : new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
-        IReadOnlyList<string> indexedJavaScriptTypeScriptConfigPathsBeforePurge = [];
-        if (!startedWithNoIndexedFiles)
-        {
-            foreach (var target in fileTargets)
-                retainedPaths!.Add(target.IndexPath);
-            indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
-        }
-        if (scanHadErrors)
-        {
-            if (!startedWithNoIndexedFiles)
-            {
-                retainedPaths!.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
-                var authoritativeDirectories = scanResult.ListedDirectories
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                var attributePrunedDirectories = scanResult.AttributePrunedDirectories
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-                var explicitlyRemovedPaths = scanResult.NonIndexablePaths
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                staleFilePurgePlan = writer.PlanFilesOutsideRetainedSetWithinListedDirectories(
-                    retainedPaths!,
-                    authoritativeDirectories,
-                    attributePrunedDirectories,
-                    explicitlyRemovedPaths,
-                    cancellationToken);
-                purged = staleFilePurgePlan.Count;
-            }
-        }
-        else
-        {
-            if (!startedWithNoIndexedFiles)
-                staleFilePurgePlan = writer.PlanFilesOutsideRetainedSet(retainedPaths!, cancellationToken);
-            purged = staleFilePurgePlan.Count;
-        }
-        if (deferCSharpMutationsForIncompleteScan && staleFilePurgePlan.Count > 0)
-        {
-            // A fatal discovery gap makes the C# workspace non-authoritative. Keep every
-            // prior row (including stale candidates) until a clean scan can rebuild implicit
-            // implementation references from one complete source snapshot.
-            // fatal discovery gap中はC# workspaceが不完全なため、clean scanまで既存rowを保持する。
-            staleFilePurgePlan = FilePurgePlan.Empty;
-            purged = 0;
-        }
-        var hadCSharpStaticInterfaceContractsBeforePurge = !options.SymbolsOnly
-            && !startedWithNoIndexedFiles
-            && staleFilePurgePlan.Count > 0
-            && writer.HasCSharpFilesInFileIds(staleFilePurgePlan.FileIds, cancellationToken)
-            && (priorCSharpStaticInterfaceSourceEvidence == true
-                || writer.HasCSharpStaticInterfaceContractMembersInFileIds(
-                    staleFilePurgePlan.FileIds,
-                    includeInterfaceDeclarationsAsConservativeEvidence:
-                        priorCSharpStaticInterfaceSourceEvidence == null
-                        || !priorFilterRetainedCSharpContractMembers,
-                    cancellationToken));
+        var purgePreparation = PlanFullScanStaleFiles(
+            writer,
+            scanResult,
+            fileTargets,
+            scanHadErrors,
+            startedWithNoIndexedFiles,
+            options.SymbolsOnly,
+            deferCSharpMutationsForIncompleteScan,
+            priorCSharpStaticInterfaceSourceEvidence,
+            priorFilterRetainedCSharpContractMembers,
+            cancellationToken);
+        var staleFilePurgePlan = purgePreparation.StaleFilePurgePlan;
+        var purged = purgePreparation.Purged;
+        var retainedPaths = purgePreparation.RetainedPaths;
+        var indexedJavaScriptTypeScriptConfigPathsBeforePurge =
+            purgePreparation.IndexedJavaScriptTypeScriptConfigPathsBeforePurge;
+        var hadCSharpStaticInterfaceContractsBeforePurge =
+            purgePreparation.HadCSharpStaticInterfaceContractsBeforePurge;
         ConsoleUi.StopSpinner(purgeCts);
         WriteFullScanJsonLiveness(options, purged > 0
             ? $"identified {purged:N0} stale file(s); preparing index writes..."
