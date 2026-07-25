@@ -2636,149 +2636,34 @@ public static partial class IndexCommandRunner
                 indexRunDiagnostics,
                 writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter));
         }
-        stopwatch.Stop();
-        var memoryTimeline = BuildMemoryTimeline(memorySamples);
-        WarnIfMemoryThresholdExceeded(memoryTimeline);
-        // Detect cwd drift between option-parsing and finalize. Paths used in this run are
-        // already absolute, but a drifted cwd is a strong signal that an embedded host or
-        // signal handler mutated process state -- surface it so the operator can correct
-        // their hosting code. Issue #1577.
-        var finalCwd = TryCaptureCurrentDirectory();
-        var cwdDriftNotice = BuildCwdDriftNotice(initialCwd, finalCwd);
-        var cwdDriftDetected = cwdDriftNotice != null;
-        if (cwdDriftDetected)
+        return WriteUpdateFinalOutput(new UpdateFinalOutputContext
         {
-            warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
-            warnings++;
-        }
-        warnings += AddPostExtractionHookWarnings(postExtractionHooks.ValueIfCreated, warningList);
-        var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
-        var signalReader = new DbReader(writer.Connection);
-        var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
-        var referenceGraphCompleteAfter = signalReader.IsReferenceGraphComplete(
-            referenceExtractionCapHitsAfter);
-        var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
-        var hdlGraphContractSignalAfter = signalReader.GetHdlGraphContractSignal(lang: null);
-        var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
-        var sqlGraphContractReadyAfter = sqlGraphContractSignalAfter.Ready;
-        var sqlGraphContractDegradedReasonAfter = sqlGraphContractSignalAfter.DegradedReason;
-        var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
-        var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
-
-        var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
-            graphTableAvailableAfter,
-            issuesTableAvailableAfter,
-            sqlGraphContractReadyAfter,
-            hotspotFamilyReadyAfter,
-            csharpSymbolNameReadyAfter,
-            csharpMetadataTargetReadyAfter,
-            foldReadyAfter,
-            foldReadyReasonAfter,
-            projectRoot,
-            resolvedDbPath);
-
-        if (options.Json)
-        {
-            CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexUpdateJsonResult
-            {
-                Status = errors > 0 ? "partial" : "success",
-                Mode = "update",
-                Summary = new IndexUpdateSummaryJsonResult
-                {
-                    FilesTotal = totalFiles,
-                    ChunksTotal = totalChunks,
-                    SymbolsTotal = totalSymbols,
-                    ReferencesTotal = totalReferences,
-                    Updated = updated,
-                    Removed = removed,
-                    Skipped = skipped,
-                    Warnings = warnings,
-                    Errors = errors,
-                    SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
-                    FtsOptimizeRan = false,
-                    FtsMergeRan = ftsMergeRan,
-                },
-                SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
-                GraphTableAvailable = graphTableAvailableAfter,
-                GraphDataCurrent = errors == 0
-                    && graphTableAvailableAfter
-                    && referenceGraphCompleteAfter
-                    && hdlGraphContractSignalAfter.Ready,
-                IndexComplete = errors == 0,
-                ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
-                ReferenceGraphComplete = referenceGraphCompleteAfter,
-                ReferenceExtractionCapHits = referenceExtractionCapHitsAfter,
-                ErrorCode = errors > 0 ? CommandErrorCodes.IndexPartial : null,
-                IssuesTableAvailable = issuesTableAvailableAfter,
-                SqlGraphContractReady = sqlGraphContractReadyAfter,
-                SqlGraphContractDegradedReason = sqlGraphContractDegradedReasonAfter,
-                HdlGraphContractReady = hdlGraphContractSignalAfter.Ready,
-                HdlGraphContractDegradedReason = hdlGraphContractSignalAfter.DegradedReason,
-                HotspotFamilyReady = hotspotFamilyReadyAfter,
-                HotspotFamilyDegradedReason = hotspotFamilyDegradedReasonAfter,
-                CSharpSymbolNameReady = csharpSymbolNameReadyAfter,
-                CSharpMetadataTargetReady = csharpMetadataTargetReadyAfter,
-                // #86 codex review: expose fold-readiness so AI clients can decide whether
-                // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
-                // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
-                FoldReady = foldReadyAfter,
-                FoldReadyReason = foldReadyAfter ? null : foldReadyReasonAfter,
-                DegradedReason = foldOnlyRemediation?.DegradedReason,
-                RecommendedAction = foldOnlyRemediation?.RecommendedAction,
-                AlternativeAction = foldOnlyRemediation?.AlternativeAction,
-                CwdDriftDetected = cwdDriftDetected,
-                CwdAtStart = initialCwd,
-                CwdAtFinalize = finalCwd,
-                CwdDriftNotice = cwdDriftNotice,
-                Errors = errorList.Count > 0 ? errorList : null,
-                FileErrors = fileErrorList.Count > 0 ? fileErrorList : null,
-                Warnings = warningList.Count > 0 ? warningList : null,
-                MemoryTimeline = memoryTimeline,
-                ElapsedMs = stopwatch.ElapsedMilliseconds,
-            }, jsonContext.IndexUpdateJsonResult));
-        }
-        else
-        {
-            CommandOutputWriter.WriteLine();
-            CommandOutputWriter.WriteLine();
-            CommandOutputWriter.WriteLine("Done.");
-            CommandOutputWriter.WriteLine();
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Files", $"{ConsoleUi.FormatNumber(totalFiles)} (total in DB)", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", ConsoleUi.FormatNumber(totalChunks), indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", ConsoleUi.FormatNumber(totalSymbols), indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Refs", ConsoleUi.FormatNumber(totalReferences), indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Updated", ConsoleUi.FormatNumber(updated), indent: "  "));
-            if (removed > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Removed", ConsoleUi.FormatNumber(removed), indent: "  "));
-            if (skipped > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", ConsoleUi.FormatNumber(skipped), indent: "  "));
-            if (warnings > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", ConsoleUi.FormatNumber(warnings), indent: "  "));
-            if (errors > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Errors", ConsoleUi.FormatNumber(errors), indent: "  "));
-            if (symbolsDroppedByKindFilter > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", ConsoleUi.FormatNumber(symbolsDroppedByKindFilter), indent: "  "));
-            if (ftsMergeRan) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("FTS merge", "completed", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Hotspots", hotspotFamilyReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# names", csharpSymbolNameReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# meta", csharpMetadataTargetReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Fold", foldReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat), indent: "  "));
-            CommandOutputWriter.WriteLine();
-            if (errors > 0)
-                ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
-            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
-            if (cwdDriftDetected)
-                ConsoleUi.PrintWarning(cwdDriftNotice!);
-        }
-
-        if (!options.Json && !options.Quiet && stopwatch.Elapsed >= TimeSpan.FromSeconds(5))
-            ConsoleUi.EmitCompletionNotification(
-                options.NotifyMode,
-                $"cdidx index update complete ({ConsoleUi.Counted(updated + removed + skipped, "file", format: "N0")})");
-
-        return errors > 0 && !options.AllowPartial
-            ? CommandExitCodes.PartialResult
-            : CommandExitCodes.Success;
+            Writer = writer,
+            Options = options,
+            Stopwatch = stopwatch,
+            JsonContext = jsonContext,
+            ProjectRoot = projectRoot,
+            ResolvedDbPath = resolvedDbPath,
+            InitialCwd = initialCwd,
+            MemorySamples = memorySamples,
+            PostExtractionHooks = postExtractionHooks.ValueIfCreated,
+            WarningList = warningList,
+            ErrorList = errorList,
+            FileErrorList = fileErrorList,
+            Warnings = warnings,
+            Errors = errors,
+            SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
+            GraphTableAvailableAfter = graphTableAvailableAfter,
+            IssuesTableAvailableAfter = issuesTableAvailableAfter,
+            CSharpSymbolNameReadyAfter = csharpSymbolNameReadyAfter,
+            CSharpMetadataTargetReadyAfter = csharpMetadataTargetReadyAfter,
+            FoldReadyAfter = foldReadyAfter,
+            FoldReadyReasonAfter = foldReadyReasonAfter,
+            Updated = updated,
+            Removed = removed,
+            Skipped = skipped,
+            FtsMergeRan = ftsMergeRan,
+        });
     }
 
     private sealed class CSharpWorkspaceChangedException(string message) : Exception(message);
