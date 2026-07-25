@@ -99,6 +99,8 @@ public static partial class ReferenceExtractor
         var csharpUsingAliases = loop.CSharpUsingAliases;
         var csharpUsingStatics = loop.CSharpUsingStatics;
         var dynamicDeclarativeState = loop.DynamicDeclarativeState;
+        Func<string, bool> isIgnoredCallName =
+            name => IsIgnoredCallName(language, name);
         var pendingCSharpMultiLineTypePattern =
             default(CSharpMultiLineTypePatternState);
         var pendingCSharpWhereConstraint = language == "csharp"
@@ -310,21 +312,6 @@ public static partial class ReferenceExtractor
                     container) ?? container;
             }
 
-            SymbolRecord? ResolvePythonDefinitionContainer(
-                int lineNumberCandidate,
-                string kind)
-            {
-                var pythonDefinitionContainersByLineAndKind =
-                    lookups.GetPythonDefinitionContainersByLineAndKind();
-                if (pythonDefinitionContainersByLineAndKind == null)
-                    return null;
-                return pythonDefinitionContainersByLineAndKind.TryGetValue(
-                    (lineNumberCandidate, kind),
-                    out var symbol)
-                    ? symbol
-                    : null;
-            }
-
             SymbolRecord? ResolveSwiftPropertyContainerForCall(int column)
             {
                 if (loop.SwiftPropertyDefinitionsByLine != null
@@ -356,7 +343,8 @@ public static partial class ReferenceExtractor
                 seen,
                 container,
                 definitionNames,
-                ResolveContainerForCall);
+                ResolveContainerForCall,
+                isIgnoredCallName);
 
             if (shaderState is not null)
             {
@@ -486,8 +474,7 @@ public static partial class ReferenceExtractor
             {
                 EmitPythonLineReferences(
                     lineContext,
-                    lookups,
-                    ResolvePythonDefinitionContainer);
+                    lookups);
             }
             if (language == "r")
                 EmitRLineReferences(lineContext);
@@ -546,48 +533,57 @@ public static partial class ReferenceExtractor
         var request = loop.Request;
         var input = loop.Preparation;
         var lineNumber = lineIndex + 1;
-        SymbolRecord? phpLineContainer = null;
-        var phpLineContainerResolved = false;
-
-        SymbolRecord? GetPhpLineContainer()
+        if (request.Language is "csharp" or "java" or "kotlin" or "r" or "php")
         {
-            if (!phpLineContainerResolved)
+            Func<SymbolRecord?>? getPhpLineContainer = null;
+            if (request.Language == "php")
             {
-                phpLineContainer =
-                    loop.ContainerResolver.Find(lineNumber);
-                phpLineContainerResolved = true;
+                SymbolRecord? phpLineContainer = null;
+                var phpLineContainerResolved = false;
+
+                SymbolRecord? GetPhpLineContainer()
+                {
+                    if (!phpLineContainerResolved)
+                    {
+                        phpLineContainer =
+                            loop.ContainerResolver.Find(lineNumber);
+                        phpLineContainerResolved = true;
+                    }
+
+                    return phpLineContainer;
+                }
+
+                getPhpLineContainer = GetPhpLineContainer;
             }
 
-            return phpLineContainer;
+            var documentationLine = new CoreDocumentationLineContext(
+                request.FileId,
+                request.Language,
+                input.Lines,
+                input.PreparedLines,
+                input.StructuralLines,
+                lineIndex,
+                lineNumber,
+                originalLine,
+                preparedLine,
+                loop.References,
+                loop.Seen,
+                loop.ContainerCandidates,
+                loop.ContainerResolver,
+                loop.Lookups,
+                input.CSharpLinesInsideMultilineStringContent,
+                input.CSharpLinesInsideBlockComment,
+                csharpAttributeRangesOnLine,
+                loop.CSharpAttributeRanges,
+                getPhpLineContainer);
+            EmitCoreDocumentationReferences(
+                documentationLine,
+                ref state.CSharpInDelimitedDocComment,
+                ref state.JvmInDelimitedDocComment,
+                ref state.PhpInDocblock,
+                ref state.PhpDocblockContainer,
+                ref state.PhpDocblockPropertyNames);
         }
-
-        var documentationLine = new CoreDocumentationLineContext(
-            request.FileId,
-            request.Language,
-            input.Lines,
-            input.PreparedLines,
-            input.StructuralLines,
-            lineIndex,
-            lineNumber,
-            originalLine,
-            preparedLine,
-            loop.References,
-            loop.Seen,
-            loop.ContainerCandidates,
-            loop.ContainerResolver,
-            loop.Lookups,
-            input.CSharpLinesInsideMultilineStringContent,
-            input.CSharpLinesInsideBlockComment,
-            csharpAttributeRangesOnLine,
-            loop.CSharpAttributeRanges,
-            GetPhpLineContainer);
-        EmitCoreDocumentationReferences(
-            documentationLine,
-            ref state.CSharpInDelimitedDocComment,
-            ref state.JvmInDelimitedDocComment,
-            ref state.PhpInDocblock,
-            ref state.PhpDocblockContainer,
-            ref state.PhpDocblockPropertyNames);
 
         sourceContext = originalLine.Trim();
         if (request.Language

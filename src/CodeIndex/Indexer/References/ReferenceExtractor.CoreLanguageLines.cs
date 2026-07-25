@@ -19,7 +19,8 @@ public static partial class ReferenceExtractor
         ReferenceDedupeSet Seen,
         SymbolRecord? Container,
         HashSet<string>? DefinitionNames,
-        Func<int, SymbolRecord?> ResolveContainerForCall);
+        Func<int, SymbolRecord?> ResolveContainerForCall,
+        Func<string, bool> IsIgnoredCallName);
 
     private static void EmitJavaScriptTaggedTemplateReferences(
         CoreReferenceLineContext line,
@@ -146,10 +147,34 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static void EmitPythonLineReferences(
+    private static Func<int, SymbolRecord?> CreatePythonDefinitionContainerResolver(
         CoreReferenceLineContext line,
         CoreExtractionLookups lookups,
-        Func<int, string, SymbolRecord?> resolvePythonDefinitionContainer)
+        SymbolRecord? headerContainer,
+        string definitionKind) =>
+        column =>
+        {
+            if (headerContainer != null)
+                return headerContainer;
+
+            var container = line.ResolveContainerForCall(column);
+            if (container != null)
+                return container;
+
+            var definitionContainers =
+                lookups.GetPythonDefinitionContainersByLineAndKind();
+            if (definitionContainers == null)
+                return null;
+            return definitionContainers.TryGetValue(
+                (line.LineNumber, definitionKind),
+                out var symbol)
+                ? symbol
+                : null;
+        };
+
+    private static void EmitPythonLineReferences(
+        CoreReferenceLineContext line,
+        CoreExtractionLookups lookups)
     {
 
         var pythonPreparedLine = line.PreparedLine;
@@ -177,6 +202,22 @@ public static partial class ReferenceExtractor
             }
         }
         var pythonHeaderContainer = pythonHeaderSymbol ?? line.Container;
+        var resolvePythonClassContainer =
+            pythonPreparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
+                ? CreatePythonDefinitionContainerResolver(
+                    line,
+                    lookups,
+                    pythonHeaderContainer,
+                    "class")
+                : line.ResolveContainerForCall;
+        var resolvePythonFunctionContainer =
+            pythonPreparedLine.IndexOf("def", StringComparison.Ordinal) >= 0
+                ? CreatePythonDefinitionContainerResolver(
+                    line,
+                    lookups,
+                    pythonHeaderContainer,
+                    "function")
+                : line.ResolveContainerForCall;
 
         var pythonReferenceStart = line.References.Count;
         PythonReferenceExtractor.EmitDecoratorReferences(
@@ -188,7 +229,7 @@ public static partial class ReferenceExtractor
             line.LineNumber,
             line.Container,
             line.DefinitionNames,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitRaiseReferences(
             line.PreparedLine,
             line.References,
@@ -197,7 +238,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitExceptReferences(
             line.PreparedLine,
             line.References,
@@ -206,7 +247,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitIsInstanceReferences(
             line.PreparedLine,
             line.References,
@@ -215,7 +256,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitIsSubclassReferences(
             line.PreparedLine,
             line.References,
@@ -224,7 +265,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitCastReferences(
             line.PreparedLine,
             line.References,
@@ -233,7 +274,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitAssertTypeReferences(
             line.PreparedLine,
             line.References,
@@ -242,7 +283,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitClassBaseReferences(
             pythonPreparedLine,
             line.References,
@@ -251,8 +292,8 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             pythonHeaderContainer,
-            index => pythonHeaderContainer ?? line.ResolveContainerForCall(index) ?? resolvePythonDefinitionContainer(line.LineNumber, "class"),
-            name => IsIgnoredCallName(line.Language, name));
+            resolvePythonClassContainer,
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitFunctionReturnReferences(
             pythonPreparedLine,
             line.References,
@@ -261,8 +302,8 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             pythonHeaderContainer,
-            index => pythonHeaderContainer ?? line.ResolveContainerForCall(index) ?? resolvePythonDefinitionContainer(line.LineNumber, "function"),
-            name => IsIgnoredCallName(line.Language, name));
+            resolvePythonFunctionContainer,
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitFunctionParameterReferences(
             pythonPreparedLine,
             line.References,
@@ -271,8 +312,8 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             pythonHeaderContainer,
-            index => pythonHeaderContainer ?? line.ResolveContainerForCall(index) ?? resolvePythonDefinitionContainer(line.LineNumber, "function"),
-            name => IsIgnoredCallName(line.Language, name));
+            resolvePythonFunctionContainer,
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitVariableAnnotationReferences(
             line.PreparedLine,
             line.References,
@@ -281,7 +322,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitTypeAliasReferences(
             line.PreparedLine,
             line.References,
@@ -290,7 +331,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitNewTypeReferences(
             line.PreparedLine,
             line.References,
@@ -299,7 +340,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         var pythonTypeFactoryReferenceStart = line.References.Count;
         PythonReferenceExtractor.EmitTypeVarBoundReferences(
             pythonTypeFactoryLine,
@@ -309,7 +350,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitTypeVarConstraintReferences(
             pythonTypeFactoryLine,
             line.References,
@@ -318,7 +359,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitGetTypeHintsReferences(
             line.PreparedLine,
             line.References,
@@ -327,7 +368,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitDataclassesFieldsReferences(
             line.PreparedLine,
             line.References,
@@ -336,7 +377,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitDataclassFieldReferences(
             line.PreparedLines,
             line.Lines,
@@ -345,7 +386,7 @@ public static partial class ReferenceExtractor
             line.Seen,
             line.FileId,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitAttrsFieldsReferences(
             line.PreparedLine,
             line.References,
@@ -354,7 +395,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitPydanticTypeAdapterReferences(
             line.PreparedLine,
             line.References,
@@ -363,7 +404,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitPytestRaisesReferences(
             line.PreparedLine,
             line.References,
@@ -372,7 +413,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
         PythonReferenceExtractor.EmitContextlibSuppressReferences(
             line.PreparedLine,
             line.References,
@@ -381,7 +422,7 @@ public static partial class ReferenceExtractor
             line.Context,
             line.LineNumber,
             line.Container,
-            name => IsIgnoredCallName(line.Language, name));
+            line.IsIgnoredCallName);
 
         if (pythonTypeFactoryMap.HasValue)
             RemapPythonLogicalHeaderReferences(line.References, pythonTypeFactoryReferenceStart, pythonTypeFactoryMap.Value, line.Lines);

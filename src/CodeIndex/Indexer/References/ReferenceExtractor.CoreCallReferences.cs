@@ -22,9 +22,64 @@ public static partial class ReferenceExtractor
         HashSet<(int LineNumber, int ColumnIndex)>? SqlWindowFunctionCallSiteSuppressions,
         CoreLineDefinitionState Definitions);
 
+    private static Action<string, int> CreateCallLikeReferenceEmitter(
+        CoreCallReferenceContext call) =>
+        (name, callIndex) =>
+        {
+            var line = call.Line;
+            _ = TryAddCoreCallLikeReference(
+                call,
+                name,
+                callIndex,
+                ScientificNativeReferenceExtractor.Supports(line.Language)
+                    ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
+                        line.Language,
+                        line.PreparedLine,
+                        callIndex)
+                    : null);
+        };
+
+    private static Action<string, int> CreatePowerShellParameterReferenceEmitter(
+        CoreReferenceLineContext line) =>
+        (name, callIndex) =>
+        {
+            var callContainer = line.ResolveContainerForCall(callIndex);
+            AddReference(
+                line.References,
+                line.Seen,
+                line.FileId,
+                name,
+                callIndex,
+                "parameter",
+                line.Context,
+                line.LineNumber,
+                callContainer,
+                line.Language);
+        };
+
+    private static Action<string, int> CreateGradleDslReferenceEmitter(
+        CoreReferenceLineContext line) =>
+        (name, callIndex) =>
+        {
+            var normalizedName = NormalizeAtPrefixedIdentifier(name);
+            var callContainer = line.ResolveContainerForCall(callIndex);
+            AddReference(
+                line.References,
+                line.Seen,
+                line.FileId,
+                normalizedName,
+                callIndex,
+                "call",
+                line.Context,
+                line.LineNumber,
+                callContainer,
+                line.Language);
+        };
+
     private static void EmitCoreCallReferences(CoreCallReferenceContext call)
     {
         var line = call.Line;
+        Action<string, int>? addCallLikeReference = null;
         if (line.Language is "javascript" or "typescript")
         {
             JavaScriptReferenceExtractor.EmitOptionalMemberChainReferences(
@@ -58,33 +113,6 @@ public static partial class ReferenceExtractor
                 line.ResolveContainerForCall);
         }
 
-        void AddCallLikeReference(string name, int callIndex) =>
-            _ = TryAddCallLikeReference(
-                name,
-                callIndex,
-                ScientificNativeReferenceExtractor.Supports(line.Language)
-                    ? ScientificNativeReferenceExtractor.GetParenthesizedCallTargetQualifier(
-                        line.Language,
-                        line.PreparedLine,
-                        callIndex)
-                    : null);
-
-        void AddPowerShellParameterReference(string name, int callIndex)
-        {
-            var callContainer = line.ResolveContainerForCall(callIndex);
-            AddReference(line.References, line.Seen, line.FileId, name, callIndex, "parameter", line.Context, line.LineNumber, callContainer, line.Language);
-        }
-
-        bool TryAddCallLikeReference(
-            string name,
-            int callIndex,
-            string? targetQualifier = null) =>
-            TryAddCoreCallLikeReference(
-                call,
-                name,
-                callIndex,
-                targetQualifier);
-
         if (line.Language is "batch")
             BatchReferenceExtractor.EmitJumpTargetReferences(
                 line.OriginalLine,
@@ -107,7 +135,6 @@ public static partial class ReferenceExtractor
                 line.ResolveContainerForCall);
 
         HashSet<int>? matchedCallIndices = null;
-        HashSet<int> GetMatchedCallIndices() => matchedCallIndices ??= [];
         var callScanLine = call.DynamicDeclarativeState?.GetCallScanLine(
             line.Language,
             line.LineNumber,
@@ -128,12 +155,14 @@ public static partial class ReferenceExtractor
         }
         else if (line.Language is "powershell")
         {
-            PowerShellReferenceExtractor.EmitCallReferences(line.PreparedLine, AddCallLikeReference);
+            PowerShellReferenceExtractor.EmitCallReferences(
+                line.PreparedLine,
+                addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
             PowerShellReferenceExtractor.EmitSplatParameterReferences(
                 line.PreparedLine,
                 call.Lookups.GetPowerShellSplatAssignments,
                 line.LineNumber,
-                AddPowerShellParameterReference);
+                CreatePowerShellParameterReferenceEmitter(line));
         }
         else if (line.Language is "shell")
         {
@@ -148,7 +177,7 @@ public static partial class ReferenceExtractor
                 call.ShellCallableNames,
                 call.ShellGlobalAliasNames,
                 line.ResolveContainerForCall,
-                AddCallLikeReference);
+                addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
         }
         else if (line.Language is "assembly")
         {
@@ -170,7 +199,7 @@ public static partial class ReferenceExtractor
                     line.Context,
                     line.LineNumber,
                     line.ResolveContainerForCall,
-                    AddCallLikeReference,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
                     call.ScientificNativeDependencyLimit,
                     call.ReportDiagnostic);
             }
@@ -218,8 +247,9 @@ public static partial class ReferenceExtractor
                     {
                         continue;
                     }
-                    GetMatchedCallIndices().Add(callIndex);
-                    if (TryAddCallLikeReference(
+                    (matchedCallIndices ??= []).Add(callIndex);
+                    if (TryAddCoreCallLikeReference(
+                            call,
                             name,
                             callIndex,
                             ScientificNativeReferenceExtractor.Supports(line.Language)
@@ -265,8 +295,8 @@ public static partial class ReferenceExtractor
                     line.Context,
                     line.LineNumber,
                     line.ResolveContainerForCall,
-                    GetMatchedCallIndices(),
-                    AddCallLikeReference);
+                    matchedCallIndices ??= [],
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
             }
             else if (line.Language is "perl" or "ambiguous_pl")
             {
@@ -279,7 +309,7 @@ public static partial class ReferenceExtractor
                     line.Context,
                     line.LineNumber,
                     line.ResolveContainerForCall,
-                    AddCallLikeReference,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
                     emitArrowCallReferences: line.Language != "ambiguous_pl"
                         || call.DynamicDeclarativeState?.HasPrologContainer(line.LineNumber) != true);
             }
@@ -297,36 +327,42 @@ public static partial class ReferenceExtractor
                     line.Context,
                     line.LineNumber,
                     line.ResolveContainerForCall,
-                    AddCallLikeReference);
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
             }
 
             if (line.Language == "go")
-                LanguageReferenceExtractionSupport.EmitGoBranchLabelReferences(line.PreparedLine, AddCallLikeReference);
+                LanguageReferenceExtractionSupport.EmitGoBranchLabelReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
 
             if (line.Language == "swift")
-                SwiftReferenceExtractor.EmitTrailingClosureReferences(line.PreparedLine, AddCallLikeReference);
+                SwiftReferenceExtractor.EmitTrailingClosureReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
             else if (line.Language == "kotlin")
             {
                 KotlinReferenceExtractor.EmitInfixCallReferences(
                     line.PreparedLine,
                     line.OriginalLine,
                     call.KotlinInfixFunctionNames!,
-                    AddCallLikeReference);
-                KotlinReferenceExtractor.EmitTrailingLambdaReferences(line.PreparedLine, AddCallLikeReference);
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
+                KotlinReferenceExtractor.EmitTrailingLambdaReferences(
+                    line.PreparedLine,
+                    addCallLikeReference);
             }
 
             if (line.Language == "fsharp")
             {
                 FSharpReferenceExtractor.EmitAdditionalCallReferences(
                     line.PreparedLine,
-                    AddCallLikeReference);
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
             }
 
             if (line.Language == "scala")
             {
                 ScalaReferenceExtractor.EmitTrailingBlockCallReferences(
                     line.PreparedLine,
-                    AddCallLikeReference);
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
                 ScalaReferenceExtractor.EmitAdditionalReferences(
                     line.PreparedLine,
                     line.References,
@@ -335,42 +371,66 @@ public static partial class ReferenceExtractor
                     line.Context,
                     line.LineNumber,
                     line.ResolveContainerForCall,
-                    AddCallLikeReference);
+                    addCallLikeReference);
             }
             else if (line.Language == "gradle")
             {
-                void AddGradleDslReference(string name, int callIndex)
-                {
-                    var normalizedName = NormalizeAtPrefixedIdentifier(name);
-                    var callContainer = line.ResolveContainerForCall(callIndex);
-                    AddReference(line.References, line.Seen, line.FileId, normalizedName, callIndex, "call", line.Context, line.LineNumber, callContainer, line.Language);
-                }
-
                 GradleReferenceExtractor.EmitDslCallReferences(
                     line.PreparedLine,
-                    AddGradleDslReference);
+                    CreateGradleDslReferenceEmitter(line));
             }
 
             if (line.Language == "fortran")
-                FortranReferenceExtractor.EmitAdditionalCallReferences(line.PreparedLine, AddCallLikeReference);
+                FortranReferenceExtractor.EmitAdditionalCallReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
             else if (line.Language == "pascal")
-                PascalReferenceExtractor.EmitAdditionalCallReferences(line.PreparedLine, AddCallLikeReference, line.DefinitionNames);
+                PascalReferenceExtractor.EmitAdditionalCallReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.DefinitionNames);
             else if (line.Language == "objc")
-                ObjectiveCReferenceExtractor.EmitAdditionalCallReferences(line.PreparedLine, AddCallLikeReference, line.References, line.Seen, line.FileId, line.Context, line.LineNumber, line.ResolveContainerForCall);
+                ObjectiveCReferenceExtractor.EmitAdditionalCallReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.References,
+                    line.Seen,
+                    line.FileId,
+                    line.Context,
+                    line.LineNumber,
+                    line.ResolveContainerForCall);
             else if (line.Language == "haskell")
-                HaskellReferenceExtractor.EmitAdditionalCallReferences(line.PreparedLine, AddCallLikeReference, line.DefinitionNames);
+                HaskellReferenceExtractor.EmitAdditionalCallReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.DefinitionNames);
             else if (line.Language == "elixir")
-                ElixirReferenceExtractor.EmitAdditionalCallReferences(line.PreparedLine, AddCallLikeReference, line.DefinitionNames);
+                ElixirReferenceExtractor.EmitAdditionalCallReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.DefinitionNames);
             else if (line.Language == "lua")
-                LuaReferenceExtractor.EmitAdditionalCallReferences(line.PreparedLine, AddCallLikeReference, line.References, line.Seen, line.FileId, line.Context, line.LineNumber, line.ResolveContainerForCall, line.DefinitionNames);
+                LuaReferenceExtractor.EmitAdditionalCallReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.References,
+                    line.Seen,
+                    line.FileId,
+                    line.Context,
+                    line.LineNumber,
+                    line.ResolveContainerForCall,
+                    line.DefinitionNames);
             else if (line.Language == "smalltalk")
-                SmalltalkReferenceExtractor.EmitAdditionalCallReferences(line.PreparedLine, AddCallLikeReference, line.DefinitionNames);
+                SmalltalkReferenceExtractor.EmitAdditionalCallReferences(
+                    line.PreparedLine,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.DefinitionNames);
             else if (line.Language == "vb")
                 LanguageReferenceExtractionSupport.EmitAdditionalCallReferences(
                     "vb",
                     line.PreparedLine,
                     line.OriginalLine,
-                    AddCallLikeReference,
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
                     line.References,
                     line.Seen,
                     line.FileId,
@@ -390,7 +450,10 @@ public static partial class ReferenceExtractor
             {
                 foreach (var candidate in EnumerateNestedGenericCallCandidates(line.PreparedLine, matchedCallIndices ?? EmptyMatchedIndices))
                 {
-                    if (TryAddCallLikeReference(candidate.Name, candidate.NameIndex))
+                    if (TryAddCoreCallLikeReference(
+                            call,
+                            candidate.Name,
+                            candidate.NameIndex))
                     {
                         EmitGenericInvocationTypeArgumentReferences(
                             line.Language,
@@ -411,7 +474,7 @@ public static partial class ReferenceExtractor
         {
             RustReferenceExtractor.EmitAdditionalCallReferences(
                 line.PreparedLine,
-                AddCallLikeReference);
+                addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
             RustReferenceExtractor.EmitAttributeReferences(
                 line.PreparedLine,
                 line.References,

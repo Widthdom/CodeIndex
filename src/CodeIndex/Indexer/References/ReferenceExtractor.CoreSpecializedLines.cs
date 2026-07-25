@@ -145,7 +145,7 @@ public static partial class ReferenceExtractor
             line.FileId,
             sqlState!,
             line.ResolveContainerForCall,
-            name => IsIgnoredCallName(line.Language, name),
+            line.IsIgnoredCallName,
             (resolvedName, callIndex) =>
                 definitionState.ShouldSuppressDefinitionCall(
                     resolvedName,

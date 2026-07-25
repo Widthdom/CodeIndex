@@ -23,7 +23,7 @@ public static partial class ReferenceExtractor
         bool[]? CSharpLinesInsideBlockComment,
         List<(int start, int end)>? CSharpAttributeRangesOnLine,
         List<(int start, int end)>?[]? CSharpAttributeRanges,
-        Func<SymbolRecord?> GetPhpLineContainer);
+        Func<SymbolRecord?>? GetPhpLineContainer);
 
     private static void EmitCoreDocumentationReferences(
         CoreDocumentationLineContext line,
@@ -158,7 +158,7 @@ public static partial class ReferenceExtractor
                 line.Seen,
                 line.FileId,
                 line.LineNumber,
-                line.GetPhpLineContainer,
+                line.GetPhpLineContainer!,
                 ref phpInDocblock,
                 ref phpDocblockContainer,
                 ref phpDocblockPropertyNames);
