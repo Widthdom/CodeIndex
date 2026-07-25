@@ -618,26 +618,6 @@ public static partial class IndexCommandRunner
 
         Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? csharpWorkspaceFileSnapshots = null;
 
-        string FormatCSharpWorkspaceSnapshotPath(string? path)
-        {
-            if (string.IsNullOrWhiteSpace(path) || path == "<csharp_workspace>")
-                return "<csharp_workspace>";
-            if (!Path.IsPathRooted(path))
-                return FileIndexer.NormalizePathSeparators(path);
-            try
-            {
-                return FileIndexer.NormalizePathSeparators(
-                    FileIndexer.GetRelativePathFromDirectory(projectRoot, path));
-            }
-            catch (Exception ex) when (ex is IOException
-                                       or UnauthorizedAccessException
-                                       or NotSupportedException
-                                       or ArgumentException)
-            {
-                return "<csharp_workspace>";
-            }
-        }
-
         CSharpStaticInterfaceWorkspaceSymbols BuildStableCSharpWorkspace(
             Func<CSharpStaticInterfaceWorkspaceSymbols> buildWorkspace)
         {
@@ -657,7 +637,7 @@ public static partial class IndexCommandRunner
                     SourceContractEvidenceComplete: false,
                     IncompleteSourcePaths:
                     [
-                        FormatCSharpWorkspaceSnapshotPath(failedFilePath)
+                        FormatCSharpWorkspaceSnapshotPath(projectRoot, failedFilePath)
                     ]);
             }
 
@@ -677,7 +657,7 @@ public static partial class IndexCommandRunner
                 {
                     HasStaticInterfaceContracts = true,
                     SourceContractEvidenceComplete = false,
-                    IncompleteSourcePaths = [FormatCSharpWorkspaceSnapshotPath(incompletePath)],
+                    IncompleteSourcePaths = [FormatCSharpWorkspaceSnapshotPath(projectRoot, incompletePath)],
                 };
             }
 
@@ -800,7 +780,7 @@ public static partial class IndexCommandRunner
 
         void DeferCSharpMutationsForLoadedSnapshotDrift(string path)
         {
-            path = FormatCSharpWorkspaceSnapshotPath(path);
+            path = FormatCSharpWorkspaceSnapshotPath(projectRoot, path);
             deferCSharpMutationsForIncompleteScan = true;
             preservePriorPositiveCSharpSourceNoOp = false;
             csharpSourceEvidenceForStamp = false;
@@ -1256,115 +1236,6 @@ public static partial class IndexCommandRunner
             }
         }
 
-        int ReturnBeforeWriteSnapshotFailure(string changedPath)
-        {
-            var formattedPath = FormatCSharpWorkspaceSnapshotPath(changedPath);
-            var exception = new IOException(
-                "Directory entries or scan configuration changed after source discovery; rerun indexing from a stable workspace snapshot.");
-            errors++;
-            errorList.Add(new CliJsonMessage(formattedPath, FormatIndexFileException(exception)));
-            if (fileErrorList.Count < PartialIndexFileErrorLimit)
-                fileErrorList.Add(BuildIndexFileError(formattedPath, "csharp_workspace_validation", exception));
-
-            stopwatch.Stop();
-            var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
-            var graphTableAvailable = (priorReadiness & DbContext.GraphReadyFlag) != 0;
-            var issuesTableAvailable = (priorReadiness & DbContext.IssuesReadyFlag) != 0;
-            var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(issuesTableAvailable);
-            // The connection is writable, but failure diagnostics must not trigger the
-            // DbReader constructor's interrupted-FTS recovery before the write barrier.
-            using var signalReader = new DbReader(writer.Connection, isReadOnly: true);
-            var discoveredCSharpFiles = languageCounts.ContainsKey("csharp");
-            var discoveredSqlFiles = languageCounts.ContainsKey("sql");
-            var persistedCSharpFiles = writer.HasAnyFilesWithLanguage("csharp");
-            var persistedSqlFiles = writer.HasAnyFilesWithLanguage("sql");
-            var hasCSharpFiles = discoveredCSharpFiles || persistedCSharpFiles;
-            var hasSqlFiles = discoveredSqlFiles || persistedSqlFiles;
-            var sqlGraphContractSignal = signalReader.GetSqlGraphContractSignal(lang: null);
-            if (!hasSqlFiles)
-            {
-                sqlGraphContractSignal = new SqlGraphContractSignal(
-                    Ready: true,
-                    Relevant: false,
-                    DegradedReason: null);
-            }
-            else if (!sqlGraphContractSignal.Relevant)
-            {
-                // The write barrier can fail after discovery but before the first target is
-                // persisted. Keep positive language evidence in the immediate response.
-                // write 前 barrier failure でも発見済み language の degraded signal を保持する。
-                sqlGraphContractSignal = new SqlGraphContractSignal(
-                    Ready: false,
-                    Relevant: true,
-                    DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason());
-            }
-            var hotspotFamilySignal = signalReader.GetHotspotFamilySignal(lang: null);
-            var csharpSymbolNameReady = !hasCSharpFiles
-                || (persistedCSharpFiles && csharpSymbolNameContractMatchesCurrent);
-            var csharpMetadataTargetReady = !hasCSharpFiles
-                || (persistedCSharpFiles && priorMetadataTargetCsharpMatchesCurrent);
-            var foldReady = (priorReadiness & DbContext.FoldReadyFlag) != 0;
-            var memoryTimeline = BuildMemoryTimeline(memorySamples);
-
-            if (options.Json)
-            {
-                CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexFullScanJsonResult
-                {
-                    Status = "partial",
-                    Mode = options.Rebuild ? "rebuild" : "incremental",
-                    Summary = new IndexFullScanSummaryJsonResult
-                    {
-                        FilesTotal = totalFiles,
-                        ChunksTotal = totalChunks,
-                        SymbolsTotal = totalSymbols,
-                        ReferencesTotal = totalReferences,
-                        FilesScanned = files.Count,
-                        FilesSkipped = skipped,
-                        FilesPurged = 0,
-                        DanglingSymlinksSkipped = scanResult.DanglingSymlinks.Count,
-                        Warnings = warnings,
-                        Errors = errors,
-                        SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
-                    },
-                    SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
-                    GraphTableAvailable = graphTableAvailable,
-                    GraphDataCurrent = false,
-                    IndexComplete = false,
-                    ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
-                    ReferenceGraphComplete = signalReader.IsReferenceGraphComplete(
-                        referenceExtractionCapHits),
-                    ReferenceExtractionCapHits = referenceExtractionCapHits,
-                    ErrorCode = CommandErrorCodes.IndexPartial,
-                    IssuesTableAvailable = issuesTableAvailable,
-                    SqlGraphContractReady = sqlGraphContractSignal.Ready,
-                    SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
-                    HotspotFamilyReady = hotspotFamilySignal.Ready,
-                    HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
-                    CSharpSymbolNameReady = csharpSymbolNameReady,
-                    CSharpMetadataTargetReady = csharpMetadataTargetReady,
-                    FoldReady = foldReady,
-                    FoldReadyReason = foldReady ? null : GetFoldReadyReason(
-                        backfillReady: false,
-                        priorFoldVersion == NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        priorFoldFingerprint == NameFold.Fingerprint()),
-                    Errors = errorList,
-                    FileErrors = fileErrorList,
-                    Warnings = warningList.Count > 0 ? warningList : null,
-                    MemoryTimeline = memoryTimeline,
-                    ElapsedMs = stopwatch.ElapsedMilliseconds,
-                }, jsonContext.IndexFullScanJsonResult));
-            }
-            else if (!options.Quiet)
-            {
-                ConsoleUi.TryWriteErrorLine(
-                    $"Indexing stopped before index-data mutation because the scan snapshot changed: {formattedPath}");
-            }
-
-            return options.AllowPartial
-                ? CommandExitCodes.Success
-                : CommandExitCodes.PartialResult;
-        }
-
         if (discovery.InputSnapshot != null)
         {
             FullScanInputSnapshotBarrierForTesting?.Invoke("before_write");
@@ -1373,7 +1244,32 @@ public static partial class IndexCommandRunner
                     out var changedScanInputPath,
                     cancellationToken))
             {
-                return ReturnBeforeWriteSnapshotFailure(changedScanInputPath);
+                return WriteFullScanSnapshotFailure(
+                    changedScanInputPath,
+                    new FullScanSnapshotFailureContext
+                    {
+                        Writer = writer,
+                        Options = options,
+                        Stopwatch = stopwatch,
+                        JsonContext = jsonContext,
+                        ProjectRoot = projectRoot,
+                        PriorReadiness = priorReadiness,
+                        CSharpSymbolNameContractMatchesCurrent = csharpSymbolNameContractMatchesCurrent,
+                        PriorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharpMatchesCurrent,
+                        PriorFoldVersion = priorFoldVersion,
+                        PriorFoldFingerprint = priorFoldFingerprint,
+                        MemorySamples = memorySamples,
+                        LanguageCounts = languageCounts,
+                        FilesCount = files.Count,
+                        Skipped = skipped,
+                        DanglingSymlinkCount = scanResult.DanglingSymlinks.Count,
+                        Warnings = warnings,
+                        Errors = errors,
+                        SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
+                        ErrorList = errorList,
+                        FileErrorList = fileErrorList,
+                        WarningList = warningList,
+                    });
             }
         }
 
@@ -1388,7 +1284,7 @@ public static partial class IndexCommandRunner
                     cancellationToken);
             if (!stableFiles)
             {
-                var driftPath = FormatCSharpWorkspaceSnapshotPath(changedFilePath);
+                var driftPath = FormatCSharpWorkspaceSnapshotPath(projectRoot, changedFilePath);
                 var incompleteWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
                     [],
                     HasStaticInterfaceContracts: true,
@@ -1637,7 +1533,7 @@ public static partial class IndexCommandRunner
                                             displayRelativePath,
                                             "csharp_workspace_validation",
                                             new CSharpWorkspaceSnapshotDriftException(
-                                                FormatCSharpWorkspaceSnapshotPath(changedPath))),
+                                                FormatCSharpWorkspaceSnapshotPath(projectRoot, changedPath))),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1825,7 +1721,7 @@ public static partial class IndexCommandRunner
                                             displayRelativePath,
                                             "csharp_workspace_validation",
                                             new CSharpWorkspaceSnapshotDriftException(
-                                                FormatCSharpWorkspaceSnapshotPath(changedPath))),
+                                                FormatCSharpWorkspaceSnapshotPath(projectRoot, changedPath))),
                                         extractionCancellationToken);
                                     continue;
                                 }
@@ -1859,7 +1755,7 @@ public static partial class IndexCommandRunner
                                             displayRelativePath,
                                             "csharp_workspace_validation",
                                             new CSharpWorkspaceSnapshotDriftException(
-                                                FormatCSharpWorkspaceSnapshotPath(changedPath))),
+                                                FormatCSharpWorkspaceSnapshotPath(projectRoot, changedPath))),
                                         extractionCancellationToken);
                                     continue;
                                 }

@@ -489,26 +489,6 @@ public static partial class IndexCommandRunner
                 cancellationToken);
         }
 
-        string FormatCSharpWorkspaceSnapshotPath(string? path)
-        {
-            if (string.IsNullOrWhiteSpace(path) || path == "<csharp_workspace>")
-                return "<csharp_workspace>";
-            if (!Path.IsPathRooted(path))
-                return FileIndexer.NormalizePathSeparators(path);
-            try
-            {
-                return FileIndexer.NormalizePathSeparators(
-                    FileIndexer.GetRelativePathFromDirectory(projectRoot, path));
-            }
-            catch (Exception ex) when (ex is IOException
-                                       or UnauthorizedAccessException
-                                       or NotSupportedException
-                                       or ArgumentException)
-            {
-                return "<csharp_workspace>";
-            }
-        }
-
         var csharpWorkspaceDriftDetected = false;
 
         void RecordCSharpWorkspaceDrift(
@@ -1163,95 +1143,36 @@ public static partial class IndexCommandRunner
             }
         }
 
-        int ReturnBeforeWriteSnapshotFailure(string changedPath)
-        {
-            var formattedPath = FormatCSharpWorkspaceSnapshotPath(changedPath);
-            RecordCSharpWorkspaceDrift(
-                formattedPath,
-                "Directory entries or scan configuration changed after expanded C# discovery.",
-                "csharp_workspace_validation");
-
-            stopwatch.Stop();
-            var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
-            var graphTableAvailable = (priorReadiness & DbContext.GraphReadyFlag) != 0;
-            var issuesTableAvailable = (priorReadiness & DbContext.IssuesReadyFlag) != 0;
-            var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(issuesTableAvailable);
-            // Keep early failure rendering observational: a default DbReader would recover
-            // interrupted FTS state on this writable connection before the write barrier.
-            using var signalReader = new DbReader(writer.Connection, isReadOnly: true);
-            var sqlGraphContractSignal = signalReader.GetSqlGraphContractSignal(lang: null);
-            var hotspotFamilySignal = signalReader.GetHotspotFamilySignal(lang: null);
-            var hasCSharpFiles = writer.HasAnyFilesWithLanguage("csharp");
-            var csharpSymbolNameReady = !hasCSharpFiles || csharpSymbolNameContractMatchesCurrent;
-            var csharpMetadataTargetReady = !hasCSharpFiles || priorMetadataTargetCsharpMatchesCurrent;
-            var foldReady = (priorReadiness & DbContext.FoldReadyFlag) != 0;
-            var memoryTimeline = BuildMemoryTimeline(memorySamples);
-
-            if (options.Json)
-            {
-                CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexUpdateJsonResult
-                {
-                    Status = "partial",
-                    Mode = "update",
-                    Summary = new IndexUpdateSummaryJsonResult
-                    {
-                        FilesTotal = totalFiles,
-                        ChunksTotal = totalChunks,
-                        SymbolsTotal = totalSymbols,
-                        ReferencesTotal = totalReferences,
-                        Updated = 0,
-                        Removed = 0,
-                        Skipped = skipped,
-                        Warnings = warnings,
-                        Errors = errors,
-                        SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
-                        FtsOptimizeRan = false,
-                        FtsMergeRan = false,
-                    },
-                    SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
-                    GraphTableAvailable = graphTableAvailable,
-                    GraphDataCurrent = false,
-                    IndexComplete = false,
-                    ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
-                    ReferenceGraphComplete = signalReader.IsReferenceGraphComplete(
-                        referenceExtractionCapHits),
-                    ReferenceExtractionCapHits = referenceExtractionCapHits,
-                    ErrorCode = CommandErrorCodes.IndexPartial,
-                    IssuesTableAvailable = issuesTableAvailable,
-                    SqlGraphContractReady = sqlGraphContractSignal.Ready,
-                    SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
-                    HotspotFamilyReady = hotspotFamilySignal.Ready,
-                    HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
-                    CSharpSymbolNameReady = csharpSymbolNameReady,
-                    CSharpMetadataTargetReady = csharpMetadataTargetReady,
-                    FoldReady = foldReady,
-                    FoldReadyReason = foldReady ? null : GetFoldReadyReason(
-                        backfillReady: false,
-                        priorFoldVersion == currentFoldVersion,
-                        priorFoldFingerprint == currentFoldFingerprint),
-                    Errors = errorList,
-                    FileErrors = fileErrorList,
-                    Warnings = warningList.Count > 0 ? warningList : null,
-                    MemoryTimeline = memoryTimeline,
-                    ElapsedMs = stopwatch.ElapsedMilliseconds,
-                }, jsonContext.IndexUpdateJsonResult));
-            }
-            else if (!options.Quiet)
-            {
-                ConsoleUi.TryWriteErrorLine(
-                    $"Update stopped before index-data mutation because the scan snapshot changed: {formattedPath}");
-            }
-
-            return options.AllowPartial
-                ? CommandExitCodes.Success
-                : CommandExitCodes.PartialResult;
-        }
-
         if (csharpWorkspaceInputSnapshot != null)
         {
             UpdateScanInputSnapshotBarrierForTesting?.Invoke("before_write");
             if (!TryValidateCSharpWorkspaceInputSnapshot(out var changedInputPath))
-                return ReturnBeforeWriteSnapshotFailure(changedInputPath ?? projectRoot);
+                return WriteUpdateSnapshotFailure(
+                    changedInputPath ?? projectRoot,
+                    new UpdateSnapshotFailureContext
+                    {
+                        Writer = writer,
+                        Options = options,
+                        Stopwatch = stopwatch,
+                        JsonContext = jsonContext,
+                        ProjectRoot = projectRoot,
+                        PriorReadiness = priorReadiness,
+                        CSharpSymbolNameContractMatchesCurrent = csharpSymbolNameContractMatchesCurrent,
+                        PriorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharpMatchesCurrent,
+                        PriorFoldVersion = priorFoldVersion,
+                        PriorFoldFingerprint = priorFoldFingerprint,
+                        CurrentFoldVersion = currentFoldVersion,
+                        CurrentFoldFingerprint = currentFoldFingerprint,
+                        MemorySamples = memorySamples,
+                        Skipped = skipped,
+                        Warnings = warnings,
+                        SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
+                        ErrorList = errorList,
+                        FileErrorList = fileErrorList,
+                        WarningList = warningList,
+                        RecordCSharpWorkspaceDrift = RecordCSharpWorkspaceDrift,
+                        GetErrorCount = () => errors,
+                    });
         }
 
         string? changedCSharpTargetPath = null;
@@ -2406,7 +2327,7 @@ public static partial class IndexCommandRunner
                 RecordCSharpWorkspaceDrift(
                     !string.IsNullOrEmpty(finalChangedCSharpPath)
                         ? finalChangedCSharpPath
-                        : FormatCSharpWorkspaceSnapshotPath(finalChangedCSharpDirectoryPath),
+                        : FormatCSharpWorkspaceSnapshotPath(projectRoot, finalChangedCSharpDirectoryPath),
                     "The C# workspace changed before final source-evidence validation.");
                 csharpSourceEvidenceForStamp = null;
                 csharpSourceEvidenceCompleteForStamp = false;
