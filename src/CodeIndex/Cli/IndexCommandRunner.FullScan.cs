@@ -2767,184 +2767,54 @@ public static partial class IndexCommandRunner
         hotspotAggregateRefresh.Complete(cancellationToken);
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
-        if (options.MemoryTrace)
-            memorySamples.Add(CaptureMemorySample("commit", stopwatch));
-        stopwatch.Stop();
-        var memoryTimeline = BuildMemoryTimeline(memorySamples);
-        WarnIfMemoryThresholdExceeded(memoryTimeline);
-        // Detect cwd drift between option-parsing and finalize. See RunUpdateMode for the
-        // rationale; the warning is informational because we already absolutized paths.
-        // Issue #1577.
-        var finalCwd = TryCaptureCurrentDirectory();
-        var cwdDriftNotice = BuildCwdDriftNotice(initialCwd, finalCwd);
-        var cwdDriftDetected = cwdDriftNotice != null;
-        if (cwdDriftDetected)
+        return WriteFullScanFinalOutput(new FullScanFinalOutputContext
         {
-            warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
-            warnings++;
-        }
-        warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
-        var (totalFiles, totalChunks, totalSymbols, totalReferences) =
-            startedWithNoIndexedFiles && !scanHadErrors && errors == 0
-                ? (freshCountFiles, freshCountChunks, freshCountSymbols, freshCountReferences)
-                : writer.GetCounts();
-        var signalReader = new DbReader(writer.Connection);
-        var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
-        var referenceGraphCompleteAfter = signalReader.IsReferenceGraphComplete(
-            referenceExtractionCapHitsAfter);
-        var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
-        if (!hasSqlFilesAfter)
-        {
-            sqlGraphContractSignalAfter = new SqlGraphContractSignal(
-                Ready: true,
-                Relevant: false,
-                DegradedReason: null);
-        }
-        else if (!sqlGraphContractSignalAfter.Relevant)
-        {
-            // A failed first SQL target leaves no persisted row for DbReader to classify.
-            // Preserve the discovered-language contract in this immediate index response.
-            // 最初の SQL target failure で row が無くても index response は degraded を返す。
-            sqlGraphContractSignalAfter = new SqlGraphContractSignal(
-                Ready: false,
-                Relevant: true,
-                DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason());
-        }
-        var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
-        var sqlGraphContractReadyAfter = sqlGraphContractSignalAfter.Ready;
-        var sqlGraphContractDegradedReasonAfter = sqlGraphContractSignalAfter.DegradedReason;
-        var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
-        var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
-
-        var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
-            graphTableAvailableAfter,
-            issuesTableAvailableAfter,
-            sqlGraphContractReadyAfter,
-            hotspotFamilyReadyAfter,
-            csharpSymbolNameReadyAfter,
-            csharpMetadataTargetReadyAfter,
-            foldReadyAfter,
-            foldReadyReasonAfter,
-            projectRoot,
-            resolvedDbPath);
-
-        if (options.Json)
-        {
-            CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexFullScanJsonResult
-            {
-                Status = errors > 0 ? "partial" : "success",
-                Mode = options.Rebuild ? "rebuild" : "incremental",
-                Summary = new IndexFullScanSummaryJsonResult
-                {
-                    FilesTotal = totalFiles,
-                    ChunksTotal = totalChunks,
-                    SymbolsTotal = totalSymbols,
-                    ReferencesTotal = totalReferences,
-                    FilesExtracted = extractedFiles,
-                    FilesPersisted = persistedFiles,
-                    ChunksExtracted = extractedChunks,
-                    ChunksPersisted = persistedChunks,
-                    SymbolsExtracted = extractedSymbols,
-                    SymbolsPersisted = persistedSymbols,
-                    ReferencesExtracted = extractedReferences,
-                    ReferencesPersisted = persistedReferences,
-                    FilesScanned = files.Count,
-                    FilesSkipped = skipped,
-                    FilesPurged = purged,
-                    DanglingSymlinksSkipped = scanResult.DanglingSymlinks.Count,
-                    Warnings = warnings,
-                    Errors = errors,
-                    SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
-                },
-                SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
-                GraphTableAvailable = graphTableAvailableAfter,
-                GraphDataCurrent = errors == 0 && graphTableAvailableAfter && referenceGraphCompleteAfter,
-                IndexComplete = errors == 0,
-                ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
-                ReferenceGraphComplete = referenceGraphCompleteAfter,
-                ReferenceExtractionCapHits = referenceExtractionCapHitsAfter,
-                ErrorCode = errors > 0 ? CommandErrorCodes.IndexPartial : null,
-                IssuesTableAvailable = issuesTableAvailableAfter,
-                SqlGraphContractReady = sqlGraphContractReadyAfter,
-                SqlGraphContractDegradedReason = sqlGraphContractDegradedReasonAfter,
-                HotspotFamilyReady = hotspotFamilyReadyAfter,
-                HotspotFamilyDegradedReason = hotspotFamilyDegradedReasonAfter,
-                CSharpSymbolNameReady = csharpSymbolNameReadyAfter,
-                CSharpMetadataTargetReady = csharpMetadataTargetReadyAfter,
-                // #86 codex review: expose fold-readiness so AI clients can decide whether
-                // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
-                // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
-                FoldReady = foldReadyAfter,
-                FoldReadyReason = foldReadyAfter ? null : foldReadyReasonAfter,
-                DegradedReason = foldOnlyRemediation?.DegradedReason,
-                RecommendedAction = foldOnlyRemediation?.RecommendedAction,
-                AlternativeAction = foldOnlyRemediation?.AlternativeAction,
-                HeadChanged = headChangeDetected,
-                PriorIndexedHeadCommit = priorIndexedHeadCommit,
-                CurrentHeadCommit = currentHeadCommit,
-                HeadChangeNotice = headChangeNotice,
-                CwdDriftDetected = cwdDriftDetected,
-                CwdAtStart = initialCwd,
-                CwdAtFinalize = finalCwd,
-                CwdDriftNotice = cwdDriftNotice,
-                Errors = errorList.Count > 0 ? errorList : null,
-                FileErrors = fileErrorList.Count > 0 ? fileErrorList : null,
-                Warnings = warningList.Count > 0 ? warningList : null,
-                MemoryTimeline = memoryTimeline,
-                ElapsedMs = stopwatch.ElapsedMilliseconds,
-            }, jsonContext.IndexFullScanJsonResult));
-        }
-        else if (!options.Quiet)
-        {
-            CommandOutputWriter.WriteLine();
-            CommandOutputWriter.WriteLine();
-            CommandOutputWriter.WriteLine("Done.");
-            CommandOutputWriter.WriteLine();
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Files", ConsoleUi.FormatNumber(totalFiles), indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", ConsoleUi.FormatNumber(totalChunks), indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", ConsoleUi.FormatNumber(totalSymbols), indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Refs", ConsoleUi.FormatNumber(totalReferences), indent: "  "));
-            if (skipped > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{ConsoleUi.FormatNumber(skipped)} (unchanged)", indent: "  "));
-            if (scanResult.DanglingSymlinks.Count > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Dangling symlinks", $"{ConsoleUi.FormatNumber(scanResult.DanglingSymlinks.Count)} skipped", indent: "  "));
-            if (options.Verbose && scanResult.UnknownExtensionFiles.Count > 0)
-            {
-                CommandOutputWriter.WriteLine($"  Unknown extension files: {ConsoleUi.FormatNumber(scanResult.UnknownExtensionFiles.Count)}");
-                foreach (var relPath in scanResult.UnknownExtensionFiles.Take(5))
-                    CommandOutputWriter.WriteLine($"    {relPath}");
-                if (scanResult.UnknownExtensionFiles.Count > 5)
-                    CommandOutputWriter.WriteLine($"    ... {ConsoleUi.FormatNumber(scanResult.UnknownExtensionFiles.Count - 5)} more");
-            }
-            if (warnings > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", ConsoleUi.FormatNumber(warnings), indent: "  "));
-            if (errors > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Errors", ConsoleUi.FormatNumber(errors), indent: "  "));
-            if (symbolsDroppedByKindFilter > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", ConsoleUi.FormatNumber(symbolsDroppedByKindFilter), indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Hotspots", hotspotFamilyReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# names", csharpSymbolNameReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# meta", csharpMetadataTargetReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Fold", foldReadyAfter ? "ready" : "degraded", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat), indent: "  "));
-            CommandOutputWriter.WriteLine();
-            if (errors > 0)
-                ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
-            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
-            if (cwdDriftDetected)
-                ConsoleUi.PrintWarning(cwdDriftNotice!);
-            if (errors == 0 && showNextSteps)
-                ConsoleUi.PrintIndexCompleteSummary(projectRoot, resolvedDbPath, incremental: !options.Rebuild, files.Count, languageCounts);
-        }
-
-        if (!options.Json && !options.Quiet && stopwatch.Elapsed >= TimeSpan.FromSeconds(5))
-            ConsoleUi.EmitCompletionNotification(
-                options.NotifyMode,
-                $"cdidx index complete ({ConsoleUi.Counted(files.Count, "file", format: "N0")})");
-
-        return errors > 0 && !options.AllowPartial
-            ? CommandExitCodes.PartialResult
-            : CommandExitCodes.Success;
+            Writer = writer,
+            Options = options,
+            Stopwatch = stopwatch,
+            JsonContext = jsonContext,
+            ProjectRoot = projectRoot,
+            ResolvedDbPath = resolvedDbPath,
+            InitialCwd = initialCwd,
+            MemorySamples = memorySamples,
+            PostExtractionHooks = postExtractionHooks,
+            WarningList = warningList,
+            ErrorList = errorList,
+            FileErrorList = fileErrorList,
+            Warnings = warnings,
+            Errors = errors,
+            SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
+            StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+            ScanHadErrors = scanHadErrors,
+            FreshCountFiles = freshCountFiles,
+            FreshCountChunks = freshCountChunks,
+            FreshCountSymbols = freshCountSymbols,
+            FreshCountReferences = freshCountReferences,
+            HasSqlFilesAfter = hasSqlFilesAfter,
+            GraphTableAvailableAfter = graphTableAvailableAfter,
+            IssuesTableAvailableAfter = issuesTableAvailableAfter,
+            CSharpSymbolNameReadyAfter = csharpSymbolNameReadyAfter,
+            CSharpMetadataTargetReadyAfter = csharpMetadataTargetReadyAfter,
+            FoldReadyAfter = foldReadyAfter,
+            FoldReadyReasonAfter = foldReadyReasonAfter,
+            ExtractedFiles = extractedFiles,
+            PersistedFiles = persistedFiles,
+            ExtractedChunks = extractedChunks,
+            PersistedChunks = persistedChunks,
+            ExtractedSymbols = extractedSymbols,
+            PersistedSymbols = persistedSymbols,
+            ExtractedReferences = extractedReferences,
+            PersistedReferences = persistedReferences,
+            FilesCount = files.Count,
+            Skipped = skipped,
+            Purged = purged,
+            ScanResult = scanResult,
+            LanguageCounts = languageCounts,
+            HeadChangeDetected = headChangeDetected,
+            PriorIndexedHeadCommit = priorIndexedHeadCommit,
+            CurrentHeadCommit = currentHeadCommit,
+            HeadChangeNotice = headChangeNotice,
+            ShowNextSteps = showNextSteps,
+        });
     }
-
-
 }
