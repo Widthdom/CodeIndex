@@ -16,22 +16,19 @@ using CodeIndex.Indexer.Extensibility;
 
 namespace CodeIndex.Mcp;
 
-/// <summary>
-/// MCP (Model Context Protocol) server speaking JSON-RPC 2.0 over a pluggable transport. The
-/// default <see cref="StdioMcpTransport"/> preserves the historic stdin/stdout wire path, and
-/// <see cref="HttpMcpTransport"/> exposes the same JSON-RPC catalog over POST so AI clients can
-/// share a warm server across sessions (issue #1558).
-/// プラガブルな <see cref="IMcpTransport"/> 上で JSON-RPC 2.0 を話す MCP サーバー。既定の
-/// <see cref="StdioMcpTransport"/> は従来通り stdin/stdout を使い、<see cref="HttpMcpTransport"/>
-/// は同じ JSON-RPC カタログを POST で公開して、複数クライアントから暖機済みサーバーを共有できるようにする
-/// (issue #1558)。
-/// Supported protocol versions: see <see cref="SupportedProtocolVersions"/> (negotiated per
-/// `initialize` request, #1554).
-/// 対応プロトコルバージョン: <see cref="SupportedProtocolVersions"/> 参照（`initialize` ごとに交渉, #1554）。
-/// </summary>
 public partial class McpServer : IDisposable
 {
-
+    /// <summary>
+    /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
+    /// <see cref="RunAsync(IMcpTransport, CancellationToken)"/> so existing callers stay
+    /// source-compatible after the #1558 transport refactor. SIGINT (Ctrl+C) and SIGTERM are
+    /// translated into loop cancellation so orchestrators (systemd, launchd, supervisord) can
+    /// achieve a clean shutdown instead of hanging until stdin closes (#1573).
+    /// 既定の stdio トランスポートで MCP ループを動かす。#1558 のトランスポート抽象化後も
+    /// 既存呼び出しがソース互換となるよう <see cref="RunAsync(IMcpTransport, CancellationToken)"/>
+    /// のラッパとして残す。SIGINT (Ctrl+C) と SIGTERM をループキャンセルに変換し、stdin が閉じる
+    /// まで固まる旧挙動を解消する（systemd / launchd / supervisord から graceful shutdown 可能に, #1573）。
+    /// </summary>
     public async Task RunAsync()
     {
         await using var transport = new StdioMcpTransport(StdioBufferSize);
