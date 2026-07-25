@@ -234,6 +234,75 @@ public static partial class IndexCommandRunner
             return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null, mode, progressPersisted);
         }
 
+        var initialExitCode = RunInitialIndex(new IndexRunExecutionContext(
+            options,
+            jsonOptions,
+            jsonContext,
+            indexCancellation,
+            initialCwd,
+            dbPath,
+            resolvedDbPath,
+            stopwatch,
+            runStartedAtUtc,
+            isUpdateMode,
+            mode,
+            spinnerFrames,
+            databaseExistedBeforeIndex,
+            ignoreCase,
+            ignoreRuleRoot));
+
+
+        if (!options.Watch || initialExitCode != CommandExitCodes.Success)
+            return initialExitCode;
+
+        // Release the index lock before entering the watch loop so concurrent
+        // `cdidx index` invocations between batches can still acquire it. Each
+        // partial-update batch re-acquires the lock through IndexCommandRunner.Run.
+        // watch ループ突入前にロックを解放し、バッチ間に別プロセスの `cdidx index` が
+        // 取得できる状態にする。各バッチ更新はサブ実行で再取得する。
+        return IndexWatchRunner.Run(
+            options,
+            jsonOptions,
+            Path.GetFullPath(options.ProjectPath!),
+            Path.GetFullPath(dbPath),
+            indexCancellation.Token);
+    }
+
+    private sealed record IndexRunExecutionContext(
+        IndexCommandOptions Options,
+        JsonSerializerOptions JsonOptions,
+        CliJsonSerializerContext JsonContext,
+        CancellationTokenSource IndexCancellation,
+        string? InitialCwd,
+        string DbPath,
+        string ResolvedDbPath,
+        Stopwatch Stopwatch,
+        DateTime RunStartedAtUtc,
+        bool IsUpdateMode,
+        string Mode,
+        string[] SpinnerFrames,
+        bool DatabaseExistedBeforeIndex,
+        bool IgnoreCase,
+        string IgnoreRuleRoot);
+
+    private static int RunInitialIndex(IndexRunExecutionContext context)
+    {
+        var options = context.Options;
+        var jsonOptions = context.JsonOptions;
+        var jsonContext = context.JsonContext;
+        var indexCancellation = context.IndexCancellation;
+        var initialCwd = context.InitialCwd;
+        var dbPath = context.DbPath;
+        var resolvedDbPath = context.ResolvedDbPath;
+        var stopwatch = context.Stopwatch;
+        var runStartedAtUtc = context.RunStartedAtUtc;
+        var isUpdateMode = context.IsUpdateMode;
+        var mode = context.Mode;
+        var spinnerFrames = context.SpinnerFrames;
+        var databaseExistedBeforeIndex = context.DatabaseExistedBeforeIndex;
+        var ignoreCase = context.IgnoreCase;
+        var ignoreRuleRoot = context.IgnoreRuleRoot;
+
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
         if (options.DryRun)
             return RunDryRun(
@@ -262,7 +331,7 @@ public static partial class IndexCommandRunner
             {
                 try
                 {
-                    indexLock = IndexLock.Acquire(lockPath, options.ProjectPath);
+                    indexLock = IndexLock.Acquire(lockPath, options.ProjectPath!);
                 }
                 catch (IndexLockConflictException ex)
                 {
@@ -368,7 +437,7 @@ public static partial class IndexCommandRunner
                 // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
                 // (no `--check`) でも worktree の HEAD 切替検出に利用する。
                 var priorIndexedHeadCommit = PriorMeta(DbContext.IndexedHeadCommitMetaKey);
-                var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath, indexCancellation.Token);
+                var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath!, indexCancellation.Token);
 
                 // Don't demote readiness yet. A transient usage error in update-mode preflight
                 // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -379,11 +448,11 @@ public static partial class IndexCommandRunner
 
                 db.InitializeSchema();
                 var indexRunDiagnostics = new List<string>();
-                AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics, indexCancellation.Token);
+                AddToGitExclude(options.ProjectPath!, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
                 var writer = new DbWriter(db);
                 var indexer = new FileIndexer(
-                    options.ProjectPath,
+                    options.ProjectPath!,
                     ignoreCase,
                     ignoreRuleRoot,
                     options.MaxFileSizeBytes,
@@ -481,20 +550,7 @@ public static partial class IndexCommandRunner
             return WriteDatabaseFilesystemError(options.Json, jsonOptions, resolvedDbPath, ex);
         }
 
-        if (!options.Watch || initialExitCode != CommandExitCodes.Success)
-            return initialExitCode;
-
-        // Release the index lock before entering the watch loop so concurrent
-        // `cdidx index` invocations between batches can still acquire it. Each
-        // partial-update batch re-acquires the lock through IndexCommandRunner.Run.
-        // watch ループ突入前にロックを解放し、バッチ間に別プロセスの `cdidx index` が
-        // 取得できる状態にする。各バッチ更新はサブ実行で再取得する。
-        return IndexWatchRunner.Run(
-            options,
-            jsonOptions,
-            Path.GetFullPath(options.ProjectPath!),
-            Path.GetFullPath(dbPath),
-            indexCancellation.Token);
+        return initialExitCode;
     }
 
 
