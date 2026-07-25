@@ -14,55 +14,6 @@ namespace CodeIndex.Mcp;
 
 public partial class McpServer
 {
-    internal static Action<string>? McpIndexInputSnapshotBarrierForTesting { get; set; }
-
-    private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
-    {
-        try
-        {
-            return await ExecuteIndexCoreAsync(id, args, progressToken).ConfigureAwait(false);
-        }
-        catch (McpIndexAuthorizationException ex)
-        {
-            return CreateIndexAuthorizationErrorResponse(id, ex);
-        }
-        catch (AggregateException ex) when (TryExtractIndexAuthorizationException(ex, out var authorizationException))
-        {
-            return CreateIndexAuthorizationErrorResponse(id, authorizationException);
-        }
-    }
-
-    private JsonNode CreateIndexAuthorizationErrorResponse(
-        JsonNode? id,
-        McpIndexAuthorizationException exception)
-        => CreateToolErrorResponse(
-            id,
-            "MCP index authorization changed after validation; indexing stopped.",
-            category: McpErrorEnvelope.CategoryPermissionDenied,
-            suggestion: "Restore a stable directory mapping within the current working directory and MCP client roots, then retry.",
-            retrySafe: true,
-            extraData: new JsonObject
-            {
-                ["authorization_failure_reason"] = exception.Reason,
-                ["checked_root_identity"] = exception.CheckedRootIdentity,
-            });
-
-    private static bool TryExtractIndexAuthorizationException(
-        AggregateException exception,
-        out McpIndexAuthorizationException authorizationException)
-    {
-        foreach (var innerException in exception.Flatten().InnerExceptions)
-        {
-            if (innerException is McpIndexAuthorizationException matched)
-            {
-                authorizationException = matched;
-                return true;
-            }
-        }
-
-        authorizationException = null!;
-        return false;
-    }
 
     private async Task<JsonNode> ExecuteIndexCoreAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken)
     {
@@ -86,30 +37,13 @@ public partial class McpServer
             ? new JsonArray { CaptureMcpIndexMemorySample("start", runStopwatch) }
             : null;
 
-        // Prevent path traversal — only allow indexing within current working directory
-        // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
-        var cwd = Path.GetFullPath(".");
-        if (!McpPathBoundary.IsPathWithinDirectory(cwd, requestedProjectPath))
-            return CreateToolErrorResponse(id, "Path must be within the current working directory");
-        await RefreshClientRootsIfNeededAsync().ConfigureAwait(false);
-        if (!IsPathWithinClientRoots(requestedProjectPath))
-            return CreateToolErrorResponse(id, "Path must be within an MCP client root");
-
+        var authorizationResult = await CaptureIndexAuthorizationAsync(id, requestedProjectPath).ConfigureAwait(false);
+        if (authorizationResult.ErrorResponse != null)
+            return authorizationResult.ErrorResponse;
+        var cwd = authorizationResult.CurrentWorkingDirectory;
         bool IsPathAuthorized(string path)
-            => McpPathBoundary.IsPathWithinDirectory(cwd, path) && IsPathWithinClientRoots(path);
-        if (!McpPathBoundary.TryCaptureIndexRoot(
-                requestedProjectPath,
-                IsPathAuthorized,
-                McpIndexEntryOpenBoundaryForTesting,
-                McpIndexDirectoryEnumerationBoundaryForTesting,
-                McpIndexDirectoryEnumerationCompletedForTesting,
-                out var authorization,
-                out var authorizationError))
-        {
-            return CreateToolErrorResponse(id, authorizationError!);
-        }
-
-        using var authorizedRoot = authorization!;
+            => IsIndexPathAuthorized(cwd, path);
+        using var authorizedRoot = authorizationResult.Authorization!;
         using var authorizedExtractorConfiguration = ExtractorPluginRegistry.BeginAuthorizedConfigurationScope();
         if (_currentIndexAuditContext.Value is { } auditContext)
             auditContext.CheckedRootIdentity = authorizedRoot.CheckedRootIdentity;
@@ -119,75 +53,23 @@ public partial class McpServer
 
         var unsupportedModesJson = BuildMcpIndexUnsupportedModesJson(unsupportedModes);
         if (dryRun)
-        {
-            var ignoreCase = GitHelper.ResolveIgnoreCase(projectPath, _currentRequestToken.Value);
-            var dryRunRepositoryRoot = GitHelper.TryGetRepositoryRoot(projectPath, _currentRequestToken.Value);
-            var dryRunIgnoreRuleRoot = dryRunRepositoryRoot != null && IsPathAuthorized(dryRunRepositoryRoot)
-                ? dryRunRepositoryRoot
-                : projectPath;
-            var dryRunIndexer = new FileIndexer(
+            return BuildIndexDryRunResult(
+                id,
+                indexOptions,
                 projectPath,
-                ignoreCase,
-                dryRunIgnoreRuleRoot,
-                maxFileBytes,
-                directoryIgnoreCaseProbe: null,
-                symlinkPolicy: symlinkPolicy,
-                generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
-                pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry,
-                openReadForIndexContent: authorizedRoot.OpenAuthorizedRead,
-                enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries,
-                bindConfigurationReadsToFileSystemIdentity: true,
-                internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(_dbPath));
-            var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
-            if (memorySamples != null)
-                memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
-            var dryRunFatalScanErrors = scan.Errors.Where(error => error.IsFatal).ToList();
-            var dryRunPayload = new JsonObject
-            {
-                ["path"] = projectPath,
-                ["checked_root_identity"] = authorizedRoot.CheckedRootIdentity,
-                ["dry_run"] = true,
-                ["would_rebuild"] = rebuild,
-                ["max_file_bytes"] = maxFileBytes,
-                ["index_options"] = optionsPayload,
-                ["unsupported_modes"] = unsupportedModesJson,
-                ["summary"] = new JsonObject
-                {
-                    ["files_scanned"] = scan.Files.Count,
-                    ["scan_errors"] = scan.Errors.Count,
-                    ["fatal_scan_errors"] = dryRunFatalScanErrors.Count,
-                    ["unknown_extension_file_count"] = scan.UnknownExtensionFiles.Count,
-                    ["would_mutate_database"] = false,
-                },
-                ["duration_ms"] = runStopwatch.ElapsedMilliseconds,
-                ["started_at"] = runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-                ["completed_at"] = GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-            };
-            if (memorySamples != null)
-            {
-                memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
-                dryRunPayload["memory_trace"] = memorySamples;
-            }
-            return CreateToolResult(id, "Index dry run complete.", dryRunPayload);
-        }
+                cwd,
+                authorizedRoot,
+                unsupportedModesJson,
+                runStartedAtUtc,
+                runStopwatch,
+                memorySamples);
 
         if (HasBlockingMcpIndexUnsupportedMode(unsupportedModes))
-        {
-            var unsupportedData = new JsonObject
-            {
-                ["unsupported_modes"] = unsupportedModesJson,
-                ["index_options"] = optionsPayload,
-                ["index_started"] = false,
-                ["checked_root_identity"] = authorizedRoot.CheckedRootIdentity,
-            };
-            return CreateToolErrorResponse(
+            return CreateUnsupportedIndexModeResponse(
                 id,
-                "MCP index does not support the requested scoped or watch indexing mode; no indexing started.",
-                category: McpErrorEnvelope.CategoryInvalidArgument,
-                suggestion: "Use dryRun:true to inspect the plan, remove unsupported scope/watch arguments, or run the equivalent cdidx index command in the CLI.",
-                retrySafe: false,
-                extraData: unsupportedData);
-        }
+                indexOptions,
+                unsupportedModesJson,
+                authorizedRoot.CheckedRootIdentity);
 
         if (!McpIndexRunLock.TryAcquire(_dbPath, out var indexLock, out var lockError))
             return CreateToolErrorResponse(id, lockError!);
@@ -205,46 +87,7 @@ public partial class McpServer
             ? new DbContext(openIntent, _dbPath, _currentRequestToken.Value)
             : null;
         var db = isolatedRequestDb ?? GetOrOpenSharedDb(openIntent);
-        var csharpMetadataTargetVersionMetaKey = DbContext.GetMetadataTargetVersionMetaKey("csharp");
-        var priorMeta = db.GetMetaStrings(
-        [
-            "fold_key_version",
-            "fold_key_fingerprint",
-            DbContext.CSharpSymbolNameContractVersionMetaKey,
-            DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey,
-            csharpMetadataTargetVersionMetaKey,
-            DbContext.SqlGraphContractVersionMetaKey,
-            DbContext.HdlGraphContractVersionMetaKey,
-            DbContext.SymbolsOnlyGraphOmittedMetaKey,
-            DbContext.IndexCompletenessMetaKey,
-            DbContext.IndexedProjectRootMetaKey,
-            IndexCommandRunner.SymbolKindFilterMetaKey,
-        ]);
-        var priorFoldVersion = priorMeta["fold_key_version"];
-        var priorFoldFingerprint = priorMeta["fold_key_fingerprint"];
-        var priorCSharpSymbolNameContractVersion = priorMeta[DbContext.CSharpSymbolNameContractVersionMetaKey];
-        var priorCSharpStaticInterfaceSourceEvidence =
-            bool.TryParse(
-                priorMeta[DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey],
-                out var parsedCSharpStaticInterfaceSourceEvidence)
-                ? parsedCSharpStaticInterfaceSourceEvidence
-                : (bool?)null;
-        var priorMetadataTargetCsharp = priorMeta[csharpMetadataTargetVersionMetaKey];
-        var priorSqlGraphContractVersion = priorMeta[DbContext.SqlGraphContractVersionMetaKey];
-        var priorHdlGraphContractVersion = priorMeta[DbContext.HdlGraphContractVersionMetaKey];
-        var priorSymbolsOnlyGraphOmitted = string.Equals(
-            priorMeta[DbContext.SymbolsOnlyGraphOmittedMetaKey],
-            "true",
-            StringComparison.OrdinalIgnoreCase);
-        var priorIndexComplete = string.Equals(
-            priorMeta[DbContext.IndexCompletenessMetaKey],
-            "complete",
-            StringComparison.OrdinalIgnoreCase);
-        var priorReadiness = db.GetUserVersion();
-        var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
-        var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
-        var priorIndexedProjectRoot = priorMeta[DbContext.IndexedProjectRootMetaKey];
-        var priorSymbolKindFilterSignature = priorMeta[IndexCommandRunner.SymbolKindFilterMetaKey];
+        var indexSnapshot = CaptureIndexDatabaseSnapshot(db);
         var requestToken = _currentRequestToken.Value;
         using var suppressDisposeMaintenanceOnCancellation = requestToken.CanBeCanceled
             ? requestToken.UnsafeRegister(
@@ -288,29 +131,29 @@ public partial class McpServer
         });
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
+        var csharpSymbolNameContractMatchesCurrent = indexSnapshot.CSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var csharpMetadataTargetsNeedRefresh = priorMetadataTargetCsharp != currentMetadataTargetVersion;
+        var csharpMetadataTargetsNeedRefresh = indexSnapshot.MetadataTargetCSharp != currentMetadataTargetVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var sqlGraphContractMatchesCurrent = indexSnapshot.SqlGraphContractVersion == currentSqlGraphContractVersion;
         var currentHdlGraphContractVersion = DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var hdlGraphContractMatchesCurrent = priorHdlGraphContractVersion == currentHdlGraphContractVersion;
+        var hdlGraphContractMatchesCurrent = indexSnapshot.HdlGraphContractVersion == currentHdlGraphContractVersion;
         var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
-            priorHotspotFamilyVersions,
-            priorHotspotFamilyMarkerFingerprints,
+            indexSnapshot.HotspotFamilyVersions,
+            indexSnapshot.HotspotFamilyMarkerFingerprints,
             currentHotspotFamilyMarkerFingerprints);
         var symbolKindFilterMatchesPrior = string.Equals(
-            priorSymbolKindFilterSignature,
+            indexSnapshot.SymbolKindFilterSignature,
             symbolKindFilter.Signature,
             StringComparison.Ordinal);
         var priorFilterRetainedCSharpContractMembers =
             SymbolKindFilter.SignatureRetainsCSharpStaticInterfaceContractMembers(
-                priorSymbolKindFilterSignature);
+                indexSnapshot.SymbolKindFilterSignature);
         var symbolKindFilterMetaMarkedIncomplete = symbolKindFilterMatchesPrior;
         var normalizedProjectPath = Path.GetFullPath(projectPath);
-        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(indexSnapshot.IndexedProjectRoot)
             ? null
-            : Path.GetFullPath(priorIndexedProjectRoot);
+            : Path.GetFullPath(indexSnapshot.IndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
         var csharpIndexedProjectRootCompatible = normalizedPriorIndexedProjectRoot == null
             || projectRootWritten;
@@ -322,10 +165,10 @@ public partial class McpServer
         var ftsMutated = false;
         var startedWithNoIndexedFiles = rebuild || !writer.HasAnyIndexedFiles();
         if (rebuild || startedWithNoIndexedFiles)
-            priorCSharpStaticInterfaceSourceEvidence = null;
+            indexSnapshot.CSharpStaticInterfaceSourceEvidence = null;
         var requiresConservativeCSharpSourceRefresh = !rebuild
             && !startedWithNoIndexedFiles
-            && priorCSharpStaticInterfaceSourceEvidence != false;
+            && indexSnapshot.CSharpStaticInterfaceSourceEvidence != false;
         // Delay source-evidence invalidation until scan, workspace preflight, and the final
         // uncached C# stat check finish. This avoids a committed null/true round trip for a
         // strict positive no-op while dirty runs still publish safe evidence before row writes.
@@ -493,7 +336,7 @@ public partial class McpServer
         var scanHadErrors = scanResult.HadErrors;
         var deferCSharpMutationsForIncompleteScan = !startedWithNoIndexedFiles
             && scanHadErrors
-            && priorCSharpStaticInterfaceSourceEvidence != false;
+            && indexSnapshot.CSharpStaticInterfaceSourceEvidence != false;
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
@@ -608,11 +451,11 @@ public partial class McpServer
         var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
             && staleFilePurgePlan.Count > 0
             && writer.HasCSharpFilesInFileIds(staleFilePurgePlan.FileIds, requestToken)
-            && (priorCSharpStaticInterfaceSourceEvidence == true
+            && (indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
                 || writer.HasCSharpStaticInterfaceContractMembersInFileIds(
                     staleFilePurgePlan.FileIds,
                     includeInterfaceDeclarationsAsConservativeEvidence:
-                        priorCSharpStaticInterfaceSourceEvidence == null
+                        indexSnapshot.CSharpStaticInterfaceSourceEvidence == null
                         || !priorFilterRetainedCSharpContractMembers,
                     requestToken));
         var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
@@ -643,12 +486,12 @@ public partial class McpServer
             McpIndexRetainedPathFilterAllocatedForTesting?.Invoke(fileTargets.Length);
         }
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
-        var csharpPositiveNoOpPolicyCandidate = priorCSharpStaticInterfaceSourceEvidence is not null
-            && priorIndexComplete
-            && (priorReadiness & DbContext.GraphReadyFlag) != 0
+        var csharpPositiveNoOpPolicyCandidate = indexSnapshot.CSharpStaticInterfaceSourceEvidence is not null
+            && indexSnapshot.IndexComplete
+            && (indexSnapshot.Readiness & DbContext.GraphReadyFlag) != 0
             && !scanHadErrors
             && !hadCSharpStaticInterfaceContractsBeforePurge
-            && !priorSymbolsOnlyGraphOmitted
+            && !indexSnapshot.SymbolsOnlyGraphOmitted
             && symbolKindFilterMatchesPrior
             && csharpSymbolNameContractMatchesCurrent
             && csharpIndexedProjectRootCompatible
@@ -688,7 +531,7 @@ public partial class McpServer
                 || !csharpIndexedProjectRootCompatible
                 || (requiresConservativeCSharpSourceRefresh
                     && !priorPositiveCSharpSourceNoOpCandidate)
-                || priorSymbolsOnlyGraphOmitted
+                || indexSnapshot.SymbolsOnlyGraphOmitted
                 || !symbolKindFilterMatchesPrior
                 || !csharpSymbolNameContractMatchesCurrent)
                 return false;
@@ -871,7 +714,7 @@ public partial class McpServer
                     isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
                     cancellationToken: requestToken));
             forceFullCSharpRefreshFromInvalidatedNoOp =
-                priorCSharpStaticInterfaceSourceEvidence == true
+                indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
                 || csharpWorkspace.HasStaticInterfaceContracts;
         }
         if (!csharpWorkspace.SourceContractEvidenceComplete)
@@ -891,7 +734,7 @@ public partial class McpServer
             && allCSharpPrepassTargetsReusable
             && !deferCSharpMutationsForIncompleteScan;
         var csharpSourceEvidenceForStamp = preservePriorPositiveCSharpSourceNoOp
-            ? priorCSharpStaticInterfaceSourceEvidence == true
+            ? indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
             : csharpWorkspace.HasSourceStaticInterfaceContracts;
         var csharpSourceEvidenceComplete = preservePriorPositiveCSharpSourceNoOp
             || csharpWorkspace.SourceContractEvidenceComplete;
@@ -1030,7 +873,7 @@ public partial class McpServer
         {
             var allowStatReuse = !rebuild
                 && !startedWithNoIndexedFiles
-                && !priorSymbolsOnlyGraphOmitted
+                && !indexSnapshot.SymbolsOnlyGraphOmitted
                 && symbolKindFilterMatchesPrior
                 && (target.Language != "csharp" || csharpIndexedProjectRootCompatible)
                 && (target.Language != "csharp" || csharpSymbolNameContractMatchesCurrent)
@@ -1211,7 +1054,7 @@ public partial class McpServer
                 else
                 {
                     var requiresFullCSharpRefresh =
-                        priorCSharpStaticInterfaceSourceEvidence == true
+                        indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
                         || csharpWorkspace.HasStaticInterfaceContracts;
                     forceFullCSharpRefreshFromInvalidatedNoOp = requiresFullCSharpRefresh;
                     csharpSourceEvidenceForStamp = csharpWorkspace.HasSourceStaticInterfaceContracts;
@@ -1266,7 +1109,7 @@ public partial class McpServer
             var csharpSymbolNameReady = !hasCSharpFiles
                 || (persistedCSharpFiles && csharpSymbolNameContractMatchesCurrent);
             var csharpMetadataTargetReady = !hasCSharpFiles
-                || (persistedCSharpFiles && priorMetadataTargetCsharp == currentMetadataTargetVersion);
+                || (persistedCSharpFiles && indexSnapshot.MetadataTargetCSharp == currentMetadataTargetVersion);
             var structured = new JsonObject
             {
                 ["path"] = projectPath,
@@ -1302,8 +1145,8 @@ public partial class McpServer
                 ["sql_graph_contract_ready"] = sqlGraphContractReady,
                 ["csharp_symbol_name_ready"] = csharpSymbolNameReady,
                 ["csharp_metadata_target_ready"] = csharpMetadataTargetReady,
-                ["fold_ready"] = (priorReadiness & DbContext.FoldReadyFlag) != 0,
-                ["fold_ready_reason"] = (priorReadiness & DbContext.FoldReadyFlag) != 0
+                ["fold_ready"] = (indexSnapshot.Readiness & DbContext.FoldReadyFlag) != 0,
+                ["fold_ready_reason"] = (indexSnapshot.Readiness & DbContext.FoldReadyFlag) != 0
                     ? null
                     : DegradationReasonCodes.MissingFoldBackfill,
             };
@@ -1328,7 +1171,7 @@ public partial class McpServer
                 structured["failures_truncated"] = failures.Count - 50;
             AddMcpIndexDiagnostics(structured, failures, mcpIndexDiagnostics);
             var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(
-                issuesStateAvailable: (priorReadiness & DbContext.IssuesReadyFlag) != 0);
+                issuesStateAvailable: (indexSnapshot.Readiness & DbContext.IssuesReadyFlag) != 0);
             using var referenceSignalReader = new DbReader(writer.Connection, isReadOnly: true);
             AddReferenceGraphCompletenessSignal(
                 structured,
@@ -2101,8 +1944,8 @@ public partial class McpServer
             RestampHotspotFamilyTrust(
                 writer,
                 reusedHotspotFamilyLanguages,
-                priorHotspotFamilyVersions,
-                priorHotspotFamilyMarkerFingerprints,
+                indexSnapshot.HotspotFamilyVersions,
+                indexSnapshot.HotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);
             // A successful refresh can stamp the languages it regenerated even when the
             // independent fold-key contract remains stale.
@@ -2117,8 +1960,8 @@ public partial class McpServer
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
-            var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
-            var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
+            var foldVersionMatchesCurrent = indexSnapshot.FoldVersion == currentFoldVersion;
+            var foldFingerprintMatchesCurrent = indexSnapshot.FoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
             if (skipped == 0 || canRestampExistingFoldTrust)
             {
@@ -2272,240 +2115,38 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
 
-        var structured = new JsonObject
-        {
-            ["path"] = projectPath,
-            ["checked_root_identity"] = authorizedRoot.CheckedRootIdentity,
-            ["rebuild"] = rebuild,
-            ["dry_run"] = false,
-            ["max_file_bytes"] = maxFileBytes,
-            ["index_options"] = optionsPayload,
-            ["unsupported_modes"] = unsupportedModesJson,
-            ["summary"] = new JsonObject
-            {
-                ["files"] = totalFiles,
-                ["chunks"] = totalChunks,
-                ["symbols"] = totalSymbols,
-                ["references"] = totalReferences,
-                ["scanned"] = files.Count,
-                ["skipped"] = skipped,
-                ["purged"] = purged,
-                ["unknown_extension_file_count"] = scanResult.UnknownExtensionFiles.Count,
-                ["errors"] = errors,
-                ["failed_count"] = failures.Count,
-                ["symbols_dropped_by_kind_filter"] = symbolsDroppedByKindFilter
-            },
-            ["symbol_kind_filter"] = new JsonObject
-            {
-                ["include"] = ToJsonStringArray(symbolKindFilter.Include),
-                ["exclude"] = ToJsonStringArray(symbolKindFilter.Exclude),
-                ["active"] = symbolKindFilter.IsActive,
-            },
-            ["duration_ms"] = runStopwatch.ElapsedMilliseconds,
-            ["started_at"] = runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-            ["completed_at"] = GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-            ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
-            ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
-            ["csharp_metadata_target_ready"] = csharpMetadataTargetReadyAfter,
-            // #86 codex review: AI clients use this to tell whether --exact will use the
-            // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
-            ["fold_ready"] = foldReadyAfter,
-            ["fold_ready_reason"] = foldReadyReason
-        };
-        if (memorySamples != null)
-            structured["memory_trace"] = memorySamples;
-        if (failures.Count > 0)
-        {
-            var failureArray = new JsonArray();
-            foreach (var failure in failures.Take(50))
-            {
-                failureArray.Add(new JsonObject
-                {
-                    ["path"] = failure.Path,
-                    ["stage"] = failure.Stage,
-                    ["exception_type"] = failure.ExceptionType,
-                    ["message"] = failure.Message,
-                    ["message_truncated"] = failure.MessageTruncated,
-                });
-            }
-            structured["failed_count"] = failures.Count;
-            structured["failures"] = failureArray;
-            if (failures.Count > 50)
-                structured["failures_truncated"] = failures.Count - 50;
-            GlobalToolLog.Error(
-                $"mcp_index_file_failures count={failures.Count} first_path={QuoteMcpIndexFailureLogValue(failures[0].Path)} first_error={QuoteMcpIndexFailureLogValue($"{failures[0].ExceptionType}: {failures[0].Message}")}");
-        }
-        AddMcpIndexDiagnostics(structured, failures, mcpIndexDiagnostics);
-        using var signalReader = new DbReader(writer.Connection);
-        AddReferenceGraphCompletenessSignal(structured, signalReader);
-        if (!sqlGraphContractReadyAfter)
-        {
-            var sqlGraphContractSignal = signalReader.GetSqlGraphContractSignal();
-            AddSqlGraphContractSignal(
-                structured,
-                sqlGraphContractSignal.Relevant && !sqlGraphContractSignal.Ready
-                    ? sqlGraphContractSignal
-                    : new SqlGraphContractSignal(
-                        Ready: false,
-                        Relevant: true,
-                        DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason()));
-        }
-        return CreateToolResult(id,
-            errors == 0 && !foldReadyAfter
-                ? foldReadyReason switch
-                {
-                    "stale_fold_key_version" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry an older fold-key version. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
-                    "stale_fold_key_fingerprint" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry folded keys generated under an older runtime fingerprint. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
-                    "missing_fold_backfill" => "Indexing complete. Note: --exact Unicode fold path not active because legacy rows without name_folded remain. Run backfill_fold to upgrade without reparsing files, or do a full rebuild.",
-                    _ => "Indexing complete. Note: --exact Unicode fold path not active."
-                }
-                : "Indexing complete.",
-            structured);
+        return BuildIndexCompletionResult(
+            id,
+            new IndexCompletionDetails(
+                projectPath,
+                authorizedRoot.CheckedRootIdentity,
+                rebuild,
+                maxFileBytes,
+                optionsPayload,
+                unsupportedModesJson,
+                totalFiles,
+                totalChunks,
+                totalSymbols,
+                totalReferences,
+                files.Count,
+                skipped,
+                purged,
+                scanResult.UnknownExtensionFiles.Count,
+                errors,
+                symbolsDroppedByKindFilter,
+                symbolKindFilter,
+                runStopwatch.ElapsedMilliseconds,
+                runStartedAtUtc,
+                GetUtcNow(),
+                sqlGraphContractReadyAfter,
+                csharpSymbolNameReadyAfter,
+                csharpMetadataTargetReadyAfter,
+                foldReadyAfter,
+                foldReadyReason,
+                memorySamples,
+                failures,
+                mcpIndexDiagnostics,
+                writer));
     }
-
-    private static IndexFileFailure BuildIndexFileFailure(string projectPath, string filePath, Exception ex, string stage)
-    {
-        var relativePath = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectPath, filePath));
-        var message = BuildSanitizedIndexFileFailureMessage(stage, ex.GetType().Name, out var messageTruncated);
-        return new IndexFileFailure(relativePath, stage, ex.GetType().Name, message, messageTruncated);
-    }
-
-    private static IndexFileFailure BuildScanFailure(FileIndexer.ScanError error)
-    {
-        var message = SanitizeAndCapMcpIndexFailureMessage(error.Message, out var messageTruncated);
-        return new IndexFileFailure(
-            FileIndexer.NormalizePathSeparators(error.Path),
-            "scan",
-            nameof(FileIndexer.ScanError),
-            message,
-            messageTruncated);
-    }
-
-    private static McpIndexDiagnostic BuildMcpIndexExceptionDiagnostic(
-        string code,
-        string category,
-        string stage,
-        string projectRoot,
-        string filePath,
-        Exception ex)
-    {
-        var path = SanitizeMcpIndexDiagnosticPath(projectRoot, filePath);
-        var exceptionType = SanitizeMcpIndexFailureToken(ex.GetType().Name, "Exception");
-        var message = SanitizeAndCapMcpIndexFailureMessage(
-            DiagnosticRedactor.FormatExceptionMessage(ex, MaxMcpIndexFailureMessageLength),
-            out var messageTruncated);
-        return new McpIndexDiagnostic(code, category, path, stage, exceptionType, message, messageTruncated);
-    }
-
-    internal static JsonObject BuildMcpIndexExceptionDiagnosticForTesting(
-        string code,
-        string category,
-        string stage,
-        string projectRoot,
-        string filePath,
-        Exception ex)
-        => BuildMcpIndexDiagnosticJson(BuildMcpIndexExceptionDiagnostic(
-            code,
-            category,
-            stage,
-            projectRoot,
-            filePath,
-            ex));
-
-    private static string SanitizeMcpIndexDiagnosticPath(string projectRoot, string path)
-    {
-        try
-        {
-            var relative = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectRoot, path));
-            if (!string.IsNullOrWhiteSpace(relative)
-                && relative != "."
-                && !relative.StartsWith("../", StringComparison.Ordinal)
-                && !Path.IsPathRooted(relative))
-            {
-                return McpBoundedText.ForDisplay(relative, 256).Text;
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-        {
-        }
-
-        return "<redacted>";
-    }
-
-    private static void AddMcpIndexDiagnostics(
-        JsonObject structured,
-        IReadOnlyList<IndexFileFailure> failures,
-        IReadOnlyList<McpIndexDiagnostic> diagnostics)
-    {
-        var total = failures.Count + diagnostics.Count;
-        if (total == 0)
-            return;
-
-        var categories = new Dictionary<string, int>(StringComparer.Ordinal);
-        var items = new JsonArray();
-        var emitted = 0;
-        foreach (var failure in failures)
-        {
-            var diagnostic = new McpIndexDiagnostic(
-                "recoverable_index_error",
-                "recoverable_index_error",
-                failure.Path,
-                failure.Stage,
-                failure.ExceptionType,
-                failure.Message,
-                failure.MessageTruncated);
-            AddMcpIndexDiagnosticCategory(categories, diagnostic.Category);
-            if (emitted < 50)
-            {
-                items.Add(BuildMcpIndexDiagnosticJson(diagnostic));
-                emitted++;
-            }
-        }
-
-        foreach (var diagnostic in diagnostics)
-        {
-            AddMcpIndexDiagnosticCategory(categories, diagnostic.Category);
-            if (emitted < 50)
-            {
-                items.Add(BuildMcpIndexDiagnosticJson(diagnostic));
-                emitted++;
-            }
-        }
-
-        var categoryJson = new JsonObject();
-        foreach (var entry in categories.OrderBy(entry => entry.Key, StringComparer.Ordinal))
-            categoryJson[entry.Key] = entry.Value;
-
-        structured["diagnostics"] = new JsonObject
-        {
-            ["total_count"] = total,
-            ["sample_count"] = emitted,
-            ["truncated"] = total > emitted,
-            ["categories"] = categoryJson,
-            ["items"] = items,
-        };
-    }
-
-    private static void AddMcpIndexDiagnosticCategory(Dictionary<string, int> categories, string category)
-        => categories[category] = categories.TryGetValue(category, out var count) ? count + 1 : 1;
-
-    private static JsonObject BuildMcpIndexDiagnosticJson(McpIndexDiagnostic diagnostic)
-        => new()
-        {
-            ["code"] = diagnostic.Code,
-            ["category"] = diagnostic.Category,
-            ["path"] = diagnostic.Path,
-            ["stage"] = diagnostic.Stage,
-            ["exception_type"] = diagnostic.ExceptionType,
-            ["message"] = diagnostic.Message,
-            ["message_truncated"] = diagnostic.MessageTruncated,
-        };
-
-    internal static string BuildSanitizedIndexFileFailureMessageForTesting(string stage, string exceptionType, out bool messageTruncated) =>
-        BuildSanitizedIndexFileFailureMessage(stage, exceptionType, out messageTruncated);
-
-    internal static string SanitizeMcpIndexFailureMessageForTesting(string message, out bool messageTruncated) =>
-        SanitizeAndCapMcpIndexFailureMessage(message, out messageTruncated);
-
 
 }
