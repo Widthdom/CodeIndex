@@ -523,11 +523,11 @@ public static partial class SymbolExtractor
         switch (lang)
         {
             case "xml":
-            {
-                var lines = SplitContentLines(content);
-                symbols = ExtractXmlSymbols(fileId, content, lines);
-                return true;
-            }
+                {
+                    var lines = SplitContentLines(content);
+                    symbols = ExtractXmlSymbols(fileId, content, lines);
+                    return true;
+                }
             case "json":
                 symbols = ExtractJsonSymbols(fileId, content, SplitContentLines(content));
                 return true;
@@ -564,48 +564,48 @@ public static partial class SymbolExtractor
                     lang);
                 return true;
             case "ambiguous_m":
-            {
-                var matlabContent = AmbiguousMContentMasker.MaskComments(
-                    content,
-                    maskMatlabComments: true,
-                    maskObjectiveCComments: true);
-                var objectiveCContent = AmbiguousMContentMasker.MaskComments(
-                    content,
-                    maskMatlabComments: true,
-                    maskObjectiveCComments: true,
-                    preserveObjectiveCModuloExpressions: true);
-                symbols = ExtractCore(
-                    fileId,
-                    "matlab",
-                    matlabContent,
-                    contentIsNormalized: true,
-                    hasOversizeLine: false,
-                    conflictMarkerLine: 0,
-                    filePath,
-                    projectRoot,
-                    patternConfigsAlreadyLoaded: true,
-                    cancellationToken);
-                symbols.AddRange(ExtractCore(
-                    fileId,
-                    "objc",
-                    objectiveCContent,
-                    contentIsNormalized: true,
-                    hasOversizeLine: false,
-                    conflictMarkerLine: 0,
-                    filePath,
-                    projectRoot,
-                    patternConfigsAlreadyLoaded: true,
-                    cancellationToken));
-                return true;
-            }
+                {
+                    var matlabContent = AmbiguousMContentMasker.MaskComments(
+                        content,
+                        maskMatlabComments: true,
+                        maskObjectiveCComments: true);
+                    var objectiveCContent = AmbiguousMContentMasker.MaskComments(
+                        content,
+                        maskMatlabComments: true,
+                        maskObjectiveCComments: true,
+                        preserveObjectiveCModuloExpressions: true);
+                    symbols = ExtractCore(
+                        fileId,
+                        "matlab",
+                        matlabContent,
+                        contentIsNormalized: true,
+                        hasOversizeLine: false,
+                        conflictMarkerLine: 0,
+                        filePath,
+                        projectRoot,
+                        patternConfigsAlreadyLoaded: true,
+                        cancellationToken);
+                    symbols.AddRange(ExtractCore(
+                        fileId,
+                        "objc",
+                        objectiveCContent,
+                        contentIsNormalized: true,
+                        hasOversizeLine: false,
+                        conflictMarkerLine: 0,
+                        filePath,
+                        projectRoot,
+                        patternConfigsAlreadyLoaded: true,
+                        cancellationToken));
+                    return true;
+                }
             case "markdown":
-            {
-                var lines = SplitContentLines(content);
-                symbols = ExtractMarkdownSymbols(fileId, lines);
-                AssignContainers(symbols, lines, null);
-                PopulateDeclaredContainerQualifiedNames(symbols);
-                return true;
-            }
+                {
+                    var lines = SplitContentLines(content);
+                    symbols = ExtractMarkdownSymbols(fileId, lines);
+                    AssignContainers(symbols, lines, null);
+                    PopulateDeclaredContainerQualifiedNames(symbols);
+                    return true;
+                }
             default:
                 symbols = null!;
                 return false;
