@@ -650,6 +650,22 @@ public static partial class ReferenceExtractor
                 return ResolveContainerForCall(column);
             }
 
+            var lineContext = new CoreReferenceLineContext(
+                fileId,
+                language,
+                lines,
+                preparedLines,
+                i,
+                preparedLine,
+                originalLine,
+                context,
+                lineNumber,
+                references,
+                seen,
+                container,
+                definitionNames,
+                ResolveContainerForCall);
+
             if (shaderState is not null)
             {
                 ShaderReferenceExtractor.EmitLineReferences(
@@ -665,70 +681,7 @@ public static partial class ReferenceExtractor
             }
 
             if (isJsxFile && (language is "javascript" or "typescript"))
-            {
-                var jsxTypeArgumentSkipUntil = -1;
-                foreach (Match match in JsxElementOpenRegex.Matches(preparedLine))
-                {
-                    if (match.Index < jsxTypeArgumentSkipUntil)
-                        continue;
-
-                    var fullName = match.Groups["name"].Value;
-                    var nameIndex = match.Groups["name"].Index;
-                    var jsxContainer = ResolveContainerForCall(nameIndex);
-                    var firstDotIndex = fullName.IndexOf('.');
-                    var tagEndIndex = nameIndex + fullName.Length;
-
-                    AddReference(
-                        references,
-                        seen,
-                        fileId,
-                        firstDotIndex < 0 ? fullName : fullName[..firstDotIndex],
-                        nameIndex,
-                        "call",
-                        context,
-                        lineNumber,
-                        jsxContainer);
-
-                    var dotIndex = fullName.LastIndexOf('.');
-                    if (dotIndex > 0 && dotIndex + 1 < fullName.Length)
-                    {
-                        AddReference(
-                            references,
-                            seen,
-                            fileId,
-                            fullName[(dotIndex + 1)..],
-                            nameIndex + dotIndex + 1,
-                            "call",
-                            context,
-                            lineNumber,
-                            jsxContainer);
-                    }
-
-                    if (language == "typescript")
-                    {
-                        var genericStart = SkipWhitespace(preparedLine, tagEndIndex);
-                        if (genericStart < preparedLine.Length && preparedLine[genericStart] == '<')
-                        {
-                            var genericEnd = genericStart;
-                            if (TrySkipTypeScriptJsxTypeArguments(preparedLine, ref genericEnd)
-                                && genericEnd > genericStart + 2)
-                            {
-                                jsxTypeArgumentSkipUntil = Math.Max(jsxTypeArgumentSkipUntil, genericEnd);
-                                AddTypeExpressionSegments(
-                                    references,
-                                    seen,
-                                    fileId,
-                                    preparedLine.Substring(genericStart + 1, genericEnd - genericStart - 2),
-                                    genericStart + 1,
-                                    context,
-                                    lineNumber,
-                                    jsxContainer,
-                                    "typescript");
-                            }
-                        }
-                    }
-                }
-            }
+                EmitJsxElementReferences(lineContext);
 
             if (language == "csharp")
             {
@@ -1061,84 +1014,19 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            if (language == "terraform")
-            {
-                TerraformReferenceExtractor.Emit(
-                    preparedLine,
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    definitionNames,
-                    container);
-            }
+            EmitInfrastructureLineReferences(
+                lineContext,
+                dockerfileStageNames,
+                dockerfileVariableNames,
+                cobolCallableSymbols);
 
-            if (language == "dockerfile")
-            {
-                DockerfileReferenceExtractor.EmitStageReferences(
-                    preparedLine,
-                    originalLine,
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    dockerfileStageNames,
-                    container);
-                DockerfileReferenceExtractor.EmitVariableReferences(
-                    preparedLine,
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    dockerfileVariableNames,
-                    container);
-            }
+            var sqlSuppressedCallIndices = EmitSqlLineReferences(
+                lineContext,
+                structuralLines[i],
+                sqlState,
+                definitionState);
 
-            if (language == "cobol")
-            {
-                CobolReferenceExtractor.Emit(
-                    lines[i],
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    container,
-                    cobolCallableSymbols);
-            }
 
-            var sqlSuppressedCallIndices = language is "sql"
-                ? SqlReferenceExtractor.Emit(
-                    structuralLines[i],
-                    context,
-                    lineNumber,
-                    references,
-                    seen,
-                    fileId,
-                    sqlState!,
-                    ResolveContainerForCall,
-                    name => IsIgnoredCallName(language, name),
-                    (resolvedName, callIndex) =>
-                        definitionState.ShouldSuppressDefinitionCall(
-                            resolvedName,
-                            resolvedName,
-                            callIndex))
-                : null;
-
-            if (language == "css")
-            {
-                CssReferenceExtractor.EmitScss(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-            }
 
             // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
             // `new T[] { ... }` etc. CallRegex requires a trailing `(`, so these forms slip
@@ -1148,245 +1036,9 @@ public static partial class ReferenceExtractor
             // 括弧省略の C# / Java インスタンス化 (`new T { ... }` 等) は CallRegex で拾えないため、
             // 専用パスで `instantiate` を発行する。issue #286 参照。
             if (language is "csharp" or "java")
-            {
-                HashSet<int>? matchedInitializerIndices = null;
-                var mayContainNestedGenericInitializer = language == "csharp" && MayContainNestedGenericSyntax(preparedLine);
-                foreach (Match match in CSharpJavaInitializerRegex.Matches(preparedLine))
-                {
-                    var rawName = match.Groups["name"].Value;
-                    var nameIndex = match.Groups["name"].Index;
-                    (matchedInitializerIndices ??= []).Add(nameIndex);
-                    if (ShouldSkipInitializerName(language, rawName))
-                        continue;
-                    // Do NOT skip when the type is defined in the same file — the CallRegex
-                    // `IsConstructorCallName` path emits `instantiate` without a definitionNames
-                    // filter, so `new Foo { ... }` and `new Foo()` should behave the same way.
-                    // 同一ファイル内定義でもスキップしない。`IsConstructorCallName` 経路の
-                    // `instantiate` が同様の扱いをしているため、括弧あり/なしで挙動を揃える。
-                    var initContainer = ResolveContainerForCall(nameIndex);
-                    var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
-                    AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer, language);
-                }
+                EmitParenlessInitializerReferences(lineContext);
 
-                // The initializer regex has the same one-level generic ceiling as CallRegex,
-                // so nested generic targets like `new Dictionary<string, List<int>> { ... }`
-                // need a depth-aware fallback to keep the outer `instantiate` edge.
-                // initializer regex も CallRegex と同じく generic を 1 段までしか見ないため、
-                // `new Dictionary<string, List<int>> { ... }` の外側型は depth-aware fallback
-                // で補って `instantiate` を落とさないようにする。
-                if (mayContainNestedGenericInitializer)
-                {
-                    foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
-                                 preparedLine,
-                                 matchedInitializerIndices ?? EmptyMatchedIndices,
-                                 requireOpeningBrace: true))
-                    {
-                        if (ShouldSkipInitializerName(language, candidate.Name))
-                            continue;
-
-                        var initContainer = ResolveContainerForCall(candidate.NameIndex);
-                        AddReference(
-                            references,
-                            seen,
-                            fileId,
-                            candidate.Name,
-                            candidate.NameIndex,
-                            "instantiate",
-                            context,
-                            lineNumber,
-                            initContainer,
-                            language);
-                    }
-                }
-
-                // Allman-style multi-line form: `new T` at end of current line with the
-                // opening `{` on the next non-blank prepared line. Peek forward to confirm
-                // before emitting, so trailing `new T` patterns that are not followed by `{`
-                // (e.g. `var a = new Foo\n;` or `var a = new Foo\n(1, 2);`) do not produce
-                // phantom `instantiate` rows.
-                // Allman スタイルの多行形式: 現在行末の `new T` と次の非空 prepared line 冒頭の
-                // `{` を合わせて 1 つの instantiate として扱う。`{` が続かない場合（`;` や `(` が
-                // 後続する等）には幻行を出さないため、peek で確認してから発行する。
-                var trailingMatch = CSharpJavaInitializerTrailingRegex.Match(preparedLine);
-                var peek = i + 1;
-                while (peek < preparedLines.Length && string.IsNullOrWhiteSpace(preparedLines[peek]))
-                    peek++;
-                if (peek < preparedLines.Length)
-                {
-                    var nextContent = preparedLines[peek].TrimStart();
-                    if (nextContent.Length > 0 && nextContent[0] == '{')
-                    {
-                        if (trailingMatch.Success)
-                        {
-                            var rawName = trailingMatch.Groups["name"].Value;
-                            var nameIndex = trailingMatch.Groups["name"].Index;
-                            (matchedInitializerIndices ??= []).Add(nameIndex);
-                            if (!ShouldSkipInitializerName(language, rawName))
-                            {
-                                var initContainer = ResolveContainerForCall(nameIndex);
-                                var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
-                                AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer);
-                            }
-
-                        }
-
-                        if (mayContainNestedGenericInitializer)
-                        {
-                            foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
-                                         preparedLine,
-                                         matchedInitializerIndices ?? EmptyMatchedIndices,
-                                         requireOpeningBrace: false))
-                            {
-                                if (ShouldSkipInitializerName(language, candidate.Name))
-                                    continue;
-
-                                var initContainer = ResolveContainerForCall(candidate.NameIndex);
-                                var name = language == "csharp" ? NormalizeCSharpIdentifier(candidate.Name) : candidate.Name;
-                                AddReference(
-                                    references,
-                                    seen,
-                                    fileId,
-                                    name,
-                                    candidate.NameIndex,
-                                    "instantiate",
-                                    context,
-                                    lineNumber,
-                                    initContainer);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (language == "css")
-            {
-                CssReferenceExtractor.EmitScss(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-            }
-
-            if (language == "php")
-            {
-                PhpReferenceExtractor.EmitStaticAccessReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitInstanceofReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitCatchTypeReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitReturnTypeReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitParameterTypeReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitPropertyTypeReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitInheritanceTypeReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitUseTypeReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitUseFunctionReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitUseConstReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-
-                PhpReferenceExtractor.EmitObjectMemberAccessReferences(
-                    preparedLine,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container);
-            }
-
-            var lineContext = new CoreReferenceLineContext(
-                fileId,
-                language,
-                lines,
-                preparedLines,
-                i,
-                preparedLine,
-                originalLine,
-                context,
-                lineNumber,
-                references,
-                seen,
-                container,
-                definitionNames,
-                ResolveContainerForCall);
+            EmitPhpAndScssLineReferences(lineContext);
 
             var callContext = new CoreCallReferenceContext(
                 lineContext,
