@@ -1282,8 +1282,6 @@ public static partial class IndexCommandRunner
                         continue;
                     }
                     readableFileBytes.Remember(targetIndex, record.Size);
-                    var content = loaded.Content;
-                    var rawBytes = loaded.RawBytes;
                     var warning = loaded.Warning;
                     var generatedSuppressionIssue = generatedExtractionSuppressed
                         ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
@@ -1342,181 +1340,42 @@ public static partial class IndexCommandRunner
                     }
 
                     DemoteReadinessOnce();
-                    writer.MarkBatchInProgress();
-                    fileBatchMarked = true;
                     if (record.Lang == "csharp")
                         csharpMetadataTargetsNeedRefresh = true;
-                    var recordRequiresTypeScriptAugmentationRefresh = record.Lang == "typescript";
-                    using var txn = writer.BeginTransaction(cancellationToken, "update file");
-                    if (recordRequiresTypeScriptAugmentationRefresh)
-                        RequireTypeScriptAugmentationRefresh();
-                    var stalePurged = PurgeStaleUpdateCleanupPaths(
-                        record.Path,
-                        record.Checksum,
-                        includeDirectoryAndStem: projectRootWritten);
-                    if (stalePurged > 0)
+                    var persistence = PersistUpdateFile(new UpdateFilePersistenceContext
                     {
-                        RequireTypeScriptAugmentationRefresh();
-                        if (!options.SymbolsOnly)
-                            mutualRecursionRefreshNeeded = true;
-                    }
-                    WriteProjectRootOnce();
-                    var fileId = writer.UpsertFile(record, out var referenceIdentityChanged);
-                    if (!options.SymbolsOnly && referenceIdentityChanged)
-                        mutualRecursionRefreshNeeded = true;
-                    currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
-                    currentUpdatePhase = "chunking";
-                    var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
-                    if (generatedSuppressionIssue != null)
-                    {
-                        writer.InsertChunks(chunks, cancellationToken);
-                        writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
-                        currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                        currentUpdatePhase = "validating";
-                        var generatedIssues = AppendIssueIfMissing(
-                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
-                            generatedSuppressionIssue);
-                        writer.InsertIssues(fileId, generatedIssues);
-                        currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
-                        currentUpdatePhase = "committing";
-                        writer.ClearBatchInProgress();
-                        txn.Commit();
-                        fileBatchMarked = false;
-                        RecordDynamicGraphFileRefresh(record.Lang);
-                        updated++;
-                        ftsMutated = true;
-                        updateProgress.WriteVerbose($"  [OK  ] {relPath} ({chunks.Count} chunks, generated-code extraction skipped)");
-                        continue;
-                    }
-                    currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
-                    currentUpdatePhase = "symbols";
-                    var symbolExtraction = ExtractSymbolsWithStallTimeout(
-                        fileId,
-                        record.Lang,
-                        content,
-                        absPath,
-                        projectRoot,
-                        record.Path,
-                        currentUpdatePath,
-                        true,
-                        loaded.HasOversizeLine,
-                        loaded.ConflictMarkerLine,
-                        symbolExtractionWorker.Value,
-                        cancellationToken);
-                    var symbols = symbolExtraction.Symbols;
-                    var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
-                    var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
-                    var sourceContractSeenBeforeObservation =
-                        postExtractionHooks.Value.SawCSharpStaticInterfaceSourceContract;
-                    postExtractionHooks.Value.ObserveCSharpStaticInterfaceSourceSymbols(fileContext, symbols);
-                    if (record.Lang == "csharp"
-                        && !csharpWorkspace.HasSourceStaticInterfaceContracts
-                        && !sourceContractSeenBeforeObservation
-                        && postExtractionHooks.Value.SawCSharpStaticInterfaceSourceContract)
-                    {
-                        writer.SetCSharpStaticInterfaceSourceEvidence(null);
-                        throw new CSharpWorkspaceChangedException(
-                            "A C# static-interface contract appeared after workspace preflight.");
-                    }
-                    if (symbols.Count > options.MaxSymbolsPerFile)
-                    {
-                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
-                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
-                            ? [issue]
-                            : AppendIssue([symbolRegexTimeoutIssue], issue);
-                        writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
-                        writer.InsertIssues(fileId, capIssues);
-                        writer.ClearBatchInProgress();
-                        txn.Commit();
-                        fileBatchMarked = false;
-                        RecordDynamicGraphFileRefresh(record.Lang);
-                        updated++;
-                        ftsMutated = true;
-                        updateProgress.WriteVerbose($"  [SKIP] {relPath} ({issue.Message})");
-                        continue;
-                    }
-                    SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
-                    postExtractionHooks.Value.OnSymbolsExtractedAfterSourceObservation(fileContext, symbols);
-                    symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
-                    if (symbols.Count > options.MaxSymbolsPerFile)
-                    {
-                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
-                        IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
-                            ? [issue]
-                            : AppendIssue([symbolRegexTimeoutIssue], issue);
-                        writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferencesInAtomicFileScope([], refreshMutualRecursionFlags: false, cancellationToken);
-                        writer.InsertIssues(fileId, capIssues);
-                        writer.ClearBatchInProgress();
-                        txn.Commit();
-                        fileBatchMarked = false;
-                        RecordDynamicGraphFileRefresh(record.Lang);
-                        updated++;
-                        ftsMutated = true;
-                        updateProgress.WriteVerbose($"  [SKIP] {relPath} ({issue.Message})");
-                        continue;
-                    }
-                    writer.InsertChunks(chunks, cancellationToken);
-                    FileIndexer.ValidateSymbolLineRanges(record, symbols);
-                    writer.InsertSymbols(symbols, cancellationToken);
-                    currentUpdatePath = FormatIndexPhasePath(relPath, "references");
-                    currentUpdatePhase = "references";
-                    List<ReferenceRecord> references;
-                    FileIssue? referenceRegexTimeoutIssue;
-                    ReferenceExtractionResult referenceExtraction;
-                    using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
-                    {
-                        referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
-                            fileId,
-                            record.Lang,
-                            content,
-                            loaded.HasOversizeLine,
-                            symbols,
-                            record.Path,
-                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                            cancellationToken,
-                            maxReferenceCount: options.MaxReferencesPerFile + 1,
-                            conflictMarkerLine: loaded.ConflictMarkerLine,
-                            workspaceRoot: projectRoot,
-                            csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups);
-                        references = referenceExtraction.References;
-                        referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
-                    }
-                    postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);
-                    FileIssue? referenceCapIssue = null;
-                    if (references.Count > options.MaxReferencesPerFile)
-                    {
-                        referenceCapIssue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
-                        references = [];
-                    }
-                    writer.InsertReferencesInAtomicFileScope(references, refreshMutualRecursionFlags: false, cancellationToken);
-                    // Validate content for encoding issues / エンコーディング問題を検証
-                    currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    currentUpdatePhase = "validating";
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
-                    if (symbolRegexTimeoutIssue != null)
-                        issues = AppendIssue(issues, symbolRegexTimeoutIssue);
-                    if (referenceRegexTimeoutIssue != null)
-                        issues = AppendIssue(issues, referenceRegexTimeoutIssue);
-                    issues = AppendReferenceExtractionDiagnosticIssues(issues, record.Path, referenceExtraction.Diagnostics);
-                    if (referenceCapIssue != null)
-                        issues = AppendIssue(issues, referenceCapIssue);
-                    writer.InsertIssues(fileId, issues);
-                    currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
-                    currentUpdatePhase = "committing";
-                    writer.ClearBatchInProgress();
-                    txn.Commit();
-
-                    RecordDynamicGraphFileRefresh(record.Lang);
+                        Writer = writer,
+                        Indexer = indexer,
+                        Options = options,
+                        ProjectRoot = projectRoot,
+                        RelativePath = relPath,
+                        AbsolutePath = absPath,
+                        Record = record,
+                        Loaded = loaded,
+                        GeneratedSuppressionIssue = generatedSuppressionIssue,
+                        CSharpWorkspace = csharpWorkspace,
+                        PostExtractionHooks = postExtractionHooks.Value,
+                        SymbolExtractionWorker = symbolExtractionWorker.Value,
+                        ProjectRootWritten = projectRootWritten,
+                        CancellationToken = cancellationToken,
+                        RequireTypeScriptAugmentationRefresh = RequireTypeScriptAugmentationRefresh,
+                        PurgeStaleUpdateCleanupPaths = PurgeStaleUpdateCleanupPaths,
+                        WriteProjectRootOnce = WriteProjectRootOnce,
+                        RecordDynamicGraphFileRefresh = RecordDynamicGraphFileRefresh,
+                        SetBatchMarkerOwned = owned => fileBatchMarked = owned,
+                        SetPhase = (path, phase) =>
+                        {
+                            currentUpdatePath = path;
+                            currentUpdatePhase = phase;
+                        },
+                    });
+                    symbolsDroppedByKindFilter += persistence.SymbolsDroppedByKindFilter;
+                    mutualRecursionRefreshNeeded |= persistence.MutualRecursionRefreshNeeded;
                     updated++;
                     ftsMutated = true;
-                    if (!options.SymbolsOnly && (symbols.Count > 0 || references.Count > 0))
-                        mutualRecursionRefreshNeeded = true;
                     UpdateFileCommittedForTesting?.Invoke(updated + removed, targetPaths.Count);
                     ThrowIfUpdateCancelled();
-                    updateProgress.WriteVerbose($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                    updateProgress.WriteVerbose(persistence.VerboseMessage);
                 }
                 catch (IndexExtractionStalledException)
                 {
