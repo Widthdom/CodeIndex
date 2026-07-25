@@ -65,12 +65,84 @@ internal static partial class ProgramRunner
         string appVersion,
         CancellationToken cancellationToken = default)
     {
-        var checkOnly = false;
         var wantsJson = cmdArgs.Contains("--json", StringComparer.Ordinal);
+        if (!TryParseUpgradeSelection(cmdArgs, out var selection, out var selectionError))
+            return WriteUpgradeUsageError(selectionError, wantsJson, jsonOptions);
+
+        if (!TryGetUpgradeVerificationPolicy(out var verificationPolicy, out var verificationPolicyError))
+            return WriteUpgradeUsageError(verificationPolicyError, wantsJson, jsonOptions);
+
+        if (selection.ExplicitVersion != null
+            && IsPrereleaseTag(selection.ExplicitVersion)
+            && selection.SelectedChannel == "stable")
+        {
+            selection = selection with
+            {
+                SelectedChannel = "prerelease",
+                IncludePrerelease = true,
+            };
+        }
+
+        var result = ResolveUpgradeRelease(selection, appVersion, cancellationToken);
+        var shouldInstall = result.LatestVersion != null
+            && (selection.ExplicitVersion != null || result.UpdateAvailable);
+        if (selection.CheckOnly || !shouldInstall)
+            return WriteUpgradeAvailabilityResult(result, selection, verificationPolicy, wantsJson, jsonOptions);
+
+        var selectedReleaseTag = result.LatestVersion!;
+        if (TryHandleUnsupportedUpgradePlatform(
+                selectedReleaseTag,
+                result,
+                selection,
+                verificationPolicy,
+                wantsJson,
+                jsonOptions,
+                out var platformExitCode))
+        {
+            return platformExitCode;
+        }
+
+        if (!TryResolveWritableUpgradeInstallDirectory(
+                result,
+                selection,
+                verificationPolicy,
+                wantsJson,
+                jsonOptions,
+                out var installDir,
+                out var installDirectoryExitCode))
+        {
+            return installDirectoryExitCode;
+        }
+
+        return RunVerifiedUpgradeInstaller(
+            selectedReleaseTag,
+            installDir,
+            result,
+            selection,
+            verificationPolicy,
+            wantsJson,
+            jsonOptions,
+            cancellationToken);
+    }
+
+    private sealed record UpgradeSelection(
+        bool CheckOnly,
+        string SelectedChannel,
+        bool IncludePrerelease,
+        string SelectionSource,
+        string? ExplicitVersion);
+
+    private static bool TryParseUpgradeSelection(
+        string[] cmdArgs,
+        out UpgradeSelection selection,
+        out string error)
+    {
+        var checkOnly = false;
         var selectedChannel = "stable";
         var includePrerelease = false;
         var selectionSource = "latest";
         string? explicitVersion = null;
+
         for (var i = 0; i < cmdArgs.Length; i++)
         {
             var arg = cmdArgs[i];
@@ -93,10 +165,18 @@ internal static partial class ProgramRunner
             if (arg == "--channel")
             {
                 if (i + 1 >= cmdArgs.Length)
-                    return WriteUpgradeUsageError("--channel requires a value: stable, latest, or prerelease.", wantsJson, jsonOptions);
+                {
+                    selection = default!;
+                    error = "--channel requires a value: stable, latest, or prerelease.";
+                    return false;
+                }
 
                 if (!TryApplyUpgradeChannel(cmdArgs[++i], out selectedChannel, out includePrerelease, out var channelError))
-                    return WriteUpgradeUsageError(channelError, wantsJson, jsonOptions);
+                {
+                    selection = default!;
+                    error = channelError;
+                    return false;
+                }
 
                 selectionSource = selectedChannel;
                 continue;
@@ -104,7 +184,11 @@ internal static partial class ProgramRunner
             if (arg.StartsWith("--channel=", StringComparison.Ordinal))
             {
                 if (!TryApplyUpgradeChannel(arg["--channel=".Length..], out selectedChannel, out includePrerelease, out var channelError))
-                    return WriteUpgradeUsageError(channelError, wantsJson, jsonOptions);
+                {
+                    selection = default!;
+                    error = channelError;
+                    return false;
+                }
 
                 selectionSource = selectedChannel;
                 continue;
@@ -112,10 +196,18 @@ internal static partial class ProgramRunner
             if (arg == "--version")
             {
                 if (i + 1 >= cmdArgs.Length)
-                    return WriteUpgradeUsageError("--version requires a release tag such as v1.29.0.", wantsJson, jsonOptions);
+                {
+                    selection = default!;
+                    error = "--version requires a release tag such as v1.29.0.";
+                    return false;
+                }
 
                 if (!TryNormalizeReleaseTag(cmdArgs[++i], out explicitVersion, out var versionError))
-                    return WriteUpgradeUsageError(versionError, wantsJson, jsonOptions);
+                {
+                    selection = default!;
+                    error = versionError;
+                    return false;
+                }
 
                 selectionSource = "explicit_version";
                 continue;
@@ -123,67 +215,87 @@ internal static partial class ProgramRunner
             if (arg.StartsWith("--version=", StringComparison.Ordinal))
             {
                 if (!TryNormalizeReleaseTag(arg["--version=".Length..], out explicitVersion, out var versionError))
-                    return WriteUpgradeUsageError(versionError, wantsJson, jsonOptions);
+                {
+                    selection = default!;
+                    error = versionError;
+                    return false;
+                }
 
                 selectionSource = "explicit_version";
                 continue;
             }
-            return WriteUpgradeUsageError($"upgrade does not accept '{arg}'.", wantsJson, jsonOptions);
+            selection = default!;
+            error = $"upgrade does not accept '{arg}'.";
+            return false;
         }
 
-        if (!TryGetUpgradeVerificationPolicy(out var verificationPolicy, out var verificationPolicyError))
-            return WriteUpgradeUsageError(verificationPolicyError, wantsJson, jsonOptions);
+        selection = new UpgradeSelection(
+            checkOnly,
+            selectedChannel,
+            includePrerelease,
+            selectionSource,
+            explicitVersion);
+        error = string.Empty;
+        return true;
+    }
 
-        if (explicitVersion != null && IsPrereleaseTag(explicitVersion) && selectedChannel == "stable")
-        {
-            selectedChannel = "prerelease";
-            includePrerelease = true;
-        }
-
-        var result = explicitVersion != null
+    private static UpdateCheckResult ResolveUpgradeRelease(
+        UpgradeSelection selection,
+        string appVersion,
+        CancellationToken cancellationToken)
+        => selection.ExplicitVersion != null
             ? new UpdateCheckResult(
                 appVersion,
-                explicitVersion,
-                UpdateChecker.IsNewerRelease(explicitVersion, appVersion),
+                selection.ExplicitVersion,
+                UpdateChecker.IsNewerRelease(selection.ExplicitVersion, appVersion),
                 FromCache: false,
                 Error: null)
-            : includePrerelease
+            : selection.IncludePrerelease
                 ? CheckLatestPrerelease(appVersion, cancellationToken)
                 : UpdateChecker.Check(appVersion, cancellationToken);
 
-        var shouldInstall = result.LatestVersion != null && (explicitVersion != null || result.UpdateAvailable);
-        if (checkOnly || !shouldInstall)
+    private static int WriteUpgradeAvailabilityResult(
+        UpdateCheckResult result,
+        UpgradeSelection selection,
+        string verificationPolicy,
+        bool wantsJson,
+        JsonSerializerOptions jsonOptions)
+    {
+        var metadataFailureExitCode = result.Error is null
+            ? CommandExitCodes.Success
+            : CommandExitCodes.RuntimeError;
+        if (wantsJson)
         {
-            var metadataFailureExitCode = result.Error is null
-                ? CommandExitCodes.Success
-                : CommandExitCodes.RuntimeError;
-            if (wantsJson)
-            {
-                Console.WriteLine(JsonSerializer.Serialize(
-                    CreateUpgradeJsonResult(
-                        result,
-                        selectedChannel,
-                        selectionSource,
-                        includePrerelease,
-                        verificationPolicy,
-                        installAttempted: false,
-                        installExitCode: null,
-                        error: null),
-                    jsonOptions));
-            }
-            else if (result.UpdateAvailable && result.LatestVersion != null)
-                Console.WriteLine($"A newer cdidx {selectedChannel} release is available: {result.LatestVersion} (current: {result.CurrentVersion}).");
-            else if (result.Error != null)
-                Console.WriteLine($"Could not select a cdidx {selectedChannel} release ({result.Error}); current: {result.CurrentVersion}.");
-            else
-                Console.WriteLine($"cdidx is up to date (current: {result.CurrentVersion}).");
-            return metadataFailureExitCode;
+            Console.WriteLine(JsonSerializer.Serialize(
+                CreateUpgradeJsonResult(
+                    result,
+                    selection.SelectedChannel,
+                    selection.SelectionSource,
+                    selection.IncludePrerelease,
+                    verificationPolicy,
+                    installAttempted: false,
+                    installExitCode: null,
+                    error: null),
+                jsonOptions));
         }
+        else if (result.UpdateAvailable && result.LatestVersion != null)
+            Console.WriteLine($"A newer cdidx {selection.SelectedChannel} release is available: {result.LatestVersion} (current: {result.CurrentVersion}).");
+        else if (result.Error != null)
+            Console.WriteLine($"Could not select a cdidx {selection.SelectedChannel} release ({result.Error}); current: {result.CurrentVersion}.");
+        else
+            Console.WriteLine($"cdidx is up to date (current: {result.CurrentVersion}).");
+        return metadataFailureExitCode;
+    }
 
-        var selectedReleaseTag = result.LatestVersion!;
-        bool? manifestProvenanceVerified = null;
-        bool? installerProvenanceVerified = null;
-
+    private static bool TryHandleUnsupportedUpgradePlatform(
+        string selectedReleaseTag,
+        UpdateCheckResult result,
+        UpgradeSelection selection,
+        string verificationPolicy,
+        bool wantsJson,
+        JsonSerializerOptions jsonOptions,
+        out int exitCode)
+    {
         if (OperatingSystem.IsWindows())
         {
             var handoff = CreateWindowsUpgradeHandoff(selectedReleaseTag, RuntimeInformation.ProcessArchitecture);
@@ -192,9 +304,9 @@ internal static partial class ProgramRunner
                 Console.WriteLine(JsonSerializer.Serialize(
                     CreateUpgradeJsonResult(
                         result,
-                        selectedChannel,
-                        selectionSource,
-                        includePrerelease,
+                        selection.SelectedChannel,
+                        selection.SelectionSource,
+                        selection.IncludePrerelease,
                         verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
@@ -209,7 +321,8 @@ internal static partial class ProgramRunner
                 CommandErrorWriter.WriteStderr($"Release page: {handoff.Url}");
                 CommandErrorWriter.WriteStderr($"Manual zip asset: {handoff.Asset} ({handoff.AssetUrl})");
             }
-            return CommandExitCodes.FeatureUnavailable;
+            exitCode = CommandExitCodes.FeatureUnavailable;
+            return true;
         }
 
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -219,9 +332,9 @@ internal static partial class ProgramRunner
                 Console.WriteLine(JsonSerializer.Serialize(
                     CreateUpgradeJsonResult(
                         result,
-                        selectedChannel,
-                        selectionSource,
-                        includePrerelease,
+                        selection.SelectedChannel,
+                        selection.SelectionSource,
+                        selection.IncludePrerelease,
                         verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
@@ -233,10 +346,24 @@ internal static partial class ProgramRunner
                 CommandErrorWriter.WriteStderr("Error: cdidx upgrade currently requires a POSIX shell installer on Linux or macOS.");
                 CommandErrorWriter.WriteStderr("Hint: download the latest release asset manually, or rerun install.sh from a shell environment.");
             }
-            return CommandExitCodes.FeatureUnavailable;
+            exitCode = CommandExitCodes.FeatureUnavailable;
+            return true;
         }
 
-        var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        exitCode = CommandExitCodes.Success;
+        return false;
+    }
+
+    private static bool TryResolveWritableUpgradeInstallDirectory(
+        UpdateCheckResult result,
+        UpgradeSelection selection,
+        string verificationPolicy,
+        bool wantsJson,
+        JsonSerializerOptions jsonOptions,
+        out string installDir,
+        out int exitCode)
+    {
+        installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (!TryCheckInstallDirectoryWritable(installDir, out var installDirectoryError))
         {
             if (wantsJson)
@@ -244,9 +371,9 @@ internal static partial class ProgramRunner
                 Console.WriteLine(JsonSerializer.Serialize(
                     CreateUpgradeJsonResult(
                         result,
-                        selectedChannel,
-                        selectionSource,
-                        includePrerelease,
+                        selection.SelectedChannel,
+                        selection.SelectionSource,
+                        selection.IncludePrerelease,
                         verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
@@ -262,9 +389,26 @@ internal static partial class ProgramRunner
                 WriteUpgradeInstallerTrustDiagnostic();
                 CommandErrorWriter.WriteStderr("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
             }
-            return CommandExitCodes.UsageError;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
         }
 
+        exitCode = CommandExitCodes.Success;
+        return true;
+    }
+
+    private static int RunVerifiedUpgradeInstaller(
+        string selectedReleaseTag,
+        string installDir,
+        UpdateCheckResult result,
+        UpgradeSelection selection,
+        string verificationPolicy,
+        bool wantsJson,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
+    {
+        bool? manifestProvenanceVerified = null;
+        bool? installerProvenanceVerified = null;
         string? scriptDirectory = null;
         string? scriptPath = null;
         string? checksumManifestPath = null;
@@ -332,9 +476,9 @@ internal static partial class ProgramRunner
                 Console.WriteLine(JsonSerializer.Serialize(
                     CreateUpgradeJsonResult(
                         result,
-                        selectedChannel,
-                        selectionSource,
-                        includePrerelease,
+                        selection.SelectedChannel,
+                        selection.SelectionSource,
+                        selection.IncludePrerelease,
                         verificationPolicy,
                         installAttempted: true,
                         installExitCode: installExitCode,
@@ -357,9 +501,9 @@ internal static partial class ProgramRunner
                 Console.WriteLine(JsonSerializer.Serialize(
                     CreateUpgradeJsonResult(
                         result,
-                        selectedChannel,
-                        selectionSource,
-                        includePrerelease,
+                        selection.SelectedChannel,
+                        selection.SelectionSource,
+                        selection.IncludePrerelease,
                         verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
