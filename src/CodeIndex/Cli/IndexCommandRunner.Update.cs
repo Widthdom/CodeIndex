@@ -377,10 +377,6 @@ public static partial class IndexCommandRunner
             ], fatalPhase);
         }
 
-        IReadOnlyDictionary<string, string>? scannedUpdateLanguages = null;
-        ThrowIfUpdateCancelled();
-        WriteIndexJsonLiveness(options, "checking C# workspace contracts...");
-        var csharpWorkspaceHeartbeat = StartIndexJsonPhaseHeartbeat(options, "checking C# workspace contracts");
         var priorCSharpStaticInterfaceSourceEvidence =
             writer.GetCSharpStaticInterfaceSourceEvidence();
         var scopedCleanupPlan = PlanUpdateCSharpCleanup(
@@ -431,20 +427,49 @@ public static partial class IndexCommandRunner
             return writer.ApplyScopedFileCleanupPlan(livePlan, cancellationToken);
         }
 
-        var csharpPrepassTargets = BuildUpdateCSharpPrepassTargets(
-            indexer,
-            projectRoot,
-            targetPaths,
-            scannedUpdateLanguages,
-            out var existingCSharpPathsNowUnsupportedOrNonCSharp);
-        CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
-        Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? csharpWorkspaceSnapshots = null;
-        FileIndexer.ScanInputSnapshot? csharpWorkspaceInputSnapshot = null;
-        var deferCSharpMutationsForIncompleteWorkspace = false;
-        bool? csharpSourceEvidenceForStamp = null;
-        var csharpSourceEvidenceCompleteForStamp = false;
-        var preserveConservativePersistedContractEvidence = false;
-        var csharpTargetAffected = false;
+        var csharpPreflight = PrepareUpdateCSharpWorkspace(
+            new UpdateCSharpPreflightContext
+            {
+                Writer = writer,
+                Indexer = indexer,
+                Options = options,
+                ProjectRoot = projectRoot,
+                TargetPaths = targetPaths,
+                PriorFilterRetainedCSharpContractMembers =
+                    priorFilterRetainedCSharpContractMembers,
+                PriorCSharpStaticInterfaceSourceEvidence =
+                    priorCSharpStaticInterfaceSourceEvidence,
+                ScopedCleanupPlan = scopedCleanupPlan,
+                ScopedCleanupHadCSharp = scopedCleanupHadCSharp,
+                ScopedCleanupHadContract = scopedCleanupHadContract,
+                HadIndexedCSharpFilesBeforeUpdate =
+                    hadIndexedCSharpFilesBeforeUpdate,
+                Updated = updated,
+                Removed = removed,
+                CancellationToken = cancellationToken,
+                ThrowIfUpdateCancelled = ThrowIfUpdateCancelled,
+                RecordScanErrors = errors => RecordScanErrors(errors),
+                RecordCSharpWorkspaceDrift = (path, detail) =>
+                    RecordCSharpWorkspaceDrift(path, detail),
+            });
+        var scannedUpdateLanguages =
+            csharpPreflight.ScannedUpdateLanguages;
+        var csharpPrepassTargets =
+            csharpPreflight.CSharpPrepassTargets;
+        var csharpWorkspace = csharpPreflight.CSharpWorkspace;
+        var csharpWorkspaceSnapshots =
+            csharpPreflight.CSharpWorkspaceSnapshots;
+        var csharpWorkspaceInputSnapshot =
+            csharpPreflight.CSharpWorkspaceInputSnapshot;
+        var deferCSharpMutationsForIncompleteWorkspace =
+            csharpPreflight.DeferCSharpMutationsForIncompleteWorkspace;
+        var csharpSourceEvidenceForStamp =
+            csharpPreflight.CSharpSourceEvidenceForStamp;
+        var csharpSourceEvidenceCompleteForStamp =
+            csharpPreflight.CSharpSourceEvidenceCompleteForStamp;
+        var csharpTargetAffected =
+            csharpPreflight.CSharpTargetAffected;
+
         bool TryValidateCSharpWorkspaceInputSnapshot(out string? changedPath)
         {
             if (csharpWorkspaceInputSnapshot == null)
@@ -459,251 +484,6 @@ public static partial class IndexCommandRunner
                 cancellationToken);
             changedPath = changedInputPath;
             return stable;
-        }
-        try
-        {
-            var transitionedPathWasCSharp = existingCSharpPathsNowUnsupportedOrNonCSharp is { Count: > 0 }
-                && writer.HasCSharpFilesInPaths(
-                    existingCSharpPathsNowUnsupportedOrNonCSharp,
-                    cancellationToken);
-            var transitionedPathHadContract = existingCSharpPathsNowUnsupportedOrNonCSharp is { Count: > 0 }
-                && writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
-                    existingCSharpPathsNowUnsupportedOrNonCSharp,
-                    includeInterfaceDeclarationsAsConservativeEvidence:
-                        priorCSharpStaticInterfaceSourceEvidence == null
-                        || !priorFilterRetainedCSharpContractMembers,
-                    cancellationToken);
-            csharpTargetAffected = csharpPrepassTargets.Count > 0
-                || transitionedPathWasCSharp
-                || scopedCleanupHadCSharp;
-            var persistedContractEvidence = scopedCleanupHadContract
-                || transitionedPathHadContract
-                || (csharpTargetAffected
-                    && hadIndexedCSharpFilesBeforeUpdate
-                    && priorCSharpStaticInterfaceSourceEvidence != false);
-            preserveConservativePersistedContractEvidence = persistedContractEvidence;
-            if (csharpPrepassTargets.Count == 0 && !persistedContractEvidence)
-            {
-                csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], transitionedPathHadContract);
-            }
-            else if (persistedContractEvidence)
-            {
-                // Persisted contracts already require the complete C# update set. Defer
-                // candidate reads and workspace materialization to that authoritative pass.
-                // 永続化済みcontractがある場合は全C# update setが必要なため、candidate
-                // readとworkspace materializationを後続のauthoritative passへ委譲する。
-                csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], true);
-            }
-            else
-            {
-                var capturedBefore = CSharpStaticInterfacePrepass.TryCaptureFileStatSnapshots(
-                    csharpPrepassTargets,
-                    out var beforeSnapshots,
-                    out _,
-                    cancellationToken);
-                if (!capturedBefore)
-                {
-                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                        [],
-                        HasStaticInterfaceContracts: true,
-                        SourceContractEvidenceComplete: false);
-                }
-                else
-                {
-                    UpdateCSharpPrepassForTesting?.Invoke();
-                    csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                        writer,
-                        indexer,
-                        csharpPrepassTargets,
-                        includeExistingSymbols: false,
-                        parallelism: options.Parallelism,
-                        cancellationToken: cancellationToken);
-                    if (!CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(
-                        csharpPrepassTargets,
-                        beforeSnapshots,
-                        out _,
-                        cancellationToken))
-                    {
-                        csharpWorkspace = csharpWorkspace with
-                        {
-                            HasStaticInterfaceContracts = true,
-                            SourceContractEvidenceComplete = false,
-                        };
-                    }
-                    else
-                    {
-                        csharpWorkspaceSnapshots = beforeSnapshots;
-                    }
-                }
-            }
-
-            if (csharpTargetAffected && priorCSharpStaticInterfaceSourceEvidence == false)
-            {
-                csharpSourceEvidenceForStamp = csharpWorkspace.HasSourceStaticInterfaceContracts;
-                csharpSourceEvidenceCompleteForStamp = csharpWorkspace.SourceContractEvidenceComplete;
-            }
-
-            if (!csharpWorkspace.SourceContractEvidenceComplete)
-            {
-                csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw new IndexInterruptedException(updated + removed, targetPaths.Count);
-        }
-        finally
-        {
-            StopIndexJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
-        }
-        if (csharpWorkspace.HasStaticInterfaceContracts)
-        {
-            WriteIndexJsonLiveness(options, "expanding C# update set for static interface contracts...");
-            var expandHeartbeat = StartIndexJsonPhaseHeartbeat(options, "expanding C# update set for static interface contracts");
-            try
-            {
-                UpdateCSharpExpansionScanStartingForTesting?.Invoke();
-                var scanWithDirectorySnapshots =
-                    indexer.ScanFilesDetailedWithDirectoryListingSnapshots(
-                    cancellationToken: cancellationToken);
-                var scanResult = scanWithDirectorySnapshots.ScanResult;
-                csharpWorkspaceInputSnapshot = scanWithDirectorySnapshots.InputSnapshot;
-                var expandedScanHadFatalErrors = scanResult.Errors.Any(error => error.IsFatal);
-                RecordScanErrors(scanResult.Errors);
-                scannedUpdateLanguages = scanResult.FileLanguages;
-                if (expandedScanHadFatalErrors)
-                {
-                    // An incomplete enumeration cannot prove that a hook-hidden source
-                    // contract was absent from the omitted subtree. Preserve every C# row
-                    // and reference instead of rebuilding visible implementations against
-                    // a partial lookup. Non-C# caller targets may still make progress.
-                    // 不完全列挙では omitted subtree の hook-hidden contract 不在を証明
-                    // できないため、C# row/ref は全て保持し、non-C# target のみ進める。
-                    deferCSharpMutationsForIncompleteWorkspace = true;
-                    csharpSourceEvidenceForStamp = null;
-                    csharpSourceEvidenceCompleteForStamp = false;
-                    csharpWorkspaceSnapshots = null;
-                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                        [],
-                        HasStaticInterfaceContracts: true,
-                        SourceContractEvidenceComplete: false);
-                    DeferCSharpTargetsAfterIncompleteWorkspace(
-                        writer,
-                        projectRoot,
-                        targetPaths,
-                        cancellationToken);
-                }
-                else
-                {
-                    var expandedTargetIndexPaths = new HashSet<string>(StringComparer.Ordinal);
-                    foreach (var existingTargetPath in targetPaths)
-                    {
-                        expandedTargetIndexPaths.Add(
-                            UpdateFileTarget.Create(projectRoot, existingTargetPath).IndexPath);
-                    }
-                    foreach (var filePath in scanResult.Files)
-                    {
-                        if (scanResult.FileLanguages.TryGetValue(filePath, out var language)
-                            && language == "csharp"
-                            && expandedTargetIndexPaths.Add(
-                                UpdateFileTarget.Create(projectRoot, filePath).IndexPath))
-                        {
-                            targetPaths.Add(filePath);
-                        }
-                    }
-
-                    csharpPrepassTargets = BuildUpdateCSharpPrepassTargets(
-                        indexer,
-                        projectRoot,
-                        targetPaths,
-                        scannedUpdateLanguages,
-                        out existingCSharpPathsNowUnsupportedOrNonCSharp);
-                    var capturedBefore = CSharpStaticInterfacePrepass.TryCaptureFileStatSnapshots(
-                        csharpPrepassTargets,
-                        out var beforeSnapshots,
-                        out var snapshotFailurePath,
-                        cancellationToken);
-                    if (csharpPrepassTargets.Count == 0)
-                    {
-                        csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
-                    }
-                    else if (!capturedBefore)
-                    {
-                        csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                            [],
-                            HasStaticInterfaceContracts: true,
-                            SourceContractEvidenceComplete: false);
-                    }
-                    else
-                    {
-                        UpdateCSharpPrepassForTesting?.Invoke();
-                        csharpWorkspace = CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                            writer,
-                            indexer,
-                            csharpPrepassTargets,
-                            isExistingSymbolPathExcluded: path =>
-                                existingCSharpPathsNowUnsupportedOrNonCSharp?.Contains(path) == true,
-                            parallelism: options.Parallelism,
-                            excludedExistingFileIds: scopedCleanupPlan.FileIds,
-                            cancellationToken: cancellationToken);
-                    }
-
-                    string? afterSnapshotFailurePath = null;
-                    var stableFilesAfterPrepass = capturedBefore
-                        && CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(
-                            csharpPrepassTargets,
-                            beforeSnapshots,
-                            out afterSnapshotFailurePath,
-                            cancellationToken);
-                    var stableSnapshot = stableFilesAfterPrepass
-                        && csharpWorkspace.SourceContractEvidenceComplete;
-                    if (!stableSnapshot)
-                    {
-                        deferCSharpMutationsForIncompleteWorkspace = true;
-                        RecordCSharpWorkspaceDrift(
-                            csharpWorkspace.IncompleteSourcePaths?.FirstOrDefault()
-                                ?? snapshotFailurePath
-                                ?? afterSnapshotFailurePath
-                                ?? "<csharp_workspace>",
-                            "The C# workspace changed or became unreadable during contract preflight.");
-                        csharpSourceEvidenceForStamp = null;
-                        csharpSourceEvidenceCompleteForStamp = false;
-                        csharpWorkspaceSnapshots = null;
-                        csharpWorkspace = csharpWorkspace with
-                        {
-                            HasStaticInterfaceContracts = true,
-                            SourceContractEvidenceComplete = false,
-                        };
-                        DeferCSharpTargetsAfterIncompleteWorkspace(
-                            writer,
-                            projectRoot,
-                            targetPaths,
-                            cancellationToken);
-                    }
-                    else
-                    {
-                        csharpWorkspaceSnapshots = beforeSnapshots;
-                        csharpSourceEvidenceForStamp = csharpWorkspace.HasSourceStaticInterfaceContracts;
-                        csharpSourceEvidenceCompleteForStamp = true;
-
-                        // Persisted positive/legacy evidence remains conservative until
-                        // every C# file has been refreshed successfully. Even when the new
-                        // source snapshot is negative, disable C# stat reuse for this pass.
-                        // persisted positive/legacy evidence は全C# refresh成功まで保持し、
-                        // 新 snapshot がnegativeでも今回のC# stat reuseは無効化する。
-                        if (preserveConservativePersistedContractEvidence)
-                            csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-                    }
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw new IndexInterruptedException(updated + removed, targetPaths.Count);
-            }
-            finally
-            {
-                StopIndexJsonPhaseHeartbeat(expandHeartbeat);
-            }
         }
 
         if (csharpWorkspaceInputSnapshot != null)
