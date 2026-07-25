@@ -292,67 +292,17 @@ public partial class McpServer : IDisposable
         CancellationToken loopToken,
         CancellationToken externalCancellationToken)
     {
-        var writeGate = new SemaphoreSlim(1, 1);
-        var admissionGate = new SemaphoreSlim(MaxAcceptedConcurrentFrames, MaxAcceptedConcurrentFrames);
-        var tasks = new List<Task>();
-        Task protocolBarrier = Task.CompletedTask;
-        Task? terminalTransportWriteTask = null;
-        var hasRequestScopedWriters = transport is IConcurrentMcpTransport;
-
-        async Task WriteTransportFrameResponseAsync(
-            Func<string?, CancellationToken, Task> writeResponseAsync,
-            string? response)
-        {
-            // Concurrent transports provide one writer per request, so serializing those writers
-            // behind the base-transport gate lets an unrelated stuck response retain later HTTP
-            // request resources. Base transports (notably stdio) still require the shared gate.
-            // concurrent transport は request ごとの writer を持つため、base transport 用 gate
-            // に直列化すると無関係な stuck response が後続 HTTP resource を保持してしまう。
-            // stdio 等の base transport だけ shared gate を維持する (#4546)。
-            if (hasRequestScopedWriters)
-            {
-                await WriteFrameSafelyAsync(
-                    writeResponseAsync,
-                    response,
-                    externalCancellationToken).ConfigureAwait(false);
-                FlushDeferredFrameLogs();
-                return;
-            }
-
-            await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
-            try
-            {
-                await WriteFrameSafelyAsync(
-                    writeResponseAsync,
-                    response,
-                    externalCancellationToken).ConfigureAwait(false);
-                FlushDeferredFrameLogs();
-            }
-            finally
-            {
-                writeGate.Release();
-            }
-        }
+        var state = new ConcurrentFrameLoopState(this, transport, loopToken, externalCancellationToken);
 
         try
         {
             while (_running)
             {
-                PruneCompletedRequestTasks(tasks);
+                PruneCompletedRequestTasks(state.Tasks);
                 McpTransportFrame? transportFrame;
                 try
                 {
-                    if (transport is IConcurrentMcpTransport concurrentTransport)
-                    {
-                        transportFrame = await concurrentTransport.ReadConcurrentFrameAsync(loopToken).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        var readFrame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
-                        transportFrame = readFrame is null
-                            ? null
-                            : new McpTransportFrame(readFrame, transport.WriteFrameAsync);
-                    }
+                    transportFrame = await ReadConcurrentTransportFrameAsync(transport, loopToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
                 {
@@ -360,228 +310,27 @@ public partial class McpServer : IDisposable
                 }
                 catch (DecoderFallbackException ex)
                 {
-                    BeginDeferredFrameLogs();
-                    terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
-                        writeGate,
-                        transport,
-                        BuildInvalidUtf8ParseErrorResponse(ex),
-                        externalCancellationToken);
+                    state.ScheduleTerminalProtocolError(BuildInvalidUtf8ParseErrorResponse(ex));
                     break;
                 }
                 catch (BoundedLineLengthException ex)
                 {
-                    BeginDeferredFrameLogs();
-                    terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
-                        writeGate,
-                        transport,
-                        BuildOversizedLineErrorResponse(ex),
-                        externalCancellationToken);
+                    state.ScheduleTerminalProtocolError(BuildOversizedLineErrorResponse(ex));
                     break;
                 }
                 if (transportFrame is null)
                     break;
-                var frame = transportFrame.Frame;
-                var writeResponseAsync = transportFrame.WriteResponseAsync;
-                var transportRequestToken = transportFrame.RequestCancellationToken;
 
-                if (IsCancellationFrame(frame))
-                {
-                    try
-                    {
-                        BeginDeferredFrameLogs();
-                        var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                        await WriteTransportFrameResponseAsync(writeResponseAsync, response).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
-                    }
+                if (await TryProcessInlineConcurrentFrameAsync(state, transportFrame).ConfigureAwait(false))
                     continue;
-                }
 
-                if (IsServerResponseFrame(frame))
-                {
-                    try
-                    {
-                        BeginDeferredFrameLogs();
-                        var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                        await WriteTransportFrameResponseAsync(writeResponseAsync, response).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
-                    }
-                    continue;
-                }
-
-                // Admission is deliberately non-blocking: waiting here would prevent a later
-                // cancellation/client-response frame from being read while execution is saturated.
-                // Excess ordinary work receives a retry-safe JSON-RPC overload response instead of
-                // retaining another frame/task/HTTP context without bound (#4536).
-                // admission は non-blocking にする。ここで待つと execution 飽和中に後続の
-                // cancellation/client-response frame を読めなくなるため。上限超過 work は task や
-                // HTTP context を保持し続けず、retry-safe overload response を返す (#4536)。
-                if (!admissionGate.Wait(0))
-                {
-                    try
-                    {
-                        // Keep every response-bearing id registered until its retry-safe overload
-                        // response has reached the transport. A cancellation before or during that
-                        // write then belongs to this rejected occurrence instead of poisoning a later
-                        // same-id retry (#4536, #4545).
-                        // retry-safe overload 応答が transport へ届くまで response-bearing id を登録する。
-                        // reject 前または write 中の cancel をこの occurrence に束縛し、同じ id の後続
-                        // retry へ持ち越さない (#4536, #4545)。
-                        using var capacityRejectedRegistrations = new CapacityRejectedFrameRegistrations(this);
-                        BeginDeferredFrameLogs();
-                        var response = await ProcessFrameAsync(
-                            frame,
-                            beforeDispatchAsync: null,
-                            rejectForCapacity: true,
-                            capacityRejectedRegistrations: capacityRejectedRegistrations).ConfigureAwait(false);
-                        await WriteTransportFrameResponseAsync(writeResponseAsync, response).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
-                    }
-                    continue;
-                }
-                Interlocked.Increment(ref _acceptedConcurrentFrameCount);
-
-                var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                var isProtocolBarrier = IsProtocolOrderingBarrierFrame(frame);
-                var precedingBarrier = protocolBarrier;
-                var tasksAcceptedBeforeBarrier = isProtocolBarrier ? tasks.ToArray() : [];
-                Func<CancellationToken, Task> awaitPredecessorsAsync = isProtocolBarrier
-                    ? token => AwaitProtocolPredecessorsAsync(tasksAcceptedBeforeBarrier, token)
-                    : token => AwaitProtocolPredecessorsAsync([precedingBarrier], token);
-                var predecessorTask = new Lazy<Task>(
-                    () => awaitPredecessorsAsync(loopToken),
-                    LazyThreadSafetyMode.ExecutionAndPublication);
-                Task BeforeDispatchAsync(CancellationToken token)
-                    => predecessorTask.Value.WaitAsync(token);
                 // Accepted frames are bounded independently from executing operations. The request
                 // registers its id/cancellation state before awaiting protocol predecessors and the
                 // execution gate, so a cancellation cannot expire while queued (#4536).
                 // accepted frame と executing operation は別々に上限化する。request は protocol
                 // predecessor / execution gate を待つ前に id と cancellation state を登録するため、
                 // queue 中に cancellation が失効しない (#4536)。
-                Task requestTask;
-                try
-                {
-                    requestTask = Task.Run(async () =>
-                    {
-                        var detachedIsolatedActions = new ConcurrentQueue<Task>();
-                        var previousDetachedIsolatedActions = _currentDetachedIsolatedActions.Value;
-                        try
-                        {
-                            requestTaskStarted.TrySetResult();
-                            using var frameCts = transportRequestToken.CanBeCanceled
-                                ? CancellationTokenSource.CreateLinkedTokenSource(loopToken, transportRequestToken)
-                                : null;
-                            var frameToken = frameCts?.Token ?? loopToken;
-                            string? response = null;
-                            try
-                            {
-                                _currentDetachedIsolatedActions.Value = detachedIsolatedActions;
-                                _currentRequestToken.Value = frameToken;
-                                _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
-                                    ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
-                                    : string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase)
-                                        ? async (frameToWrite, writeToken) =>
-                                    {
-                                        await writeGate.WaitAsync(writeToken).ConfigureAwait(false);
-                                        try
-                                        {
-                                            await transport.WriteFrameAsync(frameToWrite, writeToken).ConfigureAwait(false);
-                                        }
-                                        finally
-                                        {
-                                            writeGate.Release();
-                                        }
-                                    }
-                                : null;
-                                _canAwaitClientResponses.Value = _currentOutOfBandFrameWriter.Value is not null
-                                    && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
-                                BeginDeferredFrameLogs();
-                                response = await ProcessFrameAsync(
-                                    frame,
-                                    BeforeDispatchAsync,
-                                    rejectForCapacity: false).ConfigureAwait(false);
-                            }
-                            catch (OperationCanceledException) when (frameToken.IsCancellationRequested)
-                            {
-                                // Keep the transport's strict one-frame/one-writer contract. HTTP
-                                // observes its own terminal reason and aborts/finalizes the response
-                                // when the per-request lifetime expires (#4546).
-                                // transport の frame/writer 対応を維持する。request lifetime 期限切れ時は
-                                // HTTP 側が terminal reason を観測して response を abort/finalize する。
-                                response = null;
-                            }
-                            finally
-                            {
-                                _currentDetachedIsolatedActions.Value = previousDetachedIsolatedActions;
-                                _currentRequestToken.Value = CancellationToken.None;
-                                _canAwaitClientResponses.Value = false;
-                                _currentOutOfBandFrameWriter.Value = null;
-                            }
-
-                            // Malformed/unauthorized frames can return before normal dispatch. Start their
-                            // predecessor wait here so such a frame cannot collapse a protocol barrier.
-                            // malformed / unauthorized frame が dispatch 前に return しても protocol
-                            // barrier を消してしまわないよう、未開始ならここで predecessor を待つ。
-                            if (!predecessorTask.IsValueCreated)
-                            {
-                                try
-                                {
-                                    await predecessorTask.Value.WaitAsync(frameToken).ConfigureAwait(false);
-                                }
-                                catch (OperationCanceledException) when (frameToken.IsCancellationRequested)
-                                {
-                                    // A canceled frame no longer needs protocol ordering, but its
-                                    // request-scoped writer still owns mandatory response cleanup.
-                                    // cancel 済み frame は protocol ordering を待たず、対応 writer
-                                    // による必須 cleanup だけを完了させる (#4546)。
-                                    response = null;
-                                }
-                            }
-
-                            await WriteTransportFrameResponseAsync(writeResponseAsync, response).ConfigureAwait(false);
-                        }
-                        finally
-                        {
-                            var retainedWork = detachedIsolatedActions.IsEmpty
-                                ? Task.CompletedTask
-                                : ObserveDetachedIsolatedActionsAsync(detachedIsolatedActions.ToArray());
-                            transportFrame.CompleteResourceRetentionWhen(retainedWork);
-                            Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
-                            admissionGate.Release();
-
-                            // A canceled or timed-out isolated action may still be unwinding
-                            // durable writer cleanup after its response has been sent. Release
-                            // frame admission and the transport resource callback first, then keep
-                            // the outer request task attached to that cleanup so EOF's bounded
-                            // drain cannot return while the action is restoring database state.
-                            // cancel / timeout 応答後も isolated action が永続 writer cleanup を
-                            // unwind 中の場合がある。frame admission と transport resource callback
-                            // を先に解放し、その後 outer request task を cleanup に接続して、EOF の
-                            // bounded drain が database 復元中に戻らないようにする。
-                            await retainedWork.ConfigureAwait(false);
-                        }
-                    }, CancellationToken.None);
-                }
-                catch
-                {
-                    transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
-                    Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
-                    admissionGate.Release();
-                    throw;
-                }
-                tasks.Add(requestTask);
-                if (isProtocolBarrier)
-                    protocolBarrier = requestTask;
-                await requestTaskStarted.Task.ConfigureAwait(false);
+                await StartAcceptedConcurrentFrameAsync(state, transportFrame).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
@@ -591,29 +340,7 @@ public partial class McpServer : IDisposable
         }
         finally
         {
-            try
-            {
-                await DrainInFlightTasksAsync(
-                    tasks,
-                    InFlightDrainGracePeriod,
-                    InFlightPostCancelGracePeriod,
-                    externalCancellationToken,
-                    terminalTransportWriteTask).ConfigureAwait(false);
-            }
-            finally
-            {
-                // The bounded EOF drain can intentionally leave late request tasks running. Those
-                // tasks can still own the write gate or reach the stdio writer until their finally
-                // blocks run. Publish that aggregate even if draining itself exits unexpectedly,
-                // then clean up the gates only after every accepted task is done (#3999, #4543).
-                // bounded EOF drain は late request task を残すことがある。finally が走るまで gate や
-                // stdio writer を使い得るため、drain 自体が異常終了しても aggregate を公開し、全
-                // accepted task 完了後に gate を dispose する (#3999, #4543)。
-                var transportWork = BuildDrainOperationsTask(tasks, terminalTransportWriteTask);
-                if (transport is StdioMcpTransport stdioTransport)
-                    stdioTransport.DeferDisposalUntil(transportWork);
-                _ = DisposeConcurrentLoopGatesAfterAsync(transportWork, writeGate, admissionGate);
-            }
+            await state.DrainAndScheduleGateDisposalAsync().ConfigureAwait(false);
         }
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
