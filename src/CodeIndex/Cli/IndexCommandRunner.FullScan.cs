@@ -383,88 +383,6 @@ public static partial class IndexCommandRunner
                 writer.InsertIssues(fileId, issues);
         }
 
-        HashSet<string>? retainedPathsForReuse = null;
-        if (!options.Rebuild
-            && !startedWithNoIndexedFiles
-            && staleFilePurgePlan.RemainingFileCount - fileTargets.LongLength > fileTargets.LongLength)
-        {
-            retainedPathsForReuse = new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
-            foreach (var target in fileTargets)
-                retainedPathsForReuse.Add(target.IndexPath);
-        }
-        var csharpPositiveNoOpPolicyCandidate = !options.SymbolsOnly
-            && priorCSharpStaticInterfaceSourceEvidence is not null
-            && priorIndexComplete
-            && (priorReadiness & DbContext.GraphReadyFlag) != 0
-            && !scanHadErrors
-            && !hadCSharpStaticInterfaceContractsBeforePurge
-            && !forceExtractorRefresh
-            && !priorSymbolsOnlyGraphOmitted
-            && symbolKindFilterMatchesPrior
-            && csharpSymbolNameContractMatchesCurrent
-            && csharpIndexedProjectRootCompatible
-            && AllowReuseWithCurrentHotspotFamilyTrust(
-                "csharp",
-                hotspotFamilyTrustMatchesCurrent)
-            && csharpPrepassTargets.Count > 0;
-        var hasCSharpLanguageTransitions = false;
-        void ObservePersistedCSharpPath(string indexPath)
-        {
-            if (!hasCSharpLanguageTransitions && IsExistingCSharpSymbolPathNowNonCSharp(indexPath))
-                hasCSharpLanguageTransitions = true;
-        }
-
-        var reusableIndexedFileStats = !options.Rebuild && !startedWithNoIndexedFiles
-            ? writer.LoadReusableIndexedFileStats(
-                options.MaxSymbolsPerFile,
-                options.MaxReferencesPerFile,
-                cancellationToken,
-                fileTargets.Length,
-                retainedPathsForReuse,
-                staleFilePurgePlan.FileIds,
-                csharpPositiveNoOpPolicyCandidate
-                    ? ObservePersistedCSharpPath
-                    : null)
-            : null;
-        Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
-        var priorPositiveCSharpSourceNoOpCandidate = false;
-        var allCSharpPrepassTargetsReusable = false;
-
-        bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
-        {
-            if (forceExtractorRefresh
-                || options.Rebuild
-                || startedWithNoIndexedFiles
-                || !projectRootWritten
-                || (requiresConservativeCSharpSourceRefresh
-                    && !priorPositiveCSharpSourceNoOpCandidate)
-                || !symbolKindFilterMatchesPrior
-                || !csharpSymbolNameContractMatchesCurrent)
-                return false;
-            if (target.Language != "csharp")
-                return false;
-
-            var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                reusableIndexedFileStats!,
-                target.FilePath,
-                target.IndexPath,
-                target.Language,
-                target.GeneratedExtractionSuppressed);
-            if (existingFile == null)
-            {
-                allCSharpPrepassTargetsReusable = false;
-                (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
-                    csharpPrepassCapacity,
-                    StringComparer.Ordinal))[target.IndexPath] = null;
-                return false;
-            }
-
-            (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
-                csharpPrepassCapacity,
-                StringComparer.Ordinal))[target.IndexPath] = existingFile.Value;
-            return true;
-        }
-
         bool IsExistingCSharpSymbolPathNowNonCSharp(string indexPath)
         {
             var currentPath = Path.Combine(
@@ -474,125 +392,66 @@ public static partial class IndexCommandRunner
                 && currentLanguage != "csharp";
         }
 
-        Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? csharpWorkspaceFileSnapshots = null;
-
-        priorPositiveCSharpSourceNoOpCandidate = csharpPositiveNoOpPolicyCandidate
-            && !hasCSharpLanguageTransitions;
-        if (priorPositiveCSharpSourceNoOpCandidate)
-        {
-            allCSharpPrepassTargetsReusable = true;
-            csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(
-                csharpPrepassCapacity,
-                StringComparer.Ordinal);
-            foreach (var target in csharpPrepassTargets)
+        var csharpPreflight = PrepareFullScanCSharpWorkspace(
+            new FullScanCSharpPreflightContext
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                    reusableIndexedFileStats!,
-                    target.FilePath,
-                    target.IndexPath,
-                    target.Language,
-                    target.GeneratedExtractionSuppressed);
-                csharpPrepassStatReuse[target.IndexPath] = existingFile;
-                allCSharpPrepassTargetsReusable &= existingFile != null;
-            }
-        }
-
-        CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
-        var forceFullCSharpRefreshFromInvalidatedNoOp = false;
-        if (options.SymbolsOnly || deferCSharpMutationsForIncompleteScan)
-        {
-            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
-        }
-        else
-        {
-            WriteFullScanJsonLiveness(options, "preparing C# workspace symbols...");
-            var activeCSharpWorkspaceFiles = new string?[csharpPrepassTargets.Count];
-            var csharpWorkspaceHeartbeat = StartFullScanJsonPhaseHeartbeat(
-                options,
-                "preparing C# workspace symbols",
-                () => GetActiveCSharpPrepassPath(activeCSharpWorkspaceFiles));
-            try
-            {
-                if (csharpPrepassTargets.Count == 0)
-                {
-                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
-                }
-                else if (priorPositiveCSharpSourceNoOpCandidate
-                         && allCSharpPrepassTargetsReusable)
-                {
-                    // A strict positive no-op needs neither persisted C# symbols nor a
-                    // workspace lookup: every existing reference row is retained unchanged.
-                    // positive完全no-opではDB symbol/lookupを一切materializeしない。
-                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
-                }
-                else
-                {
-                    csharpWorkspace = BuildStableFullScanCSharpWorkspace(
-                        projectRoot,
-                        csharpPrepassTargets,
-                        out csharpWorkspaceFileSnapshots,
-                        () =>
-                        CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                            writer,
-                            indexer,
-                            csharpPrepassTargets,
-                            includeExistingSymbols: csharpIndexedProjectRootCompatible && !options.Rebuild && !startedWithNoIndexedFiles,
-                            canReuseExistingSymbolsWithoutRead:
-                                priorPositiveCSharpSourceNoOpCandidate
-                                    ? null
-                                    : CanReuseCSharpPrepassTargetWithoutRead,
-                            reportCandidateFile: (candidateIndex, path) => SetActiveCSharpPrepassPath(activeCSharpWorkspaceFiles, candidateIndex, path),
-                            parallelism: extractionParallelism,
-                            excludedExistingFileIds: staleFilePurgePlan.FileIds,
-                            isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
-                            cancellationToken: cancellationToken),
-                        cancellationToken);
-                    forceFullCSharpRefreshFromInvalidatedNoOp =
-                        priorCSharpStaticInterfaceSourceEvidence == true
-                        || csharpWorkspace.HasStaticInterfaceContracts;
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw new IndexInterruptedException(0, files.Count, actualMode);
-            }
-            finally
-            {
-                Array.Clear(activeCSharpWorkspaceFiles);
-                StopFullScanJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
-            }
-        }
-        if (!options.SymbolsOnly && !csharpWorkspace.SourceContractEvidenceComplete)
-        {
-            var incompleteSourcePaths = csharpWorkspace.IncompleteSourcePaths;
-            DeferCSharpMutationsForIncompleteWorkspace(csharpWorkspace);
-            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                [],
-                false,
-                SourceContractEvidenceComplete: false,
-                IncompleteSourcePaths: incompleteSourcePaths);
-        }
-        var preservePriorPositiveCSharpSourceNoOp = priorPositiveCSharpSourceNoOpCandidate
-            && allCSharpPrepassTargetsReusable
-            && !deferCSharpMutationsForIncompleteScan;
-        var csharpSourceEvidenceForStamp = preservePriorPositiveCSharpSourceNoOp
-            ? priorCSharpStaticInterfaceSourceEvidence == true
-            : csharpWorkspace.HasSourceStaticInterfaceContracts;
-        var csharpSourceEvidenceComplete = preservePriorPositiveCSharpSourceNoOp
-            || csharpWorkspace.SourceContractEvidenceComplete;
-        if (preservePriorPositiveCSharpSourceNoOp)
-            csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = false };
-        if (!options.SymbolsOnly
-            && !deferCSharpMutationsForIncompleteScan
-            && !preservePriorPositiveCSharpSourceNoOp
-            && (forceFullCSharpRefreshFromInvalidatedNoOp
-                || requiresConservativeCSharpSourceRefresh
-                || !csharpSourceEvidenceComplete
-                || (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)))
-        {
-            csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-        }
+                Writer = writer,
+                Indexer = indexer,
+                Options = options,
+                ProjectRoot = projectRoot,
+                FileTargets = fileTargets,
+                CSharpPrepassTargets = csharpPrepassTargets,
+                CSharpPrepassCapacity = csharpPrepassCapacity,
+                StaleFilePurgePlan = staleFilePurgePlan,
+                StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+                PriorIndexComplete = priorIndexComplete,
+                PriorReadiness = priorReadiness,
+                ScanHadErrors = scanHadErrors,
+                ForceExtractorRefresh = forceExtractorRefresh,
+                PriorSymbolsOnlyGraphOmitted = priorSymbolsOnlyGraphOmitted,
+                SymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior,
+                CSharpSymbolNameContractMatchesCurrent =
+                    csharpSymbolNameContractMatchesCurrent,
+                CSharpIndexedProjectRootCompatible =
+                    csharpIndexedProjectRootCompatible,
+                CSharpHotspotTrustMatchesCurrent =
+                    AllowReuseWithCurrentHotspotFamilyTrust(
+                        "csharp",
+                        hotspotFamilyTrustMatchesCurrent),
+                RequiresConservativeCSharpSourceRefresh =
+                    requiresConservativeCSharpSourceRefresh,
+                HadCSharpStaticInterfaceContractsBeforePurge =
+                    hadCSharpStaticInterfaceContractsBeforePurge,
+                PriorCSharpStaticInterfaceSourceEvidence =
+                    priorCSharpStaticInterfaceSourceEvidence,
+                ProjectRootWritten = projectRootWritten,
+                ExtractionParallelism = extractionParallelism,
+                FilesCount = files.Count,
+                ActualMode = actualMode,
+                CancellationToken = cancellationToken,
+                IsExistingCSharpSymbolPathNowNonCSharp =
+                    IsExistingCSharpSymbolPathNowNonCSharp,
+                GetDeferCSharpMutationsForIncompleteScan =
+                    () => deferCSharpMutationsForIncompleteScan,
+                GetPurged = () => purged,
+                DeferCSharpMutationsForIncompleteWorkspace =
+                    DeferCSharpMutationsForIncompleteWorkspace,
+            });
+        var reusableIndexedFileStats =
+            csharpPreflight.ReusableIndexedFileStats;
+        var csharpPrepassStatReuse =
+            csharpPreflight.CSharpPrepassStatReuse;
+        var csharpWorkspaceFileSnapshots =
+            csharpPreflight.CSharpWorkspaceFileSnapshots;
+        var csharpWorkspace = csharpPreflight.CSharpWorkspace;
+        var forceFullCSharpRefreshFromInvalidatedNoOp =
+            csharpPreflight.ForceFullCSharpRefreshFromInvalidatedNoOp;
+        var preservePriorPositiveCSharpSourceNoOp =
+            csharpPreflight.PreservePriorPositiveCSharpSourceNoOp;
+        var csharpSourceEvidenceForStamp =
+            csharpPreflight.CSharpSourceEvidenceForStamp;
+        var csharpSourceEvidenceComplete =
+            csharpPreflight.CSharpSourceEvidenceComplete;
 
         void DeferCSharpMutationsForLoadedSnapshotDrift(string path)
         {
