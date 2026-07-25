@@ -14,6 +14,11 @@ namespace CodeIndex.Mcp;
 
 public partial class McpServer
 {
+    private sealed record IndexAuthorizationResult(
+        string CurrentWorkingDirectory,
+        McpPathBoundary.IndexRootAuthorization? Authorization,
+        JsonNode? ErrorResponse);
+
     internal static Action<string>? McpIndexInputSnapshotBarrierForTesting { get; set; }
 
     private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
@@ -64,7 +69,70 @@ public partial class McpServer
         return false;
     }
 
+    private async Task<IndexAuthorizationResult> CaptureIndexAuthorizationAsync(
+        JsonNode? id,
+        string requestedProjectPath)
+    {
+        // Prevent path traversal — only allow indexing within current working directory
+        // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
+        var cwd = Path.GetFullPath(".");
+        if (!McpPathBoundary.IsPathWithinDirectory(cwd, requestedProjectPath))
+        {
+            return new IndexAuthorizationResult(
+                cwd,
+                null,
+                CreateToolErrorResponse(id, "Path must be within the current working directory"));
+        }
 
+        await RefreshClientRootsIfNeededAsync().ConfigureAwait(false);
+        if (!IsPathWithinClientRoots(requestedProjectPath))
+        {
+            return new IndexAuthorizationResult(
+                cwd,
+                null,
+                CreateToolErrorResponse(id, "Path must be within an MCP client root"));
+        }
 
+        if (!McpPathBoundary.TryCaptureIndexRoot(
+                requestedProjectPath,
+                path => IsIndexPathAuthorized(cwd, path),
+                McpIndexEntryOpenBoundaryForTesting,
+                McpIndexDirectoryEnumerationBoundaryForTesting,
+                McpIndexDirectoryEnumerationCompletedForTesting,
+                out var authorization,
+                out var authorizationError))
+        {
+            return new IndexAuthorizationResult(
+                cwd,
+                null,
+                CreateToolErrorResponse(id, authorizationError!));
+        }
 
+        return new IndexAuthorizationResult(cwd, authorization, null);
+    }
+
+    private bool IsIndexPathAuthorized(string cwd, string path)
+        => McpPathBoundary.IsPathWithinDirectory(cwd, path) && IsPathWithinClientRoots(path);
+
+    private JsonNode CreateUnsupportedIndexModeResponse(
+        JsonNode? id,
+        McpIndexRequestOptions indexOptions,
+        JsonArray unsupportedModes,
+        string checkedRootIdentity)
+    {
+        var unsupportedData = new JsonObject
+        {
+            ["unsupported_modes"] = unsupportedModes,
+            ["index_options"] = indexOptions.OptionsPayload,
+            ["index_started"] = false,
+            ["checked_root_identity"] = checkedRootIdentity,
+        };
+        return CreateToolErrorResponse(
+            id,
+            "MCP index does not support the requested scoped or watch indexing mode; no indexing started.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use dryRun:true to inspect the plan, remove unsupported scope/watch arguments, or run the equivalent cdidx index command in the CLI.",
+            retrySafe: false,
+            extraData: unsupportedData);
+    }
 }
