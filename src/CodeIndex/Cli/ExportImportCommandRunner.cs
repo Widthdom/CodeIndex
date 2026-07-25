@@ -57,6 +57,18 @@ internal static partial class ExportImportCommandRunner
     private const string CtagsSkipExcludePathFilter = "exclude_path_filter";
     private const string CtagsSkipOther = "other";
 
+    private sealed record ImportArguments(
+        string ArchivePath,
+        string? DbPath,
+        bool WantsJson,
+        bool PrunePaths,
+        string ImportMode,
+        bool DryRun,
+        int Limit,
+        int Offset);
+
+    private sealed record ImportArgumentParseResult(ImportArguments? Arguments, int ExitCode);
+
     public static int RunExport(
         string[] args,
         JsonSerializerOptions jsonOptions,
@@ -71,86 +83,20 @@ internal static partial class ExportImportCommandRunner
 
     public static int RunImport(string[] args, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken = default)
     {
-        string? archivePath = null;
-        string? dbPath = null;
-        var wantsJson = Array.Exists(args, arg => arg == "--json");
-        var prunePaths = false;
-        var importMode = "import";
-        var dryRun = false;
-        var limit = DiffCommandRunner.DefaultDiffLimit;
-        var offset = 0;
-        var pagingOptionSpecified = false;
+        var parseResult = ParseImportArguments(args, jsonOptions);
+        var importArguments = parseResult.Arguments;
+        if (importArguments == null)
+            return parseResult.ExitCode;
 
-        for (var i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-            if (arg == "--json")
-            {
-                wantsJson = true;
-                continue;
-            }
-            if (arg == "--prune-paths")
-            {
-                prunePaths = true;
-                continue;
-            }
-            if (arg is "--dry-run" or "--check")
-            {
-                importMode = arg == "--check" ? "check" : "dry_run";
-                dryRun = true;
-                continue;
-            }
-
-            if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
-            {
-                if (dbError != null)
-                    return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_db_requires_value", dbError, "use `cdidx import <archive> --db <path>`.", ImportUsage);
-                dbPath = dbValue;
-                continue;
-            }
-
-            if (TryReadValueOption(args, ref i, "--limit", arg, out var limitValue, out var limitError))
-            {
-                pagingOptionSpecified = true;
-                if (limitError != null
-                    || !int.TryParse(limitValue, NumberStyles.None, CultureInfo.InvariantCulture, out limit)
-                    || limit < 0
-                    || limit > DiffCommandRunner.MaxDiffLimit)
-                {
-                    return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_limit_invalid", $"--limit requires an integer from 0 to {DiffCommandRunner.MaxDiffLimit}.", "use `--limit 20` to bound destination delta samples.", ImportUsage);
-                }
-                continue;
-            }
-
-            if (TryReadValueOption(args, ref i, "--offset", arg, out var offsetValue, out var offsetError))
-            {
-                pagingOptionSpecified = true;
-                if (offsetError != null
-                    || !int.TryParse(offsetValue, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
-                    || offset < 0
-                    || offset > int.MaxValue - limit)
-                {
-                    return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_offset_invalid", "--offset requires a non-negative integer that can be combined with --limit.", "use `--offset 0` for the first destination delta page.", ImportUsage);
-                }
-                continue;
-            }
-
-            if (arg.StartsWith("-", StringComparison.Ordinal))
-                return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_unknown_option", $"unknown import option `{arg}`.", "use `cdidx import <archive> [--db <path>]`.", ImportUsage);
-
-            if (archivePath != null)
-                return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_extra_archive_path", $"import accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", ImportUsage);
-            archivePath = arg;
-        }
-
-        if (string.IsNullOrWhiteSpace(archivePath))
-            return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_archive_required", "import requires an archive path.", "pass an archive produced by `cdidx export <archive>`.", ImportUsage);
-        if (pagingOptionSpecified && !dryRun)
-            return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_paging_requires_dry_run", "--limit and --offset are only valid with --dry-run or --check.", "add `--dry-run` to preview bounded destination deltas.", ImportUsage);
-        if (offset > int.MaxValue - limit)
-            return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_offset_invalid", "--offset is too large for the requested --limit.", "choose a lower --offset.", ImportUsage);
-
-        dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
+        var archivePath = importArguments.ArchivePath;
+        var wantsJson = importArguments.WantsJson;
+        var prunePaths = importArguments.PrunePaths;
+        var importMode = importArguments.ImportMode;
+        var dryRun = importArguments.DryRun;
+        var limit = importArguments.Limit;
+        var offset = importArguments.Offset;
+        var dbPath = importArguments.DbPath
+            ?? DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
         var importTargetProjectRoot = ResolveImportTargetProjectRoot(fullDbPath);
         var dbDirectory = Path.GetDirectoryName(fullDbPath);
@@ -260,75 +206,26 @@ internal static partial class ExportImportCommandRunner
                     destinationDelta.Message);
                 AddImportValidationPhase(validationPhases, PhaseReplaceDb, "skipped", $"{importMode} mode does not replace the destination database");
                 var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
-                if (wantsJson)
-                {
-                    Console.WriteLine(JsonSerializer.Serialize(
-                        new ImportDryRunResult(
-                            "1",
-                            "success",
-                            Path.GetFullPath(archivePath),
-                            fullDbPath,
-                            importMode,
-                            dryRun,
-                            prunePaths,
-                            prunePaths ? importTargetProjectRoot : null,
-                            ReplacementWouldBeAllowed: true,
-                            validationPhases,
-                            DestinationDelta: destinationDelta,
-                            UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
-                            UnknownExtensionFiles: manifest.UnknownExtensionFiles,
-                            UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
-                            UnknownExtensionFilePathLimit: manifest.UnknownExtensionFilePathLimit,
-                            UnknownExtensionFileSampleCount: manifest.UnknownExtensionFileSampleCount,
-                            UnknownExtensionFileSampleLimit: manifest.UnknownExtensionFileSampleLimit,
-                            UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated),
-                        CliJsonSerializerContextFactory.Create(jsonOptions).ImportDryRunResult));
-                }
-                else
-                {
-                    Console.WriteLine(FormatImportSuccessMessage(
-                        $"Validated CodeIndex archive {Path.GetFullPath(archivePath)}; replacement would be allowed for {fullDbPath}{FormatDestinationDeltaSummary(destinationDelta)}",
-                        prunePaths,
-                        importTargetProjectRoot));
-                }
-
-                return CommandExitCodes.Success;
+                return WriteImportDryRunResult(
+                    importArguments,
+                    jsonOptions,
+                    fullDbPath,
+                    importTargetProjectRoot,
+                    validationPhases,
+                    destinationDelta,
+                    manifest);
             }
 
             phase = PhaseReplaceDb;
             ReplaceImportedDatabase(tempPath, fullDbPath, cancellationToken);
             AddImportValidationPhase(validationPhases, PhaseReplaceDb);
-            if (wantsJson)
-            {
-                var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new ImportResult(
-                        "1",
-                        "success",
-                        Path.GetFullPath(archivePath),
-                        fullDbPath,
-                        importMode,
-                        DryRun: false,
-                        prunePaths,
-                        prunePaths ? importTargetProjectRoot : null,
-                        validationPhases,
-                        UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
-                        UnknownExtensionFiles: manifest.UnknownExtensionFiles,
-                        UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
-                        UnknownExtensionFilePathLimit: manifest.UnknownExtensionFilePathLimit,
-                        UnknownExtensionFileSampleCount: manifest.UnknownExtensionFileSampleCount,
-                        UnknownExtensionFileSampleLimit: manifest.UnknownExtensionFileSampleLimit,
-                        UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated),
-                    jsonOptions));
-            }
-            else
-            {
-                Console.WriteLine(FormatImportSuccessMessage(
-                    $"Imported CodeIndex database to {fullDbPath}",
-                    prunePaths,
-                    importTargetProjectRoot));
-            }
-            return CommandExitCodes.Success;
+            return WriteImportResult(
+                importArguments,
+                jsonOptions,
+                fullDbPath,
+                importTargetProjectRoot,
+                validationPhases,
+                importedManifest ?? throw new InvalidDataException("archive manifest was not loaded"));
         }
         catch (OperationCanceledException)
         {
@@ -376,6 +273,199 @@ internal static partial class ExportImportCommandRunner
             if (tempDirectory != null)
                 TryDeleteDirectoryIfEmpty(tempDirectory, "import temporary directory", Path.GetTempPath(), "codeindex-import-");
         }
+    }
+
+    private static ImportArgumentParseResult ParseImportArguments(
+        string[] args,
+        JsonSerializerOptions jsonOptions)
+    {
+        string? archivePath = null;
+        string? dbPath = null;
+        var wantsJson = Array.Exists(args, arg => arg == "--json");
+        var prunePaths = false;
+        var importMode = "import";
+        var dryRun = false;
+        var limit = DiffCommandRunner.DefaultDiffLimit;
+        var offset = 0;
+        var pagingOptionSpecified = false;
+
+        ImportArgumentParseResult Fail(string errorCode, string message, string recommendedAction)
+        {
+            return new ImportArgumentParseResult(
+                Arguments: null,
+                WriteImportError(
+                    wantsJson,
+                    jsonOptions,
+                    PhaseParseArgs,
+                    errorCode,
+                    message,
+                    recommendedAction,
+                    ImportUsage));
+        }
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--json")
+            {
+                wantsJson = true;
+                continue;
+            }
+            if (arg == "--prune-paths")
+            {
+                prunePaths = true;
+                continue;
+            }
+            if (arg is "--dry-run" or "--check")
+            {
+                importMode = arg == "--check" ? "check" : "dry_run";
+                dryRun = true;
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
+            {
+                if (dbError != null)
+                    return Fail("import_db_requires_value", dbError, "use `cdidx import <archive> --db <path>`.");
+                dbPath = dbValue;
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--limit", arg, out var limitValue, out var limitError))
+            {
+                pagingOptionSpecified = true;
+                if (limitError != null
+                    || !int.TryParse(limitValue, NumberStyles.None, CultureInfo.InvariantCulture, out limit)
+                    || limit < 0
+                    || limit > DiffCommandRunner.MaxDiffLimit)
+                {
+                    return Fail(
+                        "import_limit_invalid",
+                        $"--limit requires an integer from 0 to {DiffCommandRunner.MaxDiffLimit}.",
+                        "use `--limit 20` to bound destination delta samples.");
+                }
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--offset", arg, out var offsetValue, out var offsetError))
+            {
+                pagingOptionSpecified = true;
+                if (offsetError != null
+                    || !int.TryParse(offsetValue, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
+                    || offset < 0
+                    || offset > int.MaxValue - limit)
+                {
+                    return Fail(
+                        "import_offset_invalid",
+                        "--offset requires a non-negative integer that can be combined with --limit.",
+                        "use `--offset 0` for the first destination delta page.");
+                }
+                continue;
+            }
+
+            if (arg.StartsWith("-", StringComparison.Ordinal))
+                return Fail("import_unknown_option", $"unknown import option `{arg}`.", "use `cdidx import <archive> [--db <path>]`.");
+
+            if (archivePath != null)
+                return Fail("import_extra_archive_path", $"import accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.");
+            archivePath = arg;
+        }
+
+        if (string.IsNullOrWhiteSpace(archivePath))
+            return Fail("import_archive_required", "import requires an archive path.", "pass an archive produced by `cdidx export <archive>`.");
+        if (pagingOptionSpecified && !dryRun)
+            return Fail("import_paging_requires_dry_run", "--limit and --offset are only valid with --dry-run or --check.", "add `--dry-run` to preview bounded destination deltas.");
+        if (offset > int.MaxValue - limit)
+            return Fail("import_offset_invalid", "--offset is too large for the requested --limit.", "choose a lower --offset.");
+
+        return new ImportArgumentParseResult(
+            new ImportArguments(archivePath, dbPath, wantsJson, prunePaths, importMode, dryRun, limit, offset),
+            CommandExitCodes.Success);
+    }
+
+    private static int WriteImportDryRunResult(
+        ImportArguments importArguments,
+        JsonSerializerOptions jsonOptions,
+        string fullDbPath,
+        string importTargetProjectRoot,
+        IReadOnlyList<ImportValidationPhaseResult> validationPhases,
+        ImportDestinationDeltaResult destinationDelta,
+        ExportManifest manifest)
+    {
+        if (importArguments.WantsJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new ImportDryRunResult(
+                    "1",
+                    "success",
+                    Path.GetFullPath(importArguments.ArchivePath),
+                    fullDbPath,
+                    importArguments.ImportMode,
+                    importArguments.DryRun,
+                    importArguments.PrunePaths,
+                    importArguments.PrunePaths ? importTargetProjectRoot : null,
+                    ReplacementWouldBeAllowed: true,
+                    validationPhases,
+                    DestinationDelta: destinationDelta,
+                    UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
+                    UnknownExtensionFiles: manifest.UnknownExtensionFiles,
+                    UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
+                    UnknownExtensionFilePathLimit: manifest.UnknownExtensionFilePathLimit,
+                    UnknownExtensionFileSampleCount: manifest.UnknownExtensionFileSampleCount,
+                    UnknownExtensionFileSampleLimit: manifest.UnknownExtensionFileSampleLimit,
+                    UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated),
+                CliJsonSerializerContextFactory.Create(jsonOptions).ImportDryRunResult));
+        }
+        else
+        {
+            Console.WriteLine(FormatImportSuccessMessage(
+                $"Validated CodeIndex archive {Path.GetFullPath(importArguments.ArchivePath)}; replacement would be allowed for {fullDbPath}{FormatDestinationDeltaSummary(destinationDelta)}",
+                importArguments.PrunePaths,
+                importTargetProjectRoot));
+        }
+
+        return CommandExitCodes.Success;
+    }
+
+    private static int WriteImportResult(
+        ImportArguments importArguments,
+        JsonSerializerOptions jsonOptions,
+        string fullDbPath,
+        string importTargetProjectRoot,
+        IReadOnlyList<ImportValidationPhaseResult> validationPhases,
+        ExportManifest manifest)
+    {
+        if (importArguments.WantsJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new ImportResult(
+                    "1",
+                    "success",
+                    Path.GetFullPath(importArguments.ArchivePath),
+                    fullDbPath,
+                    importArguments.ImportMode,
+                    DryRun: false,
+                    importArguments.PrunePaths,
+                    importArguments.PrunePaths ? importTargetProjectRoot : null,
+                    validationPhases,
+                    UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
+                    UnknownExtensionFiles: manifest.UnknownExtensionFiles,
+                    UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
+                    UnknownExtensionFilePathLimit: manifest.UnknownExtensionFilePathLimit,
+                    UnknownExtensionFileSampleCount: manifest.UnknownExtensionFileSampleCount,
+                    UnknownExtensionFileSampleLimit: manifest.UnknownExtensionFileSampleLimit,
+                    UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated),
+                jsonOptions));
+        }
+        else
+        {
+            Console.WriteLine(FormatImportSuccessMessage(
+                $"Imported CodeIndex database to {fullDbPath}",
+                importArguments.PrunePaths,
+                importTargetProjectRoot));
+        }
+
+        return CommandExitCodes.Success;
     }
 
     private static int RunExportArchive(string[] args, JsonSerializerOptions jsonOptions, string appVersion, CancellationToken cancellationToken)
