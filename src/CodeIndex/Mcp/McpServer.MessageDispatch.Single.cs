@@ -314,7 +314,7 @@ public partial class McpServer
                 code: -32601,
                 message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
-                suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/templates/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/roots/list_changed, notifications/shutdown.",
+                suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/templates/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                 retrySafe: false)),
         };
     }

@@ -7927,7 +7927,6 @@ public sealed class Caller
         Assert.Contains("Method not found", response["error"]!["message"]!.GetValue<string>());
         var suggestion = response["error"]!["data"]!["suggestion"]!.GetValue<string>();
         Assert.Contains("notifications/cancelled", suggestion, StringComparison.Ordinal);
-        Assert.Contains("notifications/roots/list_changed", suggestion, StringComparison.Ordinal);
     }
 
     [Fact]
