@@ -242,7 +242,6 @@ public static partial class IndexCommandRunner
         var mutualRecursionRefreshNeeded = !options.SymbolsOnly
             && (!writer.ReferenceIdentityContractMatchesCurrent() || purged > 0);
 
-        var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var indexProgress = new IndexProgressReporter(
             options,
@@ -254,11 +253,16 @@ public static partial class IndexCommandRunner
         HashSet<string>? reusedHotspotFamilyLanguages = null;
         HashSet<string>? skippedSymbolExtractorLanguages = null;
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
-        var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
         ActiveExtractionPhase?[] activeExtractionPhases = [];
-        CancellationTokenSource? jsonHeartbeatCts = null;
-        Task? jsonHeartbeatTask = null;
+        using var fullScanProgress = new FullScanProgressSession(
+            options,
+            files.Count,
+            indexProgress,
+            () => processed,
+            () => indexProgressVisible,
+            () => currentJsonIndexFile,
+            () => activeExtractionPhases);
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
             && (options.Rebuild
@@ -340,93 +344,6 @@ public static partial class IndexCommandRunner
             || (!options.Rebuild
                 && !startedWithNoIndexedFiles
                 && FullScanJavaScriptTypeScriptConfigChanged());
-
-        void EnsureIndexingActivityVisible()
-        {
-            if (options.Json || options.Quiet)
-                return;
-
-            if (indexProgressVisible)
-                return;
-
-            if (indexProgress.Interactive)
-            {
-                indexProgress.Start();
-                return;
-            }
-
-            if (redirectedIndexingMessagePrinted)
-                return;
-
-            CommandOutputWriter.WriteLine("Indexing...");
-            redirectedIndexingMessagePrinted = true;
-        }
-
-        void ReportJsonIndexProgressIfNeeded()
-        {
-            if (!options.Json || options.Quiet || files.Count == 0)
-                return;
-
-            var now = Stopwatch.GetTimestamp();
-            if (processed == 0
-                || processed == files.Count
-                || processed % 100 == 0
-                || Stopwatch.GetElapsedTime(lastJsonProgressAt, now) >= TimeSpan.FromSeconds(5))
-            {
-                ConsoleUi.TryWriteErrorLine($"cdidx: indexed {processed:N0}/{files.Count:N0} file(s)...");
-                lastJsonProgressAt = now;
-            }
-        }
-
-        void StartJsonHeartbeatIfNeeded()
-        {
-            if (!options.Json || options.Quiet || files.Count == 0 || jsonHeartbeatCts != null)
-                return;
-
-            jsonHeartbeatCts = new CancellationTokenSource();
-            var token = jsonHeartbeatCts.Token;
-            jsonHeartbeatTask = Task.Run(async () =>
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-
-                    if (token.IsCancellationRequested)
-                        break;
-
-                    var file = GetJsonIndexHeartbeatPath(
-                        currentJsonIndexFile,
-                        FormatActiveExtractionPhases(activeExtractionPhases));
-                    var fileSuffix = string.IsNullOrEmpty(file) ? string.Empty : $": {file}";
-                    ConsoleUi.TryWriteErrorLine($"cdidx: still indexing {processed:N0}/{files.Count:N0} file(s){fileSuffix}...");
-                }
-            }, token);
-        }
-
-        void StopJsonHeartbeat()
-        {
-            if (jsonHeartbeatCts == null)
-                return;
-
-            jsonHeartbeatCts.Cancel();
-            try
-            {
-                jsonHeartbeatTask?.Wait(TimeSpan.FromSeconds(1));
-            }
-            catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
-            {
-            }
-            jsonHeartbeatCts.Dispose();
-            jsonHeartbeatCts = null;
-            jsonHeartbeatTask = null;
-        }
 
         bool FullScanJavaScriptTypeScriptConfigChanged()
         {
@@ -1286,7 +1203,7 @@ public static partial class IndexCommandRunner
                 ConsoleUi.PrintWarning("Skipped authoritative purge outside directories whose file listing completed successfully because some paths could not be scanned.");
         }
 
-        ReportJsonIndexProgressIfNeeded();
+        fullScanProgress.ReportJsonIndexProgressIfNeeded();
 
         PostExtractionHookRunner? postExtractionHooks = null;
         if (extractionWorkItemCount == 0)
@@ -1313,8 +1230,8 @@ public static partial class IndexCommandRunner
                 parallelizeExtraction,
                 parallelizeExtractionReason);
 
-            EnsureIndexingActivityVisible();
-            StartJsonHeartbeatIfNeeded();
+            fullScanProgress.EnsureIndexingActivityVisible();
+            fullScanProgress.StartJsonHeartbeatIfNeeded();
 
             try
             {
@@ -1397,8 +1314,10 @@ public static partial class IndexCommandRunner
                         ActiveExtractionPhases = activeExtractionPhases,
                         CancellationToken = cancellationToken,
                         CancelExtraction = extractionStallCts.Cancel,
-                        EnsureIndexingActivityVisible = EnsureIndexingActivityVisible,
-                        ReportJsonIndexProgressIfNeeded = ReportJsonIndexProgressIfNeeded,
+                        EnsureIndexingActivityVisible =
+                            fullScanProgress.EnsureIndexingActivityVisible,
+                        ReportJsonIndexProgressIfNeeded =
+                            fullScanProgress.ReportJsonIndexProgressIfNeeded,
                         ThrowIfFullScanCancelled = ThrowIfFullScanCancelled,
                         PublishProcessedCount = value => processed = value,
                         SetCurrentJsonIndexFile = path => currentJsonIndexFile = path,
@@ -1465,7 +1384,7 @@ public static partial class IndexCommandRunner
             finally
             {
                 currentJsonIndexFile = null;
-                StopJsonHeartbeat();
+                fullScanProgress.StopJsonHeartbeat();
                 postExtractionHooks?.Dispose();
             }
         }
