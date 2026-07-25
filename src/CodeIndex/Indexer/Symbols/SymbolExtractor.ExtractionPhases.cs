@@ -4,6 +4,144 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private sealed class PatternScanInputs
+    {
+        private readonly string _lang;
+        private readonly string[] _lines;
+        private CSharpLexState[]? _csharpLineStartStates;
+        private DartClassBodyScope? _dartInsideClassBody;
+        private JavaScriptScopePrivacyFlags[][]? _privateScopeColumns;
+        private CSharpTypeBodyScope? _csharpInsideTypeBody;
+        private CSharpCallableParameterScope? _csharpCallableParameterScope;
+        private bool[]? _csharpSwitchExpressionLines;
+        private bool _csharpSwitchExpressionLinesInitialized;
+        private bool[]? _cssQualifiedRuleAncestors;
+        private string[]? _javaScriptTypeScriptSanitizedLines;
+
+        public PatternScanInputs(string lang, string? filePath, string[] lines)
+        {
+            _lang = lang;
+            _lines = lines;
+            PythonModulePrefix = lang == "python"
+                ? GetPythonModulePrefix(filePath)
+                : null;
+
+            var structuralMaskLanguage = lang == "cython" ? "python" : lang;
+            var structuralLines = StructuralLineMasker.MaskLines(structuralMaskLanguage, lines);
+            if (lang is "d" or "julia" or "matlab" or "nim")
+                structuralLines = ScientificNativeCommentMasker.MaskBlockComments(lang, structuralLines);
+            structuralLines = DynamicDeclarativeReferenceExtractor.MaskNonCodeLines(
+                lang,
+                structuralLines);
+            if (lang == "tcl")
+            {
+                structuralLines = DynamicDeclarativeReferenceExtractor.MaskTclContinuedCommentLines(
+                    lines,
+                    structuralLines);
+                structuralLines = DynamicDeclarativeReferenceExtractor.MaskTclNonScriptLines(
+                    structuralLines);
+            }
+
+            StructuralLines = structuralLines;
+            ScientificBodyScannerLines = lang is "julia" or "matlab"
+                ? PrepareScientificBodyScannerLines(structuralLines, lang)
+                : null;
+            MatlabExplicitOuterClosureByLine = lang == "matlab" && ScientificBodyScannerLines != null
+                ? BuildMatlabExplicitOuterClosureMap(ScientificBodyScannerLines)
+                : null;
+            CssScannerLines = lang == "css"
+                ? MaskCssScannerLines(lines)
+                : null;
+            SassStylusScannerLines = lang is "sass" or "stylus"
+                ? MaskSassStylusBlockCommentLines(lang, lines)
+                : null;
+            ShellScannerLines = lang == "shell"
+                ? MaskShellHeredocLines(lines)
+                : null;
+            if (lang is "prolog" or "ambiguous_pl")
+            {
+                PrologMultilineHeads = [];
+                PrologClauseContinuationLines = BuildPrologClauseContinuationLines(
+                    structuralLines,
+                    PrologMultilineHeads);
+            }
+            PowershellEnumBodyLines = lang == "powershell"
+                ? FindPowerShellEnumBodyLines(structuralLines)
+                : null;
+
+            int[]?[] csharpMatchColumnToRaw = null!;
+            CSharpMatchLines = lang == "csharp"
+                ? BuildCSharpMatchLines(lines, out csharpMatchColumnToRaw)
+                : null;
+            CSharpMatchColumnToRaw = csharpMatchColumnToRaw;
+            GetCSharpLineStartStates = lang == "csharp"
+                ? BuildCSharpLineStartStates
+                : null;
+            GetPrivateScopeColumns = lang is "javascript" or "typescript"
+                ? BuildPrivateScopeColumns
+                : null;
+            GetCSharpSwitchExpressionLines = lang == "csharp"
+                ? BuildCSharpSwitchExpressionLines
+                : null;
+            GetCssQualifiedRuleAncestors = lang == "css"
+                ? BuildCssQualifiedRuleAncestors
+                : null;
+        }
+
+        public string? PythonModulePrefix { get; }
+        public string[] StructuralLines { get; }
+        public string[]? ScientificBodyScannerLines { get; }
+        public bool[]? MatlabExplicitOuterClosureByLine { get; }
+        public string[]? CssScannerLines { get; }
+        public string[]? SassStylusScannerLines { get; }
+        public string[]? ShellScannerLines { get; }
+        public bool[]? PrologClauseContinuationLines { get; }
+        public Dictionary<int, PrologMultilineHead>? PrologMultilineHeads { get; }
+        public bool[]? PowershellEnumBodyLines { get; }
+        public int[]?[] CSharpMatchColumnToRaw { get; }
+        public string[]? CSharpMatchLines { get; }
+        public Func<CSharpLexState[]>? GetCSharpLineStartStates { get; }
+        public Func<JavaScriptScopePrivacyFlags[][]>? GetPrivateScopeColumns { get; }
+        public Func<bool[]?>? GetCSharpSwitchExpressionLines { get; }
+        public Func<bool[]?>? GetCssQualifiedRuleAncestors { get; }
+
+        public string[] GetJavaScriptTypeScriptSanitizedLines() =>
+            _javaScriptTypeScriptSanitizedLines ??= BuildJavaScriptTypeScriptSanitizedLines(_lines);
+
+        public DartClassBodyScope GetDartInsideClassBody() =>
+            _dartInsideClassBody ??= BuildDartClassBodyScope(StructuralLines);
+
+        public CSharpTypeBodyScope GetCSharpInsideTypeBody() =>
+            _csharpInsideTypeBody ??= BuildCSharpTypeBodyScope(StructuralLines);
+
+        public CSharpCallableParameterScope GetCSharpCallableParameterScope() =>
+            _csharpCallableParameterScope ??= BuildCSharpCallableParameterScope(
+                StructuralLines,
+                GetCSharpInsideTypeBody());
+
+        private CSharpLexState[] BuildCSharpLineStartStates() =>
+            _csharpLineStartStates ??= SymbolExtractor.BuildCSharpLineStartStates(_lines);
+
+        private JavaScriptScopePrivacyFlags[][] BuildPrivateScopeColumns() =>
+            _privateScopeColumns ??= BuildJavaScriptTypeScriptPrivateScopeColumns(_lines, _lang);
+
+        private bool[]? BuildCSharpSwitchExpressionLines()
+        {
+            if (!_csharpSwitchExpressionLinesInitialized)
+            {
+                _csharpSwitchExpressionLinesInitialized = true;
+                _csharpSwitchExpressionLines = LinesContain(StructuralLines, "switch", StringComparison.Ordinal)
+                    ? FindCSharpSwitchExpressionLines(StructuralLines)
+                    : null;
+            }
+
+            return _csharpSwitchExpressionLines;
+        }
+
+        private bool[] BuildCssQualifiedRuleAncestors() =>
+            _cssQualifiedRuleAncestors ??= FindCssQualifiedRuleAncestors(CssScannerLines!);
+    }
+
     private static bool TryExtractSpecializedSymbols(
         long fileId,
         string? lang,
