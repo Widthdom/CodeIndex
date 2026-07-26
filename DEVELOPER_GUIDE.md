@@ -509,6 +509,12 @@ string. `string.Split` creates an array and substrings for every import,
 dependency, path segment, or declaration item. Preserve the original empty-item,
 trimming, quote, and first-separator semantics when replacing it.
 
+When structural masking turns a source line into whitespace, do not materialize
+a trimmed copy merely to discover that the line has no references. Preserve
+documentation handling and the build-automation and markup paths that inspect
+the original line, but let ordinary C#, Java, and JavaScript / TypeScript code
+paths skip masked multiline payloads before creating a reference context.
+
 The C# value-receiver path is the reference example: local receiver scopes are
 derived from precomputed block spans for the containing function, and duplicate
 receiver records are tracked with a hash set. Regressions in this area should
@@ -3493,6 +3499,11 @@ hot extractor の delimiter-only parsing では、consumer が item を一度に
 validation を source string 上で完結できる場合、index / span walk を優先する。`string.Split` は
 import、dependency、path segment、declaration item ごとに array と substring を作る。置換時は
 元の empty-item、trim、quote、first-separator semantics を維持する。
+
+構造マスクによって source line が空白だけになった場合、reference がないことを確認するため
+だけに trim 済み copy を実体化してはならない。documentation handling と、original line を
+検査する build-automation / markup 経路は維持しつつ、通常の C#、Java、
+JavaScript / TypeScript 経路では reference context を作る前に multiline payload を skip する。
 
 C# の value receiver 経路を参照例とする。local receiver の scope は containing function 用に
 事前計算した block span から導出し、重複 receiver record は hash set で追跡する。この領域の

@@ -585,6 +585,20 @@ public static partial class ReferenceExtractor
                 ref state.PhpDocblockPropertyNames);
         }
 
+        if (string.IsNullOrWhiteSpace(preparedLine)
+            && request.Language
+                is not ("cmake"
+                    or "justfile"
+                    or "makefile"
+                    or "msbuild"
+                    or "graphql"
+                    or "html"
+                    or "markdown"))
+        {
+            sourceContext = string.Empty;
+            return false;
+        }
+
         sourceContext = originalLine.Trim();
         if (request.Language
                 is "cmake" or "justfile" or "makefile" or "msbuild"

@@ -358,6 +358,75 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void ReferenceExtraction_MaskedMultilinePayloads_StayWithinAllocationBudget()
+    {
+        var payloadLine = $"    {new string('x', 4_096)} TargetInsidePayload();    ";
+        var fixtures = new[]
+        {
+            (
+                Language: "csharp",
+                Content: $$""""
+                    public sealed class C
+                    {
+                        private const string Payload = """
+                    {{string.Join('\n', Enumerable.Repeat(payloadLine, 256))}}
+                        """;
+                        public void Run() => CSharpTarget();
+                    }
+                    """",
+                ExpectedTarget: "CSharpTarget"),
+            (
+                Language: "java",
+                Content: $$""""
+                    public final class C {
+                        private static final String PAYLOAD = """
+                    {{string.Join('\n', Enumerable.Repeat(payloadLine, 256))}}
+                        """;
+                        public void run() { JavaTarget(); }
+                    }
+                    """",
+                ExpectedTarget: "JavaTarget"),
+            (
+                Language: "typescript",
+                Content: $$"""
+                    const payload = `
+                    {{string.Join('\n', Enumerable.Repeat(payloadLine, 256))}}
+                    `;
+                    export function run() { TypeScriptTarget(); }
+                    """,
+                ExpectedTarget: "TypeScriptTarget"),
+        };
+
+        long allocatedBytes = 0;
+        foreach (var fixture in fixtures)
+        {
+            var symbols = SymbolExtractor.Extract(1, fixture.Language, fixture.Content);
+            _ = ReferenceExtractor.Extract(1, fixture.Language, fixture.Content, symbols);
+
+            List<ReferenceRecord>? references = null;
+            allocatedBytes += MeasureAllocatedBytes(
+                () => references = ReferenceExtractor.Extract(
+                    1,
+                    fixture.Language,
+                    fixture.Content,
+                    symbols));
+
+            Assert.Contains(
+                references!,
+                reference => reference.ReferenceKind == "call"
+                    && reference.SymbolName == fixture.ExpectedTarget);
+        }
+
+        Assert.True(
+            allocatedBytes < 23_000_000,
+            $"Masked multiline payload extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
