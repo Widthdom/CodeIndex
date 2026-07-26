@@ -960,7 +960,7 @@ public class PerformanceTests : IDisposable
             contentBuilder
                 .Append("rule_")
                 .Append(index)
-                .AppendLine("(Value) :- Value = Value.");
+                .Append("(Value) :- Value = Value.\n");
         }
         var content = contentBuilder.ToString();
         var symbols = SymbolExtractor.Extract(1, "prolog", content);
