@@ -69,6 +69,37 @@ public sealed class BoundedRegexTests
     }
 
     [Fact]
+    public void EnumerateMatches_StaticPatternCustomTimeout_ReturnsEmpty()
+    {
+        var input = new string('a', 10_000) + "!";
+
+        var matches = BoundedRegex.EnumerateMatches(
+            input,
+            "(a+)+$",
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromMilliseconds(1));
+
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void EnumerateMatches_StaticPatternCustomTimeout_StopsAfterConsumerBreak()
+    {
+        var input = "token " + new string('a', 10_000) + "!";
+
+        var match = BoundedRegex
+            .EnumerateMatches(
+                input,
+                @"token|(?:a+)+$",
+                RegexOptions.CultureInvariant,
+                TimeSpan.FromMilliseconds(1))
+            .Take(1)
+            .Single();
+
+        Assert.Equal("token", match.Value);
+    }
+
+    [Fact]
     public void EnumerateMatches_InstanceRegex_StartsAtRequestedOffset()
     {
         var regex = new BoundedRegex(@"\w+");

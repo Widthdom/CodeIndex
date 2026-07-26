@@ -171,9 +171,19 @@ internal sealed class BoundedRegex : BclRegex
     public static IEnumerable<BclMatch> EnumerateMatches(string input, string pattern) =>
         EnumerateMatches(input, pattern, RegexOptions.None);
 
-    public static IEnumerable<BclMatch> EnumerateMatches(string input, string pattern, RegexOptions options)
+    public static IEnumerable<BclMatch> EnumerateMatches(
+        string input,
+        string pattern,
+        RegexOptions options) =>
+        EnumerateMatches(input, pattern, options, DefaultMatchTimeout);
+
+    public static IEnumerable<BclMatch> EnumerateMatches(
+        string input,
+        string pattern,
+        RegexOptions options,
+        TimeSpan matchTimeout)
     {
-        var match = FirstMatchOrEmpty(input, pattern, options);
+        var match = FirstMatchOrEmpty(input, pattern, options, matchTimeout);
         while (match.Success)
         {
             yield return match;
@@ -389,7 +399,8 @@ internal sealed class BoundedRegex : BclRegex
     private static BclMatch FirstMatchOrEmpty(
         string input,
         string pattern,
-        RegexOptions options)
+        RegexOptions options,
+        TimeSpan matchTimeout)
     {
         try
         {
@@ -397,7 +408,7 @@ internal sealed class BoundedRegex : BclRegex
                 input,
                 pattern,
                 options,
-                DefaultMatchTimeout);
+                matchTimeout);
         }
         catch (RegexMatchTimeoutException ex)
         {

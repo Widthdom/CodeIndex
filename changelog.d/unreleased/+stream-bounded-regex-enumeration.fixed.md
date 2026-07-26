@@ -12,10 +12,16 @@ affected:
 - **Made bounded regex enumeration demand-driven** — Extractors that stop after
   reaching a result limit no longer force every remaining regex match on the
   source line to be materialized first, while right-to-left instances preserve
-  their default reverse match order.
+  their default reverse match order. Secondary reference scanners now use the
+  same streaming path across Fortran, Visual Basic, F#, Pascal, Objective-C,
+  Haskell, Elixir, Smalltalk, Lua, Dart, Razor, JSON, JavaScript, GitHub Actions,
+  and C++ compound requirements without changing their configured timeouts.
 
 ## 日本語
 
 - **bounded regex enumeration を demand-driven にしました** — 結果上限に達して
   停止する extractor は、source line に残るすべての regex match を先に実体化せず、
-  right-to-left instance の既定の逆順も維持します。
+  right-to-left instance の既定の逆順も維持します。Fortran、Visual Basic、F#、
+  Pascal、Objective-C、Haskell、Elixir、Smalltalk、Lua、Dart、Razor、JSON、
+  JavaScript、GitHub Actions、C++ compound requirement の secondary reference
+  scanner も設定済み timeout を変えず同じ逐次経路を使います。

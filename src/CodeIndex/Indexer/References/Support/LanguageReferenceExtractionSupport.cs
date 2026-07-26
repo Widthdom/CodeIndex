@@ -294,7 +294,7 @@ internal static partial class LanguageReferenceExtractionSupport
         var hasDartUppercaseTypeMarker = ContainsAsciiUppercase(preparedLine);
         if (hasDartDeclarationTerminator && hasDartUppercaseTypeMarker)
         {
-            foreach (Match match in DartVariableTypeRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(DartVariableTypeRegex, preparedLine))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "dart");
@@ -311,7 +311,7 @@ internal static partial class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, returnGroup.Value, returnGroup.Index, context, lineNumber, resolveContainerForColumn(returnGroup.Index), "dart");
 
             var parametersGroup = signatureMatch.Groups["params"];
-            foreach (Match parameterMatch in DartParameterTypeRegex.Matches(parametersGroup.Value))
+            foreach (Match parameterMatch in Regex.EnumerateMatches(DartParameterTypeRegex, parametersGroup.Value))
             {
                 var typeGroup = parameterMatch.Groups["type"];
                 var absoluteIndex = parametersGroup.Index + typeGroup.Index;
@@ -325,7 +325,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 || preparedLine.IndexOf("const", StringComparison.Ordinal) >= 0);
         if (hasDartCtorMarker)
         {
-            foreach (Match match in DartCtorRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(DartCtorRegex, preparedLine))
             {
                 var group = match.Groups["name"];
                 ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));

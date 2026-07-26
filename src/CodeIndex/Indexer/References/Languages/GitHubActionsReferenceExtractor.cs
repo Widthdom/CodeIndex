@@ -136,7 +136,7 @@ internal static class GitHubActionsReferenceExtractor
         ReferenceDedupeSet seen,
         int baseIndex = 0)
     {
-        foreach (Match match in LocalPathRegex.Matches(text))
+        foreach (Match match in Regex.EnumerateMatches(LocalPathRegex, text))
         {
             var rawPath = match.Groups["path"].Value;
             var path = rawPath.StartsWith("./", StringComparison.Ordinal) ? rawPath[2..] : rawPath;

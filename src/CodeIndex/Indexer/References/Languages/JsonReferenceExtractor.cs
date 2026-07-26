@@ -54,7 +54,7 @@ internal static class JsonReferenceExtractor
                 var tokenColumn = Encoding.UTF8.GetCharCount(
                     utf8.AsSpan(lineStarts[lineIndex], tokenStart - lineStarts[lineIndex]));
 
-                foreach (Match match in RepositoryLocalPathRegex.Matches(value))
+                foreach (Match match in Regex.EnumerateMatches(RepositoryLocalPathRegex, value))
                 {
                     var rawPath = match.Groups["path"].Value;
                     var normalizedPath = rawPath.Replace('\\', '/');

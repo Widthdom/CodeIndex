@@ -11,7 +11,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (!StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "call"))
             return;
 
-        foreach (Match match in FortranCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(FortranCallRegex, preparedLine))
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
     }
 
@@ -43,7 +43,7 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         if (preparedLine.IndexOf('[') >= 0)
         {
-            foreach (Match match in ObjCMessageRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(ObjCMessageRegex, preparedLine))
             {
                 var receiver = match.Groups["receiver"];
                 var selector = match.Groups["name"];
@@ -59,7 +59,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (preparedLine.IndexOf("@selector", StringComparison.Ordinal) >= 0
             && preparedLine.IndexOf('(') >= 0)
         {
-            foreach (Match match in ObjCSelectorRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(ObjCSelectorRegex, preparedLine))
                 addCallLikeReference(match.Groups["name"].Value.TrimEnd(':'), match.Groups["name"].Index);
         }
     }
@@ -87,7 +87,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in HaskellSpaceCallRegex.Matches(scanText))
+        foreach (Match match in Regex.EnumerateMatches(HaskellSpaceCallRegex, scanText))
         {
             var name = match.Groups["name"].Value;
             if (definitionNames?.Contains(name) == true || string.Equals(name, definitionName, StringComparison.Ordinal))
@@ -101,7 +101,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (!ContainsWhitespace(preparedLine))
             return;
 
-        foreach (Match match in ElixirParenlessCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(ElixirParenlessCallRegex, preparedLine))
         {
             var name = match.Groups["name"].Value;
             if (definitionNames?.Contains(name) == true)
@@ -125,7 +125,7 @@ internal static partial class LanguageReferenceExtractionSupport
             return;
 
         var consumedUntil = 0;
-        foreach (Match match in SmalltalkMessageSendRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(SmalltalkMessageSendRegex, preparedLine))
         {
             if (match.Index < consumedUntil)
                 continue;

@@ -18,7 +18,7 @@ internal static class TrailingLambdaReferenceExtractor
         string preparedLine,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in CallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(CallRegex, preparedLine))
         {
             var callIndex = match.Groups["name"].Index;
             if (IsInheritanceClause(preparedLine, callIndex))

@@ -31,14 +31,14 @@ internal static partial class LanguageReferenceExtractionSupport
                 || ContainsKeywordIgnoringCase(preparedLine, "object"));
         if (hasPascalBaseMarker)
         {
-            foreach (Match match in PascalClassBaseRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(PascalClassBaseRegex, preparedLine))
                 EmitCommaSeparatedNames(match.Groups["bases"].Value, match.Groups["bases"].Index, "pascal", references, seen, fileId, context, lineNumber, resolveContainerForColumn(match.Groups["bases"].Index));
         }
 
         if (preparedLine.IndexOf(':') < 0)
             return;
 
-        foreach (Match match in PascalTypeAfterColonRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(PascalTypeAfterColonRegex, preparedLine))
         {
             if (!IsPascalColonTypeReferenceContext(preparedLine, lineNumber, container))
                 continue;
@@ -87,7 +87,7 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         if (StartsWithCharIgnoringLeadingWhitespace(preparedLine, '@') && preparedLine.IndexOf(':') >= 0)
         {
-            foreach (Match match in ObjCInterfaceBaseRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(ObjCInterfaceBaseRegex, preparedLine))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, container);
@@ -96,14 +96,14 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (preparedLine.IndexOf('<') >= 0 && preparedLine.IndexOf('>') >= 0)
         {
-            foreach (Match match in ObjCProtocolListRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(ObjCProtocolListRegex, preparedLine))
                 EmitCommaSeparatedNames(match.Groups["list"].Value, match.Groups["list"].Index, "objc", references, seen, fileId, context, lineNumber, container);
         }
 
         if (preparedLine.IndexOf('*') < 0)
             return;
 
-        foreach (Match match in ObjCDeclTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(ObjCDeclTypeRegex, preparedLine))
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "objc");

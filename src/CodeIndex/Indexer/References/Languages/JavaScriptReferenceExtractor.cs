@@ -75,7 +75,7 @@ internal static class JavaScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        foreach (Match match in DiscriminantStringGuardRegex.Matches(detectionLine))
+        foreach (Match match in Regex.EnumerateMatches(DiscriminantStringGuardRegex, detectionLine))
         {
             var objectName = match.Groups["object"].Value;
             var propertyName = match.Groups["property"].Value;
@@ -132,7 +132,7 @@ internal static class JavaScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        foreach (Match match in ParenlessConstructorRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(ParenlessConstructorRegex, preparedLine))
         {
             var rawName = match.Groups["name"].Value;
             var nameIndex = match.Groups["name"].Index;

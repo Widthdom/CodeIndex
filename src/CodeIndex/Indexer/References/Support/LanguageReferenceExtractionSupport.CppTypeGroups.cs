@@ -671,7 +671,7 @@ internal static partial class LanguageReferenceExtractionSupport
         }
 
         foreach (Match match in
-                 CppCompoundRequirementConceptRegex.Matches(preparedLine))
+                 Regex.EnumerateMatches(CppCompoundRequirementConceptRegex, preparedLine))
         {
             line.AddTypeExpression(match.Groups["concept"]);
             line.AddTypeExpression(match.Groups["args"]);

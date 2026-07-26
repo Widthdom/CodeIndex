@@ -548,6 +548,11 @@ Dynamic-language scanners for PHP, Ruby, R, and Perl stream multi-match
 attributes/types, DSL targets, namespace/member/resource references, and arrow
 calls. Any loop that writes directly to a bounded reference list must exit at
 the cap instead of walking the rest of a dense line.
+Secondary reference scanners also keep Fortran, Visual Basic, F#, Pascal,
+Objective-C, Haskell, Elixir, Smalltalk, Lua, Dart, Razor, JSON, JavaScript,
+GitHub Actions, and C++ compound-requirement matches demand-driven. Static
+pattern enumeration accepts the extraction timeout explicitly so these paths
+do not trade streaming for a different timeout contract.
 Systems-language scanners stream C/C++ construction and template groups, Rust
 calls and value/signature types, Swift property wrappers, Go concurrency and
 composite/signature types, plus shared scientific/native call groups. Preserve
@@ -3600,6 +3605,10 @@ demand-driven のままにする。offset なしの overload は regex instance 
 PHP、Ruby、R、Perl の dynamic-language scanner は multi-match の attribute / type、
 DSL target、namespace / member / resource reference、arrow call を逐次走査する。
 bounded reference list へ直接書く loop は dense line の残りを走査せず上限で停止する。
+secondary reference scanner も Fortran、Visual Basic、F#、Pascal、Objective-C、
+Haskell、Elixir、Smalltalk、Lua、Dart、Razor、JSON、JavaScript、GitHub Actions、
+C++ compound requirement の match を demand-driven に保つ。static pattern の列挙は
+extraction timeout を明示的に受け取り、逐次化によって timeout 契約を変えない。
 systems-language scanner は C / C++ construction と template group、Rust call と
 value / signature type、Swift property wrapper、Go concurrency と composite / signature
 type、共有 scientific / native call group を逐次走査する。source-order emission を維持し、

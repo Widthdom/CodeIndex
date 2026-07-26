@@ -20,7 +20,7 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         if (originalLine.IndexOf('<') >= 0)
         {
-            foreach (Match match in RazorComponentTagRegex.Matches(originalLine))
+            foreach (Match match in Regex.EnumerateMatches(RazorComponentTagRegex, originalLine))
             {
                 var group = match.Groups["name"];
                 var rawName = group.Value;
@@ -67,7 +67,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (originalLine.IndexOf("@on", StringComparison.Ordinal) >= 0 && originalLine.IndexOf('=') >= 0)
         {
-            foreach (Match match in RazorEventHandlerRegex.Matches(originalLine))
+            foreach (Match match in Regex.EnumerateMatches(RazorEventHandlerRegex, originalLine))
             {
                 var name = match.Groups["name"].Value;
                 var nameIndex = match.Groups["name"].Index;
