@@ -927,6 +927,37 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void ReferenceExtraction_PrologCallFreeRules_AvoidsPerLineLists()
+    {
+        const int ruleCount = 8_000;
+        var contentBuilder = new StringBuilder(ruleCount * 40);
+        for (var index = 0; index < ruleCount; index++)
+        {
+            contentBuilder
+                .Append("rule_")
+                .Append(index)
+                .AppendLine("(Value) :- Value = Value.");
+        }
+        var content = contentBuilder.ToString();
+        var symbols = SymbolExtractor.Extract(1, "prolog", content);
+        _ = ReferenceExtractor.Extract(1, "prolog", content, symbols);
+
+        List<ReferenceRecord>? references = null;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => references = ReferenceExtractor.Extract(1, "prolog", content, symbols));
+
+        Assert.NotNull(references);
+        Assert.DoesNotContain(references, reference => reference.ReferenceKind == "call");
+        Assert.True(
+            allocatedBytes < 24_000_000,
+            $"Call-free Prolog reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_BoundedDenseFSharpPipeline_StopsAtCapacity()
     {
         var contentBuilder = new StringBuilder("seed");

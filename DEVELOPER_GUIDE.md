@@ -552,6 +552,9 @@ Dynamic-language scanners for PHP, Ruby, R, and Perl stream multi-match
 attributes/types, DSL targets, namespace/member/resource references, and arrow
 calls. Any loop that writes directly to a bounded reference list must exit at
 the cap instead of walking the rest of a dense line.
+Prolog goal scanning keeps its per-line call list lazy. When calls are present,
+update directive metadata in that same list before storing it; do not allocate
+an empty list for call-free rules or project a populated list into a second one.
 Secondary reference scanners also keep Fortran, Visual Basic, F#, Pascal,
 Objective-C, Haskell, Elixir, Smalltalk, Lua, Dart, Razor, JSON, JavaScript,
 GitHub Actions, and C++ compound-requirement matches demand-driven. Static
@@ -3627,6 +3630,9 @@ demand-driven のままにする。offset なしの overload は regex instance 
 PHP、Ruby、R、Perl の dynamic-language scanner は multi-match の attribute / type、
 DSL target、namespace / member / resource reference、arrow call を逐次走査する。
 bounded reference list へ直接書く loop は dense line の残りを走査せず上限で停止する。
+Prolog goal scan の per-line call list は lazy にする。call がある場合は同じ list 上で
+directive metadata を更新してから保存し、call-free rule ごとの empty list や populated
+list を射影した2つ目の list を割り当ててはならない。
 secondary reference scanner も Fortran、Visual Basic、F#、Pascal、Objective-C、
 Haskell、Elixir、Smalltalk、Lua、Dart、Razor、JSON、JavaScript、GitHub Actions、
 C++ compound requirement の match を demand-driven に保つ。static pattern の列挙は

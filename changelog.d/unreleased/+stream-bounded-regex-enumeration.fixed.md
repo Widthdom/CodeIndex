@@ -28,6 +28,8 @@ affected:
   building an unbounded temporary list and trimming it after all phases.
   Symbol container assignment now reuses one path buffer across members instead
   of allocating a stack snapshot and a second list for every nested symbol.
+  Prolog goal scans now allocate per-line call lists only when a known goal is
+  emitted and update directive metadata in place instead of copying the list.
 
 ## 日本語
 
@@ -46,3 +48,5 @@ affected:
   symbol budget の diagnostic marker が必要になった時点で停止し、全 phase の後まで
   無制限の一時 list を構築してから trim しません。symbol の container assignment も
   member ごとに stack snapshot と2つ目の list を割り当てず、1つの path buffer を再利用します。
+  Prolog goal scan も既知 goal を出力するときだけ per-line call list を割り当て、directive
+  metadata は list を copy せず in-place で更新します。
