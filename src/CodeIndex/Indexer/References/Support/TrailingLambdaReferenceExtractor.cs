@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Models;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Indexer;
@@ -16,10 +17,14 @@ internal static class TrailingLambdaReferenceExtractor
 
     public static void EmitReferences(
         string preparedLine,
-        Action<string, int> addCallLikeReference)
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
         foreach (Match match in Regex.EnumerateMatches(CallRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                return;
+
             var callIndex = match.Groups["name"].Index;
             if (IsInheritanceClause(preparedLine, callIndex))
                 continue;

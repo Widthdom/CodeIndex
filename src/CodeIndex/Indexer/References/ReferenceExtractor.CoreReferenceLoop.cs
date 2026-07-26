@@ -363,11 +363,17 @@ public static partial class ReferenceExtractor
                     ResolveContainerForCall);
             }
 
+            if (ReferenceLimitReached(references))
+                break;
+
             if (loop.IsJsxFile
                 && language is "javascript" or "typescript")
             {
                 EmitJsxElementReferences(lineContext);
             }
+
+            if (ReferenceLimitReached(references))
+                break;
 
             var typeContext = new CoreTypeReferenceContext(
                 lineContext,
@@ -402,11 +408,17 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            if (ReferenceLimitReached(references))
+                break;
+
             EmitInfrastructureLineReferences(
                 lineContext,
                 loop.DockerfileStageNames,
                 loop.DockerfileVariableNames,
                 loop.CobolCallableSymbols);
+
+            if (ReferenceLimitReached(references))
+                break;
 
             var sqlSuppressedCallIndices = EmitSqlLineReferences(
                 lineContext,
@@ -414,10 +426,16 @@ public static partial class ReferenceExtractor
                 sqlState,
                 definitionState);
 
+            if (ReferenceLimitReached(references))
+                break;
+
             if (language is "csharp" or "java")
                 EmitParenlessInitializerReferences(lineContext);
 
             EmitPhpAndScssLineReferences(lineContext);
+
+            if (ReferenceLimitReached(references))
+                break;
 
             var callContext = new CoreCallReferenceContext(
                 lineContext,
@@ -437,12 +455,18 @@ public static partial class ReferenceExtractor
                 definitionState);
             EmitCoreCallReferences(callContext);
 
+            if (ReferenceLimitReached(references))
+                break;
+
             EmitCoreMethodAndMemberReferences(
                 loop,
                 lineContext,
                 preparedLine,
                 csharpAttrRangesOnLine,
                 ResolveContainerForCall);
+
+            if (ReferenceLimitReached(references))
+                break;
 
             if (input.JsTaggedTemplatesByLine != null
                 && input.JsTaggedTemplatesByLine.TryGetValue(
@@ -454,9 +478,15 @@ public static partial class ReferenceExtractor
                     tagHitsOnLine);
             }
 
+            if (ReferenceLimitReached(references))
+                break;
+
             EmitMetadataLineReferences(
                 lineContext,
                 csharpAttrTopLevelOnLine);
+
+            if (ReferenceLimitReached(references))
+                break;
 
             if (loop.IsRazorFile && language == "csharp")
             {
@@ -472,6 +502,9 @@ public static partial class ReferenceExtractor
                     loop.FileDefinitionNames,
                     input.RazorImplementedTypeNames);
             }
+
+            if (ReferenceLimitReached(references))
+                break;
 
             if (language == "python")
             {

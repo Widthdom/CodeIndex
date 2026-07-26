@@ -6,12 +6,20 @@ namespace CodeIndex.Indexer;
 
 internal static partial class LanguageReferenceExtractionSupport
 {
-    internal static void EmitGoBranchLabelReferences(string preparedLine, Action<string, int> addCallLikeReference)
+    internal static void EmitGoBranchLabelReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
         foreach (Match match in Regex.EnumerateMatches(
                      GoBranchLabelRegex,
                      preparedLine))
+        {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                return;
+
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
+        }
     }
 
     private static void EmitGoFunctionSignatureTypes(

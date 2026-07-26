@@ -927,6 +927,39 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void ReferenceExtraction_BoundedDenseFSharpPipeline_StopsAtCapacity()
+    {
+        var contentBuilder = new StringBuilder("seed");
+        for (var i = 0; i < 4_000; i++)
+            contentBuilder.Append(" |> Func").Append(i);
+        var content = contentBuilder.ToString();
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        var references = ReferenceExtractor.Extract(
+            1,
+            "fsharp",
+            content,
+            symbols,
+            maxReferenceCount: 1);
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(
+                1,
+                "fsharp",
+                content,
+                symbols,
+                maxReferenceCount: 1));
+
+        Assert.Single(references);
+        Assert.True(
+            allocatedBytes < 1_000_000,
+            $"Bounded dense F# reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceDedupe_DenseLongIdentities_StayWithinAllocationBudget()
     {
         const int keyCount = 10_000;

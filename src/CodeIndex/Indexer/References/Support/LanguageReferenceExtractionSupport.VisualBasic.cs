@@ -21,7 +21,7 @@ internal static partial class LanguageReferenceExtractionSupport
             || preparedLine.IndexOf("Implements", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbTypeKeywordMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbTypeKeywordRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbTypeKeywordRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
@@ -32,7 +32,7 @@ internal static partial class LanguageReferenceExtractionSupport
             && preparedLine.IndexOf("Of", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbGenericArgumentListMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbGenericArgumentListRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbGenericArgumentListRegex, preparedLine, references))
             {
                 if (VbGenericDeclarationOwnerRegex.IsMatch(preparedLine[..match.Index]))
                 {
@@ -49,7 +49,7 @@ internal static partial class LanguageReferenceExtractionSupport
         var hasVbNewMarker = preparedLine.IndexOf("New", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbNewMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbNewTypeRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbNewTypeRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 var rawName = LastQualifiedSegment(group.Value);
@@ -66,7 +66,7 @@ internal static partial class LanguageReferenceExtractionSupport
         var hasVbImplementsMarker = preparedLine.IndexOf("Implements", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbImplementsMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbImplementsListRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbImplementsListRegex, preparedLine, references))
             {
                 var group = match.Groups["list"];
                 EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
@@ -92,7 +92,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 || preparedLine.IndexOf("CType", StringComparison.OrdinalIgnoreCase) >= 0);
         if (hasVbCastTypeMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbCastTypeRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbCastTypeRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
@@ -103,7 +103,7 @@ internal static partial class LanguageReferenceExtractionSupport
             && preparedLine.IndexOf("GetType", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbGetTypeMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbGetTypeRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbGetTypeRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
@@ -114,7 +114,7 @@ internal static partial class LanguageReferenceExtractionSupport
             && preparedLine.IndexOf("Is", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbTypeOfMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbTypeOfRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbTypeOfRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
@@ -125,7 +125,7 @@ internal static partial class LanguageReferenceExtractionSupport
             && preparedLine.IndexOf("NameOf", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbNameOfMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbNameOfRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbNameOfRegex, preparedLine, references))
             {
                 var group = match.Groups["name"];
                 var rawName = LastQualifiedSegment(group.Value);
@@ -141,7 +141,7 @@ internal static partial class LanguageReferenceExtractionSupport
             && preparedLine.IndexOf("GetXmlNamespace", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbGetXmlNamespaceMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbGetXmlNamespaceRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbGetXmlNamespaceRegex, preparedLine, references))
             {
                 var group = match.Groups["name"];
                 ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
@@ -151,7 +151,7 @@ internal static partial class LanguageReferenceExtractionSupport
         var hasVbAddressOfMarker = preparedLine.IndexOf("AddressOf", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbAddressOfMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbAddressOfRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbAddressOfRegex, preparedLine, references))
             {
                 var group = match.Groups["name"];
                 var rawName = LastQualifiedSegment(group.Value);
@@ -166,7 +166,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (handlesIndex >= 0)
         {
             var handlesText = preparedLine[handlesIndex..];
-            foreach (Match match in Regex.EnumerateMatches(VbHandlesTargetRegex, handlesText))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbHandlesTargetRegex, handlesText, references))
             {
                 var group = match.Groups["name"];
                 var rawName = LastQualifiedSegment(group.Value);
@@ -180,7 +180,7 @@ internal static partial class LanguageReferenceExtractionSupport
         var hasVbAddHandlerMarker = preparedLine.IndexOf("AddHandler", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbAddHandlerMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbAddHandlerRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbAddHandlerRegex, preparedLine, references))
             {
                 var group = match.Groups["name"];
                 var rawName = LastQualifiedSegment(group.Value);
@@ -194,7 +194,7 @@ internal static partial class LanguageReferenceExtractionSupport
         var hasVbRemoveHandlerMarker = preparedLine.IndexOf("RemoveHandler", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbRemoveHandlerMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbRemoveHandlerRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbRemoveHandlerRegex, preparedLine, references))
             {
                 var group = match.Groups["name"];
                 var rawName = LastQualifiedSegment(group.Value);
@@ -208,7 +208,7 @@ internal static partial class LanguageReferenceExtractionSupport
         var hasVbRaiseEventMarker = preparedLine.IndexOf("RaiseEvent", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasVbRaiseEventMarker)
         {
-            foreach (Match match in Regex.EnumerateMatches(VbRaiseEventRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbRaiseEventRegex, preparedLine, references))
             {
                 var group = match.Groups["name"];
                 var rawName = LastQualifiedSegment(group.Value);
@@ -233,7 +233,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (!preparedLine.Contains('(') || !preparedLine.Contains('['))
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(VbCallRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbCallRegex, preparedLine, references))
         {
             var group = match.Groups["name"];
             if (!group.Value.Contains('['))
@@ -301,7 +301,7 @@ internal static partial class LanguageReferenceExtractionSupport
             || originalLine.IndexOf("CallByName", StringComparison.OrdinalIgnoreCase) < 0)
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(VbCallByNameRegex, originalLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(VbCallByNameRegex, originalLine, references))
         {
             if (match.Index >= preparedLine.Length || char.IsWhiteSpace(preparedLine[match.Index]))
                 continue;

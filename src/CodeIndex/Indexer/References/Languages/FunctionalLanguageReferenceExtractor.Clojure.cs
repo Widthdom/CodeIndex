@@ -39,11 +39,13 @@ public static partial class ReferenceExtractor
             state.ClojureActiveTypeDefinition = typeDefinition;
             var typeContainer = typeDefinition ?? container;
             var types = relationMatch.Groups["types"];
-            foreach (Match typeMatch in Regex.EnumerateMatches(
-                         types.Value,
-                         @"(?<name>[A-Z][\w.*+!?<>=-]*)",
-                         RegexOptions.CultureInvariant,
-                         ExtractionRegexTimeout))
+            foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                         Regex.EnumerateMatches(
+                             types.Value,
+                             @"(?<name>[A-Z][\w.*+!?<>=-]*)",
+                             RegexOptions.CultureInvariant,
+                             ExtractionRegexTimeout),
+                         references))
             {
                 AddReference(
                     references,

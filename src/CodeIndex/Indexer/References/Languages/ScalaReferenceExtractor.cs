@@ -39,7 +39,8 @@ internal static class ScalaReferenceExtractor
 
     public static void EmitTrailingBlockCallReferences(
         string preparedLine,
-        Action<string, int> addCallLikeReference)
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
         if (preparedLine.IndexOf('{') < 0)
             return;
@@ -48,6 +49,9 @@ internal static class ScalaReferenceExtractor
                      TrailingBlockCallRegex,
                      preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                return;
+
             var name = match.Groups["name"].Value;
             if (IgnoredBlockCallNames.Contains(name))
                 continue;
@@ -72,6 +76,9 @@ internal static class ScalaReferenceExtractor
                          ForGeneratorRegex,
                          preparedLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    return;
+
                 var nameGroup = match.Groups["name"];
                 addCallLikeReference(nameGroup.Value, nameGroup.Index);
             }

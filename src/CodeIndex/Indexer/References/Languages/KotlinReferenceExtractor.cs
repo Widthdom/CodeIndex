@@ -188,8 +188,9 @@ internal static partial class KotlinReferenceExtractor
 
     public static void EmitTrailingLambdaReferences(
         string preparedLine,
-        Action<string, int> addCallLikeReference)
-        => TrailingLambdaReferenceExtractor.EmitReferences(preparedLine, addCallLikeReference);
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
+        => TrailingLambdaReferenceExtractor.EmitReferences(preparedLine, addCallLikeReference, references);
 
     public static void EmitInfixCallReferences(
         string preparedLine,

@@ -632,7 +632,9 @@ public static partial class ReferenceExtractor
             pendingWhereConstraint.IgnoredSegments.Clear();
         }
 
-        var lineWhereMatches = Regex.EnumerateMatches(CSharpWhereClauseRegex, line);
+        // Both passes need the same match objects; keep this intentional materialization
+        // instead of rescanning every `where` clause.
+        var lineWhereMatches = CSharpWhereClauseRegex.Matches(line);
         var sawWhereMatch = false;
         var lineWhereNames = new HashSet<string>(pendingWhereConstraint.HeaderGenericParameterNames, StringComparer.Ordinal);
         lineWhereNames.UnionWith(declarationGenericParameterNames);

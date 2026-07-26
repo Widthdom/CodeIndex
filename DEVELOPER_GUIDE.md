@@ -552,7 +552,11 @@ Secondary reference scanners also keep Fortran, Visual Basic, F#, Pascal,
 Objective-C, Haskell, Elixir, Smalltalk, Lua, Dart, Razor, JSON, JavaScript,
 GitHub Actions, and C++ compound-requirement matches demand-driven. Static
 pattern enumeration accepts the extraction timeout explicitly so these paths
-do not trade streaming for a different timeout contract.
+do not trade streaming for a different timeout contract. Regex loops that own
+a reference list use `ReferenceExtractor.EnumerateReferenceMatches` so bounded
+lists stop before requesting the next match, and the shared per-line pipeline
+checks the same cap between type, infrastructure, SQL, call, member, metadata,
+Razor, Python, and R phases.
 Systems-language scanners stream C/C++ construction and template groups, Rust
 calls and value/signature types, Swift property wrappers, Go concurrency and
 composite/signature types, plus shared scientific/native call groups. Preserve
@@ -3609,6 +3613,10 @@ secondary reference scanner も Fortran、Visual Basic、F#、Pascal、Objective
 Haskell、Elixir、Smalltalk、Lua、Dart、Razor、JSON、JavaScript、GitHub Actions、
 C++ compound requirement の match を demand-driven に保つ。static pattern の列挙は
 extraction timeout を明示的に受け取り、逐次化によって timeout 契約を変えない。
+reference list を所有する regex loop は `ReferenceExtractor.EnumerateReferenceMatches`
+を使い、bounded list が満杯なら次の match を要求しない。共有の行単位 pipeline も
+type、infrastructure、SQL、call、member、metadata、Razor、Python、R の各 phase 間で
+同じ上限を確認する。
 systems-language scanner は C / C++ construction と template group、Rust call と
 value / signature type、Swift property wrapper、Go concurrency と composite / signature
 type、共有 scientific / native call group を逐次走査する。source-order emission を維持し、

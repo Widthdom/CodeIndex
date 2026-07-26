@@ -160,7 +160,7 @@ internal static class LuaReferenceExtractor
 
         if (preparedLine.IndexOf(':') >= 0)
         {
-            foreach (Match colonMatch in Regex.EnumerateMatches(LuaColonCallRegex, preparedLine))
+            foreach (Match colonMatch in ReferenceExtractor.EnumerateReferenceMatches(LuaColonCallRegex, preparedLine, references))
             {
                 var name = colonMatch.Groups["name"].Value;
                 if (definitionNames?.Contains(name) == true)
@@ -172,7 +172,7 @@ internal static class LuaReferenceExtractor
         if (preparedLine.IndexOf('.') < 0)
             return;
 
-        foreach (Match fieldMatch in Regex.EnumerateMatches(LuaTableFieldReferenceRegex, preparedLine))
+        foreach (Match fieldMatch in ReferenceExtractor.EnumerateReferenceMatches(LuaTableFieldReferenceRegex, preparedLine, references))
         {
             var trimmed = preparedLine.TrimStart();
             if (trimmed.StartsWith("function ", StringComparison.Ordinal)

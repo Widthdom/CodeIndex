@@ -16,6 +16,8 @@ affected:
   same streaming path across Fortran, Visual Basic, F#, Pascal, Objective-C,
   Haskell, Elixir, Smalltalk, Lua, Dart, Razor, JSON, JavaScript, GitHub Actions,
   and C++ compound requirements without changing their configured timeouts.
+  Bounded reference scans now stop before requesting another match and skip
+  all later extraction phases on the same dense line once capacity is reached.
 
 ## 日本語
 
@@ -24,4 +26,6 @@ affected:
   right-to-left instance の既定の逆順も維持します。Fortran、Visual Basic、F#、
   Pascal、Objective-C、Haskell、Elixir、Smalltalk、Lua、Dart、Razor、JSON、
   JavaScript、GitHub Actions、C++ compound requirement の secondary reference
-  scanner も設定済み timeout を変えず同じ逐次経路を使います。
+  scanner も設定済み timeout を変えず同じ逐次経路を使います。bounded reference
+  scan は上限到達後に次の match を要求せず、同じ dense line の後続 extraction phase
+  も省略します。

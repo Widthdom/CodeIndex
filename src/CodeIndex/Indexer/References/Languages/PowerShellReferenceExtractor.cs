@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Models;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Indexer;
@@ -27,7 +28,10 @@ internal static class PowerShellReferenceExtractor
         new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
     private static readonly IReadOnlyList<string> EmptyHashtableKeys = Array.Empty<string>();
 
-    public static void EmitCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
+    public static void EmitCallReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
         if (!HasCallStartCandidate(preparedLine))
         {
@@ -36,6 +40,9 @@ internal static class PowerShellReferenceExtractor
 
         foreach (Match match in BoundedRegex.EnumerateMatches(CallRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                return;
+
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
             if (IsAssignmentKey(preparedLine, callIndex + name.Length))
@@ -116,7 +123,8 @@ internal static class PowerShellReferenceExtractor
         string preparedLine,
         Func<IReadOnlyDictionary<string, List<SplatAssignment>>> getSplatAssignments,
         int lineNumber,
-        Action<string, int> addParameterReference)
+        Action<string, int> addParameterReference,
+        List<ReferenceRecord> references)
     {
         if (preparedLine.IndexOf('@') < 0)
             return;
@@ -129,6 +137,9 @@ internal static class PowerShellReferenceExtractor
 
         foreach (Match splat in BoundedRegex.EnumerateMatches(SplatTokenRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                return;
+
             var name = splat.Groups["name"].Value;
             if (!splatAssignments.TryGetValue(name, out var candidates))
                 continue;
@@ -144,7 +155,12 @@ internal static class PowerShellReferenceExtractor
                 continue;
 
             foreach (var key in latest.Value.Keys)
+            {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    return;
+
                 addParameterReference(key, splat.Index);
+            }
         }
     }
 
