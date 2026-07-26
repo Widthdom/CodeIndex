@@ -22,8 +22,13 @@ internal static partial class PythonReferenceExtractor
             && !MayStartPythonTypeAliasStatement(preparedLine))
             return;
 
-        foreach (Match match in TypeAliasRhsExpressionRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     TypeAliasRhsExpressionRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var typeGroup = match.Groups["type"];
             EmitPythonTypeExpressionReferences(
                 typeGroup,
@@ -66,8 +71,13 @@ internal static partial class PythonReferenceExtractor
         if (preparedLine.IndexOf("NewType", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in NewTypeUnderlyingTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     NewTypeUnderlyingTypeRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;
@@ -102,8 +112,13 @@ internal static partial class PythonReferenceExtractor
             return;
         }
 
-        foreach (Match match in TypeVarBoundTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     TypeVarBoundTypeRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             EmitPythonTypeExpressionReferences(
                 match.Groups["type"],
                 references,
@@ -135,8 +150,13 @@ internal static partial class PythonReferenceExtractor
         if (preparedLine.IndexOf(',') < 0)
             return;
 
-        foreach (Match match in TypeVarConstraintTypesRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     TypeVarConstraintTypesRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var typesGroup = match.Groups["types"];
             EmitPythonTypeExpressionReferences(
                 typesGroup,
@@ -166,8 +186,13 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf("typing", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in QualifiedGetTypeHintsTargetRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         QualifiedGetTypeHintsTargetRegex,
+                         preparedLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
+
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
                     continue;
@@ -185,8 +210,13 @@ internal static partial class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in GetTypeHintsTargetRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     GetTypeHintsTargetRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;
@@ -219,8 +249,13 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf("importlib", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in ImportlibDynamicImportRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         ImportlibDynamicImportRegex,
+                         preparedLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
+
                 ReferenceExtractor.AddReference(
                     references,
                     seen,
@@ -258,8 +293,13 @@ internal static partial class PythonReferenceExtractor
         if (preparedLine.IndexOf("__import__", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in BuiltinDynamicImportRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     BuiltinDynamicImportRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var literalMatch = BuiltinDynamicImportLiteralRegex.Match(originalLine, match.Index);
             if (!literalMatch.Success || literalMatch.Index != match.Index)
                 continue;

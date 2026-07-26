@@ -69,6 +69,20 @@ public sealed class BoundedRegexTests
     }
 
     [Fact]
+    public void EnumerateMatches_InstanceRegex_StartsAtRequestedOffset()
+    {
+        var regex = new BoundedRegex(@"\w+");
+
+        var matches = BoundedRegex
+            .EnumerateMatches(regex, "skip alpha beta", startAt: 5)
+            .Take(2)
+            .Select(match => match.Value)
+            .ToArray();
+
+        Assert.Equal(["alpha", "beta"], matches);
+    }
+
+    [Fact]
     public void InstanceMatch_Timeout_ReturnsEmpty()
     {
         var regex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));

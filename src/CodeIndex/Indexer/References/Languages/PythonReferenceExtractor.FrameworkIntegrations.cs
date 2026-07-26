@@ -20,8 +20,13 @@ internal static partial class PythonReferenceExtractor
             || preparedLine.IndexOf("attr", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in AttrsFieldsTargetRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     AttrsFieldsTargetRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;
@@ -53,8 +58,13 @@ internal static partial class PythonReferenceExtractor
             || preparedLine.IndexOf("pydantic", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in PydanticTypeAdapterTargetRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     PydanticTypeAdapterTargetRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;
@@ -86,8 +96,13 @@ internal static partial class PythonReferenceExtractor
             || preparedLine.IndexOf("pytest", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in PytestRaisesTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     PytestRaisesTypeRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;
@@ -119,8 +134,13 @@ internal static partial class PythonReferenceExtractor
             || preparedLine.IndexOf("contextlib", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in ContextlibSuppressTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     ContextlibSuppressTypeRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;

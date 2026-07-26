@@ -19,8 +19,13 @@ internal static partial class PythonReferenceExtractor
         if (preparedLine.IndexOf("fields", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in DataclassesFieldsTargetRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     DataclassesFieldsTargetRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;
@@ -144,8 +149,13 @@ internal static partial class PythonReferenceExtractor
             return;
 
         string? context = null;
-        foreach (Match match in DataclassFieldDefaultFactoryRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     DataclassFieldDefaultFactoryRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;

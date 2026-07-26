@@ -538,6 +538,10 @@ Erlang, OCAML, and Raku so one dense line cannot force unused match objects.
 JVM-family reference scanners follow the same rule. Java, Kotlin, Scala, and
 Gradle/Groovy multi-match loops use `BoundedRegex.EnumerateMatches`; loops that
 own the bounded reference list stop immediately at its cap.
+Python reference scanners stream decorators, annotations, runtime type checks,
+typing factories, dataclass/attrs integrations, and dynamic imports. The
+start-offset overload of `BoundedRegex.EnumerateMatches` keeps decorator
+argument scans demand-driven without rescanning the decorator prefix.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3566,6 +3570,10 @@ dense な1行に対して未使用の match object を強制的に作らない�
 JVM-family reference scanner も同じ規則に従う。Java、Kotlin、Scala、Gradle / Groovy の
 multi-match loop は `BoundedRegex.EnumerateMatches` を使い、bounded reference list を
 所有する loop は上限に達した時点で停止する。
+Python reference scanner は decorator、annotation、runtime type check、typing factory、
+dataclass / attrs integration、dynamic import を逐次走査する。`BoundedRegex.EnumerateMatches`
+の start-offset overload により、decorator prefix を再走査せず argument scan も
+demand-driven のままにする。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。
