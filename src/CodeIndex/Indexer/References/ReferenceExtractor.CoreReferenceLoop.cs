@@ -143,6 +143,8 @@ public static partial class ReferenceExtractor
                 i,
                 originalLine);
             var preparedLine = languageLines.PreparedLine;
+            var preparedLineIsWhiteSpace =
+                string.IsNullOrWhiteSpace(preparedLine);
             var originalLineForLanguage =
                 languageLines.OriginalLineForLanguage;
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
@@ -153,13 +155,14 @@ public static partial class ReferenceExtractor
                     i,
                     originalLine,
                     preparedLine,
+                    preparedLineIsWhiteSpace,
                     csharpAttrRangesOnLine,
                     out var sourceContext))
             {
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(preparedLine))
+            if (preparedLineIsWhiteSpace)
             {
                 if (language == "csharp"
                     && (pendingCSharpMultiLineTypePattern.WaitingForHead
@@ -527,6 +530,7 @@ public static partial class ReferenceExtractor
         int lineIndex,
         string originalLine,
         string preparedLine,
+        bool preparedLineIsWhiteSpace,
         List<(int start, int end)>? csharpAttributeRangesOnLine,
         out string sourceContext)
     {
@@ -585,7 +589,7 @@ public static partial class ReferenceExtractor
                 ref state.PhpDocblockPropertyNames);
         }
 
-        if (string.IsNullOrWhiteSpace(preparedLine)
+        if (preparedLineIsWhiteSpace
             && request.Language
                 is not ("cmake"
                     or "justfile"

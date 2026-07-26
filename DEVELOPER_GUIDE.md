@@ -533,6 +533,9 @@ a trimmed copy merely to discover that the line has no references. Preserve
 documentation handling and the build-automation and markup paths that inspect
 the original line, but let ordinary C#, Java, and JavaScript / TypeScript code
 paths skip masked multiline payloads before creating a reference context.
+Classify prepared-line whitespace once per core-loop iteration and reuse that
+result for both special-line dispatch and the ordinary empty-line path; masked
+payload lines can be thousands of characters long.
 
 C / C++ header disambiguation operates on bounded lexical samples. Walk those
 samples with spans and newline indices; splitting a sample into a line array
@@ -3543,6 +3546,8 @@ line string だけを実体化する。`string.Split` による separator-index 
 だけに trim 済み copy を実体化してはならない。documentation handling と、original line を
 検査する build-automation / markup 経路は維持しつつ、通常の C#、Java、
 JavaScript / TypeScript 経路では reference context を作る前に multiline payload を skip する。
+prepared-line の whitespace 判定は core-loop iteration ごとに一度だけ行い、special-line
+dispatch と通常の empty-line 経路で共有する。masked payload line は数千文字になり得る。
 
 C / C++ header の曖昧性解決は bounded lexical sample 上で行う。sample は span と newline index
 で走査し、line array に split してはならない。split は sample 内の全行を一時的に複製し、
