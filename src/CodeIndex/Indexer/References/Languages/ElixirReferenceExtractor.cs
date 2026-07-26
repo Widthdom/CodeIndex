@@ -76,8 +76,15 @@ internal static class ElixirReferenceExtractor
         AddDefimplGroupReference(match.Groups["protocol"]);
 
         var typesGroup = match.Groups["types"];
-        foreach (Match typeMatch in DefimplTypeRegex.Matches(typesGroup.Value))
+        foreach (Match typeMatch in Regex.EnumerateMatches(
+                     DefimplTypeRegex,
+                     typesGroup.Value))
+        {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             AddDefimplTypeReference(typeMatch.Groups[0], typesGroup.Index + typeMatch.Index);
+        }
 
         void AddDefimplGroupReference(Group group)
             => AddDefimplTypeReference(group, group.Index);
@@ -120,7 +127,9 @@ internal static class ElixirReferenceExtractor
     {
         if (preparedLine.IndexOf("|>", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in PipeCallRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         PipeCallRegex,
+                         preparedLine))
             {
                 var name = match.Groups["name"].Value;
                 if (!IgnoredPipeCallNames.Contains(name))

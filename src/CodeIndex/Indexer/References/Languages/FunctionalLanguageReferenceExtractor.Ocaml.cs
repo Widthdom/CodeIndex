@@ -49,8 +49,15 @@ public static partial class ReferenceExtractor
         {
             AddOcamlTypeReference(typeAliasTarget.Groups["name"]);
         }
-        foreach (Match match in OcamlTypeReferenceRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(
+                     OcamlTypeReferenceRegex,
+                     line))
+        {
+            if (ReferenceLimitReached(references))
+                break;
+
             AddOcamlTypeReference(match.Groups["name"]);
+        }
         if (state.OcamlTypeDeclarationMode)
             return;
 
@@ -65,8 +72,13 @@ public static partial class ReferenceExtractor
 
         List<(int Start, int End)>? qualifiedCallSpans =
             typeReferenceSpans is null ? null : new(typeReferenceSpans);
-        foreach (Match match in OcamlQualifiedCallRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(
+                     OcamlQualifiedCallRegex,
+                     line))
         {
+            if (ReferenceLimitReached(references))
+                break;
+
             if (OverlapsFunctionalSpan(
                     qualifiedCallSpans,
                     match.Index,
@@ -79,8 +91,13 @@ public static partial class ReferenceExtractor
         }
 
         var skippedDefinition = false;
-        foreach (Match match in OcamlBareCallRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(
+                     OcamlBareCallRegex,
+                     line))
         {
+            if (ReferenceLimitReached(references))
+                break;
+
             if (ContainsFunctionalSpan(qualifiedCallSpans, match.Index))
                 continue;
 

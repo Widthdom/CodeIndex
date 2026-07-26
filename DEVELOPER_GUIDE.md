@@ -532,6 +532,9 @@ declaration termination.
 Functional-language exclusion span lists are lazy. Erlang quoted/remote calls,
 OCAML type/qualified calls, and Raku qualified/method calls must not allocate an
 empty list on every source line when no corresponding match exists.
+Functional-language regex loops enumerate matches on demand and stop as soon as
+the bounded reference list is full. Keep this contract across Clojure, Elixir,
+Erlang, OCAML, and Raku so one dense line cannot force unused match objects.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3554,6 +3557,9 @@ state-machine の sentinel 判定も span 上で行う。Erlang specification / 
 functional-language の exclusion span list は lazy にする。Erlang quoted / remote call、
 OCAML type / qualified call、Raku qualified / method call は、対応する match がない source line
 ごとに empty list を割り当ててはならない。
+functional-language の regex loop は match を demand-driven に列挙し、bounded reference list
+が満杯になった時点で停止する。Clojure、Elixir、Erlang、OCAML、Raku でこの契約を維持し、
+dense な1行に対して未使用の match object を強制的に作らない。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

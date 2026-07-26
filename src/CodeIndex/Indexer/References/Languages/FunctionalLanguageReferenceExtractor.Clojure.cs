@@ -85,8 +85,13 @@ public static partial class ReferenceExtractor
                            && state.ClojureParenDepth == state.ClojureTypeBodyBaseDepth + 1
             ? ClojureCallHeadRegex.Match(callLine)
             : Match.Empty;
-        foreach (Match match in ClojureCallHeadRegex.Matches(callLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     ClojureCallHeadRegex,
+                     callLine))
         {
+            if (ReferenceLimitReached(references))
+                break;
+
             var fullName = match.Groups["name"].Value;
             var separator = fullName.LastIndexOf('/');
             var name = separator >= 0 ? fullName[(separator + 1)..] : fullName;

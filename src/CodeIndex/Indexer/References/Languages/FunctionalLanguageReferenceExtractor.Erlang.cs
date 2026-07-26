@@ -30,8 +30,13 @@ public static partial class ReferenceExtractor
 
         var quotedAtomSpans = GetErlangQuotedAtomSpans(line);
         List<(int Start, int End)>? remoteCallSpans = null;
-        foreach (Match match in ErlangRemoteCallRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(
+                     ErlangRemoteCallRegex,
+                     line))
         {
+            if (ReferenceLimitReached(references))
+                break;
+
             if (IsInsideQuotedAtom(match.Index))
                 continue;
             (remoteCallSpans ??= []).Add(
@@ -41,8 +46,13 @@ public static partial class ReferenceExtractor
         }
 
         var definitionMatch = ErlangFunctionDefinitionRegex.Match(line);
-        foreach (Match match in ErlangLocalCallRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(
+                     ErlangLocalCallRegex,
+                     line))
         {
+            if (ReferenceLimitReached(references))
+                break;
+
             if (ContainsFunctionalSpan(remoteCallSpans, match.Index))
                 continue;
             if (IsInsideQuotedAtom(match.Groups["name"].Index))
