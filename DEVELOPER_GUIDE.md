@@ -558,6 +558,10 @@ Infrastructure and markup scanners stream CSS, XAML, HTML/GraphQL/Markdown,
 HDL, MSBuild, Dockerfile, shell, and PowerShell match groups. Keep state-only
 scans demand-driven as well, while applying bounded-list exits only where the
 scanner owns the reference list.
+Core reference scans stream shared calls, C# attributes/types/patterns/locals,
+JSX elements, JVM documentation links, and Solidity references. A match set
+that is intentionally consumed in multiple passes may remain materialized;
+single-pass emitters must stay demand-driven and stop owned bounded lists.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3605,6 +3609,10 @@ infrastructure / markup scanner は CSS、XAML、HTML / GraphQL / Markdown、HDL
 MSBuild、Dockerfile、shell、PowerShell の match group を逐次走査する。state-only scan
 も demand-driven のまま保ち、bounded-list の停止判定は scanner が reference list を
 所有する箇所だけに適用する。
+core reference scan は共有 call、C# attribute / type / pattern / local、JSX element、
+JVM documentation link、Solidity reference を逐次走査する。複数 pass で意図的に再利用する
+match set は materialize してよいが、single-pass emitter は demand-driven を維持し、
+所有する bounded list の上限で停止する。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

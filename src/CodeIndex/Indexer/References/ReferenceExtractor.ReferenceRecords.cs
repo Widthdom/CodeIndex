@@ -443,7 +443,7 @@ public static partial class ReferenceExtractor
         if (preparedLine.Contains("=>", StringComparison.Ordinal))
             return;
 
-        foreach (Match match in CSharpLocalDeclarationRegex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CSharpLocalDeclarationRegex, preparedLine))
         {
             var name = NormalizeAtPrefixedIdentifier(match.Groups["name"].Value);
             if (IsIgnoredCallName("csharp", name))

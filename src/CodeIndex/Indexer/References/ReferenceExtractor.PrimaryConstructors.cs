@@ -75,8 +75,10 @@ public static partial class ReferenceExtractor
         if (callableDefinitionNames == null || callableDefinitionNames.Count == 0)
             return;
 
-        foreach (Match match in MethodGroupReferenceRegex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(MethodGroupReferenceRegex, preparedLine))
         {
+            if (ReferenceLimitReached(references))
+                break;
             var contextTargetGroup = match.Groups["contextTarget"];
             if (contextTargetGroup.Success && MethodGroupContextTargetIgnoreNames.Contains(contextTargetGroup.Value))
                 continue;

@@ -364,7 +364,7 @@ public static partial class ReferenceExtractor
                     AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
                 for (var i = start; i <= end; i++)
                 {
-                    foreach (Match match in CSharpLocalValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpLocalValueNameRegex, structuralLines[i]))
                         AddCSharpFunctionValueReceiverName(
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
@@ -373,7 +373,7 @@ public static partial class ReferenceExtractor
                             FindInnermostCSharpBlockEndLine(blockScopes, end + 1, i, match.Index),
                             int.MaxValue,
                             seenNames);
-                    foreach (Match match in CSharpForeachValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpForeachValueNameRegex, structuralLines[i]))
                     {
                         var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
                         AddCSharpFunctionValueReceiverName(
@@ -385,7 +385,7 @@ public static partial class ReferenceExtractor
                             scopeEnd.Column,
                             seenNames);
                     }
-                    foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpQueryRangeValueNameRegex, structuralLines[i]))
                     {
                         var scopeEnd = FindCSharpQueryExpressionEndPosition(
                             structuralLines,
@@ -404,7 +404,7 @@ public static partial class ReferenceExtractor
                             scopeEnd.Column,
                             seenNames);
                     }
-                    foreach (Match match in CSharpDeclarationPatternValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpDeclarationPatternValueNameRegex, structuralLines[i]))
                     {
                         if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, start, end, i, match.Index, out var scopeEnd))
                             continue;
@@ -418,7 +418,7 @@ public static partial class ReferenceExtractor
                             scopeEnd.Column,
                             seenNames);
                     }
-                    foreach (Match match in CSharpCaseDeclarationPatternValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpCaseDeclarationPatternValueNameRegex, structuralLines[i]))
                     {
                         if (!TryFindCSharpSwitchCaseScopeEndPosition(structuralLines, end, i, match.Index, out var scopeEnd))
                             continue;
@@ -432,9 +432,9 @@ public static partial class ReferenceExtractor
                             scopeEnd.Column,
                             seenNames);
                     }
-                    foreach (Match match in CSharpOutValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpOutValueNameRegex, structuralLines[i]))
                         AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, match.Index, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
-                    foreach (Match match in CSharpCatchValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpCatchValueNameRegex, structuralLines[i]))
                     {
                         var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
                         AddCSharpFunctionValueReceiverName(
@@ -446,7 +446,7 @@ public static partial class ReferenceExtractor
                             scopeEnd.Column,
                             seenNames);
                     }
-                    foreach (Match match in CSharpUsingStatementValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpUsingStatementValueNameRegex, structuralLines[i]))
                     {
                         var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
                         AddCSharpFunctionValueReceiverName(
@@ -458,7 +458,7 @@ public static partial class ReferenceExtractor
                             scopeEnd.Column,
                             seenNames);
                     }
-                    foreach (Match match in CSharpFixedValueNameRegex.Matches(structuralLines[i]))
+                    foreach (Match match in BoundedRegex.EnumerateMatches(CSharpFixedValueNameRegex, structuralLines[i]))
                     {
                         var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
                         AddCSharpFunctionValueReceiverName(

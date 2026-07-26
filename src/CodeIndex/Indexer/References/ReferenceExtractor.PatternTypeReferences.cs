@@ -19,7 +19,7 @@ public static partial class ReferenceExtractor
 
     internal static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
     {
-        foreach (Match match in introRegex.Matches(text))
+        foreach (Match match in BoundedRegex.EnumerateMatches(introRegex, text))
         {
             if (HasOnlyTrailingCSharpTrivia(text, match.Index + match.Length))
                 return true;
@@ -312,8 +312,10 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in CSharpDocCrefRegex.Matches(originalLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CSharpDocCrefRegex, originalLine))
         {
+            if (ReferenceLimitReached(references))
+                break;
             var crefGroup = match.Groups["cref"];
             var normalized = NormalizeCSharpDocCref(crefGroup.Value);
             if (normalized.Length == 0)
@@ -342,16 +344,28 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in JvmDocInlineLinkRegex.Matches(docText))
+        foreach (Match match in BoundedRegex.EnumerateMatches(JvmDocInlineLinkRegex, docText))
+        {
+            if (ReferenceLimitReached(references))
+                break;
             EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+        }
 
-        foreach (Match match in JvmDocSeeReferenceRegex.Matches(docText))
+        foreach (Match match in BoundedRegex.EnumerateMatches(JvmDocSeeReferenceRegex, docText))
+        {
+            if (ReferenceLimitReached(references))
+                break;
             EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+        }
 
         if (language == "kotlin")
         {
-            foreach (Match match in KDocBracketLinkRegex.Matches(docText))
+            foreach (Match match in BoundedRegex.EnumerateMatches(KDocBracketLinkRegex, docText))
+            {
+                if (ReferenceLimitReached(references))
+                    break;
                 EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+            }
         }
     }
 

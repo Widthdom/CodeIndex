@@ -109,8 +109,8 @@ internal static partial class CSharpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var chainMatches = CtorChainRegex.Matches(preparedLine);
-        if (chainMatches.Count == 0)
+        using var chainMatches = BoundedRegex.EnumerateMatches(CtorChainRegex, preparedLine).GetEnumerator();
+        if (!chainMatches.MoveNext())
             return;
 
         var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
@@ -132,8 +132,11 @@ internal static partial class CSharpReferenceExtractor
             chainContainer = FindDeclarationRangeFunction(containerCandidates, lineNumber) ?? chainContainer;
         }
 
-        foreach (Match match in chainMatches)
+        do
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+            var match = chainMatches.Current;
             var kindToken = match.Groups["kind"].Value;
             string? target;
             if (kindToken == "this")
@@ -169,7 +172,7 @@ internal static partial class CSharpReferenceExtractor
                 context,
                 lineNumber,
                 chainContainer);
-        }
+        } while (chainMatches.MoveNext());
     }
 
     public static void AdvanceMultiLineTypePatternState(
@@ -341,8 +344,10 @@ internal static partial class CSharpReferenceExtractor
             return;
         }
 
-        foreach (Match match in StaticMemberQualifierRegex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(StaticMemberQualifierRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             var qualifierGroup = match.Groups["qualifier"];
             var qualifier = qualifierGroup.Value;
             var qualifierStart = qualifierGroup.Index;

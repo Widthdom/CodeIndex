@@ -77,7 +77,7 @@ public static partial class ReferenceExtractor
             return;
 
         var bases = match.Groups["bases"];
-        foreach (Match baseMatch in SolidityBaseIdentifierRegex.Matches(bases.Value))
+        foreach (Match baseMatch in BoundedRegex.EnumerateMatches(SolidityBaseIdentifierRegex, bases.Value))
         {
             var name = baseMatch.Groups["name"].Value;
             if (string.IsNullOrWhiteSpace(name))
@@ -160,7 +160,7 @@ public static partial class ReferenceExtractor
             return;
 
         var tail = header.Groups["tail"];
-        foreach (Match modifier in SolidityTailIdentifierRegex.Matches(tail.Value))
+        foreach (Match modifier in BoundedRegex.EnumerateMatches(SolidityTailIdentifierRegex, tail.Value))
         {
             var name = modifier.Groups["name"];
             if (SolidityModifierTailKeywords.Contains(name.Value))
@@ -194,7 +194,7 @@ public static partial class ReferenceExtractor
             return;
         }
 
-        foreach (Match match in SolidityEmitRegex.Matches(line))
+        foreach (Match match in BoundedRegex.EnumerateMatches(SolidityEmitRegex, line))
         {
             var name = match.Groups["name"];
             AddSolidityReference(ref references, ref seen, fileId, name.Value, name.Index, "call", context, lineNumber, containerResolver);
@@ -213,7 +213,7 @@ public static partial class ReferenceExtractor
         if (line.IndexOf('.') < 0 || line.IndexOf('(') < 0)
             return;
 
-        foreach (Match match in SolidityInterfaceCastCallRegex.Matches(line))
+        foreach (Match match in BoundedRegex.EnumerateMatches(SolidityInterfaceCastCallRegex, line))
         {
             var type = match.Groups["type"];
             AddSolidityReference(ref references, ref seen, fileId, type.Value, type.Index, "type_reference", context, lineNumber, containerResolver);

@@ -207,8 +207,10 @@ public static partial class ReferenceExtractor
             var dTemplateArgumentCallSpanIndex = 0;
             if (line.Language is not ("tcl" or "prolog"))
             {
-                foreach (Match match in CallRegex.Matches(callScanLine))
+                foreach (Match match in BoundedRegex.EnumerateMatches(CallRegex, callScanLine))
                 {
+                    if (ReferenceLimitReached(line.References))
+                        break;
                     var name = match.Groups["name"].Value;
                     var callIndex = match.Groups["name"].Index;
                     if (line.Language == "rust" && RustReferenceExtractor.IsRawIdentifierPrefix(line.PreparedLine, callIndex))

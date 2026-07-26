@@ -8,8 +8,10 @@ public static partial class ReferenceExtractor
     private static void EmitJsxElementReferences(CoreReferenceLineContext line)
     {
         var jsxTypeArgumentSkipUntil = -1;
-        foreach (Match match in JsxElementOpenRegex.Matches(line.PreparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(JsxElementOpenRegex, line.PreparedLine))
         {
+            if (ReferenceLimitReached(line.References))
+                break;
             if (match.Index < jsxTypeArgumentSkipUntil)
                 continue;
 
@@ -158,8 +160,10 @@ public static partial class ReferenceExtractor
 
         HashSet<int>? matchedInitializerIndices = null;
         var mayContainNestedGenericInitializer = line.Language == "csharp" && MayContainNestedGenericSyntax(line.PreparedLine);
-        foreach (Match match in CSharpJavaInitializerRegex.Matches(line.PreparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CSharpJavaInitializerRegex, line.PreparedLine))
         {
+            if (ReferenceLimitReached(line.References))
+                break;
             var rawName = match.Groups["name"].Value;
             var nameIndex = match.Groups["name"].Index;
             (matchedInitializerIndices ??= []).Add(nameIndex);

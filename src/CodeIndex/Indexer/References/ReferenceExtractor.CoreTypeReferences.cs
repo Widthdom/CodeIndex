@@ -63,8 +63,10 @@ public static partial class ReferenceExtractor
         // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
         if (line.Language is "csharp")
         {
-            foreach (Match match in EventSubscriptionRegex.Matches(line.PreparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(EventSubscriptionRegex, line.PreparedLine))
             {
+                if (ReferenceLimitReached(line.References))
+                    break;
                 var eventContainer = line.ResolveContainerForCall(match.Groups["name"].Index);
                 AddReference(line.References, line.Seen, line.FileId, match, "subscribe", line.Context, line.LineNumber, eventContainer);
             }
@@ -98,8 +100,10 @@ public static partial class ReferenceExtractor
         if (line.Language is "csharp")
         {
             var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(line.PreparedLine);
-            foreach (Match match in CSharpTypeKeywordIntroRegex.Matches(line.PreparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(CSharpTypeKeywordIntroRegex, line.PreparedLine))
             {
+                if (ReferenceLimitReached(line.References))
+                    break;
                 int parenIndex = match.Index + match.Length - 1; // position of '(' / '(' の位置
                 ExtractCSharpTypeKeywordSegments(
                     line.References, line.Seen, line.FileId, line.PreparedLine, parenIndex + 1,

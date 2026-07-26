@@ -249,8 +249,10 @@ public static partial class ReferenceExtractor
         }
 
         var codeLine = SanitizeCSharpCommentsForReflectionNameScan(originalLine);
-        foreach (Match match in CSharpReflectionNameApiIntroRegex.Matches(codeLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CSharpReflectionNameApiIntroRegex, codeLine))
         {
+            if (ReferenceLimitReached(references))
+                break;
             if (IsInsideCSharpStringLiteral(codeLine, match.Index))
                 continue;
             if (!preparedLine.Contains(match.Groups["name"].Value, StringComparison.Ordinal))
