@@ -2565,193 +2565,28 @@ cdidx helps AI tools by replacing repeated repo-wide scans with a reusable local
 
 For the full MCP tool list, JSON field contracts, exact-match metadata, and fallback behavior on legacy databases, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
-### Setup: Add AI agent search rules
+### Setup: Configure MCP instead of copying a command catalog
 
-To let AI coding agents use the generated index, add the following search rules to the repo-local instruction file your tool reads, such as `CLAUDE.md`, `AGENTS.md`, or another agent guide. The template is for **downstream projects** that adopt cdidx. Contributors working on the cdidx repo itself should follow this repo's agent entry points because they route execution through the locally built `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll` instead of a bare `cdidx` command.
+After cdidx is installed and the repository is indexed, downstream repositories
+that use it through MCP only need to register the server as shown in the MCP
+setup section below. Do not copy a long cdidx command catalog or query-strategy
+template into `AGENTS.md`, `CLAUDE.md`, or another repo-local agent guide. The
+connected server is the current source of truth:
 
-~~~markdown
-# Code Search Rules
+- MCP `initialize` returns server instructions with the available search and
+  resource-discovery workflow.
+- MCP `tools/list` returns the enabled tool schemas, descriptions, first-time
+  AI guidance, capability groups, and recommended workflows.
+- MCP resource discovery advertises its templates, filters, bounds, and cursor
+  contract in-band.
 
-This project uses **cdidx** for fast code search via a pre-built SQLite index (`.cdidx/codeindex.db`).
-**Query this database** instead of using `find`, `grep`, `rg`, or `ls -R`.
-
-## Setup
-
-First check if `cdidx` is available:
-
-```bash
-cdidx --version
-```
-
-**If not found**, install it:
-
-```bash
-# No .NET required — downloads a self-contained binary
-curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
-```
-
-Or, if the .NET 8.x SDK is available:
-
-```bash
-dotnet tool install -g cdidx
-```
-
-When `cdidx` is running as a distributed/non-development install, it also
-appends stderr plus minimal lifecycle breadcrumbs to a per-user file so silent
-hosts still leave traces. Local development runs from the repository's
-`src/CodeIndex/bin/...` or `tests/.../bin/...` outputs are excluded by default.
-Default locations are `%LOCALAPPDATA%\cdidx\logs\` on Windows,
-`~/Library/Logs/cdidx/` on macOS, and `$XDG_STATE_HOME/cdidx/logs/` (or
-`~/.local/state/cdidx/logs/`) on Linux. Logs use per-process filenames,
-rotate daily, rotate again when a file reaches 50 MiB by default, and keep the
-newest 30 files. Set `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` or
-`--log-max-size-mb` to tune the size cap up to 1024 MiB / 1 GiB. Set
-`CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out.
-
-**If already installed**, reinstall or switch to a specific version explicitly:
-
-```bash
-# Reinstall or switch versions explicitly
-curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/vX.Y.Z/install.sh | bash -s -- vX.Y.Z
-```
-
-Re-running the no-argument one-liner still targets the latest release: the installer resolves the latest tag first, then skips the download only when the current healthy install already matches that latest version. Broken `v0.0.0` installs or same-version installs missing required adjacent assets are treated as reinstall targets. Use the explicit-version form when you want to force that exact version.
-
-If install fails (no network, unsupported platform), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`, provided the database was already built. If neither `cdidx` nor `sqlite3` is available, use the Claude Code built-in `Grep` / `Glob` tools (or your harness's equivalent) — do not fall back to shell `rg` / `grep` / `find` or a global `cdidx` in a Claude Code session, since those may be blocked by a repo-tracked deny list and bypassing them can hide stale-binary bugs.
-
-Before searching, check whether the index already matches the workspace:
-
-```bash
-cdidx status --check --json
-cdidx status --check --stale-after 30m
-```
-
-If it exits `0` with `index_matches_workspace: true`, skip reindexing. Otherwise update the index so results are accurate:
-
-```bash
-cdidx .   # incremental update (skips unchanged files)
-```
-
-`status --check` uses a 24-hour index-age threshold by default when explaining stale-index hints. Override it per invocation with `--stale-after <duration>` (`30m`, `2h`, `7d`, max `30d`), for a process or CI job with `CDIDX_STALE_AFTER`, or per repository with `.cdidxrc.json` (`"stale_after": "2h"`). The effective threshold is shown in human output and as `stale_after_seconds` in JSON.
-
-## Keeping the index up to date (requires cdidx)
-
-After editing files, update the database so search results stay accurate:
-
-```bash
-cdidx . --files path/to/changed_file.cs   # update specific files you modified
-cdidx . --commits HEAD                     # update all files changed in the last commit
-cdidx . --commits abc123                   # you can also pass a specific commit hash
-cdidx .                                    # full incremental update (skips unchanged files)
-```
-
-**Rule: whenever you modify source files, run `cdidx status --check --json` before your next search; if it reports a mismatch, run one of the update commands above.**
-If the checkout changed because of `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, prefer `cdidx .` so stale files are purged against the current worktree instead of only refreshing commit-local paths.
-
-## Query strategy
-
-- Start by checking freshness with `status --check --json` when search correctness matters. If the index does not match the workspace, run `cdidx .` before trusting symbol or graph results. Use `map` / `map --json` for a quick overview of languages, modules, likely entrypoints, and high-activity areas.
-- Use `languages` as the source of truth for canonical `--lang` values and current symbol / graph support. Avoid relying on memorized per-language extraction details in prompts or agent instructions; support changes over time and the CLI reports `graph_supported`, `graph_support_reason`, and related trust metadata where it matters.
-- When you have a likely symbol name, run `symbols` first to resolve candidates. Add `--exact-name` once the intended symbol is known. Use `outline` for a single file's structure and `inspect` when you want bundled definition, reference, caller, and callee context in one request.
-- Use `definition --body` for bounded implementation text, then `references --body`, `callers --body`, `callees --body`, or `impact --body` when graph results need inline excerpts. Check `body_content_truncated` before assuming the returned body is complete. Prefer `--exact` after a candidate has been resolved so names such as `Run` do not expand to `RunAsync` or `RunImpact`. Treat graph fallback and degraded metadata as guidance about confidence, not as decoration.
-- Use `search` for raw text, comments, strings, option names, generated code, or languages where the current `languages` output says structured graph support is unavailable. Use `--include-generated` when generated code is the target. Use `--exact-substring` for punctuation-heavy literals, `--token-boundary` for exact code phrases that must not match longer identifiers, and `--fts` only when you intentionally want raw FTS5 syntax such as `NEAR` or `OR`.
-- Scope broad searches early with `--path <text>`, repeatable `--exclude-path <text>`, and `--exclude-tests` unless tests are the target. Generated files are hidden from query results by default; pass `--include-generated` when needed. For noisy minified or transpiled files, reduce payload size with `--snippet-lines <n>` and `--max-line-width <n>`.
-- Use `files` to discover candidate paths, `find` to re-locate exact text within known files, and `excerpt` to fetch only the needed lines instead of opening entire files.
-- Use `deps --reverse` for file-level impact, `impact` for callable symbol ripple checks, `unused` for potentially dead definitions, and `hotspots` for central symbols. These commands are only as strong as the current graph support and freshness metadata, so keep `languages` and `status --check --json` in the loop.
-- `unused` treats indexed references as authoritative suppression signals. C# `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as `GetMethod("Foo")` or literal concatenations like `GetProperty("Display" + "Name")` are indexed, but dynamically constructed reflection names may still require manual review.
-- Use `files --since <datetime>` or `search --since <datetime>` to focus on recent changes, `index --dry-run` to preview index scope, and `--count` to size result sets before fetching full payloads.
-- If you encounter a bug, unexpected behavior, or an improvement idea, file an issue at https://github.com/Widthdom/CodeIndex/issues with the observed behavior, expected behavior, and the command you ran.
-
-## CLI (recommended if cdidx is available)
-
-```bash
-cdidx status --check --json
-cdidx map --path src/ --exclude-tests --json
-cdidx inspect "Authenticate" --lang csharp --exact --exclude-tests
-cdidx symbols --lang csharp --name Authenticate --exact-name
-cdidx definition "Authenticate" --lang csharp --exact --body
-cdidx search "keyword" --path src/ --exclude-tests --snippet-lines 6 --max-line-width 160
-cdidx search "Run();" --exact-substring --path src/
-cdidx callers "Authenticate" --lang csharp --exact --exclude-tests
-cdidx impact "Authenticate" --lang csharp --exact --exclude-tests --json
-cdidx deps --path src/Services/AuthService.cs --reverse --json
-cdidx hotspots --lang csharp --limit 20 --json
-cdidx unused --lang csharp --exclude-tests --json
-cdidx find "guard" --path src/app.py --after 2
-cdidx excerpt src/app.py --start 10 --end 20
-cdidx outline src/app.py --json
-cdidx languages --json
-```
-
-## Direct SQL queries (fallback if cdidx is unavailable)
-
-The queries below require `sqlite3`. Treat this as a basic fallback for raw text / symbol inspection only; prefer `cdidx` for call graph queries, freshness metadata, exact-name semantics, scoped snippets, `impact`, `unused`, and `hotspots`. If `sqlite3` is not installed, suggest the user install it:
-- **macOS**: pre-installed
-- **Linux**: `sudo apt install sqlite3`
-- **Windows**: `winget install SQLite.SQLite` or `scoop install sqlite`
-
-### Full-text search
-```sql
-SELECT f.path, c.start_line, c.content
-FROM fts_chunks fc
-JOIN chunks c ON c.id = fc.rowid
-JOIN files f ON f.id = c.file_id
-WHERE fts_chunks MATCH 'keyword'
-LIMIT 20;
-```
-
-### Search by function/class name
-```sql
-SELECT f.path, s.name, s.line
-FROM symbols s
-JOIN files f ON f.id = s.file_id
-WHERE s.kind = 'function' AND s.name LIKE '%keyword%';
-```
-
-### Incremental updates for CI / hooks
-
-Instead of re-indexing the entire project, AI agents can update only the files that changed:
-
-```bash
-# Update only files changed in specific commits
-# Prefer this after a normal commit because git history also carries rename/delete paths
-cdidx ./myproject --commits abc123 def456
-
-# Update only files changed between two refs, useful after a branch switch
-# Rename old and new paths are both considered
-cdidx ./myproject --changed-between main feature
-
-# Update only specific files after known in-place edits or new-file additions
-# Old rename/delete paths are not purged unless you also list them explicitly
-cdidx ./myproject --files src/app.cs src/utils.cs
-```
-
-Prefer `--commits` for commit-driven automation and `--changed-between <old-ref> <new-ref>` when a branch-switch workflow can provide the before/after refs. Use `--files` for editor/save hooks that only touch existing paths or add new files. After `git reset`, `git rebase`, `git commit --amend`, or `git merge`, prefer a full `cdidx ./myproject --json` refresh so repo-wide stale paths are purged against the current checkout.
-
-These options make it practical to keep the index up-to-date in real time, even on large codebases, without pretending that every delta workflow purges stale paths equally.
-
-### Incremental update reliability
-
-Scoped updates reuse the same skip and ignore rules as a full scan, including `.gitignore` before `.cdidxignore` in each directory and `!` re-include patterns in later rules. If a commit-based update sees `.gitignore` or `.cdidxignore` change in the selected commits, cdidx promotes that run to a full incremental scan automatically so files newly hidden by ignore rules are purged and files newly re-included can appear in the index. `--files` is narrower: it updates only the paths you pass, so use a full `cdidx ./myproject --json` refresh after changing ignore rules unless a commit-scoped command can see that ignore-file change.
-
-The index database is updated file by file inside SQLite transactions. Queries from another process can continue during a long refresh, but they may observe a transitional mix of old and new rows until the indexing command finishes. Treat that as a live snapshot, not a corrupted database: rerun `cdidx status --check --json` after the refresh completes before trusting automation results. If a branch switch or other history-moving operation left rows for files that exist only on the previous checkout, incremental JSON output includes `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice`; use `--changed-between <old-ref> <new-ref>` when you know both refs, or run a full project refresh when you need repo-wide stale-path cleanup.
-
-Use `--json` to tell what actually happened. Narrow update output reports `mode: "update"` with `summary.updated`, `summary.removed`, and `summary.skipped`. A run promoted because ignore files changed uses the full-scan JSON shape instead: `mode` remains `"incremental"` unless you passed `--rebuild`, and the summary includes `files_scanned`, `files_skipped`, and `files_purged`.
-
-Example:
-
-```bash
-cdidx ./myproject --files src/app.cs --commits HEAD --json
-```
-
-If `HEAD` only changed `src/app.cs`, this updates that path and the commit-local paths, skipping unchanged files. If `HEAD` also changed `.gitignore` or `.cdidxignore`, cdidx promotes the command to a full incremental scan so the database reflects the new ignore boundary. If the command follows a branch switch and old/new refs are known, prefer:
-
-```bash
-cdidx ./myproject --changed-between old-branch new-branch --json
-```
-
-If the refs are not known, use `cdidx ./myproject --json` and verify with `cdidx status --check --json`.
-~~~
+This keeps downstream guidance current as cdidx capabilities change. Keep
+repo-local agent instructions focused on repository-specific requirements, such
+as whether the configured cdidx MCP server is required and who may refresh the
+index. A CLI-only integration still needs a short instruction that tells the
+agent how to invoke cdidx; link to this guide and command help instead of copying
+the full strategy. Contributors working on the CodeIndex repository itself must
+follow `AGENT_GUIDE.md`, which uses the locally built binary.
 
 ### AI Protocol Boundary Quick Reference
 
@@ -5768,202 +5603,28 @@ cdidx が AI ワークフローで効く最大の理由は、毎ターン同じ�
 
 MCP ツール一覧、JSON フィールド契約、`--exact` まわりのメタデータ、旧 DB フォールバック時の挙動は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) を参照してください。
 
-### セットアップ: AIエージェント向け検索ルールを追加
+### セットアップ: コマンド一覧を複製せず MCP を設定
 
-AI コーディングエージェントにインデックスを活用させるには、`CLAUDE.md`、`AGENTS.md`、その他のエージェントガイドなど、利用中のツールが読むリポジトリローカルの指示ファイルに次の検索ルールを追加してください。以下のテンプレートは **cdidx を導入する下流プロジェクト向け**です。cdidx 本体のリポジトリに貢献する場合は、この repo のエージェント用エントリポイントに従ってください。素の `cdidx` コマンドではなくローカルビルドの `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll` を経由する運用になっています。
+cdidx のインストールとリポジトリの index 作成が済んだ後は、MCP 経由で使う
+下流リポジトリ側では、後述の MCP セットアップに従って server を登録するだけで
+利用できます。長大な cdidx のコマンド一覧やクエリ戦略テンプレートを
+`AGENTS.md`、`CLAUDE.md`、その他のリポジトリローカルな agent guide へ
+コピーしないでください。接続中の server が最新の情報源になります:
 
-~~~markdown
-# コードベース検索ルール
+- MCP `initialize` は、利用可能な検索・resource discovery workflow を
+  server instructions として返します。
+- MCP `tools/list` は、有効な tool schema、description、初回 AI 向けガイド、
+  capability group、推奨 workflow を返します。
+- MCP resource discovery は、template、filter、上限、cursor 契約を
+  protocol 上で直接公開します。
 
-このプロジェクトは **cdidx** を使い、事前構築済みSQLiteインデックス（`.cdidx/codeindex.db`）で高速コード検索を行います。
-コードを検索する際は `find`, `grep`, `rg`, `ls -R` ではなく**このデータベースを検索**してください。
-
-## セットアップ
-
-まず `cdidx` が利用可能か確認してください:
-
-```bash
-cdidx --version
-```
-
-**見つからない場合**、インストールしてください:
-
-```bash
-# .NET 不要 — self-contained バイナリをダウンロード
-curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
-```
-
-または .NET 8.x SDK がある場合:
-
-```bash
-dotnet tool install -g cdidx
-```
-
-**すでにインストール済みの場合**、再インストールやバージョン切り替えは明示バージョン指定で行ってください:
-
-```bash
-# 明示バージョンで再インストールまたは切り替え
-curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/vX.Y.Z/install.sh | bash -s -- vX.Y.Z
-```
-
-引数なしワンライナーの再実行も、常に latest release を対象にします。installer はまず最新 tag を解決し、現在の健全 install がその最新版と一致している場合だけ download を skip して 0 終了します。壊れた `v0.0.0` 状態や、同版でも必須隣接資産が欠けている場合は再インストール対象です。特定の版を強制したいときは、上の明示バージョン形式を使ってください。
-
-インストールに失敗した場合（ネットワーク不通、未対応プラットフォーム等）は、データベースが構築済みであれば下記の **「直接SQLクエリ」** セクションで `sqlite3` から `.cdidx/codeindex.db` を直接検索できます。`cdidx` も `sqlite3` も利用できない場合は、Claude Code の組み込み `Grep` / `Glob` ツール（もしくは使用ハーネスの同等機能）を使ってください — Claude Code セッション内では shell の `rg` / `grep` / `find` やグローバル `cdidx` にフォールバックしないでください。これらはリポジトリ追跡の deny リストで塞がれている可能性があり、迂回すると古いバイナリ由来のバグを隠してしまうためです。
-
-検索を始める前に、インデックスが現在の workspace と一致しているか確認してください:
-
-```bash
-cdidx status --check --json
-```
-
-終了コード `0` かつ `index_matches_workspace: true` なら再インデックス不要です。それ以外ならインデックスを最新化してください:
-
-```bash
-cdidx .   # インクリメンタル更新（未変更ファイルはスキップ）
-```
-
-## インデックスの最新化（cdidx が必要）
-
-ファイルを編集したら、検索結果を正確に保つためにデータベースを更新してください:
-
-```bash
-cdidx . --files path/to/changed_file.cs   # 変更したファイルだけ更新
-cdidx . --commits HEAD                     # 直前のコミットで変更されたファイルを更新
-cdidx . --commits abc123                   # 特定のコミットハッシュも指定可能
-cdidx .                                    # フルインクリメンタル更新（未変更ファイルはスキップ）
-```
-
-**ルール: ソースファイルを修正したら、次の検索の前に `cdidx status --check --json` を実行し、差分が報告された場合は上記のいずれかを実行すること。**
-`git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` で checkout 自体が変わった後は、コミット単位の更新だけでなく stale file の掃除も必要になるため、`cdidx .` を優先してください。
-
-commit ごとに自動更新したい場合は、任意の git pre-commit hook を使えます:
-
-```bash
-cdidx hooks install --dry-run
-cdidx hooks install
-cdidx hooks status
-cdidx hooks uninstall
-```
-
-`cdidx hooks install --dry-run` は hook file を変更せず、予定する操作と managed
-hook をプレビューします。実際の install は新規作成時に `installed`、managed
-content の置換、実行不可または UTF-8/no-BOM 以外になった managed hook の修復、
-あるいは custom hook の chain 化時に `updated`、同一かつ実行可能な UTF-8/no-BOM
-の内容で変更不要の場合に `already_installed` を返します。
-インストールされた hook は commit 完了前に `cdidx index <selected-project-path> --quiet` を実行します。
-`--project` を省略した場合、選択パスはインストール時のカレントディレクトリです。
-`--quiet` は hook 向けに通常の進捗と成功出力を抑制しますが、indexing error は
-stderr に出し、失敗時は非ゼロ終了します。既存の `.git/hooks/pre-commit` がある
-場合、`cdidx hooks install` はそれを `.git/hooks/pre-commit.cdidx-chain` に退避し、
-cdidx の更新後に呼び出します。Husky、pre-commit、lefthook などの managed hook
-system では、同じ `cdidx index . --quiet` を step として追加してください。意図的に
-すべての pre-commit hook を飛ばしたいときは `git commit --no-verify` を使います。
-手動コピー用の script は `samples/git-hooks/pre-commit` にあります。
-
-## クエリ戦略
-
-- 検索結果の正しさが重要な場合は、まず `status --check --json` で鮮度を確認する。インデックスが workspace と一致していなければ、symbol / graph 結果を信頼する前に `cdidx .` を実行する。全体像の把握には `map` / `map --json` を使い、言語、モジュール、entrypoint 候補、活動量の高い領域を先に見る。
-- `--lang` に渡す正式名と現在の symbol / graph 対応状況は `languages` を正とする。プロンプトやエージェント向け手順に言語別抽出仕様を細かく固定しない。対応範囲は更新されるため、必要な場所では CLI が返す `graph_supported`、`graph_support_reason`、関連する trust metadata を読む。
-- 候補シンボル名がある場合は、まず `symbols` で候補を固める。対象が決まったら `--exact-name` を付ける。1ファイルの構造だけ見たいときは `outline`、定義・参照・caller・callee のまとまった文脈が欲しいときは `inspect` を使う。
-- 実装本文が必要なら bounded な `definition --body` を使い、graph 結果にもインライン抜粋が必要なら `references --body`、`callers --body`、`callees --body`、`impact --body` を使う。返却 body が完全かどうかを判断する前に `body_content_truncated` を確認する。候補が解決済みなら `--exact` を付け、`Run` が `RunAsync` や `RunImpact` に広がらないようにする。graph fallback や degraded metadata は信頼度の情報として扱う。
-- 生テキスト、コメント、文字列、オプション名、生成コード、または現在の `languages` 出力で構造化 graph 対応がない言語には `search` を使う。記号を多く含む literal には `--exact-substring`、長い identifier 内への一致を避けたい exact code phrase には `--token-boundary`、`NEAR` や `OR` などの FTS5 構文を意図して使う場合だけ `--fts` を使う。
-- 広い検索は早い段階で `--path <path-or-glob>`、繰り返し指定できる `--exclude-path <path-or-glob>`、テストが目的でない場合の `--exclude-tests` で絞る。ワイルドカードなしの値は `./foo` や `/foo` を `foo` に正規化したリポジトリ相対パスとして扱い、そのファイル/ディレクトリの完全一致またはそのディレクトリ配下だけに一致する。任意の部分文字列一致ではない。生成・minified・transpiled などノイズの大きいファイルでは `--snippet-lines <n>` と `--max-line-width <n>` で payload を小さくする。
-- 候補パスの把握には `files`、既知ファイル内の再探索には `find`、必要行だけ読むときは `excerpt` を使い、ファイル全体を開かない。
-- ファイル単位の影響確認には `deps --reverse`、callable symbol の波及確認には `impact`、潜在的な未使用定義には `unused`、中心的なシンボルの把握には `hotspots` を使う。これらは現在の graph 対応とインデックス鮮度に依存するため、`languages` と `status --check --json` を併用する。
-- `unused` はインデックス済み参照を抑制シグナルとして扱う。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような直接の reflection member-name literal や `GetProperty("Display" + "Name")` のような literal 連結は index されるが、動的に組み立てられる reflection 名は引き続き手動確認が必要になることがある。
-- 最近の変更に絞るときは `files --since <datetime>` または `search --since <datetime>`、インデックス対象の事前確認には `index --dry-run`、大きな結果を取る前の見積もりには `--count` を使う。
-- cdidx のバグ、予期しない動作、改善アイデアを見つけた場合は、https://github.com/Widthdom/CodeIndex/issues に、実際の挙動、期待する挙動、実行したコマンドを書いて issue を作成してください。
-
-## CLI（cdidxが利用可能な場合に推奨）
-
-```bash
-cdidx status --check --json
-cdidx map --path src/ --exclude-tests --json
-cdidx inspect "Authenticate" --lang csharp --exact --exclude-tests
-cdidx symbols --lang csharp --name Authenticate --exact-name
-cdidx definition "Authenticate" --lang csharp --exact --body
-cdidx search "keyword" --path src/ --exclude-tests --snippet-lines 6 --max-line-width 160
-cdidx search "Run();" --exact-substring --path src/
-cdidx callers "Authenticate" --lang csharp --exact --exclude-tests
-cdidx impact "Authenticate" --lang csharp --exact --exclude-tests --json
-cdidx deps --path src/Services/AuthService.cs --reverse --json
-cdidx hotspots --lang csharp --limit 20 --json
-cdidx unused --lang csharp --exclude-tests --json
-cdidx find "guard" --path src/app.py --after 2
-cdidx excerpt src/app.py --start 10 --end 20
-cdidx outline src/app.py --json
-cdidx languages --json
-```
-
-## 直接SQLクエリ（cdidxが利用できない場合のフォールバック）
-
-以下のクエリには `sqlite3` が必要です。これは raw text / symbol を最低限覗くためのフォールバックであり、call graph、freshness metadata、exact-name semantics、scoped snippet、`impact`、`unused`、`hotspots` には `cdidx` を優先してください。未インストールの場合、ユーザーにインストールを提案してください:
-- **macOS**: プリインストール済み
-- **Linux**: `sudo apt install sqlite3`
-- **Windows**: `winget install SQLite.SQLite` または `scoop install sqlite`
-
-### 全文検索
-```sql
-SELECT f.path, c.start_line, c.content
-FROM fts_chunks fc
-JOIN chunks c ON c.id = fc.rowid
-JOIN files f ON f.id = c.file_id
-WHERE fts_chunks MATCH 'キーワード'
-LIMIT 20;
-```
-
-### 関数・クラス名で検索
-```sql
-SELECT f.path, s.name, s.line
-FROM symbols s
-JOIN files f ON f.id = s.file_id
-WHERE s.kind = 'function' AND s.name LIKE '%キーワード%';
-```
-
-### CI / フック向けインクリメンタル更新
-
-プロジェクト全体を再インデックスする代わりに、変更のあったファイルだけを更新できます:
-
-```bash
-# 特定コミットの変更ファイルのみ更新
-# 通常のコミット直後はこちらを優先。git 履歴に rename/delete path も含まれる
-cdidx ./myproject --commits abc123 def456
-
-# 2つのref間の変更ファイルのみ更新（ブランチ切り替え後に便利）
-# rename の旧 path と新 path の両方を考慮する
-cdidx ./myproject --changed-between main feature
-
-# 特定ファイルのみ更新（in-place 編集や新規追加向け）
-# rename/delete の旧 path は、明示しない限り purge されない
-cdidx ./myproject --files src/app.cs src/utils.cs
-```
-
-コミット単位の自動化では `--commits` を優先し、ブランチ切り替え workflow が前後の ref を持っている場合は `--changed-between <old-ref> <new-ref>` を使えます。`--files` は既存 path の編集や新規ファイル追加だけを前提にした editor/save hook 向けです。`git reset`、`git rebase`、`git commit --amend`、`git merge` の後は、repo 全体の stale path を掃除するために `cdidx ./myproject --json` のフル更新を優先してください。
-
-これらのオプションにより、大規模コードベースでもリアルタイムにインデックスを最新に保ちやすくなりますが、stale path を purge できる範囲は更新モードごとに異なります。
-
-### インクリメンタル更新の信頼性
-
-部分更新はフルスキャンと同じ skip / ignore ルールを使います。commit ベースの更新で対象コミット内の `.gitignore` または `.cdidxignore` 変更を検出した場合、cdidx はその実行を自動的にフルインクリメンタルスキャンへ昇格します。これにより、新しく ignore されたファイルは purge され、新しく再包含されたファイルはインデックスに入ります。`--files` はより狭く、渡した path だけを更新します。ignore ルールを変更した後は、commit-scoped コマンドがその ignore ファイル変更を見られる場合を除き、`cdidx ./myproject --json` のフル更新を使ってください。
-
-インデックスDBはファイル単位の SQLite transaction で更新されます。長い refresh 中も別プロセスからの query は続行できますが、indexing command が完了するまでは古い行と新しい行が混在した途中状態を観測する可能性があります。これはDB破損ではなく、その時点の live snapshot です。自動化で結果を信頼する前に、refresh 完了後に `cdidx status --check --json` を再実行してください。ブランチ切り替えや履歴を書き換える操作により前 checkout にしか存在しない行が残る場合、incremental JSON 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` が含まれます。前後の ref が分かるなら `--changed-between <old-ref> <new-ref>` を使い、repo 全体の stale path cleanup が必要ならフル更新を実行してください。
-
-実際にどの経路になったかは `--json` で確認できます。狭い update 出力は `mode: "update"` と `summary.updated`、`summary.removed`、`summary.skipped` を返します。ignore ファイル変更により昇格された実行は full-scan JSON 形状になり、`--rebuild` を渡していない限り `mode` は `"incremental"` のまま、summary には `files_scanned`、`files_skipped`、`files_purged` が含まれます。
-
-例:
-
-```bash
-cdidx ./myproject --files src/app.cs --commits HEAD --json
-```
-
-`HEAD` が `src/app.cs` だけを変更していれば、その path と commit 由来 path を更新し、未変更ファイルは skip します。`HEAD` が `.gitignore` または `.cdidxignore` も変更していれば、cdidx はDBを新しい ignore 境界に合わせるためフルインクリメンタルスキャンへ昇格します。ブランチ切り替え後で旧 / 新 ref が分かる場合は、次を優先してください:
-
-```bash
-cdidx ./myproject --changed-between old-branch new-branch --json
-```
-
-ref が分からない場合は `cdidx ./myproject --json` を使い、`cdidx status --check --json` で検証してください。
-~~~
+これにより、cdidx の機能追加後も下流側のガイダンスが古くなりません。
+リポジトリローカルな agent 指示には、設定済み cdidx MCP server を必須にするか、
+誰が index を更新できるかなど、そのリポジトリ固有の要件だけを記載してください。
+CLI-only integration では、agent に cdidx の呼び出し方を伝える短い指示は引き続き
+必要ですが、戦略全体を複製せず、このガイドと command help へリンクしてください。
+CodeIndex リポジトリ自体への貢献者は、ローカルビルドを使う
+`AGENT_GUIDE.md` に従ってください。
 
 ### AI プロトコル境界クイックリファレンス
 
