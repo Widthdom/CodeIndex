@@ -23,14 +23,18 @@ internal static class GradleReferenceExtractor
     {
         if (preparedLine.IndexOf('{') >= 0)
         {
-            foreach (Match match in BlockCallRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         BlockCallRegex,
+                         preparedLine))
                 addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
         }
 
         if (!ContainsWhitespace(preparedLine))
             return;
 
-        foreach (Match match in CommandCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     CommandCallRegex,
+                     preparedLine))
             addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
     }
 

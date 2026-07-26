@@ -197,7 +197,9 @@ internal static partial class KotlinReferenceExtractor
         IReadOnlySet<string> infixFunctionNames,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in IdentifierRegex.Matches(originalLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     IdentifierRegex,
+                     originalLine))
         {
             var nameGroup = match.Groups["name"];
             var name = nameGroup.Value;
@@ -311,8 +313,13 @@ internal static partial class KotlinReferenceExtractor
         SymbolRecord? container)
     {
         var genericParameterNames = CollectGenericParameterNames(preparedLine);
-        foreach (Match match in ClassLiteralRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     ClassLiteralRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var typeGroup = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(
                 references,
@@ -341,8 +348,13 @@ internal static partial class KotlinReferenceExtractor
         if (constructorTypeNames.Count == 0)
             return;
 
-        foreach (Match match in BacktickConstructorCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     BacktickConstructorCallRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = match.Groups["name"];
             if (IsBacktickConstructorDeclarationSite(preparedLine, nameGroup.Index))
                 continue;
@@ -376,8 +388,10 @@ internal static partial class KotlinReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var matches = CtorDelegationRegex.Matches(preparedLine);
-        if (matches.Count == 0)
+        using var matches = Regex
+            .EnumerateMatches(CtorDelegationRegex, preparedLine)
+            .GetEnumerator();
+        if (!matches.MoveNext())
             return;
 
         var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
@@ -392,8 +406,12 @@ internal static partial class KotlinReferenceExtractor
             ctorContainer = FindEnclosingKotlinConstructor(symbols, enclosingType, lineNumber) ?? ctorContainer;
         }
 
-        foreach (Match match in matches)
+        do
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
+            var match = matches.Current;
             var kindToken = match.Groups["kind"].Value;
             string? target;
             if (kindToken == "this")
@@ -428,6 +446,7 @@ internal static partial class KotlinReferenceExtractor
                 lineNumber,
                 ctorContainer);
         }
+        while (matches.MoveNext());
     }
 
 }

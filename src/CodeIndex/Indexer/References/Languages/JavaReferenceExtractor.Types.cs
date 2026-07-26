@@ -60,8 +60,13 @@ internal static partial class JavaReferenceExtractor
             resolveContainerForColumn,
             genericParameterNames);
 
-        foreach (Match match in InstanceofRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     InstanceofRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var typeGroup = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(
                 references,

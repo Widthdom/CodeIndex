@@ -44,7 +44,9 @@ internal static class ScalaReferenceExtractor
         if (preparedLine.IndexOf('{') < 0)
             return;
 
-        foreach (Match match in TrailingBlockCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     TrailingBlockCallRegex,
+                     preparedLine))
         {
             var name = match.Groups["name"].Value;
             if (IgnoredBlockCallNames.Contains(name))
@@ -66,7 +68,9 @@ internal static class ScalaReferenceExtractor
     {
         if (preparedLine.IndexOf("<-", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in ForGeneratorRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         ForGeneratorRegex,
+                         preparedLine))
             {
                 var nameGroup = match.Groups["name"];
                 addCallLikeReference(nameGroup.Value, nameGroup.Index);
@@ -88,8 +92,13 @@ internal static class ScalaReferenceExtractor
 
         if (preparedLine.IndexOf("using", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match usingMatch in UsingClauseRegex.Matches(preparedLine))
+            foreach (Match usingMatch in Regex.EnumerateMatches(
+                         UsingClauseRegex,
+                         preparedLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
+
                 var parameters = usingMatch.Groups["params"];
                 if (parameters.Value.IndexOf(':') < 0
                     && parameters.Value.IndexOf('=') < 0)
@@ -97,8 +106,15 @@ internal static class ScalaReferenceExtractor
                     continue;
                 }
 
-                foreach (Match typeMatch in UsingTypeRegex.Matches(parameters.Value))
+                foreach (Match typeMatch in Regex.EnumerateMatches(
+                             UsingTypeRegex,
+                             parameters.Value))
+                {
+                    if (ReferenceExtractor.ReferenceLimitReached(references))
+                        break;
+
                     AddTypeReference(typeMatch.Groups["type"], parameters.Index);
+                }
             }
         }
 

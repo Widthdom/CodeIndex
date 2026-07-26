@@ -33,8 +33,13 @@ internal static partial class JavaReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in DotClassArgRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     DotClassArgRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var argGroup = match.Groups["arg"];
             ReferenceExtractor.AddTypeReferenceSegments(
                 references,
@@ -80,6 +85,9 @@ internal static partial class JavaReferenceExtractor
 
         foreach (Match match in BoundedRegex.EnumerateMatches(ModuleProvidesDirectiveReferenceRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var serviceGroup = match.Groups["service"];
             ReferenceExtractor.AddTypeReferenceSegment(
                 references,
@@ -133,6 +141,9 @@ internal static partial class JavaReferenceExtractor
     {
         foreach (Match match in BoundedRegex.EnumerateMatches(regex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = match.Groups["name"];
             ReferenceExtractor.AddTypeReferenceSegment(
                 references,
