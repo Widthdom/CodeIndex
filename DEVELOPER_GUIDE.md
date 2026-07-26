@@ -519,6 +519,10 @@ The same rule applies to hardware languages: Verilog / SystemVerilog / VHDL
 shadow scopes and CUDA / GLSL / HLSL / Metal / WGSL binding and resource scopes
 use direct indexed loops so every identifier does not allocate a predicate
 closure.
+Repository metadata character validation uses `SpanCharacterSearch` instead of
+predicate-based enumeration, and application-manifest dependency ownership is
+tracked as XML depth rather than rescanning an ancestor stack for every
+`assemblyIdentity`.
 
 When structural masking turns a source line into whitespace, do not materialize
 a trimmed copy merely to discover that the line has no references. Preserve
@@ -3524,6 +3528,9 @@ header は split array を作らずこの walker で処理する。
 hardware language も同じ規則に従う。Verilog / SystemVerilog / VHDL の shadow scope と、
 CUDA / GLSL / HLSL / Metal / WGSL の binding / resource scope は direct indexed loop を
 使い、identifier ごとの predicate closure を作らない。
+repository metadata の character validation は predicate-based enumeration ではなく
+`SpanCharacterSearch` を使い、application manifest の dependency ownership は
+`assemblyIdentity` ごとの ancestor stack 再走査ではなく XML depth で追跡する。
 
 構造マスクによって source line が空白だけになった場合、reference がないことを確認するため
 だけに trim 済み copy を実体化してはならない。documentation handling と、original line を

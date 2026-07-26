@@ -564,6 +564,36 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void SpanCharacterSearch_RepeatedLongMetadataCandidates_DoesNotAllocate()
+    {
+        var candidate = new string('x', 4_096);
+        var matches = 0;
+        _ = SpanCharacterSearch.ContainsControl(candidate);
+        _ = SpanCharacterSearch.ContainsWhitespace(candidate);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 2_048; index++)
+            {
+                if (SpanCharacterSearch.ContainsControl(candidate)
+                    || SpanCharacterSearch.ContainsWhitespace(candidate))
+                {
+                    matches++;
+                }
+            }
+        });
+
+        Assert.Equal(0, matches);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Span character classification allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);

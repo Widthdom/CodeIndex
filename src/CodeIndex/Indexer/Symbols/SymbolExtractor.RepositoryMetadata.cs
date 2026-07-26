@@ -331,12 +331,14 @@ public static partial class SymbolExtractor
             }
 
             if (patternEnd == 0
-                || builder.Length == 0
-                || builder.ToString().Any(char.IsControl))
+                || builder.Length == 0)
             {
                 return false;
             }
-            pattern = builder.ToString();
+            var decodedPattern = builder.ToString();
+            if (SpanCharacterSearch.ContainsControl(decodedPattern))
+                return false;
+            pattern = decodedPattern;
         }
         else
         {
