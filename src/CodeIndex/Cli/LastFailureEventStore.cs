@@ -42,12 +42,13 @@ internal static class LastFailureEventStore
 
         try
         {
+            var resolvedPaths = ResolveFailureProvenancePaths(args);
             var provenance = CreateReportProvenance(
-                dbPathForTesting ?? ResolveFailureDbPath(args),
+                dbPathForTesting ?? resolvedPaths.DbPath,
                 appVersion,
                 occurredAtUtc,
                 runId ?? CreateRunId(),
-                workspacePathForTesting);
+                workspacePathForTesting ?? resolvedPaths.WorkspacePath);
             var failure = new LastFailureEvent(
                 SchemaVersion,
                 occurredAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
@@ -301,8 +302,16 @@ internal static class LastFailureEventStore
     private static string ComputeOpaquePathIdentity(string domain, string prefix, string path)
     {
         // Emit only a bounded opaque fingerprint; raw local paths never enter the event or bundle.
+        // Case-insensitive filesystems fold path casing before hashing so equivalent spellings
+        // correlate, while case-sensitive filesystems retain the exact path identity.
         // 上限付きの不透明 fingerprint だけを出力し、ローカル path 自体は event / bundle に入れない。
-        var input = Encoding.UTF8.GetBytes(domain + "\0" + Path.GetFullPath(path));
+        // case-insensitive FS では同じ path の大小違いを hash 前に統一し、case-sensitive FS
+        // では正確な path identity を維持する。
+        var normalizedPath = PathCasing.NormalizeBoundaryPath(path);
+        var identityPath = PathCasing.IsIgnoreCase(normalizedPath)
+            ? normalizedPath.ToUpperInvariant()
+            : normalizedPath;
+        var input = Encoding.UTF8.GetBytes(domain + "\0" + identityPath);
         var digest = SHA256.HashData(input);
         return prefix + HexEncoding.ToLowerHexString(digest, 0, OpaqueIdentityBytes);
     }
@@ -324,6 +333,10 @@ internal static class LastFailureEventStore
     }
 
     internal static string ResolveFailureDbPath(IReadOnlyList<string> args)
+        => ResolveFailureProvenancePaths(args).DbPath;
+
+    internal static (string DbPath, string? WorkspacePath) ResolveFailureProvenancePaths(
+        IReadOnlyList<string> args)
     {
         var workspacePath = Environment.CurrentDirectory;
         if (string.Equals(ResolveCommandCategory(args), "index", StringComparison.Ordinal))
@@ -332,19 +345,22 @@ internal static class LastFailureEventStore
                 ? args.Skip(1).ToArray()
                 : args.ToArray();
             var options = IndexCommandRunner.ParseArgs(indexArgs);
-            return DbPathResolver.ResolveForIndex(
-                options.ProjectPath ?? workspacePath,
+            var projectPath = options.ProjectPath ?? workspacePath;
+            var dbPath = DbPathResolver.ResolveForIndex(
+                projectPath,
                 options.DbPath,
                 options.DataDir).DbPath;
+            return (dbPath, projectPath);
         }
 
         var queryArgs = args.Count > 0 ? args.Skip(1).ToArray() : [];
-        return QueryCommandRunner.ParseArgs(
+        var queryDbPath = QueryCommandRunner.ParseArgs(
             queryArgs,
             jsonDefault: false,
             validateDefaultLimit: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false).DbPath;
+        return (queryDbPath, null);
     }
 
     private static string ResolveWorkspacePath(string normalizedDbPath)

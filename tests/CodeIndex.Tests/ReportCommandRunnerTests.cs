@@ -602,6 +602,93 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void PersistedIndexFailure_CarriesExplicitProjectWorkspaceWithExternalDatabase_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        var projectPath = Path.Combine(workDir, "project");
+        var dataDir = Path.Combine(workDir, "external-data");
+        var dbPath = Path.Combine(dataDir, "codeindex.db");
+        var logDir = CreateLogDir(workDir);
+        var timestamp = new DateTimeOffset(2026, 7, 27, 4, 5, 6, TimeSpan.Zero);
+        var runId = LastFailureEventStore.CreateRunId();
+        const string version = "1.40.3-test";
+        try
+        {
+            Directory.CreateDirectory(projectPath);
+            Directory.CreateDirectory(dataDir);
+            using var env = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            Assert.True(LastFailureEventStore.TryPersist(
+                ["index", "--rebuild", "--db", dbPath, projectPath],
+                version,
+                CommandExitCodes.UnhandledException,
+                new InvalidOperationException("synthetic failure"),
+                timestamp,
+                runId));
+
+            var reportProvenance = LastFailureEventStore.CreateReportProvenance(
+                dbPath,
+                version,
+                timestamp + TimeSpan.FromMinutes(1),
+                LastFailureEventStore.CreateRunId(),
+                projectPath);
+            Assert.True(LastFailureEventStore.TryBuildReportPayload(
+                reportProvenance,
+                out var payload,
+                out var evidence));
+            Assert.NotEmpty(payload);
+            Assert.Equal("included", evidence.Disposition);
+            Assert.Equal("matched", evidence.Reason);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void CreateReportProvenance_FoldsCaseOnCaseInsensitiveFilesystem_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        lock (PathCasingTestLock.Gate)
+        {
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            try
+            {
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                var workspacePath = Path.Combine(workDir, "Workspace");
+                var dbPath = Path.Combine(workspacePath, "Data", "CodeIndex.db");
+                var timestamp = new DateTimeOffset(2026, 7, 27, 4, 5, 6, TimeSpan.Zero);
+                var runId = LastFailureEventStore.CreateRunId();
+
+                var original = LastFailureEventStore.CreateReportProvenance(
+                    dbPath,
+                    "1.40.3-test",
+                    timestamp,
+                    runId,
+                    workspacePath);
+                var caseVariant = LastFailureEventStore.CreateReportProvenance(
+                    dbPath.ToLowerInvariant(),
+                    "1.40.3-test",
+                    timestamp,
+                    runId,
+                    workspacePath.ToLowerInvariant());
+
+                Assert.Equal(original.DatabaseId, caseVariant.DatabaseId);
+                Assert.Equal(original.WorkspaceId, caseVariant.WorkspaceId);
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
+                TestProjectHelper.DeleteDirectory(workDir);
+            }
+        }
+    }
+
+    [Fact]
     public void ResolveFailureDbPath_DoesNotInterpretLiteralQueryAsDatabaseOption_Issue4828()
     {
         var workDir = CreateWorkDir();
@@ -682,6 +769,12 @@ public class ReportCommandRunnerTests
             Assert.Equal("existing bundle", File.ReadAllText(output));
             Assert.Single(Directory.GetFiles(workDir));
 
+            var (jsonExitCode, json) = RunAndCaptureJson(args.Append("--json").ToArray());
+
+            Assert.Equal(CommandExitCodes.UsageError, jsonExitCode);
+            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            Assert.Equal("existing bundle", File.ReadAllText(output));
+
             var overwriteArgs = args.Append("--overwrite").ToArray();
             var (overwriteExitCode, _, overwriteStderr) = RunAndCaptureStreams(overwriteArgs);
 
@@ -739,13 +832,53 @@ public class ReportCommandRunnerTests
             File.WriteAllText(output, "existing bundle");
             var bundle = new ReportBundle();
             bundle.AddText("metadata.txt", "replacement");
-            AtomicFileWriter.FlushParentDirectoryForTesting =
-                _ => throw new IOException("simulated directory flush failure");
+            var flushCount = 0;
+            AtomicFileWriter.FlushParentDirectoryForTesting = _ =>
+            {
+                flushCount++;
+                if (flushCount == 1)
+                    throw new IOException("simulated directory flush failure");
+            };
 
             var exception = Assert.Throws<IOException>(() =>
                 ReportCommandRunner.WriteBundle(output, bundle, overwrite: true));
 
             Assert.Contains("previous destination was restored", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(2, flushCount);
+            Assert.Equal("existing bundle", File.ReadAllText(output));
+            Assert.Single(Directory.GetFiles(workDir));
+        }
+        finally
+        {
+            AtomicFileWriter.FlushParentDirectoryForTesting = null;
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void WriteBundle_RollbackFlushFailureAggregatesBothFailures_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            File.WriteAllText(output, "existing bundle");
+            var bundle = new ReportBundle();
+            bundle.AddText("metadata.txt", "replacement");
+            var flushCount = 0;
+            AtomicFileWriter.FlushParentDirectoryForTesting = _ =>
+            {
+                flushCount++;
+                throw new IOException($"simulated directory flush failure {flushCount}");
+            };
+
+            var exception = Assert.Throws<IOException>(() =>
+                ReportCommandRunner.WriteBundle(output, bundle, overwrite: true));
+
+            Assert.Contains("could not be restored durably", exception.Message, StringComparison.Ordinal);
+            var aggregate = Assert.IsType<AggregateException>(exception.InnerException);
+            Assert.Equal(2, aggregate.InnerExceptions.Count);
+            Assert.Equal(2, flushCount);
             Assert.Equal("existing bundle", File.ReadAllText(output));
             Assert.Single(Directory.GetFiles(workDir));
         }

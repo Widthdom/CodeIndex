@@ -151,11 +151,12 @@ internal static class AtomicFileWriter
                         LongPath.EnsureWindowsPrefix(path),
                         destinationBackupFileName: null,
                         ignoreMetadataErrors: true);
+                    FlushParentDirectoryAfterReplace(path);
                 }
                 catch (Exception rollbackException) when (IsRecoverableFileMutationException(rollbackException))
                 {
                     throw new IOException(
-                        $"Atomic report replacement failed and the previous destination could not be restored at {ConsoleUi.FormatBoundedValue(path)}.",
+                        $"Atomic report replacement failed and the previous destination could not be restored durably at {ConsoleUi.FormatBoundedValue(path)}.",
                         new AggregateException(publishException, rollbackException));
                 }
 

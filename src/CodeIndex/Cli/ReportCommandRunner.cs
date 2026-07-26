@@ -80,7 +80,8 @@ public static class ReportCommandRunner
                     jsonOptions,
                     "report output already exists",
                     CommandExitCodes.UsageError,
-                    "Choose a new --output path, or pass --overwrite to replace the existing report bundle.");
+                    "Choose a new --output path, or pass --overwrite to replace the existing report bundle.",
+                    CommandErrorCodes.UsageError);
             }
             var outputExtensionWarning = GetOutputExtensionWarning(fullOutputPath);
             var resolvedVersion = appVersion ?? ConsoleUi.LoadVersion();
@@ -141,7 +142,8 @@ public static class ReportCommandRunner
                 jsonOptions,
                 "report output already exists",
                 CommandExitCodes.UsageError,
-                "Choose a new --output path, or pass --overwrite to replace the existing report bundle.");
+                "Choose a new --output path, or pass --overwrite to replace the existing report bundle.",
+                CommandErrorCodes.UsageError);
         }
         catch (Exception ex)
         {
