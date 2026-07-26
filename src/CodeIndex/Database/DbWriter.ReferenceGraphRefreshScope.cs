@@ -47,6 +47,10 @@ public partial class DbWriter
           AND r.source_symbol_id IS NOT {ReferenceSourceSymbolValueSql};
         """;
 
+    private static string NormalizeCSharpPropertyReceiverReferencesScopedSql =>
+        BuildCSharpPropertyReceiverNormalizationSql(
+            $"r.id IN (SELECT reference_id FROM temp.{ReferenceGraphDirtyReferencesTable})");
+
     private const string RefreshScopedReferenceUniqueFamiliesSql = $"""
         DELETE FROM temp.reference_unique_symbol_families;
 
@@ -132,6 +136,7 @@ public partial class DbWriter
         =>
         [
             RefreshScopedReferenceSourceSymbolsSql,
+            NormalizeCSharpPropertyReceiverReferencesScopedSql,
             RefreshScopedReferenceResolutionValuesSql,
             RefreshScopedSelfReferenceSql,
             RefreshScopedMutualRecursionFlagsSql,
@@ -143,7 +148,7 @@ public partial class DbWriter
         const string fullReferenceSourceSql = "FROM symbol_references AS r";
         const string fullInstantiateSymbolSourceSql = "FROM symbols AS s";
         const string fullInstantiateNamePredicateSql = "AND s.name_folded IS NOT NULL";
-        const int expectedReferenceSourceCount = 10;
+        const int expectedReferenceSourceCount = 12;
 
         if (CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullDeleteSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullReferenceSourceSql)

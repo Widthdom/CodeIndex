@@ -422,7 +422,7 @@ public class DatabaseTests : IDisposable
             candidateSql,
             StringComparison.Ordinal);
         Assert.Equal(
-            10,
+            12,
             candidateSql.Split(
                 "FROM temp.reference_graph_dirty_references AS dirty_reference",
                 StringSplitOptions.None).Length - 1);
@@ -433,7 +433,7 @@ public class DatabaseTests : IDisposable
                 "INSERT INTO symbol_reference_candidates",
                 StringComparison.Ordinal))
             .ToArray();
-        Assert.Equal(10, candidateInserts.Length);
+        Assert.Equal(12, candidateInserts.Length);
         foreach (var statement in candidateInserts)
         {
             var plan = ReadQueryPlanDetails(_db.Connection, statement);
@@ -446,7 +446,9 @@ public class DatabaseTests : IDisposable
         }
 
         var instantiateStatement = Assert.Single(candidateInserts.Where(static statement =>
-            statement.Contains("AS unique_target", StringComparison.Ordinal)));
+            statement.Contains(
+                "FROM temp.reference_graph_lookup_names AS lookup_name",
+                StringComparison.Ordinal)));
         var instantiatePlan = ReadQueryPlanDetails(_db.Connection, instantiateStatement);
         Assert.Contains(instantiatePlan, static detail => detail.Contains(
             "idx_symbols_name_folded",

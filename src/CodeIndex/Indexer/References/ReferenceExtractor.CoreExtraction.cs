@@ -343,7 +343,7 @@ public static partial class ReferenceExtractor
 
         if (language == "csharp")
         {
-            RewriteCSharpPrivatePropertyReceiverReferences(
+            RewriteCSharpPropertyReceiverReferences(
                 preparedLines,
                 references,
                 lookups);
@@ -360,7 +360,7 @@ public static partial class ReferenceExtractor
         return references;
     }
 
-    private static void RewriteCSharpPrivatePropertyReceiverReferences(
+    private static void RewriteCSharpPropertyReceiverReferences(
         IReadOnlyList<string> preparedLines,
         List<ReferenceRecord> references,
         CoreExtractionLookups lookups)
@@ -391,7 +391,7 @@ public static partial class ReferenceExtractor
                 reference.Line);
             var containingType = GetContainingTypeQualifiedName(owner);
             if (containingType == null
-                || !lookups.HasCSharpPrivateProperty(
+                || !lookups.HasCSharpProperty(
                     containingType,
                     reference.SymbolName))
             {

@@ -71,6 +71,18 @@ public partial class DbContext : IDisposable
             "csharp_identifier_occurrence_count",
             (string? text, string? identifier) => CountCSharpIdentifierOccurrences(text, identifier));
         connection.CreateFunction(
+            "csharp_reference_type_arity",
+            (string? context, string? identifier, long? columnNumber) =>
+                CSharpTypeReferenceArity.GetReferenceArity(context, identifier, columnNumber));
+        connection.CreateFunction(
+            "csharp_reference_is_member_receiver",
+            (string? context, string? identifier, long? columnNumber) =>
+                CSharpTypeReferenceArity.IsMemberReceiver(context, identifier, columnNumber));
+        connection.CreateFunction(
+            "csharp_definition_type_arity",
+            (string? signature, string? identifier, string? symbolKind) =>
+                CSharpTypeReferenceArity.GetDefinitionArity(signature, identifier, symbolKind));
+        connection.CreateFunction(
             "sql_normalize_exact_source_name",
             (string? text, string? lang) => string.IsNullOrWhiteSpace(text) ? null : ExactSourceSearchNormalizer.Normalize(text, lang));
         connection.CreateFunction(

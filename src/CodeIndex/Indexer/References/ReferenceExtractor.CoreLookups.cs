@@ -33,8 +33,8 @@ public static partial class ReferenceExtractor
         private HashSet<string>? pythonClassNames;
         private bool pythonClassNamesResolved;
         private PythonImportBindingResolver.ImportedTypeCallLookup? pythonImportedTypeCallLookup;
-        private HashSet<(string Container, string Name)>? csharpPrivateProperties;
-        private bool csharpPrivatePropertiesResolved;
+        private HashSet<(string Container, string Name)>? csharpProperties;
+        private bool csharpPropertiesResolved;
         private Dictionary<string, List<SymbolRecord>>? csharpContainerCandidatesByName;
         private List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)>? recordPrimaryCtorRanges;
         private bool recordPrimaryCtorRangesResolved;
@@ -90,23 +90,22 @@ public static partial class ReferenceExtractor
         internal PythonImportBindingResolver.ImportedTypeCallLookup GetPythonImportedTypeCallLookup()
             => pythonImportedTypeCallLookup ??= PythonImportBindingResolver.BuildImportedTypeCallLookup(symbols);
 
-        internal bool HasCSharpPrivateProperty(string containingType, string propertyName)
+        internal bool HasCSharpProperty(string containingType, string propertyName)
         {
-            if (!csharpPrivatePropertiesResolved)
+            if (!csharpPropertiesResolved)
             {
-                foreach (var symbol in symbols)
+                foreach (var symbol in request.WorkspaceSymbols ?? symbols)
                 {
                     if (symbol.Kind == "property"
-                        && symbol.ContainerQualifiedName != null
-                        && string.Equals(symbol.Visibility, "private", StringComparison.OrdinalIgnoreCase))
+                        && symbol.ContainerQualifiedName != null)
                     {
-                        (csharpPrivateProperties ??= []).Add((symbol.ContainerQualifiedName, symbol.Name));
+                        (csharpProperties ??= []).Add((symbol.ContainerQualifiedName, symbol.Name));
                     }
                 }
-                csharpPrivatePropertiesResolved = true;
+                csharpPropertiesResolved = true;
             }
 
-            return csharpPrivateProperties?.Contains((containingType, propertyName)) == true;
+            return csharpProperties?.Contains((containingType, propertyName)) == true;
         }
 
         internal SymbolRecord? FindCSharpContainerCandidate(string? containerName, int lineNumber)

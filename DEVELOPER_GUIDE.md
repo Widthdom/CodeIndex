@@ -1052,6 +1052,17 @@ unqualified name receive a global candidate only when that name is unique in the
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
 
+C# `type_reference` candidates are filtered before qualifier and namespace ranking. A candidate
+must be a type-like symbol (`class`, `struct`, `record`, `interface`, `enum`, or `delegate`), and
+when the reference's generic arity can be recovered from its normalized line context, that arity
+must match the declaration. Non-type name collisions and mismatched generic declarations never
+participate in resolution; if no compatible candidate remains, the reference stays `unresolved`.
+An uppercase property receiver such as `Name.Trim()` is rewritten to a qualified member reference
+before graph resolution, including when the property is declared in another partial-class file, so
+the type-only filter does not discard a real member dependency.
+This is a general candidate-compatibility rule rather than a framework-type blacklist, and it
+does not change Java reference resolution.
+
 Reference finalization computes candidate count, minimum symbol ID, distinct target-family
 count, and stable target key in one correlated aggregate per reference. Keep these four
 resolution fields on the row-value assignment path; separate scalar subqueries multiply the
@@ -4169,6 +4180,16 @@ identity-aware read は、`codeindex_meta` の `reference_identity_contract_vers
 resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+C# の `type_reference` candidate は qualifier / namespace の順位付け前に絞り込みます。candidate は
+型相当の symbol（`class`、`struct`、`record`、`interface`、`enum`、`delegate`）でなければならず、
+正規化済み行 context から reference の generic arity を復元できる場合は declaration の arity と
+一致する必要があります。型ではない同名 symbol と arity 不一致の generic declaration は解決候補に
+含めず、適合 candidate が残らなければ reference は `unresolved` のままです。これは framework 型の
+blacklist ではなく一般的な candidate compatibility rule です。`Name.Trim()` のように大文字で始まる
+property receiver は graph 解決前に修飾済み member reference へ書き換え、property が partial class の
+別ファイルで宣言されている場合も、型限定 filter によって実在する member dependency を失わないようにします。
+Java の reference resolution は変更しません。
 
 reference finalization は、candidate count、最小 symbol ID、distinct target-family count、安定 target
 key を reference ごとに1回の correlated aggregate で計算します。この4つの resolution field は
