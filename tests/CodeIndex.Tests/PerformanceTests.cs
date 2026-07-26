@@ -448,6 +448,31 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void DelimitedSpanWalking_DenseExtractorLists_DoesNotAllocate()
+    {
+        var content = string.Join(
+            ',',
+            Enumerable.Range(0, 8_192)
+                .Select(index => $"  value_{index}  "));
+        var expectedLength = Enumerable.Range(0, 8_192)
+            .Sum(index => $"value_{index}".Length);
+        _ = MeasureDelimitedEntries(content);
+
+        (int Count, int TotalLength) result = default;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => result = MeasureDelimitedEntries(content));
+
+        Assert.Equal((8_192, expectedLength), result);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Delimited span walking allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
@@ -651,6 +676,23 @@ public class PerformanceTests : IDisposable
         var before = GC.GetAllocatedBytesForCurrentThread();
         action();
         return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    private static (int Count, int TotalLength) MeasureDelimitedEntries(string content)
+    {
+        var count = 0;
+        var totalLength = 0;
+        foreach (var entry in new DelimitedSpanEnumerable(
+                     content.AsSpan(),
+                     ',',
+                     trimEntries: true,
+                     removeEmptyEntries: true))
+        {
+            count++;
+            totalLength += entry.Length;
+        }
+
+        return (count, totalLength);
     }
 
     private static TimeSpan MeasureElapsed(Action action)

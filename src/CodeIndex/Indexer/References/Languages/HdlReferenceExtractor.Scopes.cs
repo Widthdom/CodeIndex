@@ -345,8 +345,14 @@ public static partial class ReferenceExtractor
 
     private static void AddVhdlDeclaredNames(HashSet<string> names, string value)
     {
-        foreach (var name in value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            names.Add(name);
+        foreach (var name in new DelimitedSpanEnumerable(
+                     value.AsSpan(),
+                     ',',
+                     trimEntries: true,
+                     removeEmptyEntries: true))
+        {
+            names.Add(name.ToString());
+        }
     }
 
     private static string NormalizeVerilogScopeKind(string kind)

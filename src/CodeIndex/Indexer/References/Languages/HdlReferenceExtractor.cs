@@ -605,18 +605,44 @@ public static partial class ReferenceExtractor
 
     private static (string PackageName, int Offset) SelectVhdlPackage(string path)
     {
-        var components = path.Split('.');
-        var packageIndex = components.Length switch
+        var componentCount = 0;
+        var previousComponent = ReadOnlySpan<char>.Empty;
+        var previousOffset = 0;
+        var lastComponent = ReadOnlySpan<char>.Empty;
+        var lastOffset = 0;
+        foreach (var component in new DelimitedSpanEnumerable(path.AsSpan(), '.'))
         {
-            1 => 0,
-            2 when string.Equals(components[1], "all", StringComparison.OrdinalIgnoreCase) => 0,
-            2 => 1,
-            _ => components.Length - 2,
-        };
-        var offset = 0;
-        for (var index = 0; index < packageIndex; index++)
-            offset += components[index].Length + 1;
-        return (components[packageIndex], offset);
+            previousComponent = lastComponent;
+            previousOffset = lastOffset;
+            lastComponent = component;
+            lastOffset = componentCount == 0
+                ? 0
+                : lastOffset + previousComponent.Length + 1;
+            componentCount++;
+        }
+
+        ReadOnlySpan<char> package;
+        int offset;
+        switch (componentCount)
+        {
+            case 1:
+                package = lastComponent;
+                offset = lastOffset;
+                break;
+            case 2 when lastComponent.Equals("all", StringComparison.OrdinalIgnoreCase):
+                package = previousComponent;
+                offset = previousOffset;
+                break;
+            case 2:
+                package = lastComponent;
+                offset = lastOffset;
+                break;
+            default:
+                package = previousComponent;
+                offset = previousOffset;
+                break;
+        }
+        return (package.ToString(), offset);
     }
 
     private static void EmitKnownHdlReferences(

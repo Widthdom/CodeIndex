@@ -230,8 +230,21 @@ internal static class RepositoryMetadataReferenceExtractor
                     var privatePath = reader.GetAttribute("privatePath");
                     if (!string.IsNullOrWhiteSpace(privatePath))
                     {
-                        foreach (var path in privatePath.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                            AddManifestPath(references, seen, fileId, path, context, lineNumber, manifestContainer);
+                        foreach (var path in new DelimitedSpanEnumerable(
+                                     privatePath.AsSpan(),
+                                     ';',
+                                     trimEntries: true,
+                                     removeEmptyEntries: true))
+                        {
+                            AddManifestPath(
+                                references,
+                                seen,
+                                fileId,
+                                path.ToString(),
+                                context,
+                                lineNumber,
+                                manifestContainer);
+                        }
                     }
                 }
 
@@ -520,9 +533,11 @@ internal static class RepositoryMetadataReferenceExtractor
             return false;
         }
 
-        foreach (var segment in value.Split('/'))
+        foreach (var segment in new DelimitedSpanEnumerable(value.AsSpan(), '/'))
         {
-            if (segment.Length == 0 || segment is "." or "..")
+            if (segment.IsEmpty
+                || segment.SequenceEqual(".")
+                || segment.SequenceEqual(".."))
                 return false;
         }
 

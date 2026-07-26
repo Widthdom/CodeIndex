@@ -275,9 +275,17 @@ internal static class ShaderReferenceExtractor
             if (!match.Success)
                 continue;
 
-            foreach (var parameter in match.Groups["parameters"].Value.Split(','))
+            var parameters = match.Groups["parameters"];
+            var parameterEnumerator = new DelimitedSpanEnumerable(
+                header.AsSpan(parameters.Index, parameters.Length),
+                ',').GetEnumerator();
+            while (parameterEnumerator.MoveNext())
             {
-                var name = CudaParameterNameRegex.Match(parameter).Groups["name"];
+                var parameter = parameterEnumerator.Current;
+                var name = CudaParameterNameRegex.Match(
+                    header,
+                    parameters.Index + parameterEnumerator.CurrentStart,
+                    parameter.Length).Groups["name"];
                 if (!name.Success || string.IsNullOrWhiteSpace(name.Value))
                     continue;
 
