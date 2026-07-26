@@ -672,8 +672,23 @@ internal static class ShaderReferenceExtractor
             state.BindingsByLine[lineNumber] = bindings;
         }
 
-        if (!bindings.Any(binding => binding.Name == name && binding.Column == column))
+        if (!ContainsBindingSite(bindings, name, column))
             bindings.Add(new BindingSite(name, column));
+    }
+
+    internal static bool ContainsBindingSite(
+        IReadOnlyList<BindingSite> bindings,
+        string name,
+        int column)
+    {
+        for (var bindingIndex = 0; bindingIndex < bindings.Count; bindingIndex++)
+        {
+            var binding = bindings[bindingIndex];
+            if (binding.Name == name && binding.Column == column)
+                return true;
+        }
+
+        return false;
     }
 
     private static void TrackResourceDefinition(State state, string name, int lineNumber)
@@ -823,12 +838,11 @@ internal static class ShaderReferenceExtractor
 
             var isGlobalResource = state.GlobalResourceNames.Contains(name);
             var isScopedResource = state.ScopedResourcesByName.TryGetValue(name, out var scopes)
-                && scopes.Any(scope =>
-                    scope.ContainerName == container.Name
-                    && (lineNumber > scope.HeaderEndLine
-                        || (lineNumber == scope.HeaderEndLine
-                            && match.Index >= scope.FirstBodyColumn))
-                    && lineNumber <= scope.BodyEndLine);
+                && ContainsActiveScopedResource(
+                    scopes,
+                    container.Name,
+                    lineNumber,
+                    match.Index);
             if (!isGlobalResource && !isScopedResource)
                 continue;
 
@@ -844,5 +858,27 @@ internal static class ShaderReferenceExtractor
                 container,
                 state.Language);
         }
+    }
+
+    internal static bool ContainsActiveScopedResource(
+        IReadOnlyList<ScopedResource> scopes,
+        string containerName,
+        int lineNumber,
+        int column)
+    {
+        for (var scopeIndex = 0; scopeIndex < scopes.Count; scopeIndex++)
+        {
+            var scope = scopes[scopeIndex];
+            if (scope.ContainerName == containerName
+                && (lineNumber > scope.HeaderEndLine
+                    || (lineNumber == scope.HeaderEndLine
+                        && column >= scope.FirstBodyColumn))
+                && lineNumber <= scope.BodyEndLine)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

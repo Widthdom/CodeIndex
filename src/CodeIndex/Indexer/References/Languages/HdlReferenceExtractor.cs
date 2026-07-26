@@ -687,7 +687,7 @@ public static partial class ReferenceExtractor
                 || definitionsByLine.TryGetValue(lineNumber, out var definitions)
                     && definitions.Contains(match.Value)
                 || declaredNames?.Contains(match.Value) == true
-                || scopes.Any(scope => scope.ShadowedNames.Contains(match.Value))
+                || IsHdlNameShadowed(scopes, match.Value)
                 || knownSymbol.LocalDesignUnitIds is { Count: > 0 } localDesignUnitIds
                     && !localDesignUnitIds.Contains(currentDesignUnitId))
             {
@@ -714,6 +714,19 @@ public static partial class ReferenceExtractor
             if (ReferenceLimitReached(references))
                 break;
         }
+    }
+
+    private static bool IsHdlNameShadowed(
+        IReadOnlyList<HdlScope> scopes,
+        string name)
+    {
+        for (var scopeIndex = 0; scopeIndex < scopes.Count; scopeIndex++)
+        {
+            if (scopes[scopeIndex].ShadowedNames.Contains(name))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsFollowedByOpenParenthesis(string line, int index)

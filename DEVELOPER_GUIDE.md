@@ -515,6 +515,10 @@ Likewise, exclusion-range checks inside dense match loops must use indexed
 helpers rather than capturing LINQ predicates. Erlang, OCaml, and Raku share
 `ContainsFunctionalSpan` / `OverlapsFunctionalSpan` for remote, qualified,
 quoted-atom, and type-reference suppression.
+The same rule applies to hardware languages: Verilog / SystemVerilog / VHDL
+shadow scopes and CUDA / GLSL / HLSL / Metal / WGSL binding and resource scopes
+use direct indexed loops so every identifier does not allocate a predicate
+closure.
 
 When structural masking turns a source line into whitespace, do not materialize
 a trimmed copy merely to discover that the line has no references. Preserve
@@ -3517,6 +3521,9 @@ header は split array を作らずこの walker で処理する。
 同様に、dense match loop 内の exclusion-range 判定で capturing LINQ predicate を使っては
 ならない。Erlang、OCaml、Raku は remote / qualified / quoted-atom / type-reference の
 抑制に `ContainsFunctionalSpan` / `OverlapsFunctionalSpan` を共有する。
+hardware language も同じ規則に従う。Verilog / SystemVerilog / VHDL の shadow scope と、
+CUDA / GLSL / HLSL / Metal / WGSL の binding / resource scope は direct indexed loop を
+使い、identifier ごとの predicate closure を作らない。
 
 構造マスクによって source line が空白だけになった場合、reference がないことを確認するため
 だけに trim 済み copy を実体化してはならない。documentation handling と、original line を

@@ -505,6 +505,65 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void HardwareScopeMembership_RepeatedIdentifierFiltering_DoesNotAllocate()
+    {
+        var bindings = Enumerable.Range(0, 128)
+            .Select(index => new ShaderReferenceExtractor.BindingSite(
+                $"resource_{index}",
+                index * 4))
+            .ToArray();
+        var scopes = Enumerable.Range(0, 128)
+            .Select(index => new ShaderReferenceExtractor.ScopedResource(
+                $"kernel_{index}",
+                HeaderEndLine: index,
+                BodyEndLine: index + 16,
+                FirstBodyColumn: 8))
+            .ToArray();
+        var missingNames = Enumerable.Range(0, 8)
+            .Select(index => $"missing_{index}")
+            .ToArray();
+        var matchCount = 0;
+        _ = ShaderReferenceExtractor.ContainsBindingSite(bindings, "resource_64", 256);
+        _ = ShaderReferenceExtractor.ContainsActiveScopedResource(
+            scopes,
+            "kernel_64",
+            70,
+            12);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 10_000; index++)
+            {
+                if (ShaderReferenceExtractor.ContainsBindingSite(
+                        bindings,
+                        missingNames[index % missingNames.Length],
+                        index))
+                {
+                    matchCount++;
+                }
+
+                if (ShaderReferenceExtractor.ContainsActiveScopedResource(
+                        scopes,
+                        "kernel_64",
+                        70,
+                        12))
+                {
+                    matchCount++;
+                }
+            }
+        });
+
+        Assert.Equal(10_000, matchCount);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Hardware scope membership allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
