@@ -17,7 +17,7 @@ public static partial class SymbolExtractor
     private const int SymbolListInitialCapacityMax = 1024;
 
     private static string[] SplitContentLines(string content) =>
-        content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
+        SourceLineSplitter.Split(content);
 
     private static List<SymbolRecord> CreateSymbolListForLines(int lineCount)
     {

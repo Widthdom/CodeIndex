@@ -48,7 +48,7 @@ public static partial class ReferenceExtractor
     ];
 
     private static string[] SplitContentLines(string content) =>
-        content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
+        SourceLineSplitter.Split(content);
 
     internal static ReferenceExtractionSafetyLimits? SafetyLimitsForTesting
     {

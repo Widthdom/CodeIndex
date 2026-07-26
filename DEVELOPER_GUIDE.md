@@ -523,6 +523,10 @@ Repository metadata character validation uses `SpanCharacterSearch` instead of
 predicate-based enumeration, and application-manifest dependency ownership is
 tracked as XML depth rather than rescanning an ancestor stack for every
 `assemblyIdentity`.
+All line-based symbol and reference extractors share `SourceLineSplitter`.
+It counts newline boundaries once, allocates the exact result array, and then
+materializes only the line strings that downstream scanners require; do not
+restore separator-index arrays through `string.Split`.
 
 When structural masking turns a source line into whitespace, do not materialize
 a trimmed copy merely to discover that the line has no references. Preserve
@@ -3531,6 +3535,9 @@ CUDA / GLSL / HLSL / Metal / WGSL の binding / resource scope は direct indexe
 repository metadata の character validation は predicate-based enumeration ではなく
 `SpanCharacterSearch` を使い、application manifest の dependency ownership は
 `assemblyIdentity` ごとの ancestor stack 再走査ではなく XML depth で追跡する。
+line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
+newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
+line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。
 
 構造マスクによって source line が空白だけになった場合、reference がないことを確認するため
 だけに trim 済み copy を実体化してはならない。documentation handling と、original line を

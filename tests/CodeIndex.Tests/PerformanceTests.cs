@@ -594,6 +594,40 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void SourceLineSplitting_LargeFiles_AvoidsSeparatorIndexArrays()
+    {
+        Assert.Equal([""], SourceLineSplitter.Split(string.Empty));
+        Assert.Equal(["line", ""], SourceLineSplitter.Split("line\n"));
+        Assert.Equal(["first", "", "third"], SourceLineSplitter.Split("first\n\nthird"));
+
+        var content = string.Join(
+            '\n',
+            Enumerable.Range(0, 8_192)
+                .Select(index => $"line_{index:D5}_payload"));
+        _ = SourceLineSplitter.Split(content);
+
+        string[]? lines = null;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => lines = SourceLineSplitter.Split(content));
+        var genericSplitAllocatedBytes = MeasureAllocatedBytes(
+            () => lines = content.Split('\n'));
+
+        Assert.Equal(8_192, lines!.Length);
+        Assert.Equal("line_00000_payload", lines[0]);
+        Assert.Equal("line_08191_payload", lines[^1]);
+        Assert.True(
+            allocatedBytes < 610_000,
+            $"Source line splitting allocated {allocatedBytes:N0} bytes");
+        Assert.True(
+            allocatedBytes + 50_000 < genericSplitAllocatedBytes,
+            $"Source line splitting allocated {allocatedBytes:N0} bytes versus {genericSplitAllocatedBytes:N0} bytes for generic splitting");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
