@@ -318,6 +318,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   CI and release workflow contract tests. Keep repeated related workflow/script string contract assertions, including test-result artifact, retry-output, install, Homebrew, changelog, release-payload job splits, container image, SBOM, NuGet publish, secret scope, SDK pin, tool/action pin, and runner/cache policy contracts, in small grouped helpers so the tests emphasize the contract being checked; use the comparison-aware helpers when the contract intentionally requires ordinal matching. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
 - `PackageNormalizeDiagnosticsTests.cs`
   Package normalizer diagnostic redaction coverage. Keep timeout-budget assertions aligned with the shared diagnostic redaction policy so high-load full-suite runs do not treat expected path/secret placeholders as flaky.
+- `BoundedRegexTests.cs`
+  Shared extractor-regex safety coverage. Demand-driven enumeration tests must take only the requested prefix and keep a catastrophic suffix unvisited, while timeout tests continue to verify best-effort empty results and captured diagnostics.
 - `DocumentationStatusContractTests.cs`, `DocumentationDriftTests.cs`
   Checked-in documentation contract tests. They use `RepositoryTestPaths` to keep status fields, workflow references, documented `cdidx` command examples, release/changelog workflow snippets, and representative English/Japanese guide sections synchronized.
   `DocumentationStatusContractTests.cs` includes readiness, maintenance, and MCP status fields so status JSON support contracts stay visible in the user and agent guides.
@@ -1186,6 +1188,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   CI と release workflow の契約テスト。test-result artifact、retry-output、install、Homebrew、changelog、release-payload job split、container image、SBOM、NuGet publish、secret scope、SDK pin、tool/action pin、runner/cache policy の契約も含め、繰り返しの関連する workflow/script string contract assertion は小さな grouped helper に寄せ、テスト本文が確認している契約を読み取りやすくしてください。contract が ordinal matching を明示的に必要とする場合は comparison-aware helper を使います。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
 - `PackageNormalizeDiagnosticsTests.cs`
   package normalizer の diagnostic redaction カバレッジです。高負荷の full-suite 実行で、期待される path / secret placeholder が flaky に見えないよう、timeout budget の assertion は共有 diagnostic redaction policy と同期させてください。
+- `BoundedRegexTests.cs`
+  共有 extractor-regex safety のカバレッジです。demand-driven enumeration test は要求された prefix だけを取得して catastrophic suffix を未走査のまま保ち、timeout test は引き続き best-effort の empty result と captured diagnostic を検証してください。
 - `DocumentationStatusContractTests.cs`、`DocumentationDriftTests.cs`
   checked-in documentation の契約テスト。`RepositoryTestPaths` を使って、status field、workflow 参照、文書化された `cdidx` コマンド例、release/changelog workflow の snippet、代表的な英日 guide セクションの同期を維持します。
   `DocumentationStatusContractTests.cs` は readiness、maintenance、MCP status field も含め、status JSON support contract が user guide と agent guide に残るようにします。
