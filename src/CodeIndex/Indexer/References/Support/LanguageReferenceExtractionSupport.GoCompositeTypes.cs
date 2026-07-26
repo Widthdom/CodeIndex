@@ -15,13 +15,11 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      GoBuiltinTypeArgumentRegex,
-                     line))
+                     line,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var open = line.IndexOf('(', match.Index);
             if (open < 0)
                 continue;
@@ -55,11 +53,8 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in Regex.EnumerateMatches(GoTypeAssertionRegex, line))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(GoTypeAssertionRegex, line, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var group = match.Groups["type"];
             var expression = group.Value.Trim();
             if (expression.Length == 0 || string.Equals(expression, "type", StringComparison.Ordinal))
@@ -174,13 +169,11 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      GoFunctionLiteralRegex,
-                     line))
+                     line,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var open = line.IndexOf('(', match.Index);
             if (open < 0)
                 continue;

@@ -2,7 +2,9 @@
 category: fixed
 affected:
   - src/CodeIndex/Indexer/BoundedRegex.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - tests/CodeIndex.Tests/BoundedRegexTests.cs
+  - tests/CodeIndex.Tests/PerformanceTests.cs
   - DEVELOPER_GUIDE.md
   - TESTING_GUIDE.md
 ---

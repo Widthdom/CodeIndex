@@ -25,13 +25,11 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf("metaclass", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in Regex.EnumerateMatches(
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                          ClassMetaclassTypeRegex,
-                         preparedLine))
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    break;
-
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
                     continue;
@@ -52,21 +50,17 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf(',') >= 0)
         {
-            foreach (Match match in Regex.EnumerateMatches(
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                          MultipleClassBaseTypesRegex,
-                         preparedLine))
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    break;
-
                 var typesGroup = match.Groups["types"];
-                foreach (Match typeMatch in Regex.EnumerateMatches(
+                foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
                              TypeNameRegex,
-                             typesGroup.Value))
+                             typesGroup.Value,
+                             references))
                 {
-                    if (ReferenceExtractor.ReferenceLimitReached(references))
-                        break;
-
                     var name = typeMatch.Groups["name"].Value;
                     if (isIgnoredName(name))
                         continue;
@@ -88,13 +82,11 @@ internal static partial class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      SingleClassBaseTypeRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;

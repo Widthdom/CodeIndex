@@ -109,7 +109,7 @@ internal static partial class CSharpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        using var chainMatches = BoundedRegex.EnumerateMatches(CtorChainRegex, preparedLine).GetEnumerator();
+        using var chainMatches = ReferenceExtractor.EnumerateReferenceMatches(CtorChainRegex, preparedLine, references).GetEnumerator();
         if (!chainMatches.MoveNext())
             return;
 
@@ -344,7 +344,7 @@ internal static partial class CSharpReferenceExtractor
             return;
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(StaticMemberQualifierRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(StaticMemberQualifierRegex, preparedLine, references))
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;

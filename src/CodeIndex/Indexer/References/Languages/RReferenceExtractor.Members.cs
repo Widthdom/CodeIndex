@@ -19,13 +19,11 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf('$') < 0)
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      DollarMemberReferenceRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var backtickReceiverGroup = match.Groups["backtickReceiver"];
             var receiverGroup = backtickReceiverGroup.Success ? backtickReceiverGroup : match.Groups["receiver"];
             var receiver = receiverGroup.Value;
@@ -78,13 +76,11 @@ internal static partial class RReferenceExtractor
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      BracketMemberReferenceRegex,
-                     line))
+                     line,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var backtickReceiverGroup = match.Groups["backtickReceiver"];
             var receiverGroup = backtickReceiverGroup.Success ? backtickReceiverGroup : match.Groups["receiver"];
             var receiver = receiverGroup.Value;
@@ -131,13 +127,11 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf('@') < 0)
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      SlotMemberReferenceRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var backtickReceiverGroup = match.Groups["backtickReceiver"];
             var receiverGroup = backtickReceiverGroup.Success ? backtickReceiverGroup : match.Groups["receiver"];
             var receiver = receiverGroup.Value;

@@ -231,11 +231,8 @@ internal static class PerlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in Regex.EnumerateMatches(ArrowCallRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ArrowCallRegex, preparedLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var nameGroup = match.Groups["name"];
             addCallLikeReference(nameGroup.Value, nameGroup.Index);
 
@@ -265,13 +262,11 @@ internal static class PerlReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      QualifiedFunctionCallRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var nameGroup = match.Groups["name"];
             if (IsQualifiedSubroutineDefinition(preparedLine, nameGroup.Index))
                 continue;

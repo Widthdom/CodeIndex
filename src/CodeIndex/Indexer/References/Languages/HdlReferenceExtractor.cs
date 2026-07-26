@@ -408,10 +408,8 @@ public static partial class ReferenceExtractor
             if (importMatch.Success)
             {
                 var bodyGroup = importMatch.Groups["body"];
-                foreach (Match itemMatch in BoundedRegex.EnumerateMatches(SystemVerilogQualifiedReferenceRegex, bodyGroup.Value))
+                foreach (Match itemMatch in ReferenceExtractor.EnumerateReferenceMatches(SystemVerilogQualifiedReferenceRegex, bodyGroup.Value, references))
                 {
-                    if (ReferenceExtractor.ReferenceLimitReached(references))
-                        break;
                     var packageGroup = itemMatch.Groups["package"];
                     AddHdlReference(
                         request,
@@ -445,10 +443,8 @@ public static partial class ReferenceExtractor
 
             if (importMatch is not { Success: true })
             {
-                foreach (Match qualifiedMatch in BoundedRegex.EnumerateMatches(SystemVerilogQualifiedReferenceRegex, structuralLine))
+                foreach (Match qualifiedMatch in ReferenceExtractor.EnumerateReferenceMatches(SystemVerilogQualifiedReferenceRegex, structuralLine, references))
                 {
-                    if (ReferenceExtractor.ReferenceLimitReached(references))
-                        break;
                     AddHdlReference(
                         request,
                         references,
@@ -499,10 +495,8 @@ public static partial class ReferenceExtractor
         if (libraryMatch.Success)
         {
             var bodyGroup = libraryMatch.Groups["body"];
-            foreach (Match nameMatch in BoundedRegex.EnumerateMatches(VhdlIdentifierRegex, bodyGroup.Value))
+            foreach (Match nameMatch in ReferenceExtractor.EnumerateReferenceMatches(VhdlIdentifierRegex, bodyGroup.Value, references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    break;
                 AddHdlReference(
                     request,
                     references,
@@ -521,10 +515,8 @@ public static partial class ReferenceExtractor
         if (useMatch.Success)
         {
             var bodyGroup = useMatch.Groups["body"];
-            foreach (Match pathMatch in BoundedRegex.EnumerateMatches(VhdlSelectedNameRegex, bodyGroup.Value))
+            foreach (Match pathMatch in ReferenceExtractor.EnumerateReferenceMatches(VhdlSelectedNameRegex, bodyGroup.Value, references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    break;
                 var (packageName, packageOffset) = SelectVhdlPackage(pathMatch.Value);
                 AddHdlReference(
                     request,
@@ -559,10 +551,8 @@ public static partial class ReferenceExtractor
         }
 
         var emittedEntityInstantiation = false;
-        foreach (Match entityMatch in BoundedRegex.EnumerateMatches(VhdlEntityInstantiationRegex, structuralLine))
+        foreach (Match entityMatch in ReferenceExtractor.EnumerateReferenceMatches(VhdlEntityInstantiationRegex, structuralLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             emittedEntityInstantiation = true;
             AddHdlReference(
                 request,
@@ -676,10 +666,8 @@ public static partial class ReferenceExtractor
             ? VhdlIdentifierRegex
             : VerilogIdentifierRegex;
         var matchedNameCount = 0;
-        foreach (Match match in BoundedRegex.EnumerateMatches(identifierRegex, structuralLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(identifierRegex, structuralLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (matchedNameCount >= limits.MaxNamesPerLine)
             {
                 if (!lineNameBudgetReported)

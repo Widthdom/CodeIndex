@@ -111,7 +111,7 @@ internal static partial class CssReferenceExtractor
 
         if (preparedLine.IndexOf("animation", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            foreach (Match match in BoundedRegex.EnumerateMatches(CssAnimationNameValueRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CssAnimationNameValueRegex, preparedLine, references))
             {
                 if (ReferenceExtractor.ReferenceLimitReached(references))
                     break;
@@ -127,7 +127,7 @@ internal static partial class CssReferenceExtractor
                     container);
             }
 
-            foreach (Match match in BoundedRegex.EnumerateMatches(CssAnimationShorthandValueRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CssAnimationShorthandValueRegex, preparedLine, references))
             {
                 if (ReferenceExtractor.ReferenceLimitReached(references))
                     break;
@@ -163,7 +163,7 @@ internal static partial class CssReferenceExtractor
         if (HasCssImportMarker(originalLine))
         {
             var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
-            foreach (Match match in BoundedRegex.EnumerateMatches(CssImportReferenceRegex, importScanLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CssImportReferenceRegex, importScanLine, references))
             {
                 if (ReferenceExtractor.ReferenceLimitReached(references))
                     break;
@@ -593,7 +593,7 @@ internal static partial class CssReferenceExtractor
             return;
 
         var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
-        foreach (Match match in BoundedRegex.EnumerateMatches(importRegex, importScanLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(importRegex, importScanLine, references))
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;

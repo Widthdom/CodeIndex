@@ -76,9 +76,10 @@ internal static class ElixirReferenceExtractor
         AddDefimplGroupReference(match.Groups["protocol"]);
 
         var typesGroup = match.Groups["types"];
-        foreach (Match typeMatch in Regex.EnumerateMatches(
+        foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
                      DefimplTypeRegex,
-                     typesGroup.Value))
+                     typesGroup.Value,
+                     references))
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;

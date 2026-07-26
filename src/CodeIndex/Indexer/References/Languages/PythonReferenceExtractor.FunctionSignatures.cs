@@ -23,13 +23,11 @@ internal static partial class PythonReferenceExtractor
             return;
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      FunctionReturnAnnotationExpressionRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var typeGroup = match.Groups["type"];
             EmitPythonTypeExpressionReferences(
                 typeGroup,
@@ -43,13 +41,11 @@ internal static partial class PythonReferenceExtractor
                 isIgnoredName);
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      FunctionReturnTypeRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;
@@ -87,26 +83,22 @@ internal static partial class PythonReferenceExtractor
             return;
         }
 
-        foreach (Match functionMatch in Regex.EnumerateMatches(
+        foreach (Match functionMatch in ReferenceExtractor.EnumerateReferenceMatches(
                      FunctionParameterListRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var paramsGroup = functionMatch.Groups["params"];
             foreach (var (parameterSegment, parameterOffset) in EnumeratePythonTopLevelCommaSegments(paramsGroup.Value))
             {
                 if (ReferenceExtractor.ReferenceLimitReached(references))
                     break;
 
-                foreach (Match annotationMatch in Regex.EnumerateMatches(
+                foreach (Match annotationMatch in ReferenceExtractor.EnumerateReferenceMatches(
                              AnnotationExpressionTypeRegex,
-                             parameterSegment))
+                             parameterSegment,
+                             references))
                 {
-                    if (ReferenceExtractor.ReferenceLimitReached(references))
-                        break;
-
                     var typeGroup = annotationMatch.Groups["type"];
                     EmitPythonTypeExpressionReferences(
                         typeGroup,
@@ -121,13 +113,11 @@ internal static partial class PythonReferenceExtractor
                         paramsGroup.Index + parameterOffset);
                 }
 
-                foreach (Match annotationMatch in Regex.EnumerateMatches(
+                foreach (Match annotationMatch in ReferenceExtractor.EnumerateReferenceMatches(
                              DirectAnnotationTypeRegex,
-                             parameterSegment))
+                             parameterSegment,
+                             references))
                 {
-                    if (ReferenceExtractor.ReferenceLimitReached(references))
-                        break;
-
                     var name = annotationMatch.Groups["name"].Value;
                     if (isIgnoredName(name))
                         continue;
@@ -161,13 +151,11 @@ internal static partial class PythonReferenceExtractor
         if (preparedLine.IndexOf(':') < 0)
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      VariableAnnotationExpressionRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var typeGroup = match.Groups["type"];
             EmitPythonTypeExpressionReferences(
                 typeGroup,
@@ -181,13 +169,11 @@ internal static partial class PythonReferenceExtractor
                 isIgnoredName);
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      VariableAnnotationTypeRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;

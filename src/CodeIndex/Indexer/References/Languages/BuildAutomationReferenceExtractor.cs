@@ -213,7 +213,7 @@ internal static class BuildAutomationReferenceExtractor
         if (line.TrimStart().StartsWith("<!--", StringComparison.Ordinal))
             return;
 
-        foreach (Match elementMatch in BoundedRegex.EnumerateMatches(MsBuildElementRegex, line))
+        foreach (Match elementMatch in ReferenceExtractor.EnumerateReferenceMatches(MsBuildElementRegex, line, references))
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;
@@ -222,7 +222,7 @@ internal static class BuildAutomationReferenceExtractor
 
             var elementName = elementMatch.Groups["element"].Value;
             var attrs = elementMatch.Groups["attrs"];
-            foreach (Match attrMatch in BoundedRegex.EnumerateMatches(MsBuildAttributeRegex, attrs.Value))
+            foreach (Match attrMatch in ReferenceExtractor.EnumerateReferenceMatches(MsBuildAttributeRegex, attrs.Value, references))
             {
                 if (ReferenceExtractor.ReferenceLimitReached(references))
                     break;

@@ -440,10 +440,8 @@ internal static partial class SqlReferenceExtractor
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;
-            foreach (Match match in BoundedRegex.EnumerateMatches(WindowClauseColumnRegex, statement))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(WindowClauseColumnRegex, statement, references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    break;
                 var nameGroup = match.Groups["name"];
                 if (!nameGroup.Success || nameGroup.Index < start || nameGroup.Index >= end || nameGroup.Index < statementLineOffset)
                     continue;
@@ -574,10 +572,8 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         Func<string, int, bool> shouldSuppressDefinitionCall)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(ProcCallRegex, statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ProcCallRegex, statement, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
             var nameGroup = match.Groups["name"];
@@ -612,10 +608,8 @@ internal static partial class SqlReferenceExtractor
         long fileId,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(SystemVariableReferenceRegex, statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(SystemVariableReferenceRegex, statement, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
 
@@ -653,10 +647,8 @@ internal static partial class SqlReferenceExtractor
             return;
         }
 
-        foreach (Match match in matches)
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(matches, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
             foreach (Capture capture in match.Groups["name"].Captures)
@@ -697,10 +689,8 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(MergeUsingSourceRegex, statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MergeUsingSourceRegex, statement, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
             var nameGroup = match.Groups["name"];

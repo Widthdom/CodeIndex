@@ -45,13 +45,11 @@ internal static class ScalaReferenceExtractor
         if (preparedLine.IndexOf('{') < 0)
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      TrailingBlockCallRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             var name = match.Groups["name"].Value;
             if (IgnoredBlockCallNames.Contains(name))
                 continue;
@@ -72,13 +70,11 @@ internal static class ScalaReferenceExtractor
     {
         if (preparedLine.IndexOf("<-", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in Regex.EnumerateMatches(
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                          ForGeneratorRegex,
-                         preparedLine))
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    return;
-
                 var nameGroup = match.Groups["name"];
                 addCallLikeReference(nameGroup.Value, nameGroup.Index);
             }
@@ -99,13 +95,11 @@ internal static class ScalaReferenceExtractor
 
         if (preparedLine.IndexOf("using", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match usingMatch in Regex.EnumerateMatches(
+            foreach (Match usingMatch in ReferenceExtractor.EnumerateReferenceMatches(
                          UsingClauseRegex,
-                         preparedLine))
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    break;
-
                 var parameters = usingMatch.Groups["params"];
                 if (parameters.Value.IndexOf(':') < 0
                     && parameters.Value.IndexOf('=') < 0)
@@ -113,13 +107,11 @@ internal static class ScalaReferenceExtractor
                     continue;
                 }
 
-                foreach (Match typeMatch in Regex.EnumerateMatches(
+                foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
                              UsingTypeRegex,
-                             parameters.Value))
+                             parameters.Value,
+                             references))
                 {
-                    if (ReferenceExtractor.ReferenceLimitReached(references))
-                        break;
-
                     AddTypeReference(typeMatch.Groups["type"], parameters.Index);
                 }
             }

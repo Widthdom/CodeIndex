@@ -38,11 +38,8 @@ internal static class PowerShellReferenceExtractor
             return;
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(CallRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CallRegex, preparedLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
             if (IsAssignmentKey(preparedLine, callIndex + name.Length))
@@ -135,11 +132,8 @@ internal static class PowerShellReferenceExtractor
         if (splatAssignments.Count == 0)
             return;
 
-        foreach (Match splat in BoundedRegex.EnumerateMatches(SplatTokenRegex, preparedLine))
+        foreach (Match splat in ReferenceExtractor.EnumerateReferenceMatches(SplatTokenRegex, preparedLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             var name = splat.Groups["name"].Value;
             if (!splatAssignments.TryGetValue(name, out var candidates))
                 continue;

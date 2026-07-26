@@ -28,9 +28,10 @@ public static partial class ReferenceExtractor
 
         if (typeDefinition != null)
         {
-            foreach (Match match in Regex.EnumerateMatches(
+            foreach (Match match in EnumerateReferenceMatches(
                          RakuTypeRelationRegex,
-                         line))
+                         line,
+                         references))
             {
                 if (ReferenceLimitReached(references))
                     break;
@@ -38,9 +39,10 @@ public static partial class ReferenceExtractor
                 AddFunctionalReference(references, seen, fileId, match.Groups["name"], "type_reference", context, lineNumber, typeDefinition, "raku");
             }
         }
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in EnumerateReferenceMatches(
                      RakuReturnTypeRegex,
-                     line))
+                     line,
+                     references))
         {
             if (ReferenceLimitReached(references))
                 break;
@@ -51,9 +53,10 @@ public static partial class ReferenceExtractor
             return;
 
         List<(int Start, int End)>? qualifiedCallSpans = null;
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in EnumerateReferenceMatches(
                      RakuQualifiedCallRegex,
-                     line))
+                     line,
+                     references))
         {
             if (ReferenceLimitReached(references))
                 break;
@@ -63,9 +66,10 @@ public static partial class ReferenceExtractor
             AddFunctionalReference(references, seen, fileId, match.Groups["module"], "reference", context, lineNumber, container, "raku");
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "raku");
         }
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in EnumerateReferenceMatches(
                      RakuMethodCallRegex,
-                     line))
+                     line,
+                     references))
         {
             if (ReferenceLimitReached(references))
                 break;
@@ -76,9 +80,10 @@ public static partial class ReferenceExtractor
         }
 
         var skippedDefinition = false;
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in EnumerateReferenceMatches(
                      RakuBareCallRegex,
-                     line))
+                     line,
+                     references))
         {
             if (ReferenceLimitReached(references))
                 break;

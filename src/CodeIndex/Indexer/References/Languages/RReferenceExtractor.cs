@@ -134,13 +134,11 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      NamespaceReferenceRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var package = match.Groups["package"].Value;
             var separator = match.Groups["sep"].Value;
             var backtickNameGroup = match.Groups["backtickName"];
@@ -332,13 +330,11 @@ internal static partial class RReferenceExtractor
 
                 var routinesStart = useDynLibMatch.Index + useDynLibMatch.Length;
                 var routines = directiveLine[routinesStart..];
-                foreach (Match routineMatch in Regex.EnumerateMatches(
+                foreach (Match routineMatch in ReferenceExtractor.EnumerateReferenceMatches(
                              NamespaceUseDynLibRoutineRegex,
-                             routines))
+                             routines,
+                             references))
                 {
-                    if (ReferenceExtractor.ReferenceLimitReached(references))
-                        break;
-
                     var routine = GetNamespaceDirectiveToken(
                         routineMatch,
                         "backtickName",
@@ -540,13 +536,11 @@ internal static partial class RReferenceExtractor
             return;
 
         var signatureBody = signatureCall.Groups["body"];
-        foreach (Match signatureMatch in Regex.EnumerateMatches(
+        foreach (Match signatureMatch in ReferenceExtractor.EnumerateReferenceMatches(
                      S4SignatureClassRegex,
-                     signatureBody.Value))
+                     signatureBody.Value,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var classToken = GetNamespaceDirectiveToken(
                 signatureMatch,
                 "backtickName",

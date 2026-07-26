@@ -693,10 +693,8 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(MergeOnClauseRegex, statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MergeOnClauseRegex, statement, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
 
@@ -732,10 +730,8 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(MergeUpdateSetActionRegex, statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MergeUpdateSetActionRegex, statement, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
 
@@ -794,10 +790,8 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(MergeInsertActionRegex, statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MergeInsertActionRegex, statement, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
 

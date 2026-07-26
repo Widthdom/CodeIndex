@@ -30,9 +30,10 @@ public static partial class ReferenceExtractor
 
         var quotedAtomSpans = GetErlangQuotedAtomSpans(line);
         List<(int Start, int End)>? remoteCallSpans = null;
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in EnumerateReferenceMatches(
                      ErlangRemoteCallRegex,
-                     line))
+                     line,
+                     references))
         {
             if (ReferenceLimitReached(references))
                 break;
@@ -46,9 +47,10 @@ public static partial class ReferenceExtractor
         }
 
         var definitionMatch = ErlangFunctionDefinitionRegex.Match(line);
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in EnumerateReferenceMatches(
                      ErlangLocalCallRegex,
-                     line))
+                     line,
+                     references))
         {
             if (ReferenceLimitReached(references))
                 break;

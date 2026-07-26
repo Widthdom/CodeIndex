@@ -97,21 +97,21 @@ internal static partial class DynamicDeclarativeReferenceExtractor
 
         if (language == "crystal")
         {
-            foreach (Match match in BoundedRegex.EnumerateMatches(CrystalSuffixedParenthesizedCallRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         CrystalSuffixedParenthesizedCallRegex,
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    return;
-
                 var nameGroup = match.Groups["name"];
                 if (state.CallableNames.Contains(nameGroup.Value))
                     addCallLikeReference(nameGroup.Value, nameGroup.Index);
             }
 
-            foreach (Match match in BoundedRegex.EnumerateMatches(CrystalControlPredicateCallRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         CrystalControlPredicateCallRegex,
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    return;
-
                 var nameGroup = match.Groups["name"];
                 if (state.CallableNames.Contains(nameGroup.Value))
                     addCallLikeReference(nameGroup.Value, nameGroup.Index);
@@ -126,11 +126,8 @@ internal static partial class DynamicDeclarativeReferenceExtractor
                 references);
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(callRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(callRegex, preparedLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             var nameGroup = match.Groups["name"];
             if (language == "tcl")
             {

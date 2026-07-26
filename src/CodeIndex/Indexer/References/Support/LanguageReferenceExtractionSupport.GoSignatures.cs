@@ -11,13 +11,11 @@ internal static partial class LanguageReferenceExtractionSupport
         Action<string, int> addCallLikeReference,
         List<ReferenceRecord> references)
     {
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      GoBranchLabelRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
         }
     }

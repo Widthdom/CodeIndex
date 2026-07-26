@@ -32,9 +32,10 @@ internal static class GoReferenceExtractor
     {
         if (preparedLine.IndexOf("go", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in Regex.EnumerateMatches(
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                          GoroutineCallRegex,
-                         preparedLine))
+                         preparedLine,
+                         references))
             {
                 if (ReferenceExtractor.ReferenceLimitReached(references))
                     break;
@@ -60,7 +61,7 @@ internal static class GoReferenceExtractor
         if (preparedLine.IndexOf("<-", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(ChannelSendRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ChannelSendRegex, preparedLine, references))
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;
@@ -77,9 +78,10 @@ internal static class GoReferenceExtractor
                 resolveContainerForColumn(match.Groups["name"].Index));
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      ChannelReceiveRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;

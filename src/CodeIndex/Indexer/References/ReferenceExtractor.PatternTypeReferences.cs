@@ -312,10 +312,8 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(CSharpDocCrefRegex, originalLine))
+        foreach (Match match in EnumerateReferenceMatches(CSharpDocCrefRegex, originalLine, references))
         {
-            if (ReferenceLimitReached(references))
-                break;
             var crefGroup = match.Groups["cref"];
             var normalized = NormalizeCSharpDocCref(crefGroup.Value);
             if (normalized.Length == 0)
@@ -344,26 +342,20 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(JvmDocInlineLinkRegex, docText))
+        foreach (Match match in EnumerateReferenceMatches(JvmDocInlineLinkRegex, docText, references))
         {
-            if (ReferenceLimitReached(references))
-                break;
             EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(JvmDocSeeReferenceRegex, docText))
+        foreach (Match match in EnumerateReferenceMatches(JvmDocSeeReferenceRegex, docText, references))
         {
-            if (ReferenceLimitReached(references))
-                break;
             EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
         }
 
         if (language == "kotlin")
         {
-            foreach (Match match in BoundedRegex.EnumerateMatches(KDocBracketLinkRegex, docText))
+            foreach (Match match in EnumerateReferenceMatches(KDocBracketLinkRegex, docText, references))
             {
-                if (ReferenceLimitReached(references))
-                    break;
                 EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
             }
         }

@@ -53,7 +53,7 @@ internal static class CppReferenceExtractor
             return;
         }
 
-        foreach (Match match in Regex.EnumerateMatches(FriendTypeRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FriendTypeRegex, preparedLine, references))
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;
@@ -61,9 +61,10 @@ internal static class CppReferenceExtractor
             AddFriendReference(match.Groups["name"]);
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      FriendFunctionRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
             if (ReferenceExtractor.ReferenceLimitReached(references))
                 break;

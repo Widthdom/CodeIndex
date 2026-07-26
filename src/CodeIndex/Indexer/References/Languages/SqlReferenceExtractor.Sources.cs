@@ -141,10 +141,8 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int>? suppressedCallIndices = null)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(SelectIntoTargetStatementRegex, statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(SelectIntoTargetStatementRegex, statement, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
             var nameGroup = match.Groups["name"];
@@ -174,10 +172,8 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(TargetReferenceRegex, statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(TargetReferenceRegex, statement, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
             if (!TryGetTrailingQualifiedIdentifierLeaf(match, out var rawName, out var rawIndex))
@@ -341,10 +337,8 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int>? suppressedCallIndices = null)
     {
-        foreach (Match match in matches)
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(matches, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
 

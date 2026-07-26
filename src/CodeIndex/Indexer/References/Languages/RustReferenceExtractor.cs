@@ -395,33 +395,27 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      DeriveAttributeRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             EmitDeriveTypeList(match.Groups["types"], references, seen, fileId, context, lineNumber, container);
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      CfgAttrDeriveAttributeRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             EmitDeriveTypeList(match.Groups["types"], references, seen, fileId, context, lineNumber, container);
         }
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      AttributeHeadRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var nameGroup = match.Groups["name"];
             var name = NormalizeIdentifier(nameGroup.Value);
             if (string.Equals(name, "derive", StringComparison.Ordinal))

@@ -314,13 +314,11 @@ internal static partial class KotlinReferenceExtractor
         SymbolRecord? container)
     {
         var genericParameterNames = CollectGenericParameterNames(preparedLine);
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      ClassLiteralRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var typeGroup = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(
                 references,
@@ -349,13 +347,11 @@ internal static partial class KotlinReferenceExtractor
         if (constructorTypeNames.Count == 0)
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      BacktickConstructorCallRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var nameGroup = match.Groups["name"];
             if (IsBacktickConstructorDeclarationSite(preparedLine, nameGroup.Index))
                 continue;

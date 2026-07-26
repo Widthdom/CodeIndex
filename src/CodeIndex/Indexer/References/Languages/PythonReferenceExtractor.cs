@@ -174,13 +174,11 @@ internal static partial class PythonReferenceExtractor
     {
         var normalized = NormalizePythonAnnotationExpression(typeGroup.Value);
         var offsetDelta = typeGroup.Value.Length - normalized.Length;
-        foreach (Match typeMatch in Regex.EnumerateMatches(
+        foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
                      TypeNameRegex,
-                     normalized))
+                     normalized,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var name = typeMatch.Groups["name"].Value;
             if (isIgnoredName(name))
                 continue;
@@ -271,13 +269,11 @@ internal static partial class PythonReferenceExtractor
         var mayBeDecoratorCall = MayBePythonDecoratorCall(preparedLine);
         if (mayBeDecoratorCall)
         {
-            foreach (Match match in Regex.EnumerateMatches(
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                          DecoratorCallRegex,
-                         preparedLine))
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    break;
-
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
                     continue;
@@ -300,13 +296,11 @@ internal static partial class PythonReferenceExtractor
 
         if (!mayBeDecoratorCall)
         {
-            foreach (Match match in Regex.EnumerateMatches(
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                          DecoratorRegex,
-                         preparedLine))
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    break;
-
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
                     continue;
@@ -334,14 +328,13 @@ internal static partial class PythonReferenceExtractor
         if (argumentStart < 0)
             return;
 
-        foreach (Match identifierMatch in Regex.EnumerateMatches(
-                     PythonIdentifierRegex,
-                     preparedLine,
-                     argumentStart + 1))
+        foreach (Match identifierMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                     Regex.EnumerateMatches(
+                         PythonIdentifierRegex,
+                         preparedLine,
+                         argumentStart + 1),
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-
             var nameGroup = identifierMatch.Groups["name"];
             var name = nameGroup.Value;
             if (name == decoratorName || isIgnoredName(name) || IsPythonLiteralName(name))

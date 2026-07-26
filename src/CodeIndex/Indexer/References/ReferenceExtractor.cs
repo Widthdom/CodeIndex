@@ -291,31 +291,49 @@ public static partial class ReferenceExtractor
         => references is BoundedReferenceList bounded
             && bounded.Count >= bounded.MaxReferenceCount;
 
-    internal static IEnumerable<Match> EnumerateReferenceMatches(
+    internal static ReferenceMatchEnumerable EnumerateReferenceMatches(
         Regex regex,
         string input,
         List<ReferenceRecord> references) =>
-        EnumerateReferenceMatches(Regex.EnumerateMatches(regex, input), references);
+        new(Regex.EnumerateMatches(regex, input), references);
 
-    internal static IEnumerable<Match> EnumerateReferenceMatches(
+    internal static ReferenceMatchEnumerable EnumerateReferenceMatches(
+        IEnumerable<Match> matches,
+        List<ReferenceRecord> references)
+        => new(matches, references);
+
+    internal readonly struct ReferenceMatchEnumerable(
         IEnumerable<Match> matches,
         List<ReferenceRecord> references)
     {
-        return references is BoundedReferenceList bounded
-            ? EnumerateBoundedReferenceMatches(matches, bounded)
-            : matches;
+        public ReferenceMatchEnumerator GetEnumerator() => new(matches.GetEnumerator(), references);
     }
 
-    private static IEnumerable<Match> EnumerateBoundedReferenceMatches(
-        IEnumerable<Match> matches,
-        BoundedReferenceList references)
+    internal struct ReferenceMatchEnumerator : IDisposable
     {
-        foreach (var match in matches)
-        {
-            if (references.Count >= references.MaxReferenceCount)
-                yield break;
+        private IEnumerator<Match>? _matches;
+        private readonly BoundedReferenceList? _references;
 
-            yield return match;
+        internal ReferenceMatchEnumerator(
+            IEnumerator<Match> matches,
+            List<ReferenceRecord> references)
+        {
+            _matches = matches;
+            _references = references as BoundedReferenceList;
+        }
+
+        public readonly Match Current => _matches!.Current;
+
+        public readonly bool MoveNext()
+        {
+            return (_references == null || _references.Count < _references.MaxReferenceCount)
+                && _matches!.MoveNext();
+        }
+
+        public void Dispose()
+        {
+            _matches?.Dispose();
+            _matches = null;
         }
     }
 

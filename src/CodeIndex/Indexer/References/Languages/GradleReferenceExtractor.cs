@@ -25,13 +25,11 @@ internal static class GradleReferenceExtractor
     {
         if (preparedLine.IndexOf('{') >= 0)
         {
-            foreach (Match match in Regex.EnumerateMatches(
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                          BlockCallRegex,
-                         preparedLine))
+                         preparedLine,
+                         references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    return;
-
                 addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
             }
         }
@@ -39,13 +37,11 @@ internal static class GradleReferenceExtractor
         if (!ContainsWhitespace(preparedLine))
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      CommandCallRegex,
-                     preparedLine))
+                     preparedLine,
+                     references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
         }
     }

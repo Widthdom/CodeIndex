@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -1009,6 +1010,61 @@ public class PerformanceTests : IDisposable
             $"Bounded dense F# reference extraction allocated {allocatedBytes:N0} bytes");
     }
 
+    [Fact]
+    public void ReferenceMatchEnumeration_BoundedListDoesNotRequestMatchAfterCapacity()
+    {
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount: 1);
+        var sourceMoveNextCount = 0;
+        using var matches = ReferenceExtractor
+            .EnumerateReferenceMatches(EnumerateMatches(), references)
+            .GetEnumerator();
+
+        Assert.True(matches.MoveNext());
+        Assert.Equal(1, sourceMoveNextCount);
+
+        references.Add(new ReferenceRecord());
+
+        Assert.False(matches.MoveNext());
+        Assert.Equal(1, sourceMoveNextCount);
+
+        IEnumerable<Match> EnumerateMatches()
+        {
+            sourceMoveNextCount++;
+            yield return Match.Empty;
+
+            sourceMoveNextCount++;
+            throw new InvalidOperationException("The bounded enumerator requested an unused match.");
+        }
+    }
+
+    [Fact]
+    public void ReferenceMatchEnumeration_BelowCapacity_DoesNotAllocateWrapperEnumerators()
+    {
+        const int scanCount = 10_000;
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount: scanCount + 1);
+        var source = new ReusableMatchEnumerable();
+        var observedMatches = 0;
+
+        Scan();
+        observedMatches = 0;
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < scanCount; index++)
+                Scan();
+        });
+
+        Assert.Equal(scanCount, observedMatches);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Below-cap reference match wrappers allocated {allocatedBytes:N0} bytes");
+
+        void Scan()
+        {
+            foreach (var _ in ReferenceExtractor.EnumerateReferenceMatches(source, references))
+                observedMatches++;
+        }
+    }
+
 #if NET8_0
     [Fact]
 #else
@@ -1341,6 +1397,38 @@ public class PerformanceTests : IDisposable
             content.Append("proc_").Append(index);
         }
         return content.Append("\n  end interface\nend module dense_mod\n").ToString();
+    }
+
+    private sealed class ReusableMatchEnumerable : IEnumerable<Match>, IEnumerator<Match>
+    {
+        private bool _moved;
+
+        public Match Current => Match.Empty;
+
+        object System.Collections.IEnumerator.Current => Current;
+
+        public IEnumerator<Match> GetEnumerator()
+        {
+            _moved = false;
+            return this;
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public bool MoveNext()
+        {
+            if (_moved)
+                return false;
+
+            _moved = true;
+            return true;
+        }
+
+        public void Reset() => _moved = false;
+
+        public void Dispose()
+        {
+        }
     }
 
     public void Dispose()

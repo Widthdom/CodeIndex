@@ -25,11 +25,8 @@ internal static partial class LanguageReferenceExtractionSupport
 
         internal void EmitTypeExpressions(Regex regex)
         {
-            foreach (Match match in Regex.EnumerateMatches(regex, PreparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(regex, PreparedLine, references))
             {
-                if (LimitReached)
-                    break;
-
                 AddTypeExpression(match.Groups["type"]);
             }
         }

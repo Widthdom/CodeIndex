@@ -14,11 +14,8 @@ internal static partial class LanguageReferenceExtractionSupport
         if (!StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "call"))
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(FortranCallRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranCallRegex, preparedLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
         }
     }
@@ -51,11 +48,8 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         if (preparedLine.IndexOf('[') >= 0)
         {
-            foreach (Match match in Regex.EnumerateMatches(ObjCMessageRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ObjCMessageRegex, preparedLine, references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    return;
-
                 var receiver = match.Groups["receiver"];
                 var selector = match.Groups["name"];
                 if (char.IsUpper(receiver.Value[0]) && selector.Value is "alloc" or "new")
@@ -70,11 +64,8 @@ internal static partial class LanguageReferenceExtractionSupport
         if (preparedLine.IndexOf("@selector", StringComparison.Ordinal) >= 0
             && preparedLine.IndexOf('(') >= 0)
         {
-            foreach (Match match in Regex.EnumerateMatches(ObjCSelectorRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ObjCSelectorRegex, preparedLine, references))
             {
-                if (ReferenceExtractor.ReferenceLimitReached(references))
-                    return;
-
                 addCallLikeReference(match.Groups["name"].Value.TrimEnd(':'), match.Groups["name"].Index);
             }
         }
@@ -107,11 +98,8 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in Regex.EnumerateMatches(HaskellSpaceCallRegex, scanText))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(HaskellSpaceCallRegex, scanText, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             var name = match.Groups["name"].Value;
             if (definitionNames?.Contains(name) == true || string.Equals(name, definitionName, StringComparison.Ordinal))
                 continue;
@@ -128,11 +116,8 @@ internal static partial class LanguageReferenceExtractionSupport
         if (!ContainsWhitespace(preparedLine))
             return;
 
-        foreach (Match match in Regex.EnumerateMatches(ElixirParenlessCallRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ElixirParenlessCallRegex, preparedLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             var name = match.Groups["name"].Value;
             if (definitionNames?.Contains(name) == true)
                 continue;
@@ -159,11 +144,8 @@ internal static partial class LanguageReferenceExtractionSupport
             return;
 
         var consumedUntil = 0;
-        foreach (Match match in Regex.EnumerateMatches(SmalltalkMessageSendRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(SmalltalkMessageSendRegex, preparedLine, references))
         {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                return;
-
             if (match.Index < consumedUntil)
                 continue;
 
