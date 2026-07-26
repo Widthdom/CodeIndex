@@ -526,6 +526,9 @@ tracked as XML depth rather than rescanning an ancestor stack for every
 State-machine sentinel checks must also stay on spans. Erlang specification and
 callable terminators plus Raku heredoc terminators trim views of the original
 line without materializing padded copies.
+`SpanCharacterSearch.EndsWithAfterTrim` is the shared suffix primitive for
+these sentinels and for CSS selector continuations plus C# / Java body-less
+declaration termination.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3543,6 +3546,8 @@ repository metadata の character validation は predicate-based enumeration で
 `assemblyIdentity` ごとの ancestor stack 再走査ではなく XML depth で追跡する。
 state-machine の sentinel 判定も span 上で行う。Erlang specification / callable terminator
 と Raku heredoc terminator は、padding を含む copy を実体化せず original line の view を trim する。
+`SpanCharacterSearch.EndsWithAfterTrim` はこれらの sentinel に加え、CSS selector continuation
+と C# / Java の body-less declaration termination が共有する suffix primitive である。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

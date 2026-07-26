@@ -23,4 +23,17 @@ internal static class SpanCharacterSearch
 
         return false;
     }
+
+    internal static bool EndsWithAfterTrim(
+        ReadOnlySpan<char> value,
+        char suffix)
+    {
+        value = value.TrimEnd();
+        return !value.IsEmpty && value[^1] == suffix;
+    }
+
+    internal static bool EqualsAfterTrim(
+        ReadOnlySpan<char> value,
+        string expected)
+        => value.TrimEnd().Equals(expected, StringComparison.Ordinal);
 }

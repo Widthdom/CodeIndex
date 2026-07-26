@@ -184,15 +184,12 @@ public static partial class ReferenceExtractor
     internal static bool TrimmedFunctionalLineEndsWith(
         ReadOnlySpan<char> line,
         char suffix)
-    {
-        line = line.TrimEnd();
-        return !line.IsEmpty && line[^1] == suffix;
-    }
+        => SpanCharacterSearch.EndsWithAfterTrim(line, suffix);
 
     internal static bool TrimmedFunctionalLineEquals(
         ReadOnlySpan<char> line,
         string expected)
-        => line.TrimEnd().Equals(expected, StringComparison.Ordinal);
+        => SpanCharacterSearch.EqualsAfterTrim(line, expected);
 
     private static List<ReferenceRecord> ExtractFunctionalLanguageReferences(ReferenceExtractionContext request)
     {

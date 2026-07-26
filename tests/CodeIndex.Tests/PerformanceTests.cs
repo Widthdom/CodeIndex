@@ -666,6 +666,39 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void TrimmedSuffixChecks_LongDeclarationLines_DoNotAllocate()
+    {
+        var semicolonLine = $"declaration;{new string(' ', 4_096)}";
+        var commaLine = $"selector,{new string(' ', 4_096)}";
+        var matchCount = 0;
+        _ = SpanCharacterSearch.EndsWithAfterTrim(semicolonLine, ';');
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 4_096; index++)
+            {
+                if (SpanCharacterSearch.EndsWithAfterTrim(
+                        semicolonLine,
+                        ';'))
+                {
+                    matchCount++;
+                }
+                if (SpanCharacterSearch.EndsWithAfterTrim(commaLine, ','))
+                    matchCount++;
+            }
+        });
+
+        Assert.Equal(8_192, matchCount);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Trimmed suffix checks allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);

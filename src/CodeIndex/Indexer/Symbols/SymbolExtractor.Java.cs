@@ -1533,7 +1533,7 @@ public static partial class SymbolExtractor
 
             if (!opened && mode == JavaScanMode.Normal
                 && parenDepth == 0 && bracketDepth == 0 && angleDepth == 0
-                && line.TrimEnd().EndsWith(';'))
+                && SpanCharacterSearch.EndsWithAfterTrim(line, ';'))
                 return (startIndex + 1, null, null);
         }
 
