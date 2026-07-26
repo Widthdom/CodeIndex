@@ -8,7 +8,9 @@ internal static partial class LanguageReferenceExtractionSupport
 {
     internal static void EmitGoBranchLabelReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in GoBranchLabelRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     GoBranchLabelRegex,
+                     preparedLine))
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
     }
 

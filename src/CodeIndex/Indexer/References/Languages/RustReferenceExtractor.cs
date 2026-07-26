@@ -360,7 +360,9 @@ internal static partial class RustReferenceExtractor
     {
         if (preparedLine.IndexOf("r#", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in RawIdentifierCallRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         RawIdentifierCallRegex,
+                         preparedLine))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -371,7 +373,7 @@ internal static partial class RustReferenceExtractor
         if (preparedLine.IndexOf('!') < 0)
             return;
 
-        foreach (Match match in MacroCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(MacroCallRegex, preparedLine))
         {
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
@@ -393,18 +395,33 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in DeriveAttributeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     DeriveAttributeRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             EmitDeriveTypeList(match.Groups["types"], references, seen, fileId, context, lineNumber, container);
         }
 
-        foreach (Match match in CfgAttrDeriveAttributeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     CfgAttrDeriveAttributeRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             EmitDeriveTypeList(match.Groups["types"], references, seen, fileId, context, lineNumber, container);
         }
 
-        foreach (Match match in AttributeHeadRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     AttributeHeadRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = match.Groups["name"];
             var name = NormalizeIdentifier(nameGroup.Value);
             if (string.Equals(name, "derive", StringComparison.Ordinal))

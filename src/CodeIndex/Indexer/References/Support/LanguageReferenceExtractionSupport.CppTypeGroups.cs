@@ -20,11 +20,18 @@ internal static partial class LanguageReferenceExtractionSupport
         internal string Language { get; } = language;
         internal string PreparedLine { get; } = preparedLine;
         internal string OriginalLine { get; } = originalLine;
+        internal bool LimitReached =>
+            ReferenceExtractor.ReferenceLimitReached(references);
 
         internal void EmitTypeExpressions(Regex regex)
         {
-            foreach (Match match in regex.Matches(PreparedLine))
+            foreach (Match match in Regex.EnumerateMatches(regex, PreparedLine))
+            {
+                if (LimitReached)
+                    break;
+
                 AddTypeExpression(match.Groups["type"]);
+            }
         }
 
         internal void AddTypeExpression(Group group)
@@ -130,8 +137,15 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (ContainsOrdinalKeyword(preparedLine, "new"))
         {
-            foreach (Match match in CppNewTypeRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         CppNewTypeRegex,
+                         preparedLine))
+            {
+                if (line.LimitReached)
+                    break;
+
                 line.AddInstantiation(match.Groups["type"]);
+            }
         }
 
         if (preparedLine.IndexOf("_cast", StringComparison.Ordinal) >= 0)
@@ -435,17 +449,28 @@ internal static partial class LanguageReferenceExtractionSupport
                 || preparedLine.IndexOf('=') >= 0);
         if (hasBraceConstruction)
         {
-            foreach (Match match in CppBraceConstructionRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         CppBraceConstructionRegex,
+                         preparedLine))
+            {
+                if (line.LimitReached)
+                    break;
+
                 line.AddInstantiation(match.Groups["type"]);
+            }
         }
 
         var hasScopeSeparator =
             preparedLine.IndexOf("::", StringComparison.Ordinal) >= 0;
         if (hasBraceConstruction && hasTemplateOpen && hasScopeSeparator)
         {
-            foreach (Match match in
-                     CppQualifiedTemplateBraceConstructionRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         CppQualifiedTemplateBraceConstructionRegex,
+                         preparedLine))
             {
+                if (line.LimitReached)
+                    break;
+
                 var group = match.Groups["args"];
                 line.AddTypeExpression(group);
             }
@@ -469,9 +494,13 @@ internal static partial class LanguageReferenceExtractionSupport
             && (ContainsOrdinalKeyword(preparedLine, "class")
                 || ContainsOrdinalKeyword(preparedLine, "struct")))
         {
-            foreach (Match match in
-                     CppExplicitTemplateInstantiationRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         CppExplicitTemplateInstantiationRegex,
+                         preparedLine))
             {
+                if (line.LimitReached)
+                    break;
+
                 line.AddInstantiation(match.Groups["type"]);
             }
         }
@@ -497,9 +526,13 @@ internal static partial class LanguageReferenceExtractionSupport
                 || preparedLine.IndexOf('[') >= 0);
         if (hasTemplateIdDeclaration)
         {
-            foreach (Match match in
-                     CppTemplateIdDeclarationRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         CppTemplateIdDeclarationRegex,
+                         preparedLine))
             {
+                if (line.LimitReached)
+                    break;
+
                 if (IsCppTemplateDeclarationOrSpecializationLine(
                         preparedLine,
                         match.Index))
@@ -572,8 +605,13 @@ internal static partial class LanguageReferenceExtractionSupport
         if (!hasDeclarationType)
             return;
 
-        foreach (Match match in CppDeclarationTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     CppDeclarationTypeRegex,
+                     preparedLine))
         {
+            if (line.LimitReached)
+                break;
+
             var group = match.Groups["type"];
             var expression = StripCppAccessPrefix(group.Value);
             if (expression.Length == 0)
@@ -604,10 +642,13 @@ internal static partial class LanguageReferenceExtractionSupport
                 line.EmitTypeExpressions(CppParenthesizedRequiresConceptTypeRegex);
             if (hasRequiresConcept && hasScopeSeparator)
             {
-                foreach (Match match in
-                         CppQualifiedRequiresConceptConstraintRegex.Matches(
+                foreach (Match match in Regex.EnumerateMatches(
+                             CppQualifiedRequiresConceptConstraintRegex,
                              preparedLine))
                 {
+                    if (line.LimitReached)
+                        break;
+
                     line.AddTypeExpression(match.Groups["concept"]);
                     line.AddTypeExpression(match.Groups["args"]);
                 }

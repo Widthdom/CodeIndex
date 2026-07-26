@@ -458,8 +458,13 @@ internal static partial class SwiftReferenceExtractor
         if (!attributes.Success || attributes.Length == 0)
             return;
 
-        foreach (Match attributeMatch in PropertyWrapperAttributeRegex.Matches(attributes.Value))
+        foreach (Match attributeMatch in Regex.EnumerateMatches(
+                     PropertyWrapperAttributeRegex,
+                     attributes.Value))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = attributeMatch.Groups["name"];
             if (!nameGroup.Success)
                 continue;

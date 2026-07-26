@@ -240,8 +240,13 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (preparedLine.IndexOf('{') >= 0 && ContainsGoUppercaseAscii(preparedLine))
         {
-            foreach (Match match in GoCompositeLiteralRegex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(
+                         GoCompositeLiteralRegex,
+                         preparedLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
+
                 var group = match.Groups["name"];
                 if (!IsGoCompositeLiteralContext(preparedLine, group.Index, group.Value.Length))
                     continue;

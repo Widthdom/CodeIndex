@@ -197,8 +197,13 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in AssociatedCallReceiverRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     AssociatedCallReceiverRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var receiverGroup = match.Groups["receiver"];
             var receiver = receiverGroup.Value;
             var leafStart = receiver.LastIndexOf("::", StringComparison.Ordinal);
@@ -250,8 +255,13 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in AssociatedValueReceiverRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     AssociatedValueReceiverRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var receiverGroup = match.Groups["receiver"];
             var receiver = receiverGroup.Value;
             var leafStart = receiver.LastIndexOf("::", StringComparison.Ordinal);
@@ -423,8 +433,13 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in StructLiteralRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     StructLiteralRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = match.Groups["name"];
             var name = nameGroup.Value;
             var leafStart = name.LastIndexOf("::", StringComparison.Ordinal);

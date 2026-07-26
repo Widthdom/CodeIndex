@@ -546,6 +546,10 @@ Dynamic-language scanners for PHP, Ruby, R, and Perl stream multi-match
 attributes/types, DSL targets, namespace/member/resource references, and arrow
 calls. Any loop that writes directly to a bounded reference list must exit at
 the cap instead of walking the rest of a dense line.
+Systems-language scanners stream C/C++ construction and template groups, Rust
+calls and value/signature types, Swift property wrappers, Go concurrency and
+composite/signature types, plus shared scientific/native call groups. Preserve
+source-order emission and stop owned bounded lists at capacity.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3581,6 +3585,10 @@ demand-driven のままにする。
 PHP、Ruby、R、Perl の dynamic-language scanner は multi-match の attribute / type、
 DSL target、namespace / member / resource reference、arrow call を逐次走査する。
 bounded reference list へ直接書く loop は dense line の残りを走査せず上限で停止する。
+systems-language scanner は C / C++ construction と template group、Rust call と
+value / signature type、Swift property wrapper、Go concurrency と composite / signature
+type、共有 scientific / native call group を逐次走査する。source-order emission を維持し、
+所有する bounded list は上限で停止する。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

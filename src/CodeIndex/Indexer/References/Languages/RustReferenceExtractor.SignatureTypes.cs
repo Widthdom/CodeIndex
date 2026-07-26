@@ -58,8 +58,13 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in MutableReferenceTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     MutableReferenceTypeRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             if (!IsMutableReferenceTypeContext(preparedLine, match.Index))
                 continue;
 
