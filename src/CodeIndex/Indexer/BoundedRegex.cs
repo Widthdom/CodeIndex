@@ -144,7 +144,15 @@ internal sealed class BoundedRegex : BclRegex
     }
 
     public static IEnumerable<BclMatch> EnumerateMatches(BclRegex regex, string input)
-        => EnumerateMatches(regex, input, startAt: 0);
+    {
+        var pattern = regex.ToString();
+        var match = FirstMatchOrEmpty(regex, input, pattern);
+        while (match.Success)
+        {
+            yield return match;
+            match = NextMatchOrEmpty(match, pattern);
+        }
+    }
 
     public static IEnumerable<BclMatch> EnumerateMatches(
         BclRegex regex,
@@ -344,6 +352,22 @@ internal sealed class BoundedRegex : BclRegex
 
     private static void RecordTimeout(string operation, string pattern, RegexMatchTimeoutException ex) =>
         TimeoutCaptureScope.Value?.Record(operation, pattern, ex.MatchTimeout);
+
+    private static BclMatch FirstMatchOrEmpty(
+        BclRegex regex,
+        string input,
+        string pattern)
+    {
+        try
+        {
+            return regex.Match(input);
+        }
+        catch (RegexMatchTimeoutException ex)
+        {
+            RecordTimeout("matches", pattern, ex);
+            return BclMatch.Empty;
+        }
+    }
 
     private static BclMatch FirstMatchOrEmpty(
         BclRegex regex,

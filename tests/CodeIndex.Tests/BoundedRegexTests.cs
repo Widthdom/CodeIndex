@@ -83,6 +83,19 @@ public sealed class BoundedRegexTests
     }
 
     [Fact]
+    public void EnumerateMatches_InstanceRightToLeftRegex_PreservesDefaultStartAndOrder()
+    {
+        var regex = new BoundedRegex(@"\w+", RegexOptions.RightToLeft);
+
+        var matches = BoundedRegex
+            .EnumerateMatches(regex, "alpha beta")
+            .Select(match => match.Value)
+            .ToArray();
+
+        Assert.Equal(["beta", "alpha"], matches);
+    }
+
+    [Fact]
     public void InstanceMatch_Timeout_ReturnsEmpty()
     {
         var regex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));

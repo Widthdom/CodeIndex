@@ -541,7 +541,9 @@ own the bounded reference list stop immediately at its cap.
 Python reference scanners stream decorators, annotations, runtime type checks,
 typing factories, dataclass/attrs integrations, and dynamic imports. The
 start-offset overload of `BoundedRegex.EnumerateMatches` keeps decorator
-argument scans demand-driven without rescanning the decorator prefix.
+argument scans demand-driven without rescanning the decorator prefix. The
+no-offset overload preserves the regex instance's default start position,
+including reverse source order for `RegexOptions.RightToLeft`.
 Dynamic-language scanners for PHP, Ruby, R, and Perl stream multi-match
 attributes/types, DSL targets, namespace/member/resource references, and arrow
 calls. Any loop that writes directly to a bounded reference list must exit at
@@ -3593,7 +3595,8 @@ multi-match loop は `BoundedRegex.EnumerateMatches` を使い、bounded referen
 Python reference scanner は decorator、annotation、runtime type check、typing factory、
 dataclass / attrs integration、dynamic import を逐次走査する。`BoundedRegex.EnumerateMatches`
 の start-offset overload により、decorator prefix を再走査せず argument scan も
-demand-driven のままにする。
+demand-driven のままにする。offset なしの overload は regex instance の既定開始位置を
+維持し、`RegexOptions.RightToLeft` では source の逆順に match する。
 PHP、Ruby、R、Perl の dynamic-language scanner は multi-match の attribute / type、
 DSL target、namespace / member / resource reference、arrow call を逐次走査する。
 bounded reference list へ直接書く loop は dense line の残りを走査せず上限で停止する。
