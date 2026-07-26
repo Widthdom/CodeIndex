@@ -36,16 +36,18 @@ public static partial class ReferenceExtractor
         if (typeDefinition != null)
             return;
 
-        var qualifiedCallSpans = new List<(int Start, int End)>();
+        List<(int Start, int End)>? qualifiedCallSpans = null;
         foreach (Match match in RakuQualifiedCallRegex.Matches(line))
         {
-            qualifiedCallSpans.Add((match.Index, match.Index + match.Length));
+            (qualifiedCallSpans ??= []).Add(
+                (match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["module"], "reference", context, lineNumber, container, "raku");
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "raku");
         }
         foreach (Match match in RakuMethodCallRegex.Matches(line))
         {
-            qualifiedCallSpans.Add((match.Index, match.Index + match.Length));
+            (qualifiedCallSpans ??= []).Add(
+                (match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "raku");
         }
 

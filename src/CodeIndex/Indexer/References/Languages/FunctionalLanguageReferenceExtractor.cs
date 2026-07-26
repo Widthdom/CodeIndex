@@ -139,9 +139,12 @@ public static partial class ReferenceExtractor
     }
 
     internal static bool ContainsFunctionalSpan(
-        IReadOnlyList<(int Start, int End)> spans,
+        IReadOnlyList<(int Start, int End)>? spans,
         int index)
     {
+        if (spans is null)
+            return false;
+
         for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
         {
             var span = spans[spanIndex];
@@ -153,9 +156,12 @@ public static partial class ReferenceExtractor
     }
 
     private static bool ContainsFunctionalSpanInterior(
-        IReadOnlyList<(int Start, int End)> spans,
+        IReadOnlyList<(int Start, int End)>? spans,
         int index)
     {
+        if (spans is null)
+            return false;
+
         for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
         {
             var span = spans[spanIndex];
@@ -167,10 +173,13 @@ public static partial class ReferenceExtractor
     }
 
     internal static bool OverlapsFunctionalSpan(
-        IReadOnlyList<(int Start, int End)> spans,
+        IReadOnlyList<(int Start, int End)>? spans,
         int start,
         int end)
     {
+        if (spans is null)
+            return false;
+
         for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
         {
             var span = spans[spanIndex];

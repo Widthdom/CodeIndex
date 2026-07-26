@@ -41,7 +41,7 @@ public static partial class ReferenceExtractor
             state.OcamlActiveTypeDefinition = typeDefinition;
         }
 
-        var typeReferenceSpans = new List<(int Start, int End)>();
+        List<(int Start, int End)>? typeReferenceSpans = null;
         AddMatch(OcamlImportRegex.Match(line), "import");
         AddMatch(OcamlModuleAliasRegex.Match(line), "alias");
         var typeAliasTarget = OcamlTypeAliasTargetRegex.Match(line);
@@ -63,7 +63,8 @@ public static partial class ReferenceExtractor
             return;
         }
 
-        var qualifiedCallSpans = new List<(int Start, int End)>(typeReferenceSpans);
+        List<(int Start, int End)>? qualifiedCallSpans =
+            typeReferenceSpans is null ? null : new(typeReferenceSpans);
         foreach (Match match in OcamlQualifiedCallRegex.Matches(line))
         {
             if (OverlapsFunctionalSpan(
@@ -71,7 +72,8 @@ public static partial class ReferenceExtractor
                     match.Index,
                     match.Index + match.Length))
                 continue;
-            qualifiedCallSpans.Add((match.Index, match.Index + match.Length));
+            (qualifiedCallSpans ??= []).Add(
+                (match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["module"], "reference", context, lineNumber, container, "ocaml");
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "ocaml");
         }
@@ -108,7 +110,8 @@ public static partial class ReferenceExtractor
             if (!group.Success)
                 return;
 
-            typeReferenceSpans.Add((group.Index, group.Index + group.Length));
+            (typeReferenceSpans ??= []).Add(
+                (group.Index, group.Index + group.Length));
             if (!OcamlIgnoredTypeReferences.Contains(group.Value))
             {
                 AddFunctionalReference(

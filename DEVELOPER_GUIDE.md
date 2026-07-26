@@ -529,6 +529,9 @@ line without materializing padded copies.
 `SpanCharacterSearch.EndsWithAfterTrim` is the shared suffix primitive for
 these sentinels and for CSS selector continuations plus C# / Java body-less
 declaration termination.
+Functional-language exclusion span lists are lazy. Erlang quoted/remote calls,
+OCAML type/qualified calls, and Raku qualified/method calls must not allocate an
+empty list on every source line when no corresponding match exists.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3548,6 +3551,9 @@ state-machine の sentinel 判定も span 上で行う。Erlang specification / 
 と Raku heredoc terminator は、padding を含む copy を実体化せず original line の view を trim する。
 `SpanCharacterSearch.EndsWithAfterTrim` はこれらの sentinel に加え、CSS selector continuation
 と C# / Java の body-less declaration termination が共有する suffix primitive である。
+functional-language の exclusion span list は lazy にする。Erlang quoted / remote call、
+OCAML type / qualified call、Raku qualified / method call は、対応する match がない source line
+ごとに empty list を割り当ててはならない。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

@@ -699,6 +699,69 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void FunctionalReferenceExtraction_CallFreeLines_AvoidsEmptySpanLists()
+    {
+        const int lineCount = 4_096;
+        var fixtures = new[]
+        {
+            (
+                Language: "erlang",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"value_{index} = {index}."))),
+            (
+                Language: "ocaml",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"let value_{index} = {index}"))),
+            (
+                Language: "raku",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"my $value_{index} = {index};"))),
+        }
+        .Select(fixture => (
+            fixture.Language,
+            fixture.Content,
+            Symbols: SymbolExtractor.Extract(
+                1,
+                fixture.Language,
+                fixture.Content)))
+        .ToArray();
+        foreach (var fixture in fixtures)
+        {
+            _ = ReferenceExtractor.Extract(
+                1,
+                fixture.Language,
+                fixture.Content,
+                fixture.Symbols);
+        }
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            foreach (var fixture in fixtures)
+            {
+                _ = ReferenceExtractor.Extract(
+                    1,
+                    fixture.Language,
+                    fixture.Content,
+                    fixture.Symbols);
+            }
+        });
+
+        Assert.True(
+            allocatedBytes < 14_000_000,
+            $"Call-free functional extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
