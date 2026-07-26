@@ -23,7 +23,7 @@ public static partial class ReferenceExtractor
             state.ErlangSpecificationMode = true;
         if (state.ErlangSpecificationMode)
         {
-            if (line.TrimEnd().EndsWith(".", StringComparison.Ordinal))
+            if (TrimmedFunctionalLineEndsWith(line, '.'))
                 state.ErlangSpecificationMode = false;
             return;
         }

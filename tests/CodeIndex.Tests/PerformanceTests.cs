@@ -628,6 +628,44 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void FunctionalTerminatorChecks_LongPaddedLines_DoNotAllocate()
+    {
+        var periodLine = $"value.{new string(' ', 4_096)}";
+        var heredocLine = $"END{new string(' ', 4_096)}";
+        var matchCount = 0;
+        _ = ReferenceExtractor.TrimmedFunctionalLineEndsWith(periodLine, '.');
+        _ = ReferenceExtractor.TrimmedFunctionalLineEquals(heredocLine, "END");
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 4_096; index++)
+            {
+                if (ReferenceExtractor.TrimmedFunctionalLineEndsWith(
+                        periodLine,
+                        '.'))
+                {
+                    matchCount++;
+                }
+                if (ReferenceExtractor.TrimmedFunctionalLineEquals(
+                        heredocLine,
+                        "END"))
+                {
+                    matchCount++;
+                }
+            }
+        });
+
+        Assert.Equal(8_192, matchCount);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Functional terminator checks allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);

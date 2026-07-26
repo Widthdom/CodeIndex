@@ -523,6 +523,9 @@ Repository metadata character validation uses `SpanCharacterSearch` instead of
 predicate-based enumeration, and application-manifest dependency ownership is
 tracked as XML depth rather than rescanning an ancestor stack for every
 `assemblyIdentity`.
+State-machine sentinel checks must also stay on spans. Erlang specification and
+callable terminators plus Raku heredoc terminators trim views of the original
+line without materializing padded copies.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3538,6 +3541,8 @@ CUDA / GLSL / HLSL / Metal / WGSL の binding / resource scope は direct indexe
 repository metadata の character validation は predicate-based enumeration ではなく
 `SpanCharacterSearch` を使い、application manifest の dependency ownership は
 `assemblyIdentity` ごとの ancestor stack 再走査ではなく XML depth で追跡する。
+state-machine の sentinel 判定も span 上で行う。Erlang specification / callable terminator
+と Raku heredoc terminator は、padding を含む copy を実体化せず original line の view を trim する。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

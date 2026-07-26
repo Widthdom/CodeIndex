@@ -181,6 +181,19 @@ public static partial class ReferenceExtractor
         return false;
     }
 
+    internal static bool TrimmedFunctionalLineEndsWith(
+        ReadOnlySpan<char> line,
+        char suffix)
+    {
+        line = line.TrimEnd();
+        return !line.IsEmpty && line[^1] == suffix;
+    }
+
+    internal static bool TrimmedFunctionalLineEquals(
+        ReadOnlySpan<char> line,
+        string expected)
+        => line.TrimEnd().Equals(expected, StringComparison.Ordinal);
+
     private static List<ReferenceRecord> ExtractFunctionalLanguageReferences(ReferenceExtractionContext request)
     {
         if (!TryPrepareReferenceLines(
@@ -389,7 +402,8 @@ public static partial class ReferenceExtractor
                 }
                 break;
             case "erlang":
-                if (state.ActiveCallable != null && maskedLine.TrimEnd().EndsWith(".", StringComparison.Ordinal))
+                if (state.ActiveCallable != null
+                    && TrimmedFunctionalLineEndsWith(maskedLine, '.'))
                     state.ActiveCallable = null;
                 break;
             case "raku":
@@ -431,10 +445,12 @@ public static partial class ReferenceExtractor
     {
         if (language == "raku")
         {
-            var trimmed = line.TrimStart();
+            var trimmed = line.AsSpan().TrimStart();
             if (state.RakuHeredocTerminator != null)
             {
-                if (string.Equals(trimmed.TrimEnd(), state.RakuHeredocTerminator, StringComparison.Ordinal))
+                if (TrimmedFunctionalLineEquals(
+                        trimmed,
+                        state.RakuHeredocTerminator))
                     state.RakuHeredocTerminator = null;
                 return new string(' ', line.Length);
             }
