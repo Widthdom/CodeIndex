@@ -262,7 +262,7 @@ public static partial class ReferenceExtractor
     private static HashSet<string>? GetVhdlParameterNames(string line)
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match parameterMatch in VhdlParameterNamesRegex.Matches(line))
+        foreach (Match parameterMatch in BoundedRegex.EnumerateMatches(VhdlParameterNamesRegex, line))
             AddVhdlDeclaredNames(result, parameterMatch.Groups["names"].Value);
         return result.Count == 0 ? null : result;
     }
@@ -325,7 +325,7 @@ public static partial class ReferenceExtractor
                     openParenthesis + 1,
                     closeParenthesis - openParenthesis - 1);
                 var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (Match parameterMatch in VhdlParameterNamesRegex.Matches(parameters))
+                foreach (Match parameterMatch in BoundedRegex.EnumerateMatches(VhdlParameterNamesRegex, parameters))
                     AddVhdlDeclaredNames(result, parameterMatch.Groups["names"].Value);
                 return result.Count == 0 ? null : result;
             }
@@ -345,8 +345,14 @@ public static partial class ReferenceExtractor
 
     private static void AddVhdlDeclaredNames(HashSet<string> names, string value)
     {
-        foreach (var name in value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            names.Add(name);
+        foreach (var name in new DelimitedSpanEnumerable(
+                     value.AsSpan(),
+                     ',',
+                     trimEntries: true,
+                     removeEmptyEntries: true))
+        {
+            names.Add(name.ToString());
+        }
     }
 
     private static string NormalizeVerilogScopeKind(string kind)

@@ -31,14 +31,14 @@ internal static partial class LanguageReferenceExtractionSupport
                 || ContainsKeywordIgnoringCase(preparedLine, "object"));
         if (hasPascalBaseMarker)
         {
-            foreach (Match match in PascalClassBaseRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(PascalClassBaseRegex, preparedLine, references))
                 EmitCommaSeparatedNames(match.Groups["bases"].Value, match.Groups["bases"].Index, "pascal", references, seen, fileId, context, lineNumber, resolveContainerForColumn(match.Groups["bases"].Index));
         }
 
         if (preparedLine.IndexOf(':') < 0)
             return;
 
-        foreach (Match match in PascalTypeAfterColonRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(PascalTypeAfterColonRegex, preparedLine, references))
         {
             if (!IsPascalColonTypeReferenceContext(preparedLine, lineNumber, container))
                 continue;
@@ -87,7 +87,7 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         if (StartsWithCharIgnoringLeadingWhitespace(preparedLine, '@') && preparedLine.IndexOf(':') >= 0)
         {
-            foreach (Match match in ObjCInterfaceBaseRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ObjCInterfaceBaseRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, container);
@@ -96,14 +96,14 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (preparedLine.IndexOf('<') >= 0 && preparedLine.IndexOf('>') >= 0)
         {
-            foreach (Match match in ObjCProtocolListRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ObjCProtocolListRegex, preparedLine, references))
                 EmitCommaSeparatedNames(match.Groups["list"].Value, match.Groups["list"].Index, "objc", references, seen, fileId, context, lineNumber, container);
         }
 
         if (preparedLine.IndexOf('*') < 0)
             return;
 
-        foreach (Match match in ObjCDeclTypeRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ObjCDeclTypeRegex, preparedLine, references))
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "objc");
@@ -179,7 +179,7 @@ internal static partial class LanguageReferenceExtractionSupport
             || StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "use");
         if (hasImportMarker)
         {
-            foreach (var match in EnumerateMatches(ElixirImportRegex, preparedLine))
+            foreach (var match in ReferenceExtractor.EnumerateReferenceMatches(ElixirImportRegex, preparedLine, references))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
         }
 
@@ -188,7 +188,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 || ContainsOrdinalKeyword(preparedLine, "impl"));
         if (hasBehaviourMarker)
         {
-            foreach (var match in EnumerateMatches(ElixirBehaviourRegex, preparedLine))
+            foreach (var match in ReferenceExtractor.EnumerateReferenceMatches(ElixirBehaviourRegex, preparedLine, references))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
         }
     }

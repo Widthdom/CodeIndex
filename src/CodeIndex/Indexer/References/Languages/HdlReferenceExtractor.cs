@@ -408,7 +408,7 @@ public static partial class ReferenceExtractor
             if (importMatch.Success)
             {
                 var bodyGroup = importMatch.Groups["body"];
-                foreach (Match itemMatch in SystemVerilogQualifiedReferenceRegex.Matches(bodyGroup.Value))
+                foreach (Match itemMatch in ReferenceExtractor.EnumerateReferenceMatches(SystemVerilogQualifiedReferenceRegex, bodyGroup.Value, references))
                 {
                     var packageGroup = itemMatch.Groups["package"];
                     AddHdlReference(
@@ -443,7 +443,7 @@ public static partial class ReferenceExtractor
 
             if (importMatch is not { Success: true })
             {
-                foreach (Match qualifiedMatch in SystemVerilogQualifiedReferenceRegex.Matches(structuralLine))
+                foreach (Match qualifiedMatch in ReferenceExtractor.EnumerateReferenceMatches(SystemVerilogQualifiedReferenceRegex, structuralLine, references))
                 {
                     AddHdlReference(
                         request,
@@ -495,7 +495,7 @@ public static partial class ReferenceExtractor
         if (libraryMatch.Success)
         {
             var bodyGroup = libraryMatch.Groups["body"];
-            foreach (Match nameMatch in VhdlIdentifierRegex.Matches(bodyGroup.Value))
+            foreach (Match nameMatch in ReferenceExtractor.EnumerateReferenceMatches(VhdlIdentifierRegex, bodyGroup.Value, references))
             {
                 AddHdlReference(
                     request,
@@ -515,7 +515,7 @@ public static partial class ReferenceExtractor
         if (useMatch.Success)
         {
             var bodyGroup = useMatch.Groups["body"];
-            foreach (Match pathMatch in VhdlSelectedNameRegex.Matches(bodyGroup.Value))
+            foreach (Match pathMatch in ReferenceExtractor.EnumerateReferenceMatches(VhdlSelectedNameRegex, bodyGroup.Value, references))
             {
                 var (packageName, packageOffset) = SelectVhdlPackage(pathMatch.Value);
                 AddHdlReference(
@@ -529,7 +529,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     specialPositions);
-                foreach (Match identifierMatch in VhdlIdentifierRegex.Matches(pathMatch.Value))
+                foreach (Match identifierMatch in BoundedRegex.EnumerateMatches(VhdlIdentifierRegex, pathMatch.Value))
                     specialPositions.Add(bodyGroup.Index + pathMatch.Index + identifierMatch.Index);
             }
         }
@@ -551,7 +551,7 @@ public static partial class ReferenceExtractor
         }
 
         var emittedEntityInstantiation = false;
-        foreach (Match entityMatch in VhdlEntityInstantiationRegex.Matches(structuralLine))
+        foreach (Match entityMatch in ReferenceExtractor.EnumerateReferenceMatches(VhdlEntityInstantiationRegex, structuralLine, references))
         {
             emittedEntityInstantiation = true;
             AddHdlReference(
@@ -605,18 +605,44 @@ public static partial class ReferenceExtractor
 
     private static (string PackageName, int Offset) SelectVhdlPackage(string path)
     {
-        var components = path.Split('.');
-        var packageIndex = components.Length switch
+        var componentCount = 0;
+        var previousComponent = ReadOnlySpan<char>.Empty;
+        var previousOffset = 0;
+        var lastComponent = ReadOnlySpan<char>.Empty;
+        var lastOffset = 0;
+        foreach (var component in new DelimitedSpanEnumerable(path.AsSpan(), '.'))
         {
-            1 => 0,
-            2 when string.Equals(components[1], "all", StringComparison.OrdinalIgnoreCase) => 0,
-            2 => 1,
-            _ => components.Length - 2,
-        };
-        var offset = 0;
-        for (var index = 0; index < packageIndex; index++)
-            offset += components[index].Length + 1;
-        return (components[packageIndex], offset);
+            previousComponent = lastComponent;
+            previousOffset = lastOffset;
+            lastComponent = component;
+            lastOffset = componentCount == 0
+                ? 0
+                : lastOffset + previousComponent.Length + 1;
+            componentCount++;
+        }
+
+        ReadOnlySpan<char> package;
+        int offset;
+        switch (componentCount)
+        {
+            case 1:
+                package = lastComponent;
+                offset = lastOffset;
+                break;
+            case 2 when lastComponent.Equals("all", StringComparison.OrdinalIgnoreCase):
+                package = previousComponent;
+                offset = previousOffset;
+                break;
+            case 2:
+                package = lastComponent;
+                offset = lastOffset;
+                break;
+            default:
+                package = previousComponent;
+                offset = previousOffset;
+                break;
+        }
+        return (package.ToString(), offset);
     }
 
     private static void EmitKnownHdlReferences(
@@ -640,7 +666,7 @@ public static partial class ReferenceExtractor
             ? VhdlIdentifierRegex
             : VerilogIdentifierRegex;
         var matchedNameCount = 0;
-        foreach (Match match in identifierRegex.Matches(structuralLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(identifierRegex, structuralLine, references))
         {
             if (matchedNameCount >= limits.MaxNamesPerLine)
             {
@@ -661,7 +687,7 @@ public static partial class ReferenceExtractor
                 || definitionsByLine.TryGetValue(lineNumber, out var definitions)
                     && definitions.Contains(match.Value)
                 || declaredNames?.Contains(match.Value) == true
-                || scopes.Any(scope => scope.ShadowedNames.Contains(match.Value))
+                || IsHdlNameShadowed(scopes, match.Value)
                 || knownSymbol.LocalDesignUnitIds is { Count: > 0 } localDesignUnitIds
                     && !localDesignUnitIds.Contains(currentDesignUnitId))
             {
@@ -688,6 +714,19 @@ public static partial class ReferenceExtractor
             if (ReferenceLimitReached(references))
                 break;
         }
+    }
+
+    private static bool IsHdlNameShadowed(
+        IReadOnlyList<HdlScope> scopes,
+        string name)
+    {
+        for (var scopeIndex = 0; scopeIndex < scopes.Count; scopeIndex++)
+        {
+            if (scopes[scopeIndex].ShadowedNames.Contains(name))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsFollowedByOpenParenthesis(string line, int index)

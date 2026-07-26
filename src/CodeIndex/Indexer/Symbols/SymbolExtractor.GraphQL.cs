@@ -33,14 +33,14 @@ public static partial class SymbolExtractor
         if (hasInputBlocks && LinesContain(lines, '{'))
         {
             List<int>? lineStarts = null;
-            foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
+            foreach (Match inputMatch in Regex.EnumerateMatches(GraphQLInputBlockRegex, content))
             {
                 var inputName = inputMatch.Groups["name"].Value;
                 var body = inputMatch.Groups["body"];
                 if (body.Value.IndexOf(':', StringComparison.Ordinal) < 0)
                     continue;
 
-                foreach (Match fieldMatch in GraphQLInputFieldRegex.Matches(body.Value))
+                foreach (Match fieldMatch in Regex.EnumerateMatches(GraphQLInputFieldRegex, body.Value))
                 {
                     var fieldGroup = fieldMatch.Groups["name"];
                     var absoluteIndex = body.Index + fieldGroup.Index;
@@ -161,7 +161,7 @@ public static partial class SymbolExtractor
         if (!MayContainGraphQLNameStart(variantText))
             return;
 
-        foreach (Match variantMatch in GraphQLUnionVariantRegex.Matches(variantText))
+        foreach (Match variantMatch in Regex.EnumerateMatches(GraphQLUnionVariantRegex, variantText))
         {
             var variantName = variantMatch.Groups["name"].Value;
             if (variantName == "extend" || variantName == "union")

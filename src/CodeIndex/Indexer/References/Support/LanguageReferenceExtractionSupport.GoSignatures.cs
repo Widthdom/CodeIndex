@@ -6,10 +6,18 @@ namespace CodeIndex.Indexer;
 
 internal static partial class LanguageReferenceExtractionSupport
 {
-    internal static void EmitGoBranchLabelReferences(string preparedLine, Action<string, int> addCallLikeReference)
+    internal static void EmitGoBranchLabelReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
-        foreach (Match match in GoBranchLabelRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     GoBranchLabelRegex,
+                     preparedLine,
+                     references))
+        {
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
+        }
     }
 
     private static void EmitGoFunctionSignatureTypes(

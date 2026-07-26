@@ -221,7 +221,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         foreach (var regex in GoTypeReferenceRegexes)
         {
-            foreach (Match match in BoundedRegex.EnumerateMatches(regex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(regex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 EmitGoTypeExpression(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -240,7 +240,10 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (preparedLine.IndexOf('{') >= 0 && ContainsGoUppercaseAscii(preparedLine))
         {
-            foreach (Match match in GoCompositeLiteralRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         GoCompositeLiteralRegex,
+                         preparedLine,
+                         references))
             {
                 var group = match.Groups["name"];
                 if (!IsGoCompositeLiteralContext(preparedLine, group.Index, group.Value.Length))

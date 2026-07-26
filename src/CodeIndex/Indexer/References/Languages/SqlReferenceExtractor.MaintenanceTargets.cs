@@ -25,7 +25,7 @@ internal static partial class SqlReferenceExtractor
             || statement.IndexOf("REVOKE", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                ObjectPermissionTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(ObjectPermissionTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -42,7 +42,7 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf("AUTHORIZATION", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterAuthorizationObjectTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterAuthorizationObjectTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -56,7 +56,7 @@ internal static partial class SqlReferenceExtractor
                 shouldIgnoreName);
 
             EmitMultiTargetReferences(
-                AlterAuthorizationBareTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterAuthorizationBareTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -73,7 +73,7 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf("STATISTICS", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                UpdateStatisticsTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(UpdateStatisticsTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -87,7 +87,7 @@ internal static partial class SqlReferenceExtractor
                 shouldIgnoreName);
 
             EmitMultiTargetReferences(
-                CreateStatisticsOnTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(CreateStatisticsOnTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -102,7 +102,7 @@ internal static partial class SqlReferenceExtractor
                 suppressedCallIndices);
 
             EmitMultiTargetReferences(
-                DropStatisticsTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(DropStatisticsTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -143,7 +143,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                DropTableTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(DropTableTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -160,7 +160,7 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf("TRUNCATE", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                TruncateTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(TruncateTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,

@@ -141,7 +141,7 @@ internal static class RepositoryMetadataReferenceExtractor
     {
         var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount, Math.Min(lines.Length, 64));
         var seen = new ReferenceDedupeSet();
-        var ancestors = new Stack<string>();
+        var dependencyAncestorDepth = 0;
         var elementCount = 0;
         SymbolRecord? manifestContainer = null;
 
@@ -154,8 +154,8 @@ internal static class RepositoryMetadataReferenceExtractor
             {
                 if (reader.NodeType == XmlNodeType.EndElement)
                 {
-                    if (ancestors.Count > 0)
-                        ancestors.Pop();
+                    if (IsManifestDependencyElement(reader.LocalName))
+                        dependencyAncestorDepth--;
                     continue;
                 }
 
@@ -176,9 +176,7 @@ internal static class RepositoryMetadataReferenceExtractor
                 var elementName = reader.LocalName;
 
                 var isDependencyIdentity = elementName.Equals("assemblyIdentity", StringComparison.OrdinalIgnoreCase)
-                    && ancestors.Any(ancestor =>
-                        ancestor.Equals("dependentAssembly", StringComparison.OrdinalIgnoreCase)
-                        || ancestor.Equals("dependency", StringComparison.OrdinalIgnoreCase));
+                    && dependencyAncestorDepth > 0;
                 if (isDependencyIdentity)
                 {
                     AddManifestDependency(
@@ -230,13 +228,29 @@ internal static class RepositoryMetadataReferenceExtractor
                     var privatePath = reader.GetAttribute("privatePath");
                     if (!string.IsNullOrWhiteSpace(privatePath))
                     {
-                        foreach (var path in privatePath.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                            AddManifestPath(references, seen, fileId, path, context, lineNumber, manifestContainer);
+                        foreach (var path in new DelimitedSpanEnumerable(
+                                     privatePath.AsSpan(),
+                                     ';',
+                                     trimEntries: true,
+                                     removeEmptyEntries: true))
+                        {
+                            AddManifestPath(
+                                references,
+                                seen,
+                                fileId,
+                                path.ToString(),
+                                context,
+                                lineNumber,
+                                manifestContainer);
+                        }
                     }
                 }
 
-                if (!reader.IsEmptyElement)
-                    ancestors.Push(elementName);
+                if (!reader.IsEmptyElement
+                    && IsManifestDependencyElement(elementName))
+                {
+                    dependencyAncestorDepth++;
+                }
             }
         }
         catch (XmlException)
@@ -246,6 +260,10 @@ internal static class RepositoryMetadataReferenceExtractor
 
         return references;
     }
+
+    private static bool IsManifestDependencyElement(string elementName)
+        => elementName.Equals("dependentAssembly", StringComparison.OrdinalIgnoreCase)
+            || elementName.Equals("dependency", StringComparison.OrdinalIgnoreCase);
 
     private static void AddAssignmentPathReferences(
         List<ReferenceRecord> references,
@@ -493,8 +511,8 @@ internal static class RepositoryMetadataReferenceExtractor
         if (value.Length == 0
             || value.Length > SymbolExtractor.StructuredDataMaxPathLength
             || value.Contains("://", StringComparison.Ordinal)
-            || !allowWhitespace && value.Any(char.IsWhiteSpace)
-            || value.Any(char.IsControl))
+            || !allowWhitespace && SpanCharacterSearch.ContainsWhitespace(value)
+            || SpanCharacterSearch.ContainsControl(value))
         {
             return false;
         }
@@ -520,15 +538,17 @@ internal static class RepositoryMetadataReferenceExtractor
             return false;
         }
 
-        foreach (var segment in value.Split('/'))
+        foreach (var segment in new DelimitedSpanEnumerable(value.AsSpan(), '/'))
         {
-            if (segment.Length == 0 || segment is "." or "..")
+            if (segment.IsEmpty
+                || segment.SequenceEqual(".")
+                || segment.SequenceEqual(".."))
                 return false;
         }
 
         if (!allowBarePattern
             && !value.Contains('/', StringComparison.Ordinal)
-            && !value.Any(character => character is '*' or '?' or '[' or '{')
+            && value.AsSpan().IndexOfAny("*?[{") < 0
             && !HasFileLikeExtension(value))
         {
             return false;
@@ -562,7 +582,7 @@ internal static class RepositoryMetadataReferenceExtractor
             || name.Contains("://", StringComparison.Ordinal)
             || name.Contains('/')
             || name.Contains('\\')
-            || name.Any(char.IsControl))
+            || SpanCharacterSearch.ContainsControl(name))
             return;
 
         var sourceIndex = context.IndexOf(name, StringComparison.Ordinal);

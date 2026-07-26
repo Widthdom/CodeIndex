@@ -157,12 +157,17 @@ public static partial class ReferenceExtractor
         {
             PowerShellReferenceExtractor.EmitCallReferences(
                 line.PreparedLine,
-                addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
-            PowerShellReferenceExtractor.EmitSplatParameterReferences(
-                line.PreparedLine,
-                call.Lookups.GetPowerShellSplatAssignments,
-                line.LineNumber,
-                CreatePowerShellParameterReferenceEmitter(line));
+                addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                line.References);
+            if (!ReferenceLimitReached(line.References))
+            {
+                PowerShellReferenceExtractor.EmitSplatParameterReferences(
+                    line.PreparedLine,
+                    call.Lookups.GetPowerShellSplatAssignments,
+                    line.LineNumber,
+                    CreatePowerShellParameterReferenceEmitter(line),
+                    line.References);
+            }
         }
         else if (line.Language is "shell")
         {
@@ -207,7 +212,7 @@ public static partial class ReferenceExtractor
             var dTemplateArgumentCallSpanIndex = 0;
             if (line.Language is not ("tcl" or "prolog"))
             {
-                foreach (Match match in CallRegex.Matches(callScanLine))
+                foreach (Match match in EnumerateReferenceMatches(CallRegex, callScanLine, line.References))
                 {
                     var name = match.Groups["name"].Value;
                     var callIndex = match.Groups["name"].Index;
@@ -333,12 +338,14 @@ public static partial class ReferenceExtractor
             if (line.Language == "go")
                 LanguageReferenceExtractionSupport.EmitGoBranchLabelReferences(
                     line.PreparedLine,
-                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.References);
 
             if (line.Language == "swift")
                 SwiftReferenceExtractor.EmitTrailingClosureReferences(
                     line.PreparedLine,
-                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.References);
             else if (line.Language == "kotlin")
             {
                 KotlinReferenceExtractor.EmitInfixCallReferences(
@@ -348,21 +355,24 @@ public static partial class ReferenceExtractor
                     addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
                 KotlinReferenceExtractor.EmitTrailingLambdaReferences(
                     line.PreparedLine,
-                    addCallLikeReference);
+                    addCallLikeReference,
+                    line.References);
             }
 
             if (line.Language == "fsharp")
             {
                 FSharpReferenceExtractor.EmitAdditionalCallReferences(
                     line.PreparedLine,
-                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.References);
             }
 
             if (line.Language == "scala")
             {
                 ScalaReferenceExtractor.EmitTrailingBlockCallReferences(
                     line.PreparedLine,
-                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call));
+                    addCallLikeReference ??= CreateCallLikeReferenceEmitter(call),
+                    line.References);
                 ScalaReferenceExtractor.EmitAdditionalReferences(
                     line.PreparedLine,
                     line.References,
@@ -377,7 +387,8 @@ public static partial class ReferenceExtractor
             {
                 GradleReferenceExtractor.EmitDslCallReferences(
                     line.PreparedLine,
-                    CreateGradleDslReferenceEmitter(line));
+                    CreateGradleDslReferenceEmitter(line),
+                    line.References);
             }
 
             if (line.Language == "fortran")
@@ -450,6 +461,9 @@ public static partial class ReferenceExtractor
             {
                 foreach (var candidate in EnumerateNestedGenericCallCandidates(line.PreparedLine, matchedCallIndices ?? EmptyMatchedIndices))
                 {
+                    if (ReferenceLimitReached(line.References))
+                        break;
+
                     if (TryAddCoreCallLikeReference(
                             call,
                             candidate.Name,
@@ -469,6 +483,9 @@ public static partial class ReferenceExtractor
                 }
             }
         }
+
+        if (ReferenceLimitReached(line.References))
+            return;
 
         if (line.Language == "rust")
         {

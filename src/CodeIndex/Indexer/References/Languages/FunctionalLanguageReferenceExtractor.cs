@@ -138,6 +138,68 @@ public static partial class ReferenceExtractor
         internal SymbolRecord? ActiveCallable;
     }
 
+    internal static bool ContainsFunctionalSpan(
+        IReadOnlyList<(int Start, int End)>? spans,
+        int index)
+    {
+        if (spans is null)
+            return false;
+
+        for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
+        {
+            var span = spans[spanIndex];
+            if (index >= span.Start && index < span.End)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsFunctionalSpanInterior(
+        IReadOnlyList<(int Start, int End)>? spans,
+        int index)
+    {
+        if (spans is null)
+            return false;
+
+        for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
+        {
+            var span = spans[spanIndex];
+            if (index > span.Start && index < span.End)
+                return true;
+        }
+
+        return false;
+    }
+
+    internal static bool OverlapsFunctionalSpan(
+        IReadOnlyList<(int Start, int End)>? spans,
+        int start,
+        int end)
+    {
+        if (spans is null)
+            return false;
+
+        for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
+        {
+            var span = spans[spanIndex];
+            if (span.Start < end && start < span.End)
+                return true;
+        }
+
+        return false;
+    }
+
+    internal static bool TrimmedFunctionalLineEndsWith(
+        ReadOnlySpan<char> line,
+        char suffix)
+        => SpanCharacterSearch.EndsWithAfterTrim(line, suffix);
+
+    internal static bool TrimmedFunctionalLineEquals(
+        ReadOnlySpan<char> line,
+        string expected)
+        => SpanCharacterSearch.EqualsAfterTrim(line, expected);
+
     private static List<ReferenceRecord> ExtractFunctionalLanguageReferences(ReferenceExtractionContext request)
     {
         if (!TryPrepareReferenceLines(
@@ -346,7 +408,8 @@ public static partial class ReferenceExtractor
                 }
                 break;
             case "erlang":
-                if (state.ActiveCallable != null && maskedLine.TrimEnd().EndsWith(".", StringComparison.Ordinal))
+                if (state.ActiveCallable != null
+                    && TrimmedFunctionalLineEndsWith(maskedLine, '.'))
                     state.ActiveCallable = null;
                 break;
             case "raku":
@@ -388,10 +451,12 @@ public static partial class ReferenceExtractor
     {
         if (language == "raku")
         {
-            var trimmed = line.TrimStart();
+            var trimmed = line.AsSpan().TrimStart();
             if (state.RakuHeredocTerminator != null)
             {
-                if (string.Equals(trimmed.TrimEnd(), state.RakuHeredocTerminator, StringComparison.Ordinal))
+                if (TrimmedFunctionalLineEquals(
+                        trimmed,
+                        state.RakuHeredocTerminator))
                     state.RakuHeredocTerminator = null;
                 return new string(' ', line.Length);
             }

@@ -19,7 +19,10 @@ internal static partial class PythonReferenceExtractor
         if (!StartsWithPythonKeywordStatement(preparedLine, "raise"))
             return;
 
-        foreach (Match match in BareRaiseTypeRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     BareRaiseTypeRegex,
+                     preparedLine,
+                     references))
         {
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
@@ -53,10 +56,16 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf('(') >= 0)
         {
-            foreach (Match match in ExceptTupleTypeRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         ExceptTupleTypeRegex,
+                         preparedLine,
+                         references))
             {
                 var typesGroup = match.Groups["types"];
-                foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+                foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                             TypeNameRegex,
+                             typesGroup.Value,
+                             references))
                 {
                     var name = typeMatch.Groups["name"].Value;
                     if (isIgnoredName(name))
@@ -76,7 +85,10 @@ internal static partial class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in ExceptTypeRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     ExceptTypeRegex,
+                     preparedLine,
+                     references))
         {
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
@@ -110,10 +122,16 @@ internal static partial class PythonReferenceExtractor
 
         if (MayContainPythonTupleArgument(preparedLine))
         {
-            foreach (Match match in IsInstanceTupleTypeRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         IsInstanceTupleTypeRegex,
+                         preparedLine,
+                         references))
             {
                 var typesGroup = match.Groups["types"];
-                foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+                foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                             TypeNameRegex,
+                             typesGroup.Value,
+                             references))
                 {
                     var name = typeMatch.Groups["name"].Value;
                     if (isIgnoredName(name))
@@ -133,7 +151,10 @@ internal static partial class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in IsInstanceTypeRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     IsInstanceTypeRegex,
+                     preparedLine,
+                     references))
         {
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
@@ -167,10 +188,16 @@ internal static partial class PythonReferenceExtractor
 
         if (MayContainPythonTupleArgument(preparedLine))
         {
-            foreach (Match match in IsSubclassTupleTypeRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         IsSubclassTupleTypeRegex,
+                         preparedLine,
+                         references))
             {
                 var typesGroup = match.Groups["types"];
-                foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+                foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                             TypeNameRegex,
+                             typesGroup.Value,
+                             references))
                 {
                     var name = typeMatch.Groups["name"].Value;
                     if (isIgnoredName(name))
@@ -190,7 +217,10 @@ internal static partial class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in IsSubclassTypeRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     IsSubclassTypeRegex,
+                     preparedLine,
+                     references))
         {
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
@@ -224,7 +254,10 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf("typing", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in QualifiedCastTypeRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         QualifiedCastTypeRegex,
+                         preparedLine,
+                         references))
             {
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
@@ -243,7 +276,10 @@ internal static partial class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in CastTypeRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     CastTypeRegex,
+                     preparedLine,
+                     references))
         {
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))
@@ -329,7 +365,10 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf("typing", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in QualifiedAssertTypeRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         QualifiedAssertTypeRegex,
+                         preparedLine,
+                         references))
             {
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
@@ -348,7 +387,10 @@ internal static partial class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in AssertTypeRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     AssertTypeRegex,
+                     preparedLine,
+                     references))
         {
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))

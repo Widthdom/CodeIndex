@@ -23,26 +23,39 @@ public static partial class ReferenceExtractor
             state.ErlangSpecificationMode = true;
         if (state.ErlangSpecificationMode)
         {
-            if (line.TrimEnd().EndsWith(".", StringComparison.Ordinal))
+            if (TrimmedFunctionalLineEndsWith(line, '.'))
                 state.ErlangSpecificationMode = false;
             return;
         }
 
         var quotedAtomSpans = GetErlangQuotedAtomSpans(line);
-        var remoteCallSpans = new List<(int Start, int End)>();
-        foreach (Match match in ErlangRemoteCallRegex.Matches(line))
+        List<(int Start, int End)>? remoteCallSpans = null;
+        foreach (Match match in EnumerateReferenceMatches(
+                     ErlangRemoteCallRegex,
+                     line,
+                     references))
         {
+            if (ReferenceLimitReached(references))
+                break;
+
             if (IsInsideQuotedAtom(match.Index))
                 continue;
-            remoteCallSpans.Add((match.Index, match.Index + match.Length));
+            (remoteCallSpans ??= []).Add(
+                (match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["module"], "reference", context, lineNumber, container, "erlang");
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "erlang");
         }
 
         var definitionMatch = ErlangFunctionDefinitionRegex.Match(line);
-        foreach (Match match in ErlangLocalCallRegex.Matches(line))
+        foreach (Match match in EnumerateReferenceMatches(
+                     ErlangLocalCallRegex,
+                     line,
+                     references))
         {
-            if (remoteCallSpans.Any(span => match.Index >= span.Start && match.Index < span.End))
+            if (ReferenceLimitReached(references))
+                break;
+
+            if (ContainsFunctionalSpan(remoteCallSpans, match.Index))
                 continue;
             if (IsInsideQuotedAtom(match.Groups["name"].Index))
                 continue;
@@ -67,12 +80,12 @@ public static partial class ReferenceExtractor
         }
 
         bool IsInsideQuotedAtom(int index)
-            => quotedAtomSpans.Any(span => index > span.Start && index < span.End);
+            => ContainsFunctionalSpanInterior(quotedAtomSpans, index);
     }
 
-    private static List<(int Start, int End)> GetErlangQuotedAtomSpans(string line)
+    private static List<(int Start, int End)>? GetErlangQuotedAtomSpans(string line)
     {
-        var spans = new List<(int Start, int End)>();
+        List<(int Start, int End)>? spans = null;
         for (var index = 0; index < line.Length; index++)
         {
             if (line[index] != '\'')
@@ -90,7 +103,7 @@ public static partial class ReferenceExtractor
                 if (line[index] != '\'')
                     continue;
 
-                spans.Add((start, index + 1));
+                (spans ??= []).Add((start, index + 1));
                 break;
             }
         }

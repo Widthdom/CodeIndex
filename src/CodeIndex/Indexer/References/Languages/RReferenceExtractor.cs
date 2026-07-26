@@ -134,7 +134,10 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in NamespaceReferenceRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     NamespaceReferenceRegex,
+                     preparedLine,
+                     references))
         {
             var package = match.Groups["package"].Value;
             var separator = match.Groups["sep"].Value;
@@ -327,7 +330,10 @@ internal static partial class RReferenceExtractor
 
                 var routinesStart = useDynLibMatch.Index + useDynLibMatch.Length;
                 var routines = directiveLine[routinesStart..];
-                foreach (Match routineMatch in NamespaceUseDynLibRoutineRegex.Matches(routines))
+                foreach (Match routineMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                             NamespaceUseDynLibRoutineRegex,
+                             routines,
+                             references))
                 {
                     var routine = GetNamespaceDirectiveToken(
                         routineMatch,
@@ -530,7 +536,10 @@ internal static partial class RReferenceExtractor
             return;
 
         var signatureBody = signatureCall.Groups["body"];
-        foreach (Match signatureMatch in S4SignatureClassRegex.Matches(signatureBody.Value))
+        foreach (Match signatureMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                     S4SignatureClassRegex,
+                     signatureBody.Value,
+                     references))
         {
             var classToken = GetNamespaceDirectiveToken(
                 signatureMatch,

@@ -331,12 +331,14 @@ public static partial class SymbolExtractor
             }
 
             if (patternEnd == 0
-                || builder.Length == 0
-                || builder.ToString().Any(char.IsControl))
+                || builder.Length == 0)
             {
                 return false;
             }
-            pattern = builder.ToString();
+            var decodedPattern = builder.ToString();
+            if (SpanCharacterSearch.ContainsControl(decodedPattern))
+                return false;
+            pattern = decodedPattern;
         }
         else
         {
@@ -347,14 +349,46 @@ public static partial class SymbolExtractor
             pattern = trimmed[..patternEnd].ToString();
         }
 
-        var tokens = trimmed[patternEnd..].ToString().Split(
-            [' ', '\t'],
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (tokens.Length == 0)
+        var attributesSpan = trimmed[patternEnd..];
+        var attributeCount = CountGitAttributeTokens(attributesSpan);
+        if (attributeCount == 0)
             return false;
+
+        var tokens = new string[attributeCount];
+        var tokenIndex = 0;
+        while (!attributesSpan.IsEmpty)
+        {
+            var separator = attributesSpan.IndexOfAny(' ', '\t');
+            var token = separator < 0 ? attributesSpan : attributesSpan[..separator];
+            token = token.Trim();
+            if (!token.IsEmpty)
+                tokens[tokenIndex++] = token.ToString();
+
+            if (separator < 0)
+                break;
+            attributesSpan = attributesSpan[(separator + 1)..];
+        }
 
         attributes = tokens;
         return true;
+    }
+
+    private static int CountGitAttributeTokens(ReadOnlySpan<char> value)
+    {
+        var count = 0;
+        while (!value.IsEmpty)
+        {
+            var separator = value.IndexOfAny(' ', '\t');
+            var token = separator < 0 ? value : value[..separator];
+            if (!token.Trim().IsEmpty)
+                count++;
+
+            if (separator < 0)
+                break;
+            value = value[(separator + 1)..];
+        }
+
+        return count;
     }
 
     private static bool TryAppendGitAttributesEscape(

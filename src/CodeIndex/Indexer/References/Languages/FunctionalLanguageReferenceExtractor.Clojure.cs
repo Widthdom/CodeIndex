@@ -39,11 +39,13 @@ public static partial class ReferenceExtractor
             state.ClojureActiveTypeDefinition = typeDefinition;
             var typeContainer = typeDefinition ?? container;
             var types = relationMatch.Groups["types"];
-            foreach (Match typeMatch in Regex.Matches(
-                         types.Value,
-                         @"(?<name>[A-Z][\w.*+!?<>=-]*)",
-                         RegexOptions.CultureInvariant,
-                         ExtractionRegexTimeout))
+            foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                         Regex.EnumerateMatches(
+                             types.Value,
+                             @"(?<name>[A-Z][\w.*+!?<>=-]*)",
+                             RegexOptions.CultureInvariant,
+                             ExtractionRegexTimeout),
+                         references))
             {
                 AddReference(
                     references,
@@ -85,7 +87,10 @@ public static partial class ReferenceExtractor
                            && state.ClojureParenDepth == state.ClojureTypeBodyBaseDepth + 1
             ? ClojureCallHeadRegex.Match(callLine)
             : Match.Empty;
-        foreach (Match match in ClojureCallHeadRegex.Matches(callLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     ClojureCallHeadRegex,
+                     callLine,
+                     references))
         {
             var fullName = match.Groups["name"].Value;
             var separator = fullName.LastIndexOf('/');

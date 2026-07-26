@@ -162,7 +162,7 @@ internal static partial class ScientificNativeReferenceExtractor
             Regex regex,
             Action<string, int> addCallLikeReference)
         {
-            foreach (Match match in regex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(regex, preparedLine))
             {
                 var group = match.Groups["name"];
                 addCallLikeReference(group.Value, group.Index);
@@ -171,7 +171,9 @@ internal static partial class ScientificNativeReferenceExtractor
 
         private void EmitAdaBareCalls()
         {
-            foreach (Match bareCall in AdaBareCallRegex.Matches(preparedLine))
+            foreach (Match bareCall in Regex.EnumerateMatches(
+                         AdaBareCallRegex,
+                         preparedLine))
             {
                 var group = bareCall.Groups["name"];
                 var separatorIndex = group.Value.LastIndexOf('.');
@@ -222,7 +224,7 @@ internal static partial class ScientificNativeReferenceExtractor
             string referenceKind,
             bool normalizeQualifiedTypeName = false)
         {
-            foreach (Match match in regex.Matches(preparedLine))
+            foreach (Match match in Regex.EnumerateMatches(regex, preparedLine))
             {
                 EmitGroup(
                     match.Groups["name"],

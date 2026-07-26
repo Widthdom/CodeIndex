@@ -42,8 +42,9 @@ internal static partial class SwiftReferenceExtractor
 
     public static void EmitTrailingClosureReferences(
         string preparedLine,
-        Action<string, int> addCallLikeReference)
-        => TrailingLambdaReferenceExtractor.EmitReferences(preparedLine, addCallLikeReference);
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
+        => TrailingLambdaReferenceExtractor.EmitReferences(preparedLine, addCallLikeReference, references);
 
     public static void EmitTypePositionReferences(
         string preparedLine,
@@ -458,7 +459,10 @@ internal static partial class SwiftReferenceExtractor
         if (!attributes.Success || attributes.Length == 0)
             return;
 
-        foreach (Match attributeMatch in PropertyWrapperAttributeRegex.Matches(attributes.Value))
+        foreach (Match attributeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                     PropertyWrapperAttributeRegex,
+                     attributes.Value,
+                     references))
         {
             var nameGroup = attributeMatch.Groups["name"];
             if (!nameGroup.Success)

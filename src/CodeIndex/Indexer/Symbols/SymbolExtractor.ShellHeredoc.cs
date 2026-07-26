@@ -67,7 +67,7 @@ public static partial class SymbolExtractor
             yield break;
 
         var ignored = BuildShellIgnoredCharacterMask(line);
-        foreach (Match match in ShellHeredocRedirectRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(ShellHeredocRedirectRegex, line))
         {
             if (match.Index < ignored.Length && ignored[match.Index])
                 continue;

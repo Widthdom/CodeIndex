@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Models;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Indexer;
@@ -19,19 +20,30 @@ internal static class GradleReferenceExtractor
 
     public static void EmitDslCallReferences(
         string preparedLine,
-        Action<string, int> addDslReference)
+        Action<string, int> addDslReference,
+        List<ReferenceRecord> references)
     {
         if (preparedLine.IndexOf('{') >= 0)
         {
-            foreach (Match match in BlockCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         BlockCallRegex,
+                         preparedLine,
+                         references))
+            {
                 addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
+            }
         }
 
         if (!ContainsWhitespace(preparedLine))
             return;
 
-        foreach (Match match in CommandCallRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     CommandCallRegex,
+                     preparedLine,
+                     references))
+        {
             addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
+        }
     }
 
     private static bool ContainsWhitespace(string line)

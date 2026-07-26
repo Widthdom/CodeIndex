@@ -162,7 +162,7 @@ public static partial class SymbolExtractor
                 if (!MayContainSwiftAccessorDeclaration(accessorStructuralLine))
                     continue;
 
-                foreach (Match accessorMatch in SwiftAccessorDeclarationRegex.Matches(accessorStructuralLine))
+                foreach (Match accessorMatch in Regex.EnumerateMatches(SwiftAccessorDeclarationRegex, accessorStructuralLine))
                 {
                     if (!IsSwiftTopLevelAccessor(structuralLines, openBraceLine, openBraceColumn, accessorLine, accessorMatch.Index))
                         continue;
@@ -246,7 +246,7 @@ public static partial class SymbolExtractor
         if (attributes.IndexOf('@') < 0)
             return false;
 
-        foreach (Match match in SwiftPropertyWrapperAttributeRegex.Matches(attributes))
+        foreach (Match match in Regex.EnumerateMatches(SwiftPropertyWrapperAttributeRegex, attributes))
         {
             var name = match.Groups["name"].Value;
             var shortNameStart = name.LastIndexOf('.') + 1;

@@ -64,8 +64,10 @@ public static partial class ReferenceExtractor
     {
         if (line.Language == "csharp" && csharpAttrTopLevelOnLine != null && csharpAttrTopLevelOnLine.Count > 0)
         {
-            foreach (Match match in CSharpNoArgAttributeRegex.Matches(line.PreparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(CSharpNoArgAttributeRegex, line.PreparedLine))
             {
+                if (ReferenceLimitReached(line.References))
+                    break;
                 var rawName = match.Groups["name"].Value;
                 var name = NormalizeCSharpIdentifier(rawName);
                 var nameIndex = match.Groups["name"].Index;
@@ -123,8 +125,10 @@ public static partial class ReferenceExtractor
         {
             if (line.Language == "kotlin")
             {
-                foreach (Match match in KotlinBacktickAnnotationRegex.Matches(line.PreparedLine))
+                foreach (Match match in BoundedRegex.EnumerateMatches(KotlinBacktickAnnotationRegex, line.PreparedLine))
                 {
+                    if (ReferenceLimitReached(line.References))
+                        break;
                     var nameGroup = match.Groups["name"];
                     var name = NormalizeKotlinBacktickIdentifier(nameGroup.Value);
                     if (IsIgnoredCallName(line.Language, name))
@@ -135,8 +139,10 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            foreach (Match match in NoArgAnnotationRegex.Matches(line.PreparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(NoArgAnnotationRegex, line.PreparedLine))
             {
+                if (ReferenceLimitReached(line.References))
+                    break;
                 var name = match.Groups["name"].Value;
                 if (IsIgnoredCallName(line.Language, name))
                     continue;

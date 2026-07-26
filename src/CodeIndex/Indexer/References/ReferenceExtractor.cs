@@ -291,6 +291,52 @@ public static partial class ReferenceExtractor
         => references is BoundedReferenceList bounded
             && bounded.Count >= bounded.MaxReferenceCount;
 
+    internal static ReferenceMatchEnumerable EnumerateReferenceMatches(
+        Regex regex,
+        string input,
+        List<ReferenceRecord> references) =>
+        new(Regex.EnumerateMatches(regex, input), references);
+
+    internal static ReferenceMatchEnumerable EnumerateReferenceMatches(
+        IEnumerable<Match> matches,
+        List<ReferenceRecord> references)
+        => new(matches, references);
+
+    internal readonly struct ReferenceMatchEnumerable(
+        IEnumerable<Match> matches,
+        List<ReferenceRecord> references)
+    {
+        public ReferenceMatchEnumerator GetEnumerator() => new(matches.GetEnumerator(), references);
+    }
+
+    internal struct ReferenceMatchEnumerator : IDisposable
+    {
+        private IEnumerator<Match>? _matches;
+        private readonly BoundedReferenceList? _references;
+
+        internal ReferenceMatchEnumerator(
+            IEnumerator<Match> matches,
+            List<ReferenceRecord> references)
+        {
+            _matches = matches;
+            _references = references as BoundedReferenceList;
+        }
+
+        public readonly Match Current => _matches!.Current;
+
+        public readonly bool MoveNext()
+        {
+            return (_references == null || _references.Count < _references.MaxReferenceCount)
+                && _matches!.MoveNext();
+        }
+
+        public void Dispose()
+        {
+            _matches?.Dispose();
+            _matches = null;
+        }
+    }
+
     internal static bool TryAddReference(List<ReferenceRecord> references, ReferenceRecord reference)
     {
         if (ReferenceLimitReached(references))

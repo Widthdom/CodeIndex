@@ -145,41 +145,68 @@ internal sealed class BoundedRegex : BclRegex
 
     public static IEnumerable<BclMatch> EnumerateMatches(BclRegex regex, string input)
     {
-        MatchCollection matches;
-        try
+        var pattern = regex.ToString();
+        var match = FirstMatchOrEmpty(regex, input, pattern);
+        while (match.Success)
         {
-            matches = regex.Matches(input);
-            _ = matches.Count;
-        }
-        catch (RegexMatchTimeoutException ex)
-        {
-            RecordTimeout("matches", regex.ToString(), ex);
-            yield break;
-        }
-
-        foreach (BclMatch match in matches)
             yield return match;
+            match = NextMatchOrEmpty(match, pattern);
+        }
+    }
+
+    public static IEnumerable<BclMatch> EnumerateMatches(
+        BclRegex regex,
+        string input,
+        int startAt)
+    {
+        var pattern = regex.ToString();
+        var match = FirstMatchOrEmpty(regex, input, startAt, pattern);
+        while (match.Success)
+        {
+            yield return match;
+            match = NextMatchOrEmpty(match, pattern);
+        }
     }
 
     public static IEnumerable<BclMatch> EnumerateMatches(string input, string pattern) =>
         EnumerateMatches(input, pattern, RegexOptions.None);
 
-    public static IEnumerable<BclMatch> EnumerateMatches(string input, string pattern, RegexOptions options)
+    public static IEnumerable<BclMatch> EnumerateMatches(
+        string input,
+        string pattern,
+        RegexOptions options) =>
+        EnumerateMatches(input, pattern, options, DefaultMatchTimeout);
+
+    public static IEnumerable<BclMatch> EnumerateMatches(
+        string input,
+        string pattern,
+        RegexOptions options,
+        TimeSpan matchTimeout)
     {
-        MatchCollection matches;
+        var match = FirstMatchOrEmpty(input, pattern, options, matchTimeout);
+        while (match.Success)
+        {
+            yield return match;
+            match = NextMatchOrEmpty(match, pattern);
+        }
+    }
+
+    public static int CountMatches(BclRegex regex, string input)
+    {
         try
         {
-            matches = BclRegex.Matches(input, pattern, options, DefaultMatchTimeout);
-            _ = matches.Count;
+            var count = 0;
+            for (var match = regex.Match(input); match.Success; match = match.NextMatch())
+                count++;
+            return count;
         }
         catch (RegexMatchTimeoutException ex)
         {
-            RecordTimeout("matches", pattern, ex);
-            yield break;
+            // MatchCollection.Count historically returned no matches after a timeout. Preserve
+            // that all-or-nothing behavior without retaining every Match object.
+            RecordTimeout("matches", regex.ToString(), ex);
+            return 0;
         }
-
-        foreach (BclMatch match in matches)
-            yield return match;
     }
 
     public static new bool IsMatch(string input, string pattern) =>
@@ -353,6 +380,73 @@ internal sealed class BoundedRegex : BclRegex
 
     private static void RecordTimeout(string operation, string pattern, RegexMatchTimeoutException ex) =>
         TimeoutCaptureScope.Value?.Record(operation, pattern, ex.MatchTimeout);
+
+    private static BclMatch FirstMatchOrEmpty(
+        BclRegex regex,
+        string input,
+        string pattern)
+    {
+        try
+        {
+            return regex.Match(input);
+        }
+        catch (RegexMatchTimeoutException ex)
+        {
+            RecordTimeout("matches", pattern, ex);
+            return BclMatch.Empty;
+        }
+    }
+
+    private static BclMatch FirstMatchOrEmpty(
+        BclRegex regex,
+        string input,
+        int startAt,
+        string pattern)
+    {
+        try
+        {
+            return regex.Match(input, startAt);
+        }
+        catch (RegexMatchTimeoutException ex)
+        {
+            RecordTimeout("matches", pattern, ex);
+            return BclMatch.Empty;
+        }
+    }
+
+    private static BclMatch FirstMatchOrEmpty(
+        string input,
+        string pattern,
+        RegexOptions options,
+        TimeSpan matchTimeout)
+    {
+        try
+        {
+            return BclRegex.Match(
+                input,
+                pattern,
+                options,
+                matchTimeout);
+        }
+        catch (RegexMatchTimeoutException ex)
+        {
+            RecordTimeout("matches", pattern, ex);
+            return BclMatch.Empty;
+        }
+    }
+
+    private static BclMatch NextMatchOrEmpty(BclMatch match, string pattern)
+    {
+        try
+        {
+            return match.NextMatch();
+        }
+        catch (RegexMatchTimeoutException ex)
+        {
+            RecordTimeout("matches", pattern, ex);
+            return BclMatch.Empty;
+        }
+    }
 
     private static string HashPattern(string pattern)
     {

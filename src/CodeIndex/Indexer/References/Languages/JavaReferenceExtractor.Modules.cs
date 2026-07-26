@@ -33,7 +33,10 @@ internal static partial class JavaReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in DotClassArgRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     DotClassArgRegex,
+                     preparedLine,
+                     references))
         {
             var argGroup = match.Groups["arg"];
             ReferenceExtractor.AddTypeReferenceSegments(
@@ -78,7 +81,7 @@ internal static partial class JavaReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(ModuleProvidesDirectiveReferenceRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ModuleProvidesDirectiveReferenceRegex, preparedLine, references))
         {
             var serviceGroup = match.Groups["service"];
             ReferenceExtractor.AddTypeReferenceSegment(
@@ -131,7 +134,7 @@ internal static partial class JavaReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(regex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(regex, preparedLine, references))
         {
             var nameGroup = match.Groups["name"];
             ReferenceExtractor.AddTypeReferenceSegment(

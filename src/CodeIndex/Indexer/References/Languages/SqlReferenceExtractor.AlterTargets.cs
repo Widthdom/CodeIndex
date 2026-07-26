@@ -22,7 +22,7 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf("VIEW", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterViewTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterViewTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -40,7 +40,7 @@ internal static partial class SqlReferenceExtractor
             || statement.IndexOf("PROC", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterProcedureTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterProcedureTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -57,7 +57,7 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf("FUNCTION", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterFunctionTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterFunctionTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -74,7 +74,7 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf("TRIGGER", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterTriggerTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterTriggerTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -91,7 +91,7 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf("SEQUENCE", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterSequenceTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterSequenceTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -109,7 +109,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("POLICY", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterSecurityPolicyTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterSecurityPolicyTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -127,7 +127,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("CATALOG", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterFullTextCatalogTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterFullTextCatalogTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -145,7 +145,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("FUNCTION", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterPartitionFunctionTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterPartitionFunctionTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -163,7 +163,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("SCHEME", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterPartitionSchemeTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterPartitionSchemeTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -182,7 +182,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("COLLECTION", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterXmlSchemaCollectionTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterXmlSchemaCollectionTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -199,7 +199,7 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf("ASSEMBLY", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterAssemblyTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterAssemblyTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -217,7 +217,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("TRANSFER", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterSchemaTransferTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterSchemaTransferTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -235,7 +235,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("SWITCH", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterTableSwitchTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterTableSwitchTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -254,7 +254,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("HISTORY_TABLE", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             EmitMultiTargetReferences(
-                AlterTableSystemVersioningHistoryTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(AlterTableSystemVersioningHistoryTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -430,7 +430,7 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match keywordMatch in WindowFrameKeywordRegex.Matches(statement))
+        foreach (Match keywordMatch in BoundedRegex.EnumerateMatches(WindowFrameKeywordRegex, statement))
         {
             if (keywordMatch.Index >= bodyStart && keywordMatch.Index < bodyEnd && keywordMatch.Index >= statementLineOffset)
                 suppressedCallIndices.Add(keywordMatch.Index + statementStart - lineOffset);
@@ -438,7 +438,9 @@ internal static partial class SqlReferenceExtractor
 
         foreach (var (start, end) in EnumerateWindowColumnListSpans(statement, bodyStart, bodyEnd))
         {
-            foreach (Match match in WindowClauseColumnRegex.Matches(statement))
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(WindowClauseColumnRegex, statement, references))
             {
                 var nameGroup = match.Groups["name"];
                 if (!nameGroup.Success || nameGroup.Index < start || nameGroup.Index >= end || nameGroup.Index < statementLineOffset)
@@ -570,7 +572,7 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         Func<string, int, bool> shouldSuppressDefinitionCall)
     {
-        foreach (Match match in ProcCallRegex.Matches(statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ProcCallRegex, statement, references))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -606,7 +608,7 @@ internal static partial class SqlReferenceExtractor
         long fileId,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        foreach (Match match in SystemVariableReferenceRegex.Matches(statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(SystemVariableReferenceRegex, statement, references))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -623,7 +625,7 @@ internal static partial class SqlReferenceExtractor
     }
 
     private static void EmitSourceCaptureReferences(
-        MatchCollection matches,
+        IEnumerable<Match> matches,
         string statement,
         int statementStart,
         int statementLineOffset,
@@ -645,7 +647,7 @@ internal static partial class SqlReferenceExtractor
             return;
         }
 
-        foreach (Match match in matches)
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(matches, references))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -687,7 +689,7 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in MergeUsingSourceRegex.Matches(statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MergeUsingSourceRegex, statement, references))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;

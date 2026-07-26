@@ -197,7 +197,10 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in AssociatedCallReceiverRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     AssociatedCallReceiverRegex,
+                     preparedLine,
+                     references))
         {
             var receiverGroup = match.Groups["receiver"];
             var receiver = receiverGroup.Value;
@@ -250,7 +253,10 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in AssociatedValueReceiverRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     AssociatedValueReceiverRegex,
+                     preparedLine,
+                     references))
         {
             var receiverGroup = match.Groups["receiver"];
             var receiver = receiverGroup.Value;
@@ -423,7 +429,10 @@ internal static partial class RustReferenceExtractor
             return;
         }
 
-        foreach (Match match in StructLiteralRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     StructLiteralRegex,
+                     preparedLine,
+                     references))
         {
             var nameGroup = match.Groups["name"];
             var name = nameGroup.Value;

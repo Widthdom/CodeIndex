@@ -26,7 +26,10 @@ internal static class JvmMethodReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in MethodReferenceRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     MethodReferenceRegex,
+                     preparedLine,
+                     references))
         {
             var nameGroup = match.Groups["name"];
             var container = resolveContainerForColumn(nameGroup.Index);

@@ -37,6 +37,9 @@ internal static partial class DynamicDeclarativeReferenceExtractor
         {
             foreach (var call in state.GetPrologGoalCalls(lineNumber))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    return;
+
                 if (!state.CallableNames.Contains(call.Name))
                     continue;
 
@@ -94,14 +97,20 @@ internal static partial class DynamicDeclarativeReferenceExtractor
 
         if (language == "crystal")
         {
-            foreach (Match match in BoundedRegex.EnumerateMatches(CrystalSuffixedParenthesizedCallRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         CrystalSuffixedParenthesizedCallRegex,
+                         preparedLine,
+                         references))
             {
                 var nameGroup = match.Groups["name"];
                 if (state.CallableNames.Contains(nameGroup.Value))
                     addCallLikeReference(nameGroup.Value, nameGroup.Index);
             }
 
-            foreach (Match match in BoundedRegex.EnumerateMatches(CrystalControlPredicateCallRegex, preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         CrystalControlPredicateCallRegex,
+                         preparedLine,
+                         references))
             {
                 var nameGroup = match.Groups["name"];
                 if (state.CallableNames.Contains(nameGroup.Value))
@@ -113,10 +122,11 @@ internal static partial class DynamicDeclarativeReferenceExtractor
             EmitGroovyControlBodyBareCalls(
                 preparedLine,
                 state.CallableNames,
-                addCallLikeReference);
+                addCallLikeReference,
+                references);
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(callRegex, preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(callRegex, preparedLine, references))
         {
             var nameGroup = match.Groups["name"];
             if (language == "tcl")
@@ -170,10 +180,14 @@ internal static partial class DynamicDeclarativeReferenceExtractor
     private static void EmitGroovyControlBodyBareCalls(
         string line,
         IReadOnlySet<string> callableNames,
-        Action<string, int> addCallLikeReference)
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
         for (var keywordColumn = 0; keywordColumn < line.Length; keywordColumn++)
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                return;
+
             if (!char.IsLetter(line[keywordColumn]))
                 continue;
 

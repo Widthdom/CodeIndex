@@ -217,7 +217,8 @@ internal static partial class CssReferenceExtractor
         // ID セレクタ (`#name`) は `#fff` 等の color literal とパターンが衝突するため、
         // セレクタ位置のセグメントでのみ参照を発行する。セグメントが本行内で `{` で
         // 終わる場合、または行末カンマで selector list が継続する場合をセレクタ位置とみなす。
-        var isSelectorContinuationLine = preparedLine.TrimEnd().EndsWith(',');
+        var isSelectorContinuationLine =
+            SpanCharacterSearch.EndsWithAfterTrim(preparedLine, ',');
         var segmentStart = 0;
         while (segmentStart < preparedLine.Length)
         {

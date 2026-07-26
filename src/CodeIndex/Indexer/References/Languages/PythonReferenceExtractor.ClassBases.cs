@@ -25,7 +25,10 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf("metaclass", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in ClassMetaclassTypeRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         ClassMetaclassTypeRegex,
+                         preparedLine,
+                         references))
             {
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
@@ -47,10 +50,16 @@ internal static partial class PythonReferenceExtractor
 
         if (preparedLine.IndexOf(',') >= 0)
         {
-            foreach (Match match in MultipleClassBaseTypesRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         MultipleClassBaseTypesRegex,
+                         preparedLine,
+                         references))
             {
                 var typesGroup = match.Groups["types"];
-                foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+                foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                             TypeNameRegex,
+                             typesGroup.Value,
+                             references))
                 {
                     var name = typeMatch.Groups["name"].Value;
                     if (isIgnoredName(name))
@@ -73,7 +82,10 @@ internal static partial class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in SingleClassBaseTypeRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     SingleClassBaseTypeRegex,
+                     preparedLine,
+                     references))
         {
             var name = match.Groups["name"].Value;
             if (isIgnoredName(name))

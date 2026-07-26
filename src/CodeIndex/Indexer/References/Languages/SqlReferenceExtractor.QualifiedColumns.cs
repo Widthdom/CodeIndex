@@ -26,7 +26,7 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         string referenceKind)
     {
-        foreach (Match match in BoundedRegex.EnumerateMatches(QualifiedColumnReferenceRegex, text))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(QualifiedColumnReferenceRegex, text, references))
         {
             if (IsInsideDoubleQuotedRegion(text, match.Index))
                 continue;
@@ -286,7 +286,7 @@ internal static partial class SqlReferenceExtractor
 
         if (hasAsKeyword || hasGeneratedKeyword)
         {
-            foreach (Match match in GeneratedColumnExpressionStartRegex.Matches(statement))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(GeneratedColumnExpressionStartRegex, statement, references))
             {
                 if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
                     continue;
@@ -326,7 +326,7 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase) >= 0
             && statement.IndexOf("FOR", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            foreach (Match match in DefaultNextValueForExpressionRegex.Matches(statement))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(DefaultNextValueForExpressionRegex, statement, references))
             {
                 if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
                     continue;
@@ -366,7 +366,7 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName)
     {
         var expression = statement[startIndex..endIndexExclusive];
-        foreach (Match match in SqlExpressionIdentifierRegex.Matches(expression))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(SqlExpressionIdentifierRegex, expression, references))
         {
             var rawIndex = startIndex + match.Index;
             if (rawIndex < statementLineOffset || IsInsideDoubleQuotedRegion(statement, rawIndex))

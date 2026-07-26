@@ -20,7 +20,7 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         if (originalLine.IndexOf('<') >= 0)
         {
-            foreach (Match match in RazorComponentTagRegex.Matches(originalLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(RazorComponentTagRegex, originalLine, references))
             {
                 var group = match.Groups["name"];
                 var rawName = group.Value;
@@ -48,26 +48,26 @@ internal static partial class LanguageReferenceExtractionSupport
                 || originalLine.IndexOf("implements", StringComparison.Ordinal) >= 0
                 || originalLine.IndexOf("model", StringComparison.Ordinal) >= 0)
             {
-                foreach (var match in EnumerateMatches(RazorDirectiveTypeRegex, originalLine))
+                foreach (var match in ReferenceExtractor.EnumerateReferenceMatches(RazorDirectiveTypeRegex, originalLine, references))
                     EmitRazorTypeReference(match);
             }
 
             if (originalLine.IndexOf("@attribute", StringComparison.Ordinal) >= 0 && originalLine.IndexOf('[') >= 0)
             {
-                foreach (var match in EnumerateMatches(RazorAttributeTypeRegex, originalLine))
+                foreach (var match in ReferenceExtractor.EnumerateReferenceMatches(RazorAttributeTypeRegex, originalLine, references))
                     EmitRazorTypeReference(match);
             }
 
             if (originalLine.IndexOf("@inject", StringComparison.Ordinal) >= 0)
             {
-                foreach (var match in EnumerateMatches(RazorInjectRegex, originalLine))
+                foreach (var match in ReferenceExtractor.EnumerateReferenceMatches(RazorInjectRegex, originalLine, references))
                     EmitRazorTypeReference(match);
             }
         }
 
         if (originalLine.IndexOf("@on", StringComparison.Ordinal) >= 0 && originalLine.IndexOf('=') >= 0)
         {
-            foreach (Match match in RazorEventHandlerRegex.Matches(originalLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(RazorEventHandlerRegex, originalLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var nameIndex = match.Groups["name"].Index;
@@ -90,6 +90,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
                 foreach (var implementedTypeName in implementedTypeNames)
                 {
+                    if (ReferenceExtractor.ReferenceLimitReached(references))
+                        return;
+
                     ReferenceExtractor.AddReference(
                         references,
                         seen,

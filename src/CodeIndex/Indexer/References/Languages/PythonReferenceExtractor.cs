@@ -174,7 +174,10 @@ internal static partial class PythonReferenceExtractor
     {
         var normalized = NormalizePythonAnnotationExpression(typeGroup.Value);
         var offsetDelta = typeGroup.Value.Length - normalized.Length;
-        foreach (Match typeMatch in TypeNameRegex.Matches(normalized))
+        foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                     TypeNameRegex,
+                     normalized,
+                     references))
         {
             var name = typeMatch.Groups["name"].Value;
             if (isIgnoredName(name))
@@ -266,7 +269,10 @@ internal static partial class PythonReferenceExtractor
         var mayBeDecoratorCall = MayBePythonDecoratorCall(preparedLine);
         if (mayBeDecoratorCall)
         {
-            foreach (Match match in DecoratorCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         DecoratorCallRegex,
+                         preparedLine,
+                         references))
             {
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
@@ -290,7 +296,10 @@ internal static partial class PythonReferenceExtractor
 
         if (!mayBeDecoratorCall)
         {
-            foreach (Match match in DecoratorRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         DecoratorRegex,
+                         preparedLine,
+                         references))
             {
                 var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
@@ -319,7 +328,12 @@ internal static partial class PythonReferenceExtractor
         if (argumentStart < 0)
             return;
 
-        foreach (Match identifierMatch in PythonIdentifierRegex.Matches(preparedLine, argumentStart + 1))
+        foreach (Match identifierMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                     Regex.EnumerateMatches(
+                         PythonIdentifierRegex,
+                         preparedLine,
+                         argumentStart + 1),
+                     references))
         {
             var nameGroup = identifierMatch.Groups["name"];
             var name = nameGroup.Value;

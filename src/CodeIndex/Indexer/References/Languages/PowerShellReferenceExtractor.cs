@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Models;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Indexer;
@@ -27,14 +28,17 @@ internal static class PowerShellReferenceExtractor
         new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
     private static readonly IReadOnlyList<string> EmptyHashtableKeys = Array.Empty<string>();
 
-    public static void EmitCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
+    public static void EmitCallReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
         if (!HasCallStartCandidate(preparedLine))
         {
             return;
         }
 
-        foreach (Match match in CallRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CallRegex, preparedLine, references))
         {
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
@@ -57,7 +61,7 @@ internal static class PowerShellReferenceExtractor
                 continue;
             }
 
-            foreach (Match match in SplatAssignmentStartRegex.Matches(line))
+            foreach (Match match in BoundedRegex.EnumerateMatches(SplatAssignmentStartRegex, line))
             {
                 var start = match.Index + match.Length;
                 var builder = new System.Text.StringBuilder(Math.Max(0, line.Length - start));
@@ -116,7 +120,8 @@ internal static class PowerShellReferenceExtractor
         string preparedLine,
         Func<IReadOnlyDictionary<string, List<SplatAssignment>>> getSplatAssignments,
         int lineNumber,
-        Action<string, int> addParameterReference)
+        Action<string, int> addParameterReference,
+        List<ReferenceRecord> references)
     {
         if (preparedLine.IndexOf('@') < 0)
             return;
@@ -127,7 +132,7 @@ internal static class PowerShellReferenceExtractor
         if (splatAssignments.Count == 0)
             return;
 
-        foreach (Match splat in SplatTokenRegex.Matches(preparedLine))
+        foreach (Match splat in ReferenceExtractor.EnumerateReferenceMatches(SplatTokenRegex, preparedLine, references))
         {
             var name = splat.Groups["name"].Value;
             if (!splatAssignments.TryGetValue(name, out var candidates))
@@ -144,7 +149,12 @@ internal static class PowerShellReferenceExtractor
                 continue;
 
             foreach (var key in latest.Value.Keys)
+            {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    return;
+
                 addParameterReference(key, splat.Index);
+            }
         }
     }
 
@@ -154,7 +164,7 @@ internal static class PowerShellReferenceExtractor
             return EmptyHashtableKeys;
 
         List<string>? keys = null;
-        foreach (Match match in HashtableKeyRegex.Matches(text))
+        foreach (Match match in BoundedRegex.EnumerateMatches(HashtableKeyRegex, text))
         {
             var key = match.Groups["quoted"].Success
                 ? match.Groups["quoted"].Value

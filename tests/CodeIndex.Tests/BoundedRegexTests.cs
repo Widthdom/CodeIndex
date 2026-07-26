@@ -43,6 +43,114 @@ public sealed class BoundedRegexTests
     }
 
     [Fact]
+    public void EnumerateMatches_InstanceRegex_StopsAfterConsumerBreak()
+    {
+        var regex = new BoundedRegex(
+            @"token|(?:a+)+$",
+            default,
+            TimeSpan.FromMilliseconds(1));
+        var input = "token " + new string('a', 10_000) + "!";
+
+        var match = BoundedRegex.EnumerateMatches(regex, input).Take(1).Single();
+
+        Assert.Equal("token", match.Value);
+    }
+
+    [Fact]
+    public void EnumerateMatches_StaticPattern_StreamsInMatchOrder()
+    {
+        var matches = BoundedRegex
+            .EnumerateMatches("alpha beta gamma", @"\w+")
+            .Take(2)
+            .Select(match => match.Value)
+            .ToArray();
+
+        Assert.Equal(["alpha", "beta"], matches);
+    }
+
+    [Fact]
+    public void EnumerateMatches_StaticPatternCustomTimeout_ReturnsEmpty()
+    {
+        var input = new string('a', 10_000) + "!";
+
+        var matches = BoundedRegex.EnumerateMatches(
+            input,
+            "(a+)+$",
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromMilliseconds(1));
+
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void EnumerateMatches_StaticPatternCustomTimeout_StopsAfterConsumerBreak()
+    {
+        var input = "token " + new string('a', 10_000) + "!";
+
+        var match = BoundedRegex
+            .EnumerateMatches(
+                input,
+                @"token|(?:a+)+$",
+                RegexOptions.CultureInvariant,
+                TimeSpan.FromMilliseconds(1))
+            .Take(1)
+            .Single();
+
+        Assert.Equal("token", match.Value);
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRegex_StartsAtRequestedOffset()
+    {
+        var regex = new BoundedRegex(@"\w+");
+
+        var matches = BoundedRegex
+            .EnumerateMatches(regex, "skip alpha beta", startAt: 5)
+            .Take(2)
+            .Select(match => match.Value)
+            .ToArray();
+
+        Assert.Equal(["alpha", "beta"], matches);
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRightToLeftRegex_PreservesDefaultStartAndOrder()
+    {
+        var regex = new BoundedRegex(@"\w+", RegexOptions.RightToLeft);
+
+        var matches = BoundedRegex
+            .EnumerateMatches(regex, "alpha beta")
+            .Select(match => match.Value)
+            .ToArray();
+
+        Assert.Equal(["beta", "alpha"], matches);
+    }
+
+    [Fact]
+    public void CountMatches_InstanceRegex_CountsWithoutMaterializingCollection()
+    {
+        var regex = new BoundedRegex(@"\w+");
+
+        var count = BoundedRegex.CountMatches(regex, "alpha beta gamma");
+
+        Assert.Equal(3, count);
+    }
+
+    [Fact]
+    public void CountMatches_InstanceRegexTimeout_ReturnsZero()
+    {
+        var regex = new BoundedRegex(
+            @"token|(?:a+)+$",
+            default,
+            TimeSpan.FromMilliseconds(1));
+        var input = "token " + new string('a', 10_000) + "!";
+
+        var count = BoundedRegex.CountMatches(regex, input);
+
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
     public void InstanceMatch_Timeout_ReturnsEmpty()
     {
         var regex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));

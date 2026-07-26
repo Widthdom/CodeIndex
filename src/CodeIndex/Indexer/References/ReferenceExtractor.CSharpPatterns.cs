@@ -40,8 +40,10 @@ public static partial class ReferenceExtractor
             pendingWhereConstraint);
         EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
 
-        foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CSharpIsAsTypeTestRegex, preparedLine))
         {
+            if (ReferenceLimitReached(references))
+                break;
             var typeGroup = match.Groups["type"];
             int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
             if (TryEmitCSharpLogicalTypePatternHeads(
@@ -326,8 +328,10 @@ public static partial class ReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
-        foreach (Match caseMatch in CSharpCaseLabelRegex.Matches(preparedLine))
+        foreach (Match caseMatch in BoundedRegex.EnumerateMatches(CSharpCaseLabelRegex, preparedLine))
         {
+            if (ReferenceLimitReached(references))
+                break;
             int cursor = SkipWhitespace(preparedLine, caseMatch.Index + caseMatch.Length);
             bool hadLeadingNot = TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not");
             if (hadLeadingNot)

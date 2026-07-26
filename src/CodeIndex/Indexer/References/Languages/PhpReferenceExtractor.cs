@@ -348,7 +348,10 @@ internal static partial class PhpReferenceExtractor
             return;
 
         var paramsGroup = match.Groups["params"];
-        foreach (Match parameterMatch in DocblockMethodParameterTypeRegex.Matches(paramsGroup.Value))
+        foreach (Match parameterMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                     DocblockMethodParameterTypeRegex,
+                     paramsGroup.Value,
+                     references))
         {
             var typesGroup = parameterMatch.Groups["types"];
             EmitDocblockTypeGroupReferences(
@@ -456,7 +459,10 @@ internal static partial class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match typeMatch in DocblockTypeNameRegex.Matches(typeExpression))
+        foreach (Match typeMatch in ReferenceExtractor.EnumerateReferenceMatches(
+                     DocblockTypeNameRegex,
+                     typeExpression,
+                     references))
         {
             var nameGroup = typeMatch.Groups["name"];
             if (IsPhpBuiltinTypeName(nameGroup.Value))

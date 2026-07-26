@@ -45,20 +45,18 @@ internal static partial class DynamicDeclarativeReferenceExtractor
                     scanningDirective = true;
                 }
 
-                var directiveCalls = new List<PrologGoalCall>();
-                ScanPrologGoalLine(
+                var directiveCalls = ScanPrologGoalLine(
                     lines,
                     lineIndex,
                     lines[lineIndex],
                     callableNames,
                     frames,
-                    ref expectGoal,
-                    directiveCalls);
-                if (directiveCalls.Count > 0)
+                    ref expectGoal);
+                if (directiveCalls != null)
                 {
-                    result[lineNumber] = directiveCalls
-                        .Select(static call => call with { IsTopLevelDirective = true })
-                        .ToList();
+                    for (var callIndex = 0; callIndex < directiveCalls.Count; callIndex++)
+                        directiveCalls[callIndex] = directiveCalls[callIndex] with { IsTopLevelDirective = true };
+                    result[lineNumber] = directiveCalls;
                 }
                 if (ContainsPrologClauseTerminator(lines[lineIndex]))
                 {
@@ -107,22 +105,22 @@ internal static partial class DynamicDeclarativeReferenceExtractor
                     lines[lineIndex],
                     container.StartLine < lineNumber);
             }
-            var lineCalls = new List<PrologGoalCall>();
-            ScanPrologGoalLine(
+            var lineCalls = ScanPrologGoalLine(
                 lines,
                 lineIndex,
                 callScanLine,
                 callableNames,
                 frames,
-                ref expectGoal,
-                lineCalls);
-            if (lineCalls.Count > 0)
+                ref expectGoal);
+            if (lineCalls != null)
             {
-                result[lineNumber] = lineCalls
-                    .Select(call => IsTopLevelPrologDirectiveGoal(lines[lineIndex], call.Column)
-                        ? call with { IsTopLevelDirective = true }
-                        : call)
-                    .ToList();
+                for (var callIndex = 0; callIndex < lineCalls.Count; callIndex++)
+                {
+                    var call = lineCalls[callIndex];
+                    if (IsTopLevelPrologDirectiveGoal(lines[lineIndex], call.Column))
+                        lineCalls[callIndex] = call with { IsTopLevelDirective = true };
+                }
+                result[lineNumber] = lineCalls;
             }
 
             if (ContainsPrologClauseTerminator(callScanLine))
@@ -280,15 +278,15 @@ internal static partial class DynamicDeclarativeReferenceExtractor
         return new string(' ', line.Length);
     }
 
-    private static void ScanPrologGoalLine(
+    private static List<PrologGoalCall>? ScanPrologGoalLine(
         IReadOnlyList<string> lines,
         int lineIndex,
         string line,
         IReadOnlySet<string> callableNames,
         Stack<PrologLexicalFrame> frames,
-        ref bool expectGoal,
-        List<PrologGoalCall> calls)
+        ref bool expectGoal)
     {
+        List<PrologGoalCall>? calls = null;
         for (var column = 0; column < line.Length;)
         {
             var ch = line[column];
@@ -394,7 +392,7 @@ internal static partial class DynamicDeclarativeReferenceExtractor
                             column,
                             nextColumn))
                     {
-                        calls.Add(new PrologGoalCall(name, nameStart));
+                        (calls ??= []).Add(new PrologGoalCall(name, nameStart));
                     }
 
                     if (nextColumn < line.Length && line[nextColumn] == '(')
@@ -481,6 +479,8 @@ internal static partial class DynamicDeclarativeReferenceExtractor
 
             column++;
         }
+
+        return calls;
     }
 
     private static bool IsPrologTermBeforeInfixOperator(

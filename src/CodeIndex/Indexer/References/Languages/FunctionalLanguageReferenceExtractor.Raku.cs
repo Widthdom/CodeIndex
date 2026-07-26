@@ -28,31 +28,67 @@ public static partial class ReferenceExtractor
 
         if (typeDefinition != null)
         {
-            foreach (Match match in RakuTypeRelationRegex.Matches(line))
+            foreach (Match match in EnumerateReferenceMatches(
+                         RakuTypeRelationRegex,
+                         line,
+                         references))
+            {
+                if (ReferenceLimitReached(references))
+                    break;
+
                 AddFunctionalReference(references, seen, fileId, match.Groups["name"], "type_reference", context, lineNumber, typeDefinition, "raku");
+            }
         }
-        foreach (Match match in RakuReturnTypeRegex.Matches(line))
+        foreach (Match match in EnumerateReferenceMatches(
+                     RakuReturnTypeRegex,
+                     line,
+                     references))
+        {
+            if (ReferenceLimitReached(references))
+                break;
+
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "type_reference", context, lineNumber, container, "raku");
+        }
         if (typeDefinition != null)
             return;
 
-        var qualifiedCallSpans = new List<(int Start, int End)>();
-        foreach (Match match in RakuQualifiedCallRegex.Matches(line))
+        List<(int Start, int End)>? qualifiedCallSpans = null;
+        foreach (Match match in EnumerateReferenceMatches(
+                     RakuQualifiedCallRegex,
+                     line,
+                     references))
         {
-            qualifiedCallSpans.Add((match.Index, match.Index + match.Length));
+            if (ReferenceLimitReached(references))
+                break;
+
+            (qualifiedCallSpans ??= []).Add(
+                (match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["module"], "reference", context, lineNumber, container, "raku");
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "raku");
         }
-        foreach (Match match in RakuMethodCallRegex.Matches(line))
+        foreach (Match match in EnumerateReferenceMatches(
+                     RakuMethodCallRegex,
+                     line,
+                     references))
         {
-            qualifiedCallSpans.Add((match.Index, match.Index + match.Length));
+            if (ReferenceLimitReached(references))
+                break;
+
+            (qualifiedCallSpans ??= []).Add(
+                (match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "raku");
         }
 
         var skippedDefinition = false;
-        foreach (Match match in RakuBareCallRegex.Matches(line))
+        foreach (Match match in EnumerateReferenceMatches(
+                     RakuBareCallRegex,
+                     line,
+                     references))
         {
-            if (qualifiedCallSpans.Any(span => match.Index >= span.Start && match.Index < span.End))
+            if (ReferenceLimitReached(references))
+                break;
+
+            if (ContainsFunctionalSpan(qualifiedCallSpans, match.Index))
                 continue;
 
             var name = match.Groups["name"].Value;

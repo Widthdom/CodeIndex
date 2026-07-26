@@ -34,7 +34,7 @@ public static partial class SymbolExtractor
                 continue;
 
             var trimmedText = trimmed.ToString();
-            foreach (Match token in RubyBlockTokenRegex.Matches(trimmedText))
+            foreach (Match token in Regex.EnumerateMatches(RubyBlockTokenRegex, trimmedText))
             {
                 if (token.Value == "end")
                     depth--;

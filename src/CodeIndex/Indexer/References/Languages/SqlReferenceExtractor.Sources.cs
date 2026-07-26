@@ -70,7 +70,7 @@ internal static partial class SqlReferenceExtractor
             return null;
 
         List<CteBodySpan>? spans = null;
-        foreach (Match match in CteDefinitionRegex.Matches(statement))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CteDefinitionRegex, statement))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -141,7 +141,7 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int>? suppressedCallIndices = null)
     {
-        foreach (Match match in SelectIntoTargetStatementRegex.Matches(statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(SelectIntoTargetStatementRegex, statement, references))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -172,7 +172,7 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in TargetReferenceRegex.Matches(statement))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(TargetReferenceRegex, statement, references))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -323,7 +323,7 @@ internal static partial class SqlReferenceExtractor
     }
 
     private static void EmitMultiTargetReferences(
-        MatchCollection matches,
+        IEnumerable<Match> matches,
         string statement,
         int statementStart,
         int statementLineOffset,
@@ -337,7 +337,7 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int>? suppressedCallIndices = null)
     {
-        foreach (Match match in matches)
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(matches, references))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;

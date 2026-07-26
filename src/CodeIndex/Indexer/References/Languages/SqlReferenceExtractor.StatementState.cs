@@ -414,30 +414,48 @@ internal static partial class SqlReferenceExtractor
             || statement.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0
             || statement.IndexOf("BULK", StringComparison.OrdinalIgnoreCase) >= 0;
         if (mayContainTargetStatement)
-            CollectTempObjectNamesFromTargetMatches(TargetReferenceRegex.Matches(statement), statement, names);
+            CollectTempObjectNamesFromTargetMatches(
+                BoundedRegex.EnumerateMatches(TargetReferenceRegex, statement),
+                statement,
+                names);
 
         if (statement.IndexOf("TRUNCATE", StringComparison.OrdinalIgnoreCase) >= 0)
-            CollectTempObjectNamesFromMatches(TruncateTargetRegex.Matches(statement), statement, names);
+            CollectTempObjectNamesFromMatches(
+                BoundedRegex.EnumerateMatches(TruncateTargetRegex, statement),
+                statement,
+                names);
 
         if (statement.IndexOf("SELECT", StringComparison.OrdinalIgnoreCase) >= 0
             && statement.IndexOf("INTO", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            CollectTempObjectNamesFromMatches(SelectIntoTargetStatementRegex.Matches(statement), statement, names);
+            CollectTempObjectNamesFromMatches(
+                BoundedRegex.EnumerateMatches(SelectIntoTargetStatementRegex, statement),
+                statement,
+                names);
         }
 
         if (statement.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) < 0)
             return;
 
         if (statement.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0)
-            CollectTempObjectNamesFromMatches(CreateTempTableRegex.Matches(statement), statement, names);
+            CollectTempObjectNamesFromMatches(
+                BoundedRegex.EnumerateMatches(CreateTempTableRegex, statement),
+                statement,
+                names);
         if (statement.IndexOf("PROC", StringComparison.OrdinalIgnoreCase) >= 0
             || statement.IndexOf("FUNCTION", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            CollectTempObjectNamesFromMatches(CreateTempRoutineRegex.Matches(statement), statement, names);
+            CollectTempObjectNamesFromMatches(
+                BoundedRegex.EnumerateMatches(CreateTempRoutineRegex, statement),
+                statement,
+                names);
         }
     }
 
-    private static void CollectTempObjectNamesFromTargetMatches(MatchCollection matches, string statement, HashSet<string> names)
+    private static void CollectTempObjectNamesFromTargetMatches(
+        IEnumerable<Match> matches,
+        string statement,
+        HashSet<string> names)
     {
         foreach (Match match in matches)
         {
@@ -452,7 +470,10 @@ internal static partial class SqlReferenceExtractor
         }
     }
 
-    private static void CollectTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
+    private static void CollectTempObjectNamesFromMatches(
+        IEnumerable<Match> matches,
+        string statement,
+        HashSet<string> names)
     {
         foreach (Match match in matches)
         {

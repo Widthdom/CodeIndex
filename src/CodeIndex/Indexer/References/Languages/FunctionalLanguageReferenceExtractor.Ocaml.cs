@@ -41,7 +41,7 @@ public static partial class ReferenceExtractor
             state.OcamlActiveTypeDefinition = typeDefinition;
         }
 
-        var typeReferenceSpans = new List<(int Start, int End)>();
+        List<(int Start, int End)>? typeReferenceSpans = null;
         AddMatch(OcamlImportRegex.Match(line), "import");
         AddMatch(OcamlModuleAliasRegex.Match(line), "alias");
         var typeAliasTarget = OcamlTypeAliasTargetRegex.Match(line);
@@ -49,8 +49,16 @@ public static partial class ReferenceExtractor
         {
             AddOcamlTypeReference(typeAliasTarget.Groups["name"]);
         }
-        foreach (Match match in OcamlTypeReferenceRegex.Matches(line))
+        foreach (Match match in EnumerateReferenceMatches(
+                     OcamlTypeReferenceRegex,
+                     line,
+                     references))
+        {
+            if (ReferenceLimitReached(references))
+                break;
+
             AddOcamlTypeReference(match.Groups["name"]);
+        }
         if (state.OcamlTypeDeclarationMode)
             return;
 
@@ -63,20 +71,37 @@ public static partial class ReferenceExtractor
             return;
         }
 
-        var qualifiedCallSpans = new List<(int Start, int End)>(typeReferenceSpans);
-        foreach (Match match in OcamlQualifiedCallRegex.Matches(line))
+        List<(int Start, int End)>? qualifiedCallSpans =
+            typeReferenceSpans is null ? null : new(typeReferenceSpans);
+        foreach (Match match in EnumerateReferenceMatches(
+                     OcamlQualifiedCallRegex,
+                     line,
+                     references))
         {
-            if (qualifiedCallSpans.Any(span => RangesOverlap(span.Start, span.End, match.Index, match.Index + match.Length)))
+            if (ReferenceLimitReached(references))
+                break;
+
+            if (OverlapsFunctionalSpan(
+                    qualifiedCallSpans,
+                    match.Index,
+                    match.Index + match.Length))
                 continue;
-            qualifiedCallSpans.Add((match.Index, match.Index + match.Length));
+            (qualifiedCallSpans ??= []).Add(
+                (match.Index, match.Index + match.Length));
             AddFunctionalReference(references, seen, fileId, match.Groups["module"], "reference", context, lineNumber, container, "ocaml");
             AddFunctionalReference(references, seen, fileId, match.Groups["name"], "call", context, lineNumber, container, "ocaml");
         }
 
         var skippedDefinition = false;
-        foreach (Match match in OcamlBareCallRegex.Matches(line))
+        foreach (Match match in EnumerateReferenceMatches(
+                     OcamlBareCallRegex,
+                     line,
+                     references))
         {
-            if (qualifiedCallSpans.Any(span => match.Index >= span.Start && match.Index < span.End))
+            if (ReferenceLimitReached(references))
+                break;
+
+            if (ContainsFunctionalSpan(qualifiedCallSpans, match.Index))
                 continue;
 
             var name = match.Groups["name"].Value;
@@ -105,7 +130,8 @@ public static partial class ReferenceExtractor
             if (!group.Success)
                 return;
 
-            typeReferenceSpans.Add((group.Index, group.Index + group.Length));
+            (typeReferenceSpans ??= []).Add(
+                (group.Index, group.Index + group.Length));
             if (!OcamlIgnoredTypeReferences.Contains(group.Value))
             {
                 AddFunctionalReference(
@@ -120,9 +146,6 @@ public static partial class ReferenceExtractor
                     "ocaml");
             }
         }
-
-        static bool RangesOverlap(int leftStart, int leftEnd, int rightStart, int rightEnd)
-            => leftStart < rightEnd && rightStart < leftEnd;
     }
 
 }

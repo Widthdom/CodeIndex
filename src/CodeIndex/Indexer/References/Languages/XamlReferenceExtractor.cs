@@ -148,7 +148,7 @@ internal static class XamlReferenceExtractor
         if (originalLine.Length == 0)
             return;
 
-        foreach (Match match in XamlTypeAttributeRegex.Matches(originalLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlTypeAttributeRegex, originalLine, references))
         {
             foreach (var name in NormalizeXamlTypeValues(match.Groups["value"].Value))
             {
@@ -156,7 +156,7 @@ internal static class XamlReferenceExtractor
             }
         }
 
-        foreach (Match match in XamlTypeArgumentsRegex.Matches(originalLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlTypeArgumentsRegex, originalLine, references))
         {
             foreach (var name in NormalizeXamlTypeArguments(match.Groups["value"].Value))
             {
@@ -171,7 +171,7 @@ internal static class XamlReferenceExtractor
                 AddReference(references, seen, fileId, value, resource.ContentIndex, "reference", context, lineNumber, container);
         }
 
-        foreach (Match match in XamlReferenceRegex.Matches(originalLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlReferenceRegex, originalLine, references))
         {
             var value = NormalizeNamedMarkupReference(match.Groups["content"].Value);
             if (value.Length > 0)
@@ -185,7 +185,7 @@ internal static class XamlReferenceExtractor
 
         TryStartBindingMarkupExtensionState(originalLine, context, lineNumber, container, bindingMarkupExtensionState);
 
-        foreach (Match match in XamlBindingElementRegex.Matches(originalLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlBindingElementRegex, originalLine, references))
         {
             EmitBindingElementAttributeReferences(
                 match.Groups["attributes"].Value,
@@ -198,7 +198,7 @@ internal static class XamlReferenceExtractor
                 container);
         }
 
-        foreach (Match match in XamlBindingPropertyElementRegex.Matches(originalLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlBindingPropertyElementRegex, originalLine, references))
         {
             var value = NormalizeBindingPath(match.Groups["value"].Value);
             if (value.Length > 0)
@@ -207,7 +207,7 @@ internal static class XamlReferenceExtractor
 
         TryStartBindingPropertyElementState(originalLine, context, lineNumber, container, bindingPropertyElementState);
 
-        foreach (Match match in XamlEventHandlerRegex.Matches(originalLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlEventHandlerRegex, originalLine, references))
         {
             var value = match.Groups["value"].Value.Trim();
             if (value.Length > 0)
@@ -271,7 +271,7 @@ internal static class XamlReferenceExtractor
 
     private static bool TryFindBindingPropertyElementEnd(string line, string property, out Match closingTag)
     {
-        foreach (Match match in XamlBindingPropertyElementEndRegex.Matches(line))
+        foreach (Match match in BoundedRegex.EnumerateMatches(XamlBindingPropertyElementEndRegex, line))
         {
             if (match.Groups["property"].Value.Equals(property, StringComparison.OrdinalIgnoreCase))
             {
@@ -622,7 +622,7 @@ internal static class XamlReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match attribute in XamlAttributeRegex.Matches(attributes))
+        foreach (Match attribute in ReferenceExtractor.EnumerateReferenceMatches(XamlAttributeRegex, attributes, references))
         {
             var name = attribute.Groups["name"].Value;
             if (!name.Equals("Path", StringComparison.OrdinalIgnoreCase)

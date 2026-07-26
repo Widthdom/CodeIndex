@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -358,6 +359,410 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void ReferenceExtraction_MaskedMultilinePayloads_StayWithinAllocationBudget()
+    {
+        var payloadLine = $"    {new string('x', 4_096)} TargetInsidePayload();    ";
+        var fixtures = new[]
+        {
+            (
+                Language: "csharp",
+                Content: $$""""
+                    public sealed class C
+                    {
+                        private const string Payload = """
+                    {{string.Join('\n', Enumerable.Repeat(payloadLine, 256))}}
+                        """;
+                        public void Run() => CSharpTarget();
+                    }
+                    """",
+                ExpectedTarget: "CSharpTarget"),
+            (
+                Language: "java",
+                Content: $$""""
+                    public final class C {
+                        private static final String PAYLOAD = """
+                    {{string.Join('\n', Enumerable.Repeat(payloadLine, 256))}}
+                        """;
+                        public void run() { JavaTarget(); }
+                    }
+                    """",
+                ExpectedTarget: "JavaTarget"),
+            (
+                Language: "typescript",
+                Content: $$"""
+                    const payload = `
+                    {{string.Join('\n', Enumerable.Repeat(payloadLine, 256))}}
+                    `;
+                    export function run() { TypeScriptTarget(); }
+                    """,
+                ExpectedTarget: "TypeScriptTarget"),
+        };
+
+        long allocatedBytes = 0;
+        foreach (var fixture in fixtures)
+        {
+            var symbols = SymbolExtractor.Extract(1, fixture.Language, fixture.Content);
+            _ = ReferenceExtractor.Extract(1, fixture.Language, fixture.Content, symbols);
+
+            List<ReferenceRecord>? references = null;
+            allocatedBytes += MeasureAllocatedBytes(
+                () => references = ReferenceExtractor.Extract(
+                    1,
+                    fixture.Language,
+                    fixture.Content,
+                    symbols));
+
+            Assert.Contains(
+                references!,
+                reference => reference.ReferenceKind == "call"
+                    && reference.SymbolName == fixture.ExpectedTarget);
+        }
+
+        Assert.True(
+            allocatedBytes < 23_000_000,
+            $"Masked multiline payload extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void CppHeaderDetection_LargeSample_DoesNotMaterializeLineArrays()
+    {
+        var content = string.Join(
+            '\n',
+            Enumerable.Range(0, 8_192)
+                .Select(index => $"struct record_{index} {{ int value; }};"));
+        _ = FileIndexer.ContainsCppHeaderMarkerForTesting(content);
+
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => FileIndexer.ContainsCppHeaderMarkerForTesting(content));
+
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"C/C++ header detection allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void DelimitedSpanWalking_DenseExtractorLists_DoesNotAllocate()
+    {
+        var content = string.Join(
+            ',',
+            Enumerable.Range(0, 8_192)
+                .Select(index => $"  value_{index}  "));
+        var expectedLength = Enumerable.Range(0, 8_192)
+            .Sum(index => $"value_{index}".Length);
+        _ = MeasureDelimitedEntries(content);
+
+        (int Count, int TotalLength) result = default;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => result = MeasureDelimitedEntries(content));
+
+        Assert.Equal((8_192, expectedLength), result);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Delimited span walking allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void FunctionalSpanMembership_RepeatedCallFiltering_DoesNotAllocate()
+    {
+        var spans = Enumerable.Range(0, 128)
+            .Select(index => (Start: index * 8, End: index * 8 + 4))
+            .ToArray();
+        var foundCount = 0;
+        _ = ReferenceExtractor.ContainsFunctionalSpan(spans, 16);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 10_000; index++)
+            {
+                if (ReferenceExtractor.ContainsFunctionalSpan(
+                        spans,
+                        index % (spans[^1].End + 1)))
+                {
+                    foundCount++;
+                }
+            }
+        });
+
+        Assert.True(foundCount > 0);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Functional span membership allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void HardwareScopeMembership_RepeatedIdentifierFiltering_DoesNotAllocate()
+    {
+        var bindings = Enumerable.Range(0, 128)
+            .Select(index => new ShaderReferenceExtractor.BindingSite(
+                $"resource_{index}",
+                index * 4))
+            .ToArray();
+        var scopes = Enumerable.Range(0, 128)
+            .Select(index => new ShaderReferenceExtractor.ScopedResource(
+                $"kernel_{index}",
+                HeaderEndLine: index,
+                BodyEndLine: index + 16,
+                FirstBodyColumn: 8))
+            .ToArray();
+        var missingNames = Enumerable.Range(0, 8)
+            .Select(index => $"missing_{index}")
+            .ToArray();
+        var matchCount = 0;
+        _ = ShaderReferenceExtractor.ContainsBindingSite(bindings, "resource_64", 256);
+        _ = ShaderReferenceExtractor.ContainsActiveScopedResource(
+            scopes,
+            "kernel_64",
+            70,
+            12);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 10_000; index++)
+            {
+                if (ShaderReferenceExtractor.ContainsBindingSite(
+                        bindings,
+                        missingNames[index % missingNames.Length],
+                        index))
+                {
+                    matchCount++;
+                }
+
+                if (ShaderReferenceExtractor.ContainsActiveScopedResource(
+                        scopes,
+                        "kernel_64",
+                        70,
+                        12))
+                {
+                    matchCount++;
+                }
+            }
+        });
+
+        Assert.Equal(10_000, matchCount);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Hardware scope membership allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void SpanCharacterSearch_RepeatedLongMetadataCandidates_DoesNotAllocate()
+    {
+        var candidate = new string('x', 4_096);
+        var matches = 0;
+        _ = SpanCharacterSearch.ContainsControl(candidate);
+        _ = SpanCharacterSearch.ContainsWhitespace(candidate);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 2_048; index++)
+            {
+                if (SpanCharacterSearch.ContainsControl(candidate)
+                    || SpanCharacterSearch.ContainsWhitespace(candidate))
+                {
+                    matches++;
+                }
+            }
+        });
+
+        Assert.Equal(0, matches);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Span character classification allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void SourceLineSplitting_LargeFiles_AvoidsSeparatorIndexArrays()
+    {
+        Assert.Equal([""], SourceLineSplitter.Split(string.Empty));
+        Assert.Equal(["line", ""], SourceLineSplitter.Split("line\n"));
+        Assert.Equal(["first", "", "third"], SourceLineSplitter.Split("first\n\nthird"));
+
+        var content = string.Join(
+            '\n',
+            Enumerable.Range(0, 8_192)
+                .Select(index => $"line_{index:D5}_payload"));
+        _ = SourceLineSplitter.Split(content);
+
+        string[]? lines = null;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => lines = SourceLineSplitter.Split(content));
+        var genericSplitAllocatedBytes = MeasureAllocatedBytes(
+            () => lines = content.Split('\n'));
+
+        Assert.Equal(8_192, lines!.Length);
+        Assert.Equal("line_00000_payload", lines[0]);
+        Assert.Equal("line_08191_payload", lines[^1]);
+        Assert.True(
+            allocatedBytes < 610_000,
+            $"Source line splitting allocated {allocatedBytes:N0} bytes");
+        Assert.True(
+            allocatedBytes + 50_000 < genericSplitAllocatedBytes,
+            $"Source line splitting allocated {allocatedBytes:N0} bytes versus {genericSplitAllocatedBytes:N0} bytes for generic splitting");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void FunctionalTerminatorChecks_LongPaddedLines_DoNotAllocate()
+    {
+        var periodLine = $"value.{new string(' ', 4_096)}";
+        var heredocLine = $"END{new string(' ', 4_096)}";
+        var matchCount = 0;
+        _ = ReferenceExtractor.TrimmedFunctionalLineEndsWith(periodLine, '.');
+        _ = ReferenceExtractor.TrimmedFunctionalLineEquals(heredocLine, "END");
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 4_096; index++)
+            {
+                if (ReferenceExtractor.TrimmedFunctionalLineEndsWith(
+                        periodLine,
+                        '.'))
+                {
+                    matchCount++;
+                }
+                if (ReferenceExtractor.TrimmedFunctionalLineEquals(
+                        heredocLine,
+                        "END"))
+                {
+                    matchCount++;
+                }
+            }
+        });
+
+        Assert.Equal(8_192, matchCount);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Functional terminator checks allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void TrimmedSuffixChecks_LongDeclarationLines_DoNotAllocate()
+    {
+        var semicolonLine = $"declaration;{new string(' ', 4_096)}";
+        var commaLine = $"selector,{new string(' ', 4_096)}";
+        var matchCount = 0;
+        _ = SpanCharacterSearch.EndsWithAfterTrim(semicolonLine, ';');
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 4_096; index++)
+            {
+                if (SpanCharacterSearch.EndsWithAfterTrim(
+                        semicolonLine,
+                        ';'))
+                {
+                    matchCount++;
+                }
+                if (SpanCharacterSearch.EndsWithAfterTrim(commaLine, ','))
+                    matchCount++;
+            }
+        });
+
+        Assert.Equal(8_192, matchCount);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Trimmed suffix checks allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void FunctionalReferenceExtraction_CallFreeLines_AvoidsEmptySpanLists()
+    {
+        const int lineCount = 4_096;
+        var fixtures = new[]
+        {
+            (
+                Language: "erlang",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"value_{index} = {index}."))),
+            (
+                Language: "ocaml",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"let value_{index} = {index}"))),
+            (
+                Language: "raku",
+                Content: string.Join(
+                    '\n',
+                    Enumerable.Range(0, lineCount)
+                        .Select(index => $"my $value_{index} = {index};"))),
+        }
+        .Select(fixture => (
+            fixture.Language,
+            fixture.Content,
+            Symbols: SymbolExtractor.Extract(
+                1,
+                fixture.Language,
+                fixture.Content)))
+        .ToArray();
+        foreach (var fixture in fixtures)
+        {
+            _ = ReferenceExtractor.Extract(
+                1,
+                fixture.Language,
+                fixture.Content,
+                fixture.Symbols);
+        }
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            foreach (var fixture in fixtures)
+            {
+                _ = ReferenceExtractor.Extract(
+                    1,
+                    fixture.Language,
+                    fixture.Content,
+                    fixture.Symbols);
+            }
+        });
+
+        Assert.True(
+            allocatedBytes < 14_000_000,
+            $"Call-free functional extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
@@ -523,6 +928,148 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void Utf8LineStarts_DenseInput_AllocatesOnlyFinalOffsetArray()
+    {
+        const int lineCount = 100_000;
+        var utf8 = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("value\n", lineCount)));
+        int[]? lineStarts = null;
+
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => lineStarts = Utf8LineStarts.Build(utf8));
+
+        Assert.NotNull(lineStarts);
+        Assert.Equal(lineCount + 1, lineStarts.Length);
+        Assert.Equal(0, lineStarts[0]);
+        Assert.Equal(utf8.Length, lineStarts[^1]);
+        Assert.True(
+            allocatedBytes < 450_000,
+            $"Dense UTF-8 line offsets allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceExtraction_PrologCallFreeRules_AvoidsPerLineLists()
+    {
+        const int ruleCount = 8_000;
+        var contentBuilder = new StringBuilder(ruleCount * 40);
+        for (var index = 0; index < ruleCount; index++)
+        {
+            contentBuilder
+                .Append("rule_")
+                .Append(index)
+                .Append("(Value) :- Value = Value.\n");
+        }
+        var content = contentBuilder.ToString();
+        var symbols = SymbolExtractor.Extract(1, "prolog", content);
+        _ = ReferenceExtractor.Extract(1, "prolog", content, symbols);
+
+        List<ReferenceRecord>? references = null;
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => references = ReferenceExtractor.Extract(1, "prolog", content, symbols));
+
+        Assert.NotNull(references);
+        Assert.DoesNotContain(references, reference => reference.ReferenceKind == "call");
+        Assert.True(
+            allocatedBytes < 24_000_000,
+            $"Call-free Prolog reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceExtraction_BoundedDenseFSharpPipeline_StopsAtCapacity()
+    {
+        var contentBuilder = new StringBuilder("seed");
+        for (var i = 0; i < 4_000; i++)
+            contentBuilder.Append(" |> Func").Append(i);
+        var content = contentBuilder.ToString();
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        var references = ReferenceExtractor.Extract(
+            1,
+            "fsharp",
+            content,
+            symbols,
+            maxReferenceCount: 1);
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(
+                1,
+                "fsharp",
+                content,
+                symbols,
+                maxReferenceCount: 1));
+
+        Assert.Single(references);
+        Assert.True(
+            allocatedBytes < 1_000_000,
+            $"Bounded dense F# reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+    [Fact]
+    public void ReferenceMatchEnumeration_BoundedListDoesNotRequestMatchAfterCapacity()
+    {
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount: 1);
+        var sourceMoveNextCount = 0;
+        using var matches = ReferenceExtractor
+            .EnumerateReferenceMatches(EnumerateMatches(), references)
+            .GetEnumerator();
+
+        Assert.True(matches.MoveNext());
+        Assert.Equal(1, sourceMoveNextCount);
+
+        references.Add(new ReferenceRecord());
+
+        Assert.False(matches.MoveNext());
+        Assert.Equal(1, sourceMoveNextCount);
+
+        IEnumerable<Match> EnumerateMatches()
+        {
+            sourceMoveNextCount++;
+            yield return Match.Empty;
+
+            sourceMoveNextCount++;
+            throw new InvalidOperationException("The bounded enumerator requested an unused match.");
+        }
+    }
+
+    [Fact]
+    public void ReferenceMatchEnumeration_BelowCapacity_DoesNotAllocateWrapperEnumerators()
+    {
+        const int scanCount = 10_000;
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount: scanCount + 1);
+        var source = new ReusableMatchEnumerable();
+        var observedMatches = 0;
+
+        Scan();
+        observedMatches = 0;
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < scanCount; index++)
+                Scan();
+        });
+
+        Assert.Equal(scanCount, observedMatches);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Below-cap reference match wrappers allocated {allocatedBytes:N0} bytes");
+
+        void Scan()
+        {
+            foreach (var _ in ReferenceExtractor.EnumerateReferenceMatches(source, references))
+                observedMatches++;
+        }
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceDedupe_DenseLongIdentities_StayWithinAllocationBudget()
     {
         const int keyCount = 10_000;
@@ -561,6 +1108,23 @@ public class PerformanceTests : IDisposable
         var before = GC.GetAllocatedBytesForCurrentThread();
         action();
         return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    private static (int Count, int TotalLength) MeasureDelimitedEntries(string content)
+    {
+        var count = 0;
+        var totalLength = 0;
+        foreach (var entry in new DelimitedSpanEnumerable(
+                     content.AsSpan(),
+                     ',',
+                     trimEntries: true,
+                     removeEmptyEntries: true))
+        {
+            count++;
+            totalLength += entry.Length;
+        }
+
+        return (count, totalLength);
     }
 
     private static TimeSpan MeasureElapsed(Action action)
@@ -833,6 +1397,38 @@ public class PerformanceTests : IDisposable
             content.Append("proc_").Append(index);
         }
         return content.Append("\n  end interface\nend module dense_mod\n").ToString();
+    }
+
+    private sealed class ReusableMatchEnumerable : IEnumerable<Match>, IEnumerator<Match>
+    {
+        private bool _moved;
+
+        public Match Current => Match.Empty;
+
+        object System.Collections.IEnumerator.Current => Current;
+
+        public IEnumerator<Match> GetEnumerator()
+        {
+            _moved = false;
+            return this;
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public bool MoveNext()
+        {
+            if (_moved)
+                return false;
+
+            _moved = true;
+            return true;
+        }
+
+        public void Reset() => _moved = false;
+
+        public void Dispose()
+        {
+        }
     }
 
     public void Dispose()

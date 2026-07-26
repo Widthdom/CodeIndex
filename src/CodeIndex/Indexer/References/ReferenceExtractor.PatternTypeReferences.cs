@@ -19,7 +19,7 @@ public static partial class ReferenceExtractor
 
     internal static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
     {
-        foreach (Match match in introRegex.Matches(text))
+        foreach (Match match in BoundedRegex.EnumerateMatches(introRegex, text))
         {
             if (HasOnlyTrailingCSharpTrivia(text, match.Index + match.Length))
                 return true;
@@ -312,7 +312,7 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in CSharpDocCrefRegex.Matches(originalLine))
+        foreach (Match match in EnumerateReferenceMatches(CSharpDocCrefRegex, originalLine, references))
         {
             var crefGroup = match.Groups["cref"];
             var normalized = NormalizeCSharpDocCref(crefGroup.Value);
@@ -342,16 +342,22 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in JvmDocInlineLinkRegex.Matches(docText))
+        foreach (Match match in EnumerateReferenceMatches(JvmDocInlineLinkRegex, docText, references))
+        {
             EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+        }
 
-        foreach (Match match in JvmDocSeeReferenceRegex.Matches(docText))
+        foreach (Match match in EnumerateReferenceMatches(JvmDocSeeReferenceRegex, docText, references))
+        {
             EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+        }
 
         if (language == "kotlin")
         {
-            foreach (Match match in KDocBracketLinkRegex.Matches(docText))
+            foreach (Match match in EnumerateReferenceMatches(KDocBracketLinkRegex, docText, references))
+            {
                 EmitJvmDocTargetReference(language, match.Groups["target"], references, seen, fileId, columnOffset, context, lineNumber, container);
+            }
         }
     }
 
@@ -618,6 +624,8 @@ public static partial class ReferenceExtractor
             pendingWhereConstraint.IgnoredSegments.Clear();
         }
 
+        // Both passes need the same match objects; keep this intentional materialization
+        // instead of rescanning every `where` clause.
         var lineWhereMatches = CSharpWhereClauseRegex.Matches(line);
         var sawWhereMatch = false;
         var lineWhereNames = new HashSet<string>(pendingWhereConstraint.HeaderGenericParameterNames, StringComparer.Ordinal);

@@ -428,7 +428,9 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (!opened && !expressionBody && scanLine.TrimEnd().EndsWith(';'))
+            if (!opened
+                && !expressionBody
+                && SpanCharacterSearch.EndsWithAfterTrim(scanLine, ';'))
                 return (startIndex + 1, null, null);
         }
 

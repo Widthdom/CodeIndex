@@ -19,7 +19,10 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf('$') < 0)
             return;
 
-        foreach (Match match in DollarMemberReferenceRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     DollarMemberReferenceRegex,
+                     preparedLine,
+                     references))
         {
             var backtickReceiverGroup = match.Groups["backtickReceiver"];
             var receiverGroup = backtickReceiverGroup.Success ? backtickReceiverGroup : match.Groups["receiver"];
@@ -73,7 +76,10 @@ internal static partial class RReferenceExtractor
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
-        foreach (Match match in BracketMemberReferenceRegex.Matches(line))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     BracketMemberReferenceRegex,
+                     line,
+                     references))
         {
             var backtickReceiverGroup = match.Groups["backtickReceiver"];
             var receiverGroup = backtickReceiverGroup.Success ? backtickReceiverGroup : match.Groups["receiver"];
@@ -121,7 +127,10 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf('@') < 0)
             return;
 
-        foreach (Match match in SlotMemberReferenceRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     SlotMemberReferenceRegex,
+                     preparedLine,
+                     references))
         {
             var backtickReceiverGroup = match.Groups["backtickReceiver"];
             var receiverGroup = backtickReceiverGroup.Success ? backtickReceiverGroup : match.Groups["receiver"];
@@ -159,7 +168,9 @@ internal static partial class RReferenceExtractor
 
     private static IEnumerable<(string Name, int Index)> EnumerateNamespaceDirectiveNames(string value, int baseIndex)
     {
-        foreach (Match match in NamespaceDirectiveNameRegex.Matches(value))
+        foreach (Match match in Regex.EnumerateMatches(
+                     NamespaceDirectiveNameRegex,
+                     value))
         {
             var backtickNameGroup = match.Groups["backtickName"];
             var nameGroup = backtickNameGroup.Success ? backtickNameGroup : match.Groups["name"];

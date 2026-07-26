@@ -217,9 +217,11 @@ internal static partial class SqlReferenceExtractor
                 sourceStart++;
             else
             {
-                var usingMatches = UsingKeywordRegex.Matches(priorListItem);
-                if (usingMatches.Count > 0)
-                    sourceStart = usingMatches[^1].Index + usingMatches[^1].Length;
+                Match? lastUsingMatch = null;
+                foreach (var usingMatch in BoundedRegex.EnumerateMatches(UsingKeywordRegex, priorListItem))
+                    lastUsingMatch = usingMatch;
+                if (lastUsingMatch != null)
+                    sourceStart = lastUsingMatch.Index + lastUsingMatch.Length;
                 else
                 {
                     sourceStart = priorListItem.LastIndexOf('#');

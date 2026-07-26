@@ -20,7 +20,7 @@ internal static partial class LanguageReferenceExtractionSupport
         var hasFortranUseMarker = StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "use");
         if (hasFortranUseMarker)
         {
-            foreach (Match match in FortranUseRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranUseRegex, preparedLine, references))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
 
             var useOnlyMatch = FortranUseOnlyRegex.Match(preparedLine);
@@ -29,13 +29,13 @@ internal static partial class LanguageReferenceExtractionSupport
                 EmitCommaSeparatedNames(useOnlyMatch.Groups["list"].Value, useOnlyMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
 
                 var list = useOnlyMatch.Groups["list"];
-                foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranUseAliasRegex, list.Value, references))
                 {
                     var group = match.Groups["alias"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
                 }
 
-                foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranUseAliasTargetRegex, list.Value, references))
                 {
                     var group = match.Groups["target"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
@@ -46,13 +46,13 @@ internal static partial class LanguageReferenceExtractionSupport
             if (useRenameMatch.Success)
             {
                 var list = useRenameMatch.Groups["list"];
-                foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranUseAliasRegex, list.Value, references))
                 {
                     var group = match.Groups["alias"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
                 }
 
-                foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranUseAliasTargetRegex, list.Value, references))
                 {
                     var group = match.Groups["target"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
@@ -70,7 +70,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (StartsWithKeywordIgnoringLeadingWhitespace(originalLine, "include")
             && (originalLine.IndexOf('\'') >= 0 || originalLine.IndexOf('"') >= 0))
         {
-            foreach (Match match in FortranIncludeRegex.Matches(originalLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranIncludeRegex, originalLine, references))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
         }
 
@@ -80,13 +80,13 @@ internal static partial class LanguageReferenceExtractionSupport
         {
             if (preparedLine.IndexOf('/') >= 0)
             {
-                foreach (Match match in FortranSlashGroupNameRegex.Matches(preparedLine))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSlashGroupNameRegex, preparedLine, references))
                     ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
 
-                foreach (Match memberListMatch in FortranSlashGroupMemberListRegex.Matches(preparedLine))
+                foreach (Match memberListMatch in ReferenceExtractor.EnumerateReferenceMatches(FortranSlashGroupMemberListRegex, preparedLine, references))
                 {
                     var list = memberListMatch.Groups["list"];
-                    foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                    foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                     {
                         var group = match.Groups["name"];
                         ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -101,7 +101,7 @@ internal static partial class LanguageReferenceExtractionSupport
             if (blankCommonMemberListMatch.Success)
             {
                 var list = blankCommonMemberListMatch.Groups["list"];
-                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -112,10 +112,10 @@ internal static partial class LanguageReferenceExtractionSupport
         if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "equivalence")
             && preparedLine.IndexOf('(') >= 0)
         {
-            foreach (Match listMatch in FortranParenthesizedNameListRegex.Matches(preparedLine))
+            foreach (Match listMatch in ReferenceExtractor.EnumerateReferenceMatches(FortranParenthesizedNameListRegex, preparedLine, references))
             {
                 var list = listMatch.Groups["list"];
-                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -131,10 +131,10 @@ internal static partial class LanguageReferenceExtractionSupport
                 var tail = dataLineMatch.Groups["tail"];
                 if (tail.Value.IndexOf('/') >= 0)
                 {
-                    foreach (Match groupMatch in FortranDataObjectGroupRegex.Matches(tail.Value))
+                    foreach (Match groupMatch in ReferenceExtractor.EnumerateReferenceMatches(FortranDataObjectGroupRegex, tail.Value, references))
                     {
                         var list = groupMatch.Groups["list"];
-                        foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                         {
                             var group = match.Groups["name"];
                             ReferenceExtractor.AddReference(references, seen, fileId, group.Value, tail.Index + list.Index + group.Index, "reference", context, lineNumber, container);
@@ -152,11 +152,11 @@ internal static partial class LanguageReferenceExtractionSupport
                 var list = saveMatch.Groups["list"];
                 if (list.Value.IndexOf('/') >= 0)
                 {
-                    foreach (Match match in FortranSlashGroupNameRegex.Matches(list.Value))
+                    foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSlashGroupNameRegex, list.Value, references))
                         ReferenceExtractor.AddReference(references, seen, fileId, match.Groups["name"].Value, list.Index + match.Groups["name"].Index, "reference", context, lineNumber, container);
                 }
 
-                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -185,7 +185,7 @@ internal static partial class LanguageReferenceExtractionSupport
             if (externalMatch.Success)
             {
                 var list = externalMatch.Groups["list"];
-                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -199,7 +199,7 @@ internal static partial class LanguageReferenceExtractionSupport
             if (intrinsicProcedureMatch.Success)
             {
                 var list = intrinsicProcedureMatch.Groups["list"];
-                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -214,7 +214,7 @@ internal static partial class LanguageReferenceExtractionSupport
             if (accessListMatch.Success)
             {
                 var list = accessListMatch.Groups["list"];
-                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -228,7 +228,7 @@ internal static partial class LanguageReferenceExtractionSupport
             if (finalizerMatch.Success)
             {
                 var list = finalizerMatch.Groups["list"];
-                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranSimpleListNameRegex, list.Value, references))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -244,7 +244,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 var targetListMatch = FortranBindingTargetListRegex.Match(preparedLine);
                 if (targetListMatch.Success)
                 {
-                    foreach (Match match in FortranBindingTargetRegex.Matches(targetListMatch.Value))
+                    foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranBindingTargetRegex, targetListMatch.Value, references))
                     {
                         var group = match.Groups["name"];
                         ReferenceExtractor.AddReference(references, seen, fileId, group.Value, targetListMatch.Index + group.Index, "reference", context, lineNumber, container);
@@ -275,7 +275,7 @@ internal static partial class LanguageReferenceExtractionSupport
             if (associateMatch.Success)
             {
                 var list = associateMatch.Groups["list"];
-                foreach (Match match in FortranAssociateTargetRegex.Matches(list.Value))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranAssociateTargetRegex, list.Value, references))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -288,7 +288,7 @@ internal static partial class LanguageReferenceExtractionSupport
             || preparedLine.IndexOf("class", StringComparison.OrdinalIgnoreCase) >= 0;
         if (hasFortranParen && hasFortranTypeOrClassMarker)
         {
-            foreach (Match match in FortranTypeRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranTypeRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
@@ -296,7 +296,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
             if (preparedLine.IndexOf("is", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                foreach (Match match in FortranTypeGuardRegex.Matches(preparedLine))
+                foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranTypeGuardRegex, preparedLine, references))
                 {
                     var group = match.Groups["type"];
                     ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
@@ -306,7 +306,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (hasFortranParen && preparedLine.IndexOf("extends", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            foreach (Match match in FortranExtendsRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranExtendsRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
@@ -315,7 +315,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (hasFortranParen && preparedLine.IndexOf("procedure", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            foreach (Match match in FortranProcedureTypeRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranProcedureTypeRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
@@ -326,7 +326,7 @@ internal static partial class LanguageReferenceExtractionSupport
             && StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "allocate");
         if (hasFortranAllocateMarker && preparedLine.IndexOf("::", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in FortranAllocateTypeSpecRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranAllocateTypeSpecRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
@@ -372,7 +372,7 @@ internal static partial class LanguageReferenceExtractionSupport
                     if (list.Value.IndexOf("source", StringComparison.OrdinalIgnoreCase) >= 0
                         || list.Value.IndexOf("mold", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        foreach (Match match in FortranAllocateSourceKeywordRegex.Matches(list.Value))
+                        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranAllocateSourceKeywordRegex, list.Value, references))
                         {
                             var group = match.Groups["name"];
                             ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -382,7 +382,7 @@ internal static partial class LanguageReferenceExtractionSupport
                     if (list.Value.IndexOf("stat", StringComparison.OrdinalIgnoreCase) >= 0
                         || list.Value.IndexOf("errmsg", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
+                        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranAllocationStatusKeywordRegex, list.Value, references))
                         {
                             var group = match.Groups["name"];
                             ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -422,7 +422,7 @@ internal static partial class LanguageReferenceExtractionSupport
                     if (list.Value.IndexOf("stat", StringComparison.OrdinalIgnoreCase) >= 0
                         || list.Value.IndexOf("errmsg", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
+                        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranAllocationStatusKeywordRegex, list.Value, references))
                         {
                             var group = match.Groups["name"];
                             ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
@@ -442,7 +442,7 @@ internal static partial class LanguageReferenceExtractionSupport
             && preparedLine.IndexOf('=') >= 0
             && preparedLine.IndexOf("kind", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            foreach (Match match in FortranIntrinsicKeywordKindRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranIntrinsicKeywordKindRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
@@ -451,7 +451,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (hasFortranIntrinsicKindMarker)
         {
-            foreach (Match match in FortranIntrinsicPositionalKindRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranIntrinsicPositionalKindRegex, preparedLine, references))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");

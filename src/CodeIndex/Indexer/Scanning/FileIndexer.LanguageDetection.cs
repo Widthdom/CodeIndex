@@ -789,19 +789,32 @@ public partial class FileIndexer
 
     private static bool ContainsCppHeaderMarker(string content, bool firstLineIsComplete)
     {
-        var lines = content.Split('\n');
-
-        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        var lineIndex = 0;
+        var lineStart = 0;
+        while (lineStart <= content.Length)
         {
-            var line = lines[lineIndex].AsSpan();
+            var lineBreak = content.IndexOf('\n', lineStart);
+            var lineEnd = lineBreak >= 0 ? lineBreak : content.Length;
+            var line = content.AsSpan(lineStart, lineEnd - lineStart);
             if (line.Length > 0 && line[^1] == '\r')
                 line = line[..^1];
             if (LooksLikeCppHeaderLine(line, allowLineStartMarkers: lineIndex > 0 || firstLineIsComplete))
                 return true;
+
+            if (lineBreak < 0)
+                break;
+
+            lineStart = lineBreak + 1;
+            lineIndex++;
         }
 
         return false;
     }
+
+    internal static bool ContainsCppHeaderMarkerForTesting(
+        string content,
+        bool firstLineIsComplete = true)
+        => ContainsCppHeaderMarker(content, firstLineIsComplete);
 
     private static bool IsCppLogicalLineBoundary(string content, int index)
     {

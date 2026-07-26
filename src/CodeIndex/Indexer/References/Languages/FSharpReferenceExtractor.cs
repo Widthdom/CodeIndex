@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Models;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Indexer;
@@ -92,11 +93,12 @@ internal static class FSharpReferenceExtractor
 
     public static void EmitAdditionalCallReferences(
         string preparedLine,
-        Action<string, int> addCallLikeReference)
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
         if (preparedLine.IndexOf("|>", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in PipelineCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(PipelineCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -106,14 +108,14 @@ internal static class FSharpReferenceExtractor
 
         if (preparedLine.IndexOf("<|", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in BackwardPipelineCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(BackwardPipelineCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
                 addCallLikeReference(name, callIndex);
             }
 
-            foreach (Match match in BackwardPipelineArgumentCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(BackwardPipelineArgumentCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -124,7 +126,7 @@ internal static class FSharpReferenceExtractor
         if (preparedLine.IndexOf("try", StringComparison.Ordinal) >= 0
             || preparedLine.IndexOf("finally", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in TryFinallyApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(TryFinallyApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -136,7 +138,7 @@ internal static class FSharpReferenceExtractor
             || preparedLine.IndexOf("elif", StringComparison.Ordinal) >= 0
             || preparedLine.IndexOf("while", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in ConditionApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ConditionApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -146,7 +148,7 @@ internal static class FSharpReferenceExtractor
 
         if (preparedLine.IndexOf("match", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in MatchApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MatchApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -156,7 +158,7 @@ internal static class FSharpReferenceExtractor
 
         if (preparedLine.IndexOf("when", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in WhenGuardApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(WhenGuardApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -166,7 +168,7 @@ internal static class FSharpReferenceExtractor
 
         if (preparedLine.IndexOf("assert", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in AssertApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(AssertApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -176,7 +178,7 @@ internal static class FSharpReferenceExtractor
 
         if (preparedLine.IndexOf("lazy", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in LazyApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(LazyApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -186,7 +188,7 @@ internal static class FSharpReferenceExtractor
 
         if (preparedLine.IndexOf("raise", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in RaiseApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(RaiseApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -197,7 +199,7 @@ internal static class FSharpReferenceExtractor
         if (preparedLine.IndexOf("upcast", StringComparison.Ordinal) >= 0
             || preparedLine.IndexOf("downcast", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in CastApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CastApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -207,7 +209,7 @@ internal static class FSharpReferenceExtractor
 
         if (preparedLine.IndexOf("new", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in NewApplicationCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(NewApplicationCallRegex, preparedLine, references))
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
@@ -218,14 +220,14 @@ internal static class FSharpReferenceExtractor
         if (preparedLine.IndexOf(">>", StringComparison.Ordinal) >= 0
             || preparedLine.IndexOf("<<", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in CompositionOperandCallRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CompositionOperandCallRegex, preparedLine, references))
             {
                 addCallLikeReference(match.Groups["left"].Value, match.Groups["left"].Index);
                 addCallLikeReference(match.Groups["right"].Value, match.Groups["right"].Index);
             }
         }
 
-        foreach (Match match in SpaceApplicationCallRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(SpaceApplicationCallRegex, preparedLine, references))
         {
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
@@ -238,7 +240,7 @@ internal static class FSharpReferenceExtractor
         }
 
         var definitionMatch = OperatorDefinitionCallRegex.Match(preparedLine);
-        foreach (Match match in OperatorCallRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(OperatorCallRegex, preparedLine, references))
         {
             var name = match.Groups["name"].Value;
             if (IgnoredOperatorCallNames.Contains(name))

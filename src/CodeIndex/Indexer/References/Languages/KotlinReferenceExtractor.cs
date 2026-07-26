@@ -188,8 +188,9 @@ internal static partial class KotlinReferenceExtractor
 
     public static void EmitTrailingLambdaReferences(
         string preparedLine,
-        Action<string, int> addCallLikeReference)
-        => TrailingLambdaReferenceExtractor.EmitReferences(preparedLine, addCallLikeReference);
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
+        => TrailingLambdaReferenceExtractor.EmitReferences(preparedLine, addCallLikeReference, references);
 
     public static void EmitInfixCallReferences(
         string preparedLine,
@@ -197,7 +198,9 @@ internal static partial class KotlinReferenceExtractor
         IReadOnlySet<string> infixFunctionNames,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in IdentifierRegex.Matches(originalLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     IdentifierRegex,
+                     originalLine))
         {
             var nameGroup = match.Groups["name"];
             var name = nameGroup.Value;
@@ -311,7 +314,10 @@ internal static partial class KotlinReferenceExtractor
         SymbolRecord? container)
     {
         var genericParameterNames = CollectGenericParameterNames(preparedLine);
-        foreach (Match match in ClassLiteralRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     ClassLiteralRegex,
+                     preparedLine,
+                     references))
         {
             var typeGroup = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(
@@ -341,7 +347,10 @@ internal static partial class KotlinReferenceExtractor
         if (constructorTypeNames.Count == 0)
             return;
 
-        foreach (Match match in BacktickConstructorCallRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     BacktickConstructorCallRegex,
+                     preparedLine,
+                     references))
         {
             var nameGroup = match.Groups["name"];
             if (IsBacktickConstructorDeclarationSite(preparedLine, nameGroup.Index))
@@ -376,8 +385,10 @@ internal static partial class KotlinReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var matches = CtorDelegationRegex.Matches(preparedLine);
-        if (matches.Count == 0)
+        using var matches = Regex
+            .EnumerateMatches(CtorDelegationRegex, preparedLine)
+            .GetEnumerator();
+        if (!matches.MoveNext())
             return;
 
         var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
@@ -392,8 +403,12 @@ internal static partial class KotlinReferenceExtractor
             ctorContainer = FindEnclosingKotlinConstructor(symbols, enclosingType, lineNumber) ?? ctorContainer;
         }
 
-        foreach (Match match in matches)
+        do
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
+            var match = matches.Current;
             var kindToken = match.Groups["kind"].Value;
             string? target;
             if (kindToken == "this")
@@ -428,6 +443,7 @@ internal static partial class KotlinReferenceExtractor
                 lineNumber,
                 ctorContainer);
         }
+        while (matches.MoveNext());
     }
 
 }

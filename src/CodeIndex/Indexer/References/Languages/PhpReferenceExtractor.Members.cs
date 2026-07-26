@@ -123,7 +123,10 @@ internal static partial class PhpReferenceExtractor
             return;
         }
 
-        foreach (Match match in ObjectMemberAccessRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                     ObjectMemberAccessRegex,
+                     preparedLine,
+                     references))
         {
             var nameGroup = match.Groups["name"];
             ReferenceExtractor.AddReference(

@@ -493,6 +493,10 @@ Container ownership follows the same contract. If references repeatedly resolve
 an extracted declaration by name and source range, index candidates by name once
 and scan only that name's ordered range list. Preserve first-candidate behavior
 for duplicate names and keep the index local to one extraction call.
+Symbol container assignment keeps one reusable path buffer for the sorted
+per-symbol walk. Enumerate the active stack into that buffer and reverse it to
+outer-to-inner order; do not materialize both a stack array and a fresh path list
+for every member in a deeply nested generated file.
 
 Duplicate detection in hot extraction loops should use a `HashSet` or another
 constant-time structure keyed by the full emitted record identity. Do not add
@@ -508,6 +512,106 @@ consumer needs only one item at a time or validation can stay on the source
 string. `string.Split` creates an array and substrings for every import,
 dependency, path segment, or declaration item. Preserve the original empty-item,
 trimming, quote, and first-separator semantics when replacing it.
+`DelimitedSpanEnumerable` is the shared allocation-free walker for single
+delimiters; repository metadata, application manifests, VHDL declarations and
+package paths, and CUDA parameter headers use it instead of split arrays.
+Likewise, exclusion-range checks inside dense match loops must use indexed
+helpers rather than capturing LINQ predicates. Erlang, OCaml, and Raku share
+`ContainsFunctionalSpan` / `OverlapsFunctionalSpan` for remote, qualified,
+quoted-atom, and type-reference suppression.
+The same rule applies to hardware languages: Verilog / SystemVerilog / VHDL
+shadow scopes and CUDA / GLSL / HLSL / Metal / WGSL binding and resource scopes
+use direct indexed loops so every identifier does not allocate a predicate
+closure.
+Repository metadata character validation uses `SpanCharacterSearch` instead of
+predicate-based enumeration, and application-manifest dependency ownership is
+tracked as XML depth rather than rescanning an ancestor stack for every
+`assemblyIdentity`.
+State-machine sentinel checks must also stay on spans. Erlang specification and
+callable terminators plus Raku heredoc terminators trim views of the original
+line without materializing padded copies.
+`SpanCharacterSearch.EndsWithAfterTrim` is the shared suffix primitive for
+these sentinels and for CSS selector continuations plus C# / Java body-less
+declaration termination.
+Functional-language exclusion span lists are lazy. Erlang quoted/remote calls,
+OCAML type/qualified calls, and Raku qualified/method calls must not allocate an
+empty list on every source line when no corresponding match exists.
+Functional-language regex loops enumerate matches on demand and stop as soon as
+the bounded reference list is full. Keep this contract across Clojure, Elixir,
+Erlang, OCAML, and Raku so one dense line cannot force unused match objects.
+JVM-family reference scanners follow the same rule. Java, Kotlin, Scala, and
+Gradle/Groovy multi-match loops use `BoundedRegex.EnumerateMatches`; loops that
+own the bounded reference list stop immediately at its cap.
+Python reference scanners stream decorators, annotations, runtime type checks,
+typing factories, dataclass/attrs integrations, and dynamic imports. The
+start-offset overload of `BoundedRegex.EnumerateMatches` keeps decorator
+argument scans demand-driven without rescanning the decorator prefix. The
+no-offset overload preserves the regex instance's default start position,
+including reverse source order for `RegexOptions.RightToLeft`.
+Dynamic-language scanners for PHP, Ruby, R, and Perl stream multi-match
+attributes/types, DSL targets, namespace/member/resource references, and arrow
+calls. Any loop that writes directly to a bounded reference list must exit at
+the cap instead of walking the rest of a dense line.
+Prolog goal scanning keeps its per-line call list lazy. When calls are present,
+update directive metadata in that same list before storing it; do not allocate
+an empty list for call-free rules or project a populated list into a second one.
+Secondary reference scanners also keep Fortran, Visual Basic, F#, Pascal,
+Objective-C, Haskell, Elixir, Smalltalk, Lua, Dart, Razor, JSON, JavaScript,
+GitHub Actions, and C++ compound-requirement matches demand-driven. Static
+pattern enumeration accepts the extraction timeout explicitly so these paths
+do not trade streaming for a different timeout contract. Regex loops that own
+a reference list use `ReferenceExtractor.EnumerateReferenceMatches` so bounded
+lists stop before requesting the next match, and the shared per-line pipeline
+  checks the same cap between type, infrastructure, SQL, call, member, metadata,
+  Razor, Python, and R phases.
+Symbol and dependency extractors follow the same streaming rule across
+scientific/native, Pascal/Ada, SQL, Python, Swift, GraphQL, markup/XAML, shell,
+Ruby, Perl, Elixir, CSS, HDL, C++, and manifest parsing. When only a total is
+needed, use `BoundedRegex.CountMatches`; it preserves the prior all-or-nothing
+timeout result without retaining a `MatchCollection`. A scanner that needs the
+first match for classification and the rest for parsing must keep one enumerator
+instead of materializing or rescanning the input.
+XAML supplemental symbol phases share the structured-data symbol budget. They
+retain at most one overflow marker for diagnostic replacement, then return
+through `TrimStructuredDataSymbols` immediately; do not accumulate an
+unbounded temporary symbol list and trim it only after every XAML phase.
+JSON symbol and reference byte-offset mapping shares `Utf8LineStarts`. It counts
+newlines first and allocates the final offset array at exact capacity; do not
+grow a `List<int>` and retain it beside a copied array for dense JSON files.
+Systems-language scanners stream C/C++ construction and template groups, Rust
+calls and value/signature types, Swift property wrappers, Go concurrency and
+composite/signature types, plus shared scientific/native call groups. Preserve
+source-order emission and stop owned bounded lists at capacity.
+SQL reference scanners stream statement, source, target, generated-column,
+window-clause, procedure-call, and temporary-object matches. Helpers that accept
+multiple SQL matches must keep the sequence demand-driven, and loops that emit
+references must stop consuming it when the bounded list reaches capacity.
+Infrastructure and markup scanners stream CSS, XAML, HTML/GraphQL/Markdown,
+HDL, MSBuild, Dockerfile, shell, and PowerShell match groups. Keep state-only
+scans demand-driven as well, while applying bounded-list exits only where the
+scanner owns the reference list.
+Core reference scans stream shared calls, C# attributes/types/patterns/locals,
+JSX elements, JVM documentation links, and Solidity references. A match set
+that is intentionally consumed in multiple passes may remain materialized;
+single-pass emitters must stay demand-driven and stop owned bounded lists.
+All line-based symbol and reference extractors share `SourceLineSplitter`.
+It counts newline boundaries once, allocates the exact result array, and then
+materializes only the line strings that downstream scanners require; do not
+restore separator-index arrays through `string.Split`.
+
+When structural masking turns a source line into whitespace, do not materialize
+a trimmed copy merely to discover that the line has no references. Preserve
+documentation handling and the build-automation and markup paths that inspect
+the original line, but let ordinary C#, Java, and JavaScript / TypeScript code
+paths skip masked multiline payloads before creating a reference context.
+Classify prepared-line whitespace once per core-loop iteration and reuse that
+result for both special-line dispatch and the ordinary empty-line path; masked
+payload lines can be thousands of characters long.
+
+C / C++ header disambiguation operates on bounded lexical samples. Walk those
+samples with spans and newline indices; splitting a sample into a line array
+temporarily duplicates every sampled line and scales poorly across large
+repositories with many ambiguous `.h` files.
 
 The C# value-receiver path is the reference example: local receiver scopes are
 derived from precomputed block spans for the containing function, and duplicate
@@ -2805,7 +2909,7 @@ Contract guarantees:
 - **Indexing and configured extractor patterns.** Indexing diagnostics use `regex_timeout`; configured pattern diagnostics use `pattern_regex_timeout`. Indexing skips the affected file or pattern so the run can finish and reports bounded diagnostics instead of leaking the pathological pattern input.
 - **Query/find and MCP find.** CLI human/JSON errors and MCP error envelopes use `regex_timeout` with the same timeout duration text. The recovery hint is surface-specific only where CLI flags and MCP tool arguments differ.
 - **Redaction surfaces fail closed.** `DiagnosticRedactor`, `GlobalToolLog`, and MCP audit argument values replace the affected value with the configured redaction placeholder. Sensitive-name decisions use `SensitiveNameClassifier`, which normalizes separators and case before checking shared credential fragments so diagnostic and audit redaction cannot drift. `DiagnosticSanitizer` omits the whole message with `[message omitted after sanitization timeout]`. `SuggestionStore` records `redaction_timeout` and persists `[REDACTED:redaction_timeout]`. GitHub API response bodies are replaced with `[response body omitted after redaction timeout]`.
-- **Bounded extraction helpers.** `BoundedRegex` keeps extraction best-effort by returning empty matches/`false` or the original input depending on the operation, and records captured timeout diagnostics when a capture scope is active.
+- **Bounded extraction helpers.** `BoundedRegex` keeps extraction best-effort by returning empty matches/`false` or the original input depending on the operation, and records captured timeout diagnostics when a capture scope is active. `EnumerateMatches` advances with `Match.NextMatch` only when the consumer requests another result, so bounded extractor loops can stop without materializing the rest of a dense match collection.
 
 ## Metrics emission
 
@@ -3480,6 +3584,9 @@ container ownership にも同じ契約を適用する。reference が extracted 
 source range で繰り返し解決する場合は、candidate を name ごとに一度だけ索引化し、その name の
 ordered range list だけを走査する。duplicate name の first-candidate behavior を維持し、index は
 1 回の extraction call 内だけに保持する。
+symbol の container assignment は、sort 済みの per-symbol walk で1つの path buffer を再利用する。
+active stack を buffer へ列挙して outer-to-inner 順に反転し、深く nest した生成ファイルの member
+ごとに stack array と新しい path list の両方を実体化してはならない。
 
 hot な抽出ループでの重複検出には、出力 record の完全な identity を key にした `HashSet` などの
 定数時間構造を使う。大きな生成ファイルで local variable、parameter、call site、type reference、
@@ -3493,6 +3600,93 @@ hot extractor の delimiter-only parsing では、consumer が item を一度に
 validation を source string 上で完結できる場合、index / span walk を優先する。`string.Split` は
 import、dependency、path segment、declaration item ごとに array と substring を作る。置換時は
 元の empty-item、trim、quote、first-separator semantics を維持する。
+single delimiter には allocation-free な共通 walker `DelimitedSpanEnumerable` を使う。
+repository metadata、application manifest、VHDL declaration / package path、CUDA parameter
+header は split array を作らずこの walker で処理する。
+同様に、dense match loop 内の exclusion-range 判定で capturing LINQ predicate を使っては
+ならない。Erlang、OCaml、Raku は remote / qualified / quoted-atom / type-reference の
+抑制に `ContainsFunctionalSpan` / `OverlapsFunctionalSpan` を共有する。
+hardware language も同じ規則に従う。Verilog / SystemVerilog / VHDL の shadow scope と、
+CUDA / GLSL / HLSL / Metal / WGSL の binding / resource scope は direct indexed loop を
+使い、identifier ごとの predicate closure を作らない。
+repository metadata の character validation は predicate-based enumeration ではなく
+`SpanCharacterSearch` を使い、application manifest の dependency ownership は
+`assemblyIdentity` ごとの ancestor stack 再走査ではなく XML depth で追跡する。
+state-machine の sentinel 判定も span 上で行う。Erlang specification / callable terminator
+と Raku heredoc terminator は、padding を含む copy を実体化せず original line の view を trim する。
+`SpanCharacterSearch.EndsWithAfterTrim` はこれらの sentinel に加え、CSS selector continuation
+と C# / Java の body-less declaration termination が共有する suffix primitive である。
+functional-language の exclusion span list は lazy にする。Erlang quoted / remote call、
+OCAML type / qualified call、Raku qualified / method call は、対応する match がない source line
+ごとに empty list を割り当ててはならない。
+functional-language の regex loop は match を demand-driven に列挙し、bounded reference list
+が満杯になった時点で停止する。Clojure、Elixir、Erlang、OCAML、Raku でこの契約を維持し、
+dense な1行に対して未使用の match object を強制的に作らない。
+JVM-family reference scanner も同じ規則に従う。Java、Kotlin、Scala、Gradle / Groovy の
+multi-match loop は `BoundedRegex.EnumerateMatches` を使い、bounded reference list を
+所有する loop は上限に達した時点で停止する。
+Python reference scanner は decorator、annotation、runtime type check、typing factory、
+dataclass / attrs integration、dynamic import を逐次走査する。`BoundedRegex.EnumerateMatches`
+の start-offset overload により、decorator prefix を再走査せず argument scan も
+demand-driven のままにする。offset なしの overload は regex instance の既定開始位置を
+維持し、`RegexOptions.RightToLeft` では source の逆順に match する。
+PHP、Ruby、R、Perl の dynamic-language scanner は multi-match の attribute / type、
+DSL target、namespace / member / resource reference、arrow call を逐次走査する。
+bounded reference list へ直接書く loop は dense line の残りを走査せず上限で停止する。
+Prolog goal scan の per-line call list は lazy にする。call がある場合は同じ list 上で
+directive metadata を更新してから保存し、call-free rule ごとの empty list や populated
+list を射影した2つ目の list を割り当ててはならない。
+secondary reference scanner も Fortran、Visual Basic、F#、Pascal、Objective-C、
+Haskell、Elixir、Smalltalk、Lua、Dart、Razor、JSON、JavaScript、GitHub Actions、
+C++ compound requirement の match を demand-driven に保つ。static pattern の列挙は
+extraction timeout を明示的に受け取り、逐次化によって timeout 契約を変えない。
+reference list を所有する regex loop は `ReferenceExtractor.EnumerateReferenceMatches`
+を使い、bounded list が満杯なら次の match を要求しない。共有の行単位 pipeline も
+  type、infrastructure、SQL、call、member、metadata、Razor、Python、R の各 phase 間で
+  同じ上限を確認する。
+symbol / dependency extractor も scientific / native、Pascal / Ada、SQL、Python、
+Swift、GraphQL、markup / XAML、shell、Ruby、Perl、Elixir、CSS、HDL、C++、
+manifest parsing をまたいで同じ逐次走査規則に従う。総数だけが必要な場合は
+`BoundedRegex.CountMatches` を使い、従来の timeout 時 all-or-nothing 結果を保ったまま
+`MatchCollection` を保持しない。先頭 match を分類に、残りを構文解析に使う scanner は、
+input を実体化または再走査せず1つの enumerator を維持する。
+XAML supplemental symbol phase は structured-data symbol budget を共有する。diagnostic
+置換用の overflow marker を最大1件だけ保持したら、直ちに
+`TrimStructuredDataSymbols` を通って戻る。全 XAML phase の完了後まで無制限の一時
+symbol list を蓄積してから trim してはならない。
+JSON symbol / reference の byte-offset mapping は `Utf8LineStarts` を共有する。先に改行数を
+数えて最終 offset array を exact capacity で確保し、dense JSON file で `List<int>` を成長させて
+copy 後の array と同時に保持してはならない。
+systems-language scanner は C / C++ construction と template group、Rust call と
+value / signature type、Swift property wrapper、Go concurrency と composite / signature
+type、共有 scientific / native call group を逐次走査する。source-order emission を維持し、
+所有する bounded list は上限で停止する。
+SQL reference scanner は statement、source、target、generated-column、window-clause、
+procedure-call、一時 object の match を逐次走査する。複数の SQL match を受け取る helper
+は sequence を demand-driven のまま保ち、reference を出力する loop は bounded list の
+上限到達時に消費を停止する。
+infrastructure / markup scanner は CSS、XAML、HTML / GraphQL / Markdown、HDL、
+MSBuild、Dockerfile、shell、PowerShell の match group を逐次走査する。state-only scan
+も demand-driven のまま保ち、bounded-list の停止判定は scanner が reference list を
+所有する箇所だけに適用する。
+core reference scan は共有 call、C# attribute / type / pattern / local、JSX element、
+JVM documentation link、Solidity reference を逐次走査する。複数 pass で意図的に再利用する
+match set は materialize してよいが、single-pass emitter は demand-driven を維持し、
+所有する bounded list の上限で停止する。
+line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
+newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
+line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。
+
+構造マスクによって source line が空白だけになった場合、reference がないことを確認するため
+だけに trim 済み copy を実体化してはならない。documentation handling と、original line を
+検査する build-automation / markup 経路は維持しつつ、通常の C#、Java、
+JavaScript / TypeScript 経路では reference context を作る前に multiline payload を skip する。
+prepared-line の whitespace 判定は core-loop iteration ごとに一度だけ行い、special-line
+dispatch と通常の empty-line 経路で共有する。masked payload line は数千文字になり得る。
+
+C / C++ header の曖昧性解決は bounded lexical sample 上で行う。sample は span と newline index
+で走査し、line array に split してはならない。split は sample 内の全行を一時的に複製し、
+曖昧な `.h` file が多い巨大 repository でスケールしにくい。
 
 C# の value receiver 経路を参照例とする。local receiver の scope は containing function 用に
 事前計算した block span から導出し、重複 receiver record は hash set で追跡する。この領域の
@@ -5264,7 +5458,7 @@ Regex timeout の挙動は `RegexTimeoutPolicy` (`src/CodeIndex/Diagnostics/Rege
 - **indexing と configured extractor pattern。** indexing 診断は `regex_timeout`、configured pattern 診断は `pattern_regex_timeout` を使う。実行を完了できるよう、影響を受けたファイルまたは pattern を skip し、病的な pattern 入力を漏らさず bounded diagnostics を報告する。
 - **query/find と MCP find。** CLI の human/JSON エラーと MCP error envelope は、同じ timeout duration 表記で `regex_timeout` を使う。CLI flag と MCP tool argument が異なる箇所だけ、復旧 hint を surface 別にする。
 - **redaction surface は fail closed。** `DiagnosticRedactor`、`GlobalToolLog`、MCP audit の argument value は、対象値を設定済み redaction placeholder へ置換する。sensitive name 判定は `SensitiveNameClassifier` を使い、区切り文字と大小文字を正規化して共有 credential fragment を確認するため、diagnostic と audit の redaction がずれない。`DiagnosticSanitizer` は `[message omitted after sanitization timeout]` でメッセージ全体を省略する。`SuggestionStore` は `redaction_timeout` を記録し `[REDACTED:redaction_timeout]` を永続化する。GitHub API response body は `[response body omitted after redaction timeout]` に置換する。
-- **bounded extraction helper。** `BoundedRegex` は extraction を best-effort に保つため、operation に応じて empty matches / `false` / 元入力を返し、capture scope が有効な場合は timeout diagnostics を記録する。
+- **bounded extraction helper。** `BoundedRegex` は extraction を best-effort に保つため、operation に応じて empty matches / `false` / 元入力を返し、capture scope が有効な場合は timeout diagnostics を記録する。`EnumerateMatches` は consumer が次の結果を要求したときだけ `Match.NextMatch` で進むため、bounded extractor loop は dense match collection の残りを実体化せず停止できる。
 
 ## メトリクス出力
 

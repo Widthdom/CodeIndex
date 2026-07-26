@@ -7903,6 +7903,38 @@ public partial class SymbolExtractorTests
             $"Long non-declarator C++ extraction took {stopwatch.Elapsed.TotalSeconds:F2}s and allocated {allocatedBytes:N0} bytes.");
     }
 
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_CSharp_ManyNestedMembers_ReusesContainerPathBuffer()
+    {
+        const int memberCount = 8_000;
+        var contentBuilder = new StringBuilder(memberCount * 32);
+        contentBuilder.AppendLine("namespace Outer { class Middle { class Inner {");
+        for (var index = 0; index < memberCount; index++)
+            contentBuilder.Append("void Method").Append(index).AppendLine("() { }");
+        contentBuilder.AppendLine("} } }");
+        var content = contentBuilder.ToString();
+        _ = SymbolExtractor.Extract(1, "csharp", "class Warmup { void Method() { } }");
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.Equal(memberCount, symbols.Count(symbol => symbol.Kind == "function"));
+        Assert.All(
+            symbols.Where(symbol => symbol.Kind == "function"),
+            symbol => Assert.Equal("Inner", symbol.ContainerName));
+        Assert.InRange(allocatedBytes, 0, 64L * 1024 * 1024);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"Nested C# member extraction took {stopwatch.Elapsed.TotalSeconds:F2}s and allocated {allocatedBytes:N0} bytes.");
+    }
+
     [Fact]
     public void Extract_Cpp_DetectsExternLinkageFunctions()
     {

@@ -6,13 +6,18 @@ namespace CodeIndex.Indexer;
 
 internal static partial class LanguageReferenceExtractionSupport
 {
-    private static void EmitFortranCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
+    private static void EmitFortranCallReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references)
     {
         if (!StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "call"))
             return;
 
-        foreach (Match match in FortranCallRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(FortranCallRegex, preparedLine, references))
+        {
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
+        }
     }
 
     private static void EmitPascalCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
@@ -43,7 +48,7 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         if (preparedLine.IndexOf('[') >= 0)
         {
-            foreach (Match match in ObjCMessageRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ObjCMessageRegex, preparedLine, references))
             {
                 var receiver = match.Groups["receiver"];
                 var selector = match.Groups["name"];
@@ -59,12 +64,18 @@ internal static partial class LanguageReferenceExtractionSupport
         if (preparedLine.IndexOf("@selector", StringComparison.Ordinal) >= 0
             && preparedLine.IndexOf('(') >= 0)
         {
-            foreach (Match match in ObjCSelectorRegex.Matches(preparedLine))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ObjCSelectorRegex, preparedLine, references))
+            {
                 addCallLikeReference(match.Groups["name"].Value.TrimEnd(':'), match.Groups["name"].Index);
+            }
         }
     }
 
-    private static void EmitHaskellSpaceCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
+    private static void EmitHaskellSpaceCallReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        IReadOnlySet<string>? definitionNames,
+        List<ReferenceRecord> references)
     {
         if (!ContainsWhitespace(preparedLine))
             return;
@@ -87,7 +98,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in HaskellSpaceCallRegex.Matches(scanText))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(HaskellSpaceCallRegex, scanText, references))
         {
             var name = match.Groups["name"].Value;
             if (definitionNames?.Contains(name) == true || string.Equals(name, definitionName, StringComparison.Ordinal))
@@ -96,12 +107,16 @@ internal static partial class LanguageReferenceExtractionSupport
         }
     }
 
-    private static void EmitElixirParenlessCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
+    private static void EmitElixirParenlessCallReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        IReadOnlySet<string>? definitionNames,
+        List<ReferenceRecord> references)
     {
         if (!ContainsWhitespace(preparedLine))
             return;
 
-        foreach (Match match in ElixirParenlessCallRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ElixirParenlessCallRegex, preparedLine, references))
         {
             var name = match.Groups["name"].Value;
             if (definitionNames?.Contains(name) == true)
@@ -110,7 +125,11 @@ internal static partial class LanguageReferenceExtractionSupport
         }
     }
 
-    private static void EmitSmalltalkMessageReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
+    private static void EmitSmalltalkMessageReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        IReadOnlySet<string>? definitionNames,
+        List<ReferenceRecord> references)
     {
         if (!ContainsWhitespace(preparedLine))
             return;
@@ -125,7 +144,7 @@ internal static partial class LanguageReferenceExtractionSupport
             return;
 
         var consumedUntil = 0;
-        foreach (Match match in SmalltalkMessageSendRegex.Matches(preparedLine))
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(SmalltalkMessageSendRegex, preparedLine, references))
         {
             if (match.Index < consumedUntil)
                 continue;
