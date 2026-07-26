@@ -306,7 +306,7 @@ public static partial class SymbolExtractor
 
         if (statement.Contains("importlib", StringComparison.Ordinal) || statement.Contains("__import__", StringComparison.Ordinal))
         {
-            foreach (Match match in PythonDynamicImportLiteralRegex.Matches(statement))
+            foreach (Match match in Regex.EnumerateMatches(PythonDynamicImportLiteralRegex, statement))
             {
                 AddPythonImportEntry(
                     line,
@@ -650,7 +650,7 @@ public static partial class SymbolExtractor
             if (!line.Contains(":=", StringComparison.Ordinal))
                 continue;
 
-            foreach (Match match in PythonWalrusAssignmentRegex.Matches(line))
+            foreach (Match match in Regex.EnumerateMatches(PythonWalrusAssignmentRegex, line))
             {
                 var name = match.Groups["name"].Value;
                 if (name is "if" or "while" or "for")

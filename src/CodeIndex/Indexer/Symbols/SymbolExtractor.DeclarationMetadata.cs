@@ -33,7 +33,7 @@ public static partial class SymbolExtractor
 
             var lineNumber = i + 1;
 
-            foreach (Match match in CppFriendTypeDeclarationRegex.Matches(matchLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(CppFriendTypeDeclarationRegex, matchLine))
             {
                 var kind = NormalizeCppFriendTypeKind(match.Groups["kind"].Value);
                 var group = match.Groups["name"];
@@ -41,7 +41,7 @@ public static partial class SymbolExtractor
                 AddCppFriendDeclarationSymbol(fileId, symbols, extractionState, declared, kind, name, lineNumber, group.Index, line);
             }
 
-            foreach (Match match in CppFriendFunctionDeclarationRegex.Matches(matchLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(CppFriendFunctionDeclarationRegex, matchLine))
             {
                 var group = match.Groups["name"];
                 var name = LastCppDeclarationSegment(group.Value);

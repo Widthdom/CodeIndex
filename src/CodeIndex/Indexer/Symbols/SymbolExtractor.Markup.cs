@@ -541,7 +541,7 @@ public static partial class SymbolExtractor
 
             if (line.Contains("]:", StringComparison.Ordinal))
             {
-                foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
+                foreach (Match match in Regex.EnumerateMatches(MarkdownReferenceDefinitionRegex, line))
                 {
                     targets ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     targets[match.Groups["label"].ValueSpan.Trim().ToString()] = match.Groups["target"].ValueSpan.Trim().ToString();
@@ -562,20 +562,20 @@ public static partial class SymbolExtractor
     {
         if (line.Contains("](", StringComparison.Ordinal))
         {
-            foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
+            foreach (Match match in Regex.EnumerateMatches(MarkdownLocalAnchorLinkRegex, line))
                 AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, match.Value, lineNumber, ref symbols);
         }
 
         if (line.Contains("]:", StringComparison.Ordinal))
         {
-            foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
+            foreach (Match match in Regex.EnumerateMatches(MarkdownLocalAnchorReferenceRegex, line))
                 AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, match.Value, lineNumber, ref symbols);
         }
 
         if (!line.Contains("][", StringComparison.Ordinal))
             return;
 
-        foreach (Match match in MarkdownReferenceLinkRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(MarkdownReferenceLinkRegex, line))
         {
             var label = match.Groups["label"].ValueSpan.Trim().ToString();
             if (label.Length == 0)
@@ -774,7 +774,7 @@ public static partial class SymbolExtractor
 
             if (hasAttributeAssignment && line.Contains("x:Class", StringComparison.Ordinal))
             {
-                foreach (Match classMatch in XamlClassRegex.Matches(line))
+                foreach (Match classMatch in Regex.EnumerateMatches(XamlClassRegex, line))
                 {
                     var value = classMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
@@ -794,7 +794,7 @@ public static partial class SymbolExtractor
 
             if (hasAttributeAssignment && line.Contains("x:DataType", StringComparison.Ordinal))
             {
-                foreach (Match dataTypeMatch in XamlDataTypeRegex.Matches(line))
+                foreach (Match dataTypeMatch in Regex.EnumerateMatches(XamlDataTypeRegex, line))
                 {
                     var value = NormalizeXamlKeyValue(dataTypeMatch.Groups["value"].Value);
                     if (value.Length == 0)
@@ -814,7 +814,7 @@ public static partial class SymbolExtractor
 
             if (hasAttributeAssignment && line.Contains("x:TypeArguments", StringComparison.Ordinal))
             {
-                foreach (Match typeArgumentsMatch in XamlTypeArgumentsRegex.Matches(line))
+                foreach (Match typeArgumentsMatch in Regex.EnumerateMatches(XamlTypeArgumentsRegex, line))
                 {
                     foreach (var value in NormalizeXamlTypeArgumentsValue(typeArgumentsMatch.Groups["value"].Value))
                     {
@@ -834,7 +834,7 @@ public static partial class SymbolExtractor
 
             if (hasAttributeAssignment && line.Contains("TargetType", StringComparison.Ordinal))
             {
-                foreach (Match targetTypeMatch in XamlTargetTypeRegex.Matches(line))
+                foreach (Match targetTypeMatch in Regex.EnumerateMatches(XamlTargetTypeRegex, line))
                 {
                     var value = NormalizeXamlKeyValue(targetTypeMatch.Groups["value"].Value);
                     if (value.Length == 0)
@@ -854,7 +854,7 @@ public static partial class SymbolExtractor
 
             if (hasAttributeAssignment && line.Contains("x:Name", StringComparison.Ordinal))
             {
-                foreach (Match nameMatch in XamlNameRegex.Matches(line))
+                foreach (Match nameMatch in Regex.EnumerateMatches(XamlNameRegex, line))
                 {
                     var value = nameMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
@@ -874,7 +874,7 @@ public static partial class SymbolExtractor
 
             if (hasAttributeAssignment && line.Contains("x:Key", StringComparison.Ordinal))
             {
-                foreach (Match keyMatch in XamlKeyRegex.Matches(line))
+                foreach (Match keyMatch in Regex.EnumerateMatches(XamlKeyRegex, line))
                 {
                     var value = NormalizeXamlKeyValue(keyMatch.Groups["value"].Value);
                     if (value.Length == 0)
@@ -894,7 +894,7 @@ public static partial class SymbolExtractor
 
             if (MayContainXamlEventHandlerAttribute(line))
             {
-                foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
+                foreach (Match handlerMatch in Regex.EnumerateMatches(XamlEventHandlerRegex, line))
                 {
                     var value = handlerMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
@@ -972,7 +972,7 @@ public static partial class SymbolExtractor
 
         if (MayContainXamlBindingMarkup(rawText))
         {
-            foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+            foreach (Match bindingMatch in Regex.EnumerateMatches(XamlBindingRegex, rawText))
             {
                 if (symbols.Count >= StructuredDataMaxSymbols)
                     break;
@@ -1387,7 +1387,7 @@ public static partial class SymbolExtractor
         if (MayContainXamlBindingMarkup(rawText)
             && rawText.Contains("ElementName", StringComparison.Ordinal))
         {
-            foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+            foreach (Match bindingMatch in Regex.EnumerateMatches(XamlBindingRegex, rawText))
             {
                 if (!bindingMatch.Groups["kind"].Value.Equals("Binding", StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -1443,7 +1443,7 @@ public static partial class SymbolExtractor
         if (!rawText.Contains("Binding.ElementName", StringComparison.Ordinal))
             return;
 
-        foreach (Match elementNameMatch in XamlBindingElementNamePropertyElementRegex.Matches(rawText))
+        foreach (Match elementNameMatch in Regex.EnumerateMatches(XamlBindingElementNamePropertyElementRegex, rawText))
         {
             var value = NormalizeXamlElementReferenceValue(elementNameMatch.Groups["value"].Value);
             if (value.Length == 0)
@@ -1532,7 +1532,7 @@ public static partial class SymbolExtractor
         if (!rawText.Contains("Binding.Path", StringComparison.Ordinal))
             return;
 
-        foreach (Match pathMatch in XamlBindingPathPropertyElementRegex.Matches(rawText))
+        foreach (Match pathMatch in Regex.EnumerateMatches(XamlBindingPathPropertyElementRegex, rawText))
         {
             var value = NormalizeXamlBindingPathValue(pathMatch.Groups["value"].Value);
             if (value.Length == 0)
@@ -1625,7 +1625,7 @@ public static partial class SymbolExtractor
             return;
         }
 
-        foreach (Match typeMatch in XamlTypeObjectElementRegex.Matches(rawText))
+        foreach (Match typeMatch in Regex.EnumerateMatches(XamlTypeObjectElementRegex, rawText))
         {
             var value = NormalizeXamlKeyValue(typeMatch.Groups["value"].Value);
             if (value.Length == 0)
@@ -1656,7 +1656,7 @@ public static partial class SymbolExtractor
         if (!rawText.Contains(".TypeName", StringComparison.Ordinal))
             return;
 
-        foreach (Match typeMatch in XamlTypePropertyElementRegex.Matches(rawText))
+        foreach (Match typeMatch in Regex.EnumerateMatches(XamlTypePropertyElementRegex, rawText))
         {
             var value = NormalizeXamlKeyValue(typeMatch.Groups["value"].Value);
             if (value.Length == 0)
@@ -1847,7 +1847,7 @@ public static partial class SymbolExtractor
             return;
         }
 
-        foreach (Match nameMatch in XamlReferenceNamePropertyElementRegex.Matches(rawText))
+        foreach (Match nameMatch in Regex.EnumerateMatches(XamlReferenceNamePropertyElementRegex, rawText))
         {
             var value = NormalizeXamlElementReferenceValue(nameMatch.Groups["value"].Value);
             if (value.Length == 0)

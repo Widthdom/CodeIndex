@@ -1156,7 +1156,7 @@ public static partial class SymbolExtractor
             {
                 if (cssScannerLine.IndexOf("--", StringComparison.Ordinal) >= 0)
                 {
-                    foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
+                    foreach (Match match in Regex.EnumerateMatches(CssInlineCustomPropertyRegex, cssScannerLine))
                     {
                         var propertyName = match.Groups["name"].ValueSpan.Trim().ToString();
                         if (propertyName.Length == 0)

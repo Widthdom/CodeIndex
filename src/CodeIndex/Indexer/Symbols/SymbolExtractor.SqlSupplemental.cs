@@ -23,7 +23,7 @@ public static partial class SymbolExtractor
             return;
 
         List<int>? lineStarts = null;
-        foreach (Match match in SqlCteDefinitionRegex.Matches(content))
+        foreach (Match match in Regex.EnumerateMatches(SqlCteDefinitionRegex, content))
         {
             var nameGroup = match.Groups["name"];
             var name = NormalizeSqlIdentifierSegment(nameGroup.Value);
@@ -190,7 +190,7 @@ public static partial class SymbolExtractor
         List<int>? lineStarts = null;
         if (hasAlterAdd)
         {
-            foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
+            foreach (Match match in Regex.EnumerateMatches(SqlAlterTableAddGeneratedColumnRegex, structuralContent))
             {
                 var nameGroup = match.Groups["name"];
                 var currentLineStarts = lineStarts ??= BuildLineStartList(structuralLines);
@@ -208,7 +208,7 @@ public static partial class SymbolExtractor
         if (!hasCreateTable)
             return;
 
-        foreach (Match tableMatch in SqlCreateTableBodyRegex.Matches(structuralContent))
+        foreach (Match tableMatch in Regex.EnumerateMatches(SqlCreateTableBodyRegex, structuralContent))
         {
             var tableName = tableMatch.Groups["table"].Value;
             var bodyGroup = tableMatch.Groups["body"];
@@ -523,7 +523,7 @@ public static partial class SymbolExtractor
             if (parameterList != null
                 && parameterList.Contains("OUT", StringComparison.OrdinalIgnoreCase))
             {
-                foreach (Match match in SqlOutParameterRegex.Matches(parameterList))
+                foreach (Match match in Regex.EnumerateMatches(SqlOutParameterRegex, parameterList))
                 {
                     var rawName = match.Groups["name"].Value;
                     var name = NormalizeSqlSymbolSegment(rawName);
@@ -611,7 +611,7 @@ public static partial class SymbolExtractor
 
     private static IEnumerable<string> EnumerateSqlReturnsTableColumnLists(string header)
     {
-        foreach (Match marker in SqlReturnsTableMarkerRegex.Matches(header))
+        foreach (Match marker in Regex.EnumerateMatches(SqlReturnsTableMarkerRegex, header))
         {
             var openParen = marker.Index + marker.Length - 1;
             if (TryFindSqlClosingParen(header, openParen, out var closeParen))

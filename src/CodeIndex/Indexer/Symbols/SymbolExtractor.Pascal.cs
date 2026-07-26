@@ -48,7 +48,7 @@ public static partial class SymbolExtractor
             if (bodyStartLine == null && AdaBeginRegex.IsMatch(code))
                 bodyStartLine = i + 1;
 
-            foreach (Match endMatch in AdaNamedEndRegex.Matches(code))
+            foreach (Match endMatch in Regex.EnumerateMatches(AdaNamedEndRegex, code))
             {
                 var endName = endMatch.Groups["name"].Value;
                 var endLeaf = endName[(endName.LastIndexOf('.') + 1)..];
@@ -64,8 +64,8 @@ public static partial class SymbolExtractor
         for (var i = bodyStartLine.Value - 1; i < lines.Length; i++)
         {
             var code = MaskAdaRangeStringsAndComments(lines[i]);
-            beginDepth += AdaBeginRegex.Matches(code).Count;
-            foreach (Match _ in AdaUnnamedOuterEndRegex.Matches(code))
+            beginDepth += Regex.CountMatches(AdaBeginRegex, code);
+            foreach (Match _ in Regex.EnumerateMatches(AdaUnnamedOuterEndRegex, code))
             {
                 if (beginDepth > 0)
                     beginDepth--;
@@ -219,12 +219,12 @@ public static partial class SymbolExtractor
 
     private static int CountPascalBeginTokens(string code) =>
         code.Contains("begin", StringComparison.OrdinalIgnoreCase)
-            ? PascalBeginRegex.Matches(code).Count
+            ? Regex.CountMatches(PascalBeginRegex, code)
             : 0;
 
     private static int CountPascalEndTokens(string code) =>
         code.Contains("end", StringComparison.OrdinalIgnoreCase)
-            ? PascalEndRegex.Matches(code).Count
+            ? Regex.CountMatches(PascalEndRegex, code)
             : 0;
 
     private static int CountPascalRangeBlockStarts(string code)
@@ -233,7 +233,7 @@ public static partial class SymbolExtractor
         if (code.Contains("case", StringComparison.OrdinalIgnoreCase)
             || code.Contains("try", StringComparison.OrdinalIgnoreCase))
         {
-            count += PascalNestedEndBlockStartRegex.Matches(code).Count;
+            count += Regex.CountMatches(PascalNestedEndBlockStartRegex, code);
         }
 
         return count;

@@ -648,7 +648,7 @@ internal static class DependencyPackageExtractor
         List<DependencyPackageInfo> packages,
         HashSet<string> seen)
     {
-        foreach (Match match in QuotedDependencyRegex.Matches(rawLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(QuotedDependencyRegex, rawLine))
         {
             var spec = match.Groups["spec"].Value;
             if (!TryParseDependencySpec(spec, out var name, out var version))

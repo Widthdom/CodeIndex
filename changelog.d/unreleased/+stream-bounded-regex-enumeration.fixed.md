@@ -18,6 +18,11 @@ affected:
   and C++ compound requirements without changing their configured timeouts.
   Bounded reference scans now stop before requesting another match and skip
   all later extraction phases on the same dense line once capacity is reached.
+  Symbol and dependency extractors now stream their remaining multi-match
+  patterns across scientific/native, Pascal/Ada, SQL, Python, Swift, GraphQL,
+  markup/XAML, shell, Ruby, Perl, Elixir, CSS, HDL, C++, and manifest parsing.
+  Count-only scans no longer retain a `MatchCollection`, while preserving the
+  previous all-or-nothing result if matching times out.
 
 ## 日本語
 
@@ -28,4 +33,8 @@ affected:
   JavaScript、GitHub Actions、C++ compound requirement の secondary reference
   scanner も設定済み timeout を変えず同じ逐次経路を使います。bounded reference
   scan は上限到達後に次の match を要求せず、同じ dense line の後続 extraction phase
-  も省略します。
+  も省略します。symbol / dependency extractor も scientific / native、Pascal / Ada、
+  SQL、Python、Swift、GraphQL、markup / XAML、shell、Ruby、Perl、Elixir、CSS、HDL、
+  C++、manifest parsing の残存 multi-match pattern を逐次走査します。count のみの scan
+  は `MatchCollection` を保持せず、matching timeout 時は従来どおり all-or-nothing の
+  結果を返します。

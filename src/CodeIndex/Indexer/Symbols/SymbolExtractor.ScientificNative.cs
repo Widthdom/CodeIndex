@@ -33,15 +33,15 @@ public static partial class SymbolExtractor
                 continue;
 
             var skipDeclarationToken = lineIndex == (openingTokenLineIndex ?? startIndex);
-            var matches = tokenRegex.Matches(code);
+            using var matches = Regex.EnumerateMatches(tokenRegex, code).GetEnumerator();
+            var hasMatch = matches.MoveNext();
             if (language == "matlab"
                 && lineIndex > startIndex
                 && depth == 1
                 && delimiterFrames.Count == 0
                 && IsMatlabPeerDeclaration(
                     lineIndex,
-                    code,
-                    matches,
+                    hasMatch ? matches.Current : null,
                     matlabExplicitOuterClosureByLine))
             {
                 return bodyStartLine == null
@@ -53,63 +53,67 @@ public static partial class SymbolExtractor
                 bodyStartLine ??= lineIndex + 1;
 
             var delimiterScanIndex = 0;
-            foreach (Match match in matches)
+            if (hasMatch)
             {
-                ScanScientificDelimiterFrames(
-                    code,
-                    delimiterScanIndex,
-                    match.Index,
-                    depth,
-                    delimiterFrames);
-                delimiterScanIndex = match.Index + match.Length;
-
-                if (skipDeclarationToken)
+                do
                 {
-                    skipDeclarationToken = false;
-                    depth++;
-                    continue;
-                }
+                    var match = matches.Current;
+                    ScanScientificDelimiterFrames(
+                        code,
+                        delimiterScanIndex,
+                        match.Index,
+                        depth,
+                        delimiterFrames);
+                    delimiterScanIndex = match.Index + match.Length;
 
-                var keyword = match.Groups["keyword"].Value;
-                if (!IsScientificBlockTokenAtStatementBoundary(code, match.Index, keyword, language))
-                    continue;
+                    if (skipDeclarationToken)
+                    {
+                        skipDeclarationToken = false;
+                        depth++;
+                        continue;
+                    }
 
-                // In Julia, `begin` inside square-bracket indexing is a first-index sentinel,
-                // not a `begin ... end` block opener (`A[begin]`).
-                // Julia の角括弧 index 内の `begin` は先頭 index sentinel であり、
-                // `begin ... end` block の開始ではない。
-                if (language == "julia"
-                    && keyword == "begin"
-                    && delimiterFrames.TryPeek(out var indexingFrame)
-                    && indexingFrame.ClosingDelimiter == ']')
-                {
-                    continue;
-                }
+                    var keyword = match.Groups["keyword"].Value;
+                    if (!IsScientificBlockTokenAtStatementBoundary(code, match.Index, keyword, language))
+                        continue;
 
-                if (keyword.Equals("end", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (delimiterFrames.TryPeek(out var delimiterFrame)
-                        && depth <= delimiterFrame.BlockDepth)
+                    // In Julia, `begin` inside square-bracket indexing is a first-index sentinel,
+                    // not a `begin ... end` block opener (`A[begin]`).
+                    // Julia の角括弧 index 内の `begin` は先頭 index sentinel であり、
+                    // `begin ... end` block の開始ではない。
+                    if (language == "julia"
+                        && keyword == "begin"
+                        && delimiterFrames.TryPeek(out var indexingFrame)
+                        && indexingFrame.ClosingDelimiter == ']')
                     {
                         continue;
                     }
 
-                    depth--;
-                    if (depth == 0)
-                        return (lineIndex + 1, bodyStartLine ?? lineIndex + 1, lineIndex + 1);
-                    continue;
-                }
+                    if (keyword.Equals("end", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (delimiterFrames.TryPeek(out var delimiterFrame)
+                            && depth <= delimiterFrame.BlockDepth)
+                        {
+                            continue;
+                        }
 
-                // Julia comprehension clauses inside delimiters do not open `end`-terminated
-                // blocks. Julia の区切り記号内にある内包表記句は `end` 終端ブロックを開かない。
-                if (language == "julia"
-                    && delimiterFrames.Count > 0
-                    && keyword is "for" or "if")
-                {
-                    continue;
-                }
+                        depth--;
+                        if (depth == 0)
+                            return (lineIndex + 1, bodyStartLine ?? lineIndex + 1, lineIndex + 1);
+                        continue;
+                    }
 
-                depth++;
+                    // Julia comprehension clauses inside delimiters do not open `end`-terminated
+                    // blocks. Julia の区切り記号内にある内包表記句は `end` 終端ブロックを開かない。
+                    if (language == "julia"
+                        && delimiterFrames.Count > 0
+                        && keyword is "for" or "if")
+                    {
+                        continue;
+                    }
+
+                    depth++;
+                } while (matches.MoveNext());
             }
 
             ScanScientificDelimiterFrames(
@@ -182,7 +186,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        foreach (Match match in JuliaScientificBlockTokenRegex.Matches(expression))
+        foreach (Match match in Regex.EnumerateMatches(JuliaScientificBlockTokenRegex, expression))
         {
             var keyword = match.Groups["keyword"].Value;
             if (keyword == "begin" && IsJuliaSquareBracketIndexToken(expression, match.Index))
@@ -357,25 +361,22 @@ public static partial class SymbolExtractor
 
     private static bool IsMatlabPeerDeclaration(
         int lineIndex,
-        string code,
-        MatchCollection matches,
+        Match? match,
         bool[]? matlabExplicitOuterClosureByLine)
     {
-        foreach (Match match in matches)
-        {
-            var keyword = match.Groups["keyword"].Value;
-            if (!keyword.Equals("function", StringComparison.OrdinalIgnoreCase)
-                && !keyword.Equals("classdef", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
+        if (match == null)
+            return false;
 
-            return matlabExplicitOuterClosureByLine == null
-                || lineIndex >= matlabExplicitOuterClosureByLine.Length
-                || !matlabExplicitOuterClosureByLine[lineIndex];
+        var keyword = match.Groups["keyword"].Value;
+        if (!keyword.Equals("function", StringComparison.OrdinalIgnoreCase)
+            && !keyword.Equals("classdef", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
         }
 
-        return false;
+        return matlabExplicitOuterClosureByLine == null
+            || lineIndex >= matlabExplicitOuterClosureByLine.Length
+            || !matlabExplicitOuterClosureByLine[lineIndex];
     }
 
     private static bool[] BuildMatlabExplicitOuterClosureMap(string[] scannerLines)
@@ -388,7 +389,7 @@ public static partial class SymbolExtractor
         {
             var code = scannerLines[lineIndex];
             var delimiterScanIndex = 0;
-            foreach (Match match in MatlabScientificBlockTokenRegex.Matches(code))
+            foreach (Match match in Regex.EnumerateMatches(MatlabScientificBlockTokenRegex, code))
             {
                 ScanScientificDelimiterFrames(
                     code,

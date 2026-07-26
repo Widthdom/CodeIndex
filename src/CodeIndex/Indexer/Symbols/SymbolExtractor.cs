@@ -393,7 +393,7 @@ public static partial class SymbolExtractor
             if (!line.Contains("parameter", StringComparison.Ordinal))
                 continue;
 
-            foreach (Match match in HdlInlineParameterRegex.Matches(line))
+            foreach (Match match in Regex.EnumerateMatches(HdlInlineParameterRegex, line))
             {
                 var name = match.Groups["name"].ValueSpan.Trim().ToString();
                 if (name.Length == 0)
@@ -671,7 +671,7 @@ public static partial class SymbolExtractor
         var argsStart = startMatch.Index + startMatch.Length;
         var args = codeLine[argsStart..];
         var added = false;
-        foreach (Match match in RPacmanPackageLoaderArgumentRegex.Matches(args))
+        foreach (Match match in Regex.EnumerateMatches(RPacmanPackageLoaderArgumentRegex, args))
         {
             var quotedNameGroup = match.Groups["quotedName"];
             var nameGroup = quotedNameGroup.Success ? quotedNameGroup : match.Groups["name"];
@@ -1064,6 +1064,6 @@ public static partial class SymbolExtractor
     {
         if (string.IsNullOrWhiteSpace(bodyContent))
             return 1;
-        return 1 + ComplexityRegex.Matches(bodyContent).Count;
+        return 1 + Regex.CountMatches(ComplexityRegex, bodyContent);
     }
 }

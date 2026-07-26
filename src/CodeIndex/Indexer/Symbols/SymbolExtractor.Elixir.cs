@@ -38,7 +38,7 @@ public static partial class SymbolExtractor
 
         if (MayContainElixirBlockToken(firstLineTail))
         {
-            foreach (Match token in ElixirBlockTokenRegex.Matches(firstLineTail))
+            foreach (Match token in Regex.EnumerateMatches(ElixirBlockTokenRegex, firstLineTail))
             {
                 if (token.Value == "end")
                     depth--;
@@ -60,7 +60,7 @@ public static partial class SymbolExtractor
             if (!MayContainElixirBlockToken(masked))
                 continue;
 
-            foreach (Match token in ElixirBlockTokenRegex.Matches(masked))
+            foreach (Match token in Regex.EnumerateMatches(ElixirBlockTokenRegex, masked))
             {
                 if (token.Value == "end")
                     depth--;

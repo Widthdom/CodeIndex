@@ -555,8 +555,15 @@ pattern enumeration accepts the extraction timeout explicitly so these paths
 do not trade streaming for a different timeout contract. Regex loops that own
 a reference list use `ReferenceExtractor.EnumerateReferenceMatches` so bounded
 lists stop before requesting the next match, and the shared per-line pipeline
-checks the same cap between type, infrastructure, SQL, call, member, metadata,
-Razor, Python, and R phases.
+  checks the same cap between type, infrastructure, SQL, call, member, metadata,
+  Razor, Python, and R phases.
+Symbol and dependency extractors follow the same streaming rule across
+scientific/native, Pascal/Ada, SQL, Python, Swift, GraphQL, markup/XAML, shell,
+Ruby, Perl, Elixir, CSS, HDL, C++, and manifest parsing. When only a total is
+needed, use `BoundedRegex.CountMatches`; it preserves the prior all-or-nothing
+timeout result without retaining a `MatchCollection`. A scanner that needs the
+first match for classification and the rest for parsing must keep one enumerator
+instead of materializing or rescanning the input.
 Systems-language scanners stream C/C++ construction and template groups, Rust
 calls and value/signature types, Swift property wrappers, Go concurrency and
 composite/signature types, plus shared scientific/native call groups. Preserve
@@ -3615,8 +3622,14 @@ C++ compound requirement の match を demand-driven に保つ。static pattern 
 extraction timeout を明示的に受け取り、逐次化によって timeout 契約を変えない。
 reference list を所有する regex loop は `ReferenceExtractor.EnumerateReferenceMatches`
 を使い、bounded list が満杯なら次の match を要求しない。共有の行単位 pipeline も
-type、infrastructure、SQL、call、member、metadata、Razor、Python、R の各 phase 間で
-同じ上限を確認する。
+  type、infrastructure、SQL、call、member、metadata、Razor、Python、R の各 phase 間で
+  同じ上限を確認する。
+symbol / dependency extractor も scientific / native、Pascal / Ada、SQL、Python、
+Swift、GraphQL、markup / XAML、shell、Ruby、Perl、Elixir、CSS、HDL、C++、
+manifest parsing をまたいで同じ逐次走査規則に従う。総数だけが必要な場合は
+`BoundedRegex.CountMatches` を使い、従来の timeout 時 all-or-nothing 結果を保ったまま
+`MatchCollection` を保持しない。先頭 match を分類に、残りを構文解析に使う scanner は、
+input を実体化または再走査せず1つの enumerator を維持する。
 systems-language scanner は C / C++ construction と template group、Rust call と
 value / signature type、Swift property wrapper、Go concurrency と composite / signature
 type、共有 scientific / native call group を逐次走査する。source-order emission を維持し、

@@ -191,6 +191,24 @@ internal sealed class BoundedRegex : BclRegex
         }
     }
 
+    public static int CountMatches(BclRegex regex, string input)
+    {
+        try
+        {
+            var count = 0;
+            for (var match = regex.Match(input); match.Success; match = match.NextMatch())
+                count++;
+            return count;
+        }
+        catch (RegexMatchTimeoutException ex)
+        {
+            // MatchCollection.Count historically returned no matches after a timeout. Preserve
+            // that all-or-nothing behavior without retaining every Match object.
+            RecordTimeout("matches", regex.ToString(), ex);
+            return 0;
+        }
+    }
+
     public static new bool IsMatch(string input, string pattern) =>
         IsMatch(input, pattern, RegexOptions.None);
 

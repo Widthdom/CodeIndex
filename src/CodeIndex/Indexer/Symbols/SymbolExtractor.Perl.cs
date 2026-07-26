@@ -39,7 +39,7 @@ public static partial class SymbolExtractor
 
             string? firstConstantName = null;
             HashSet<string>? seenConstantNames = null;
-            foreach (Match keyMatch in PerlHashConstantKeyRegex.Matches(body))
+            foreach (Match keyMatch in Regex.EnumerateMatches(PerlHashConstantKeyRegex, body))
             {
                 var nameGroup = keyMatch.Groups["bare"].Success
                     ? keyMatch.Groups["bare"]

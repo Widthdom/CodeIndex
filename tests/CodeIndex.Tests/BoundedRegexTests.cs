@@ -127,6 +127,30 @@ public sealed class BoundedRegexTests
     }
 
     [Fact]
+    public void CountMatches_InstanceRegex_CountsWithoutMaterializingCollection()
+    {
+        var regex = new BoundedRegex(@"\w+");
+
+        var count = BoundedRegex.CountMatches(regex, "alpha beta gamma");
+
+        Assert.Equal(3, count);
+    }
+
+    [Fact]
+    public void CountMatches_InstanceRegexTimeout_ReturnsZero()
+    {
+        var regex = new BoundedRegex(
+            @"token|(?:a+)+$",
+            default,
+            TimeSpan.FromMilliseconds(1));
+        var input = "token " + new string('a', 10_000) + "!";
+
+        var count = BoundedRegex.CountMatches(regex, input);
+
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
     public void InstanceMatch_Timeout_ReturnsEmpty()
     {
         var regex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));
