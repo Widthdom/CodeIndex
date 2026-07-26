@@ -138,6 +138,49 @@ public static partial class ReferenceExtractor
         internal SymbolRecord? ActiveCallable;
     }
 
+    internal static bool ContainsFunctionalSpan(
+        IReadOnlyList<(int Start, int End)> spans,
+        int index)
+    {
+        for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
+        {
+            var span = spans[spanIndex];
+            if (index >= span.Start && index < span.End)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsFunctionalSpanInterior(
+        IReadOnlyList<(int Start, int End)> spans,
+        int index)
+    {
+        for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
+        {
+            var span = spans[spanIndex];
+            if (index > span.Start && index < span.End)
+                return true;
+        }
+
+        return false;
+    }
+
+    internal static bool OverlapsFunctionalSpan(
+        IReadOnlyList<(int Start, int End)> spans,
+        int start,
+        int end)
+    {
+        for (var spanIndex = 0; spanIndex < spans.Count; spanIndex++)
+        {
+            var span = spans[spanIndex];
+            if (span.Start < end && start < span.End)
+                return true;
+        }
+
+        return false;
+    }
+
     private static List<ReferenceRecord> ExtractFunctionalLanguageReferences(ReferenceExtractionContext request)
     {
         if (!TryPrepareReferenceLines(

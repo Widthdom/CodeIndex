@@ -52,7 +52,7 @@ public static partial class ReferenceExtractor
         var skippedDefinition = false;
         foreach (Match match in RakuBareCallRegex.Matches(line))
         {
-            if (qualifiedCallSpans.Any(span => match.Index >= span.Start && match.Index < span.End))
+            if (ContainsFunctionalSpan(qualifiedCallSpans, match.Index))
                 continue;
 
             var name = match.Groups["name"].Value;

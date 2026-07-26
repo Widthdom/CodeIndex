@@ -42,7 +42,7 @@ public static partial class ReferenceExtractor
         var definitionMatch = ErlangFunctionDefinitionRegex.Match(line);
         foreach (Match match in ErlangLocalCallRegex.Matches(line))
         {
-            if (remoteCallSpans.Any(span => match.Index >= span.Start && match.Index < span.End))
+            if (ContainsFunctionalSpan(remoteCallSpans, match.Index))
                 continue;
             if (IsInsideQuotedAtom(match.Groups["name"].Index))
                 continue;
@@ -67,7 +67,7 @@ public static partial class ReferenceExtractor
         }
 
         bool IsInsideQuotedAtom(int index)
-            => quotedAtomSpans.Any(span => index > span.Start && index < span.End);
+            => ContainsFunctionalSpanInterior(quotedAtomSpans, index);
     }
 
     private static List<(int Start, int End)> GetErlangQuotedAtomSpans(string line)

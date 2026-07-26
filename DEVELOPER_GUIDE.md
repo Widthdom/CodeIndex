@@ -511,6 +511,10 @@ trimming, quote, and first-separator semantics when replacing it.
 `DelimitedSpanEnumerable` is the shared allocation-free walker for single
 delimiters; repository metadata, application manifests, VHDL declarations and
 package paths, and CUDA parameter headers use it instead of split arrays.
+Likewise, exclusion-range checks inside dense match loops must use indexed
+helpers rather than capturing LINQ predicates. Erlang, OCaml, and Raku share
+`ContainsFunctionalSpan` / `OverlapsFunctionalSpan` for remote, qualified,
+quoted-atom, and type-reference suppression.
 
 When structural masking turns a source line into whitespace, do not materialize
 a trimmed copy merely to discover that the line has no references. Preserve
@@ -3510,6 +3514,9 @@ import、dependency、path segment、declaration item ごとに array と substr
 single delimiter には allocation-free な共通 walker `DelimitedSpanEnumerable` を使う。
 repository metadata、application manifest、VHDL declaration / package path、CUDA parameter
 header は split array を作らずこの walker で処理する。
+同様に、dense match loop 内の exclusion-range 判定で capturing LINQ predicate を使っては
+ならない。Erlang、OCaml、Raku は remote / qualified / quoted-atom / type-reference の
+抑制に `ContainsFunctionalSpan` / `OverlapsFunctionalSpan` を共有する。
 
 構造マスクによって source line が空白だけになった場合、reference がないことを確認するため
 だけに trim 済み copy を実体化してはならない。documentation handling と、original line を

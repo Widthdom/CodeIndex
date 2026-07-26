@@ -473,6 +473,38 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void FunctionalSpanMembership_RepeatedCallFiltering_DoesNotAllocate()
+    {
+        var spans = Enumerable.Range(0, 128)
+            .Select(index => (Start: index * 8, End: index * 8 + 4))
+            .ToArray();
+        var foundCount = 0;
+        _ = ReferenceExtractor.ContainsFunctionalSpan(spans, 16);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < 10_000; index++)
+            {
+                if (ReferenceExtractor.ContainsFunctionalSpan(
+                        spans,
+                        index % (spans[^1].End + 1)))
+                {
+                    foundCount++;
+                }
+            }
+        });
+
+        Assert.True(foundCount > 0);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Functional span membership allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
