@@ -11,6 +11,96 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.40.3] - 2026-07-27
+
+#### Fixed
+
+- **Reduced C / C++ header-detection allocations for large repositories** —
+  Bounded lexical samples for ambiguous `.h` files are now scanned by newline
+  index instead of materializing an array and a string for every sampled line.
+- **Removed split-array growth from delimiter-only extractor paths** —
+  Repository metadata, application manifests, VHDL declarations and package
+  imports, and CUDA kernel parameters now share an allocation-free span walker
+  while preserving trimming and empty-entry behavior.
+- **Removed per-match closure allocations from functional-language references** —
+  Erlang, OCAML, and Raku now use shared indexed span-membership checks when
+  suppressing remote, qualified, quoted-atom, and type-reference matches.
+- **Removed padded-line copies from functional-language state machines** —
+  Erlang specification/callable terminators and Raku heredoc terminators now
+  compare trimmed spans, avoiding a new string for every padded sentinel line.
+- **Removed per-identifier closure allocations from hardware-language scopes** —
+  Verilog, SystemVerilog, and VHDL shadow checks plus CUDA, GLSL, HLSL, Metal,
+  and WGSL binding/resource checks now use direct indexed membership loops.
+- **Stopped allocating empty exclusion lists on functional-language lines** —
+  Erlang, OCAML, and Raku now create quoted, remote, type, qualified, and method
+  span lists only after the first relevant match on a line.
+- **Reduced reference-extraction allocations for large embedded multiline payloads** —
+  Structurally masked C# raw strings, Java text blocks, and JavaScript /
+  TypeScript template literals no longer materialize trimmed reference
+  contexts for lines that will be skipped.
+- **Reduced repository-metadata and manifest validation overhead** —
+  Long metadata candidates now use allocation-free span character scans, while
+  application manifests track dependency ancestry by XML depth instead of
+  rescanning an ancestor stack for every identity.
+- **Avoided duplicate full-line whitespace scans during reference extraction** —
+  Every supported language now classifies each prepared line once and reuses
+  the result across special-line and ordinary empty-line dispatch, which is
+  especially important for long structurally masked payloads.
+- **Reduced all-language extraction allocations for large source files** —
+  Symbol and reference extraction now share an exact-capacity line splitter
+  that avoids the temporary separator-index arrays created by generic splitting.
+- **Made bounded regex enumeration demand-driven** — Extractors that stop after
+  reaching a result limit no longer force every remaining regex match on the
+  source line to be materialized first, while right-to-left instances preserve
+  their default reverse match order. Secondary reference scanners now use the
+  same streaming path across Fortran, Visual Basic, F#, Pascal, Objective-C,
+  Haskell, Elixir, Smalltalk, Lua, Dart, Razor, JSON, JavaScript, GitHub Actions,
+  and C++ compound requirements without changing their configured timeouts.
+  Bounded reference scans now stop before requesting another match and skip
+  all later extraction phases on the same dense line once capacity is reached.
+  Symbol and dependency extractors now stream their remaining multi-match
+  patterns across scientific/native, Pascal/Ada, SQL, Python, Swift, GraphQL,
+  markup/XAML, shell, Ruby, Perl, Elixir, CSS, HDL, C++, and manifest parsing.
+  Count-only scans no longer retain a `MatchCollection`, while preserving the
+  previous all-or-nothing result if matching times out.
+  Dense XAML supplemental symbol scans now stop as soon as the shared
+  structured-data symbol budget needs its diagnostic marker, instead of
+  building an unbounded temporary list and trimming it after all phases.
+  Symbol container assignment now reuses one path buffer across members instead
+  of allocating a stack snapshot and a second list for every nested symbol.
+  Prolog goal scans now allocate per-line call lists only when a known goal is
+  emitted and update directive metadata in place instead of copying the list.
+  JSON symbol and reference extraction now build UTF-8 line-offset arrays at
+  exact capacity instead of retaining a growing list alongside its final copy.
+- **Streamed core reference matches** — Shared calls, C# attributes, types,
+  patterns and locals, JSX elements, JVM documentation links, and Solidity
+  scanners now consume single-pass match groups on demand.
+- **Streamed dynamic-language reference matches** — PHP, Ruby, R, and Perl
+  scanners now enumerate dense attribute, type, DSL, namespace/member/resource,
+  and arrow-call matches only while the reference budget has capacity.
+- **Streamed functional-language reference matches** — Clojure, Elixir,
+  Erlang, OCAML, and Raku now enumerate regex results on demand and stop dense
+  lines as soon as the per-file reference budget is full.
+- **Streamed infrastructure and markup reference matches** — CSS, XAML,
+  HTML/GraphQL/Markdown, HDL, MSBuild, Dockerfile, shell, and PowerShell
+  scanners now consume dense match groups on demand.
+- **Streamed JVM-family reference matches** — Java, Kotlin, Scala, and
+  Gradle/Groovy scanners now consume dense regex results on demand and stop
+  bounded reference loops once the per-file cap is reached.
+- **Streamed Python reference matches** — Python decorators, annotations,
+  runtime type checks, typing factories, dataclass/framework integrations, and
+  dynamic imports now stop producing regex matches at the reference cap;
+  decorator arguments also stream directly from their start offset.
+- **Streamed SQL reference matches** — SQL statement, source, target,
+  generated-column, window-clause, procedure-call, and temporary-object
+  scanners now consume matches on demand and stop at bounded reference limits.
+- **Streamed systems-language reference matches** — C/C++, Rust, Swift, Go,
+  and shared scientific/native scanners now consume dense construction, type,
+  concurrency, wrapper, and call matches on demand.
+- **Removed padded suffix copies across declaration scanners** — CSS selector
+  continuations, C# and Java body-less declarations, and functional-language
+  sentinels now share allocation-free trimmed span comparisons.
+
 ### [1.40.2] - 2026-07-26
 
 #### Fixed
@@ -6201,6 +6291,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.40.3] - 2026-07-27
+
+#### 修正
+
+- **巨大 repository の C / C++ header 判定 allocation を削減しました** —
+  曖昧な `.h` file の bounded lexical sample を、sampled line ごとの array と string
+  に実体化せず newline index で走査するようにしました。
+- **delimiter-only extractor 経路の split-array 増加を解消しました** —
+  repository metadata、application manifest、VHDL declaration / package import、
+  CUDA kernel parameter は、trim と empty-entry の意味論を維持しつつ allocation-free
+  な span walker を共有します。
+- **functional-language reference の match ごとの closure allocation を解消しました** —
+  Erlang、OCAML、Raku は remote、qualified、quoted-atom、type-reference match の抑制時に、
+  共通の indexed span-membership check を使います。
+- **functional-language state machine の padded-line copy を解消しました** —
+  Erlang specification / callable terminator と Raku heredoc terminator は trimmed span
+  を比較し、padding 付き sentinel line ごとの新しい string を回避します。
+- **hardware-language scope の identifier ごとの closure allocation を解消しました** —
+  Verilog、SystemVerilog、VHDL の shadow 判定と、CUDA、GLSL、HLSL、Metal、WGSL
+  の binding / resource 判定は direct indexed membership loop を使います。
+- **functional-language line ごとの empty exclusion list allocation を解消しました** —
+  Erlang、OCAML、Raku は quoted、remote、type、qualified、method span list を、行内の
+  最初の関連 match が見つかった後にだけ作ります。
+- **巨大な埋め込み multiline payload に対する reference extraction の allocation を削減しました** —
+  構造マスク済みの C# raw string、Java text block、JavaScript / TypeScript template literal
+  では、skip される行の trim 済み reference context を実体化しません。
+- **repository metadata と manifest の validation overhead を削減しました** —
+  長い metadata candidate は allocation-free な span character scan を使い、
+  application manifest は identity ごとの ancestor stack 再走査ではなく XML depth
+  で dependency ancestry を追跡します。
+- **reference extraction の重複した全行 whitespace scan を解消しました** —
+  全対応言語で prepared line を一度だけ判定し、special-line と通常の empty-line dispatch
+  で結果を共有するため、長い構造マスク済み payload の再走査を避けます。
+- **巨大 source file の全言語 extraction allocation を削減しました** —
+  symbol / reference extraction は exact-capacity line splitter を共有し、generic split
+  が作る一時 separator-index array を回避します。
+- **bounded regex enumeration を demand-driven にしました** — 結果上限に達して
+  停止する extractor は、source line に残るすべての regex match を先に実体化せず、
+  right-to-left instance の既定の逆順も維持します。Fortran、Visual Basic、F#、
+  Pascal、Objective-C、Haskell、Elixir、Smalltalk、Lua、Dart、Razor、JSON、
+  JavaScript、GitHub Actions、C++ compound requirement の secondary reference
+  scanner も設定済み timeout を変えず同じ逐次経路を使います。bounded reference
+  scan は上限到達後に次の match を要求せず、同じ dense line の後続 extraction phase
+  も省略します。symbol / dependency extractor も scientific / native、Pascal / Ada、
+  SQL、Python、Swift、GraphQL、markup / XAML、shell、Ruby、Perl、Elixir、CSS、HDL、
+  C++、manifest parsing の残存 multi-match pattern を逐次走査します。count のみの scan
+  は `MatchCollection` を保持せず、matching timeout 時は従来どおり all-or-nothing の
+  結果を返します。dense XAML の supplemental symbol scan は、共有 structured-data
+  symbol budget の diagnostic marker が必要になった時点で停止し、全 phase の後まで
+  無制限の一時 list を構築してから trim しません。symbol の container assignment も
+  member ごとに stack snapshot と2つ目の list を割り当てず、1つの path buffer を再利用します。
+  Prolog goal scan も既知 goal を出力するときだけ per-line call list を割り当て、directive
+  metadata は list を copy せず in-place で更新します。JSON symbol / reference extraction
+  も UTF-8 line-offset array を exact capacity で構築し、成長中の list と最終 copy を同時に
+  保持しません。
+- **core reference match を逐次走査にしました** — 共有 call、C# attribute / type /
+  pattern / local、JSX element、JVM documentation link、Solidity scanner は
+  single-pass の match group を demand-driven に消費します。
+- **dynamic-language の reference match を逐次走査にしました** — PHP、Ruby、R、
+  Perl scanner は dense な attribute、type、DSL、namespace / member / resource、
+  arrow-call match を reference budget に空きがある間だけ列挙します。
+- **functional-language の reference match を逐次走査にしました** — Clojure、
+  Elixir、Erlang、OCAML、Raku は regex result を demand-driven に列挙し、per-file
+  reference budget が満杯になると dense line の走査を停止します。
+- **infrastructure / markup の reference match を逐次走査にしました** — CSS、
+  XAML、HTML / GraphQL / Markdown、HDL、MSBuild、Dockerfile、shell、PowerShell
+  scanner は dense な match group を demand-driven に消費します。
+- **JVM-family の reference match を逐次走査にしました** — Java、Kotlin、Scala、
+  Gradle / Groovy scanner は dense な regex result を demand-driven に消費し、bounded
+  reference loop は per-file 上限に達すると停止します。
+- **Python の reference match を逐次走査にしました** — decorator、annotation、
+  runtime type check、typing factory、dataclass / framework integration、dynamic
+  import は reference 上限で regex match の生成を停止し、decorator argument も指定
+  offset から直接逐次走査します。
+- **SQL の reference match を逐次走査にしました** — SQL の statement、source、
+  target、generated-column、window-clause、procedure-call、一時 object scanner は
+  match を demand-driven に消費し、bounded reference の上限で停止します。
+- **systems-language の reference match を逐次走査にしました** — C / C++、Rust、
+  Swift、Go と共有 scientific / native scanner は dense な construction、type、
+  concurrency、wrapper、call match を demand-driven に消費します。
+- **declaration scanner 横断で padded suffix copy を解消しました** —
+  CSS selector continuation、C# / Java body-less declaration、functional-language
+  sentinel は allocation-free な trimmed span 比較を共有します。
+
 ### [1.40.2] - 2026-07-26
 
 #### 修正
@@ -12369,7 +12543,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.40.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.40.3...HEAD
+[1.40.3]: https://github.com/Widthdom/CodeIndex/compare/v1.40.2...v1.40.3
 [1.40.2]: https://github.com/Widthdom/CodeIndex/compare/v1.40.1...v1.40.2
 [1.40.1]: https://github.com/Widthdom/CodeIndex/compare/v1.40.0...v1.40.1
 [1.40.0]: https://github.com/Widthdom/CodeIndex/compare/v1.39.4...v1.40.0
