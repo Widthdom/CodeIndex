@@ -5,7 +5,11 @@ namespace CodeIndex.Cli;
 
 internal static class ReportBundleWriter
 {
-    internal static void Write(string outputPath, ReportBundle bundle, Action? beforeWriteEntries = null)
+    internal static void Write(
+        string outputPath,
+        ReportBundle bundle,
+        bool overwrite,
+        Action? beforeWriteEntries = null)
     {
         var fullOutputPath = Path.GetFullPath(outputPath);
         var dir = Path.GetDirectoryName(fullOutputPath);
@@ -31,12 +35,7 @@ internal static class ReportBundleWriter
                     tar.WriteEntry(entry);
                 }
             },
-            ApplyBundleFileMode);
-    }
-
-    private static void ApplyBundleFileMode(string path)
-    {
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, ReportCommandRunner.BundleFileMode);
+            AtomicFileWriter.WriteProfile.Sensitive,
+            overwrite);
     }
 }

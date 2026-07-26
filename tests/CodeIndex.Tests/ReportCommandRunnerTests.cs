@@ -80,6 +80,15 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_OverwriteOptsInToReplacement()
+    {
+        var options = ReportCommandRunner.ParseArgs(["--output", "x.tgz", "--overwrite"]);
+
+        Assert.True(options.Overwrite);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_LogLinesParsesPositive()
     {
         var options = ReportCommandRunner.ParseArgs(["--output", "x.tgz", "--log-lines", "50"]);
@@ -181,7 +190,7 @@ public class ReportCommandRunnerTests
 
             using var manifest = ReadJsonEntry(entries, "support-manifest.json");
             var root = manifest.RootElement;
-            Assert.Equal(3, root.GetProperty("manifest_version").GetInt32());
+            Assert.Equal(4, root.GetProperty("manifest_version").GetInt32());
             var artifact = root.GetProperty("artifact");
             Assert.Equal(ReportCommandRunner.BundleArtifactFormat, artifact.GetProperty("format").GetString());
             Assert.Equal(ReportCommandRunner.BundleArtifactMediaType, artifact.GetProperty("media_type").GetString());
@@ -189,6 +198,12 @@ public class ReportCommandRunnerTests
             Assert.True(JsonArrayContains(artifact.GetProperty("recommended_extensions"), ".tar.gz"));
             Assert.True(artifact.GetProperty("json_metadata_stdout_only").GetBoolean());
             Assert.Equal(entries.Count, root.GetProperty("bundle").GetProperty("files").GetInt32());
+            Assert.Equal(
+                entries.Keys,
+                root.GetProperty("bundle").GetProperty("members").EnumerateArray().Select(static item => item.GetString()));
+            Assert.False(root.GetProperty("bundle").GetProperty("db_inspected").GetBoolean());
+            Assert.False(root.GetProperty("bundle").GetProperty("db_diagnostics_included").GetBoolean());
+            Assert.False(root.GetProperty("bundle").GetProperty("db_member_included").GetBoolean());
             Assert.False(root.GetProperty("bundle").GetProperty("db_included").GetBoolean());
             Assert.False(root.GetProperty("bundle").GetProperty("log_included").GetBoolean());
             Assert.Equal(0, root.GetProperty("redactions").GetProperty("total").GetInt32());
@@ -210,10 +225,12 @@ public class ReportCommandRunnerTests
         var workDir = CreateWorkDir();
         var logDir = CreateLogDir(workDir);
         var output = Path.Combine(workDir, "bundle.tgz");
-        const string secretArgument = "clients/private-project";
+        var secretArgument = Path.Combine(workDir, "clients", "private-project");
+        var failureDbPath = Path.Combine(secretArgument, ".cdidx", "codeindex.db");
         const string secretMessage = "query=SELECT * FROM private_customer_records";
         try
         {
+            Directory.CreateDirectory(secretArgument);
             using var env = EnvironmentVariableScope.Capture(
                 "CDIDX_FORCE_GLOBAL_TOOL_LOG",
                 "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -240,7 +257,7 @@ public class ReportCommandRunnerTests
             }
 
             var (reportExitCode, reportStdout, reportStderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
-                ["report", "--output", output, "--db", Path.Combine(workDir, "missing.db"), "--no-log"],
+                ["report", "--output", output, "--db", failureDbPath, "--no-log"],
                 appVersion: "1.38.0-test"));
 
             Assert.Equal(CommandExitCodes.Success, reportExitCode);
@@ -263,6 +280,9 @@ public class ReportCommandRunnerTests
             Assert.Contains(nameof(ThrowCurrentProcessFailure), failureRoot.GetProperty("diagnostics").GetString());
             Assert.True(failureRoot.GetProperty("paths_redacted").GetBoolean());
             Assert.False(failureRoot.GetProperty("literal_arguments_included").GetBoolean());
+            Assert.StartsWith("ws_", failureRoot.GetProperty("workspace_id").GetString(), StringComparison.Ordinal);
+            Assert.StartsWith("db_", failureRoot.GetProperty("database_id").GetString(), StringComparison.Ordinal);
+            Assert.StartsWith("run_", failureRoot.GetProperty("run_id").GetString(), StringComparison.Ordinal);
             Assert.DoesNotContain(secretArgument, failureRoot.GetRawText());
             Assert.DoesNotContain(secretMessage, failureRoot.GetRawText());
             Assert.DoesNotContain(workDir, failureRoot.GetRawText());
@@ -270,6 +290,12 @@ public class ReportCommandRunnerTests
             using var manifest = ReadJsonEntry(entries, "support-manifest.json");
             var manifestRoot = manifest.RootElement;
             Assert.True(manifestRoot.GetProperty("bundle").GetProperty("last_failure_included").GetBoolean());
+            Assert.Equal("included", manifestRoot.GetProperty("last_failure").GetProperty("disposition").GetString());
+            Assert.Equal("matched", manifestRoot.GetProperty("last_failure").GetProperty("reason").GetString());
+            Assert.StartsWith(
+                "run_",
+                manifestRoot.GetProperty("provenance").GetProperty("run_id").GetString(),
+                StringComparison.Ordinal);
             Assert.Equal(
                 LastFailureEventStore.MaxEventBytes,
                 manifestRoot.GetProperty("limits").GetProperty("max_last_failure_event_bytes").GetInt32());
@@ -279,6 +305,12 @@ public class ReportCommandRunnerTests
             const string validDiagnostics =
                 "exception[0] type=System.InvalidOperationException message=\"invalid_operation\"\n"
                 + "  stack:    at CodeIndex.Tests.ReportCommandRunnerTests.SyntheticFailure()";
+            var storedFailureProvenance = LastFailureEventStore.CreateReportProvenance(
+                failureDbPath,
+                "1.38.0-test",
+                DateTimeOffset.UtcNow,
+                LastFailureEventStore.CreateRunId(),
+                secretArgument);
             var storedFailure = new LastFailureEvent(
                 LastFailureEventStore.SchemaVersion,
                 DateTimeOffset.UtcNow.ToString("O"),
@@ -292,7 +324,10 @@ public class ReportCommandRunnerTests
                 "invalid_operation",
                 validDiagnostics,
                 PathsRedacted: true,
-                LiteralArgumentsIncluded: false);
+                LiteralArgumentsIncluded: false,
+                storedFailureProvenance.WorkspaceId,
+                storedFailureProvenance.DatabaseId,
+                storedFailureProvenance.RunId);
             var unsafeStoredFailures = new[]
             {
                 storedFailure with
@@ -312,7 +347,10 @@ public class ReportCommandRunnerTests
                     LastFailureEventJsonContext.Default.LastFailureEvent);
                 DataDirectorySecurity.WritePrivateText(savedFailurePath, unsafeJson + "\n");
 
-                Assert.False(LastFailureEventStore.TryBuildReportPayload(out var rejectedPayload));
+                Assert.False(LastFailureEventStore.TryBuildReportPayload(
+                    storedFailureProvenance,
+                    out var rejectedPayload,
+                    out _));
                 Assert.Equal(string.Empty, rejectedPayload);
             }
         }
@@ -322,6 +360,181 @@ public class ReportCommandRunnerTests
         }
 
         static void ThrowCurrentProcessFailure() => throw new InvalidOperationException(secretMessage);
+    }
+
+    [Fact]
+    public void BuildBundle_LastFailureRequiresCurrentMatchingProvenance_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = CreateLogDir(workDir);
+        var dbPath = Path.Combine(workDir, ".cdidx", "codeindex.db");
+        var otherWorkspace = Path.Combine(workDir, "other-workspace");
+        var otherDbPath = Path.Combine(otherWorkspace, ".cdidx", "codeindex.db");
+        var reportTimestamp = new DateTimeOffset(2026, 7, 26, 12, 0, 0, TimeSpan.Zero);
+        const string version = "1.40.3-test";
+        try
+        {
+            Directory.CreateDirectory(otherWorkspace);
+            using var env = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var reportProvenance = LastFailureEventStore.CreateReportProvenance(
+                dbPath,
+                version,
+                reportTimestamp,
+                LastFailureEventStore.CreateRunId(),
+                workDir);
+            var otherWorkspaceProvenance = LastFailureEventStore.CreateReportProvenance(
+                otherDbPath,
+                version,
+                reportTimestamp,
+                LastFailureEventStore.CreateRunId(),
+                otherWorkspace);
+            var otherDatabaseProvenance = LastFailureEventStore.CreateReportProvenance(
+                Path.Combine(workDir, ".cdidx", "other.db"),
+                version,
+                reportTimestamp,
+                LastFailureEventStore.CreateRunId(),
+                workDir);
+            var currentFailure = CreateStoredFailure(
+                reportProvenance,
+                reportTimestamp - TimeSpan.FromMinutes(1));
+            var cases = new[]
+            {
+                new
+                {
+                    Name = "current",
+                    Event = currentFailure,
+                    Included = true,
+                    Disposition = "included",
+                    Reason = "matched",
+                },
+                new
+                {
+                    Name = "stale",
+                    Event = currentFailure with
+                    {
+                        OccurredAtUtc = (reportTimestamp - LastFailureEventStore.MaxReportCorrelationAge - TimeSpan.FromSeconds(1)).ToString("O"),
+                    },
+                    Included = false,
+                    Disposition = "excluded",
+                    Reason = "stale",
+                },
+                new
+                {
+                    Name = "cross-workspace",
+                    Event = currentFailure with
+                    {
+                        WorkspaceId = otherWorkspaceProvenance.WorkspaceId,
+                    },
+                    Included = false,
+                    Disposition = "excluded",
+                    Reason = "workspace_mismatch",
+                },
+                new
+                {
+                    Name = "cross-database",
+                    Event = currentFailure with
+                    {
+                        DatabaseId = otherDatabaseProvenance.DatabaseId,
+                    },
+                    Included = false,
+                    Disposition = "excluded",
+                    Reason = "database_mismatch",
+                },
+                new
+                {
+                    Name = "version-mismatch",
+                    Event = currentFailure with
+                    {
+                        BinaryVersion = "1.10.0",
+                    },
+                    Included = false,
+                    Disposition = "excluded",
+                    Reason = "binary_version_mismatch",
+                },
+                new
+                {
+                    Name = "missing-provenance",
+                    Event = currentFailure with
+                    {
+                        SchemaVersion = LastFailureEventStore.SchemaVersion - 1,
+                        WorkspaceId = null,
+                        DatabaseId = null,
+                        RunId = null,
+                    },
+                    Included = false,
+                    Disposition = "excluded",
+                    Reason = "missing_provenance",
+                },
+                new
+                {
+                    Name = "unsafe-provenance",
+                    Event = currentFailure with
+                    {
+                        WorkspaceId = workDir,
+                    },
+                    Included = false,
+                    Disposition = "excluded",
+                    Reason = "invalid_provenance",
+                },
+            };
+            var options = ReportCommandRunner.ParseArgs([
+                "--output", Path.Combine(workDir, "bundle.tgz"),
+                "--db", dbPath,
+                "--no-log",
+            ]);
+            options.ProvenanceWorkspacePathForTesting = workDir;
+            var savedFailurePath = Path.Combine(logDir, LastFailureEventStore.FileName);
+
+            foreach (var testCase in cases)
+            {
+                var json = JsonSerializer.Serialize(
+                    testCase.Event,
+                    LastFailureEventJsonContext.Default.LastFailureEvent);
+                DataDirectorySecurity.WritePrivateText(savedFailurePath, json + "\n");
+
+                var bundle = ReportCommandRunner.BuildBundle(
+                    options,
+                    version,
+                    reportTimestamp,
+                    reportProvenance.RunId);
+
+                Assert.Equal(testCase.Included, bundle.LastFailureIncluded);
+                Assert.Equal(testCase.Disposition, bundle.LastFailureEvidence.Disposition);
+                Assert.Equal(testCase.Reason, bundle.LastFailureEvidence.Reason);
+                Assert.Equal(
+                    testCase.Included,
+                    bundle.Files.Any(static file => file.Name == LastFailureEventStore.FileName));
+                Assert.DoesNotContain(workDir, JsonSerializer.Serialize(bundle.LastFailureEvidence), StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+
+        static LastFailureEvent CreateStoredFailure(
+            ReportProvenance provenance,
+            DateTimeOffset occurredAtUtc) =>
+            new(
+                LastFailureEventStore.SchemaVersion,
+                occurredAtUtc.ToString("O"),
+                provenance.BinaryVersion,
+                "cdidx.dll",
+                "dotnet",
+                "index",
+                CommandExitCodes.UnhandledException,
+                "invalid_operation",
+                typeof(InvalidOperationException).FullName!,
+                "invalid_operation",
+                "exception[0] type=System.InvalidOperationException message=\"invalid_operation\"\n"
+                + "  stack:    at CodeIndex.Tests.ReportCommandRunnerTests.SyntheticFailure()",
+                PathsRedacted: true,
+                LiteralArgumentsIncluded: false,
+                provenance.WorkspaceId,
+                provenance.DatabaseId,
+                LastFailureEventStore.CreateRunId());
     }
 
     [Fact]
@@ -358,6 +571,42 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ExistingOutputRequiresOverwriteAndOptInReplacesIt_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            File.WriteAllText(output, "existing bundle");
+            var args = new[]
+            {
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--no-log",
+            };
+
+            var (refusedExitCode, _, refusedStderr) = RunAndCaptureStreams(args);
+
+            Assert.Equal(CommandExitCodes.UsageError, refusedExitCode);
+            Assert.Contains("--overwrite", refusedStderr, StringComparison.Ordinal);
+            Assert.Equal("existing bundle", File.ReadAllText(output));
+            Assert.Single(Directory.GetFiles(workDir));
+
+            var overwriteArgs = args.Append("--overwrite").ToArray();
+            var (overwriteExitCode, _, overwriteStderr) = RunAndCaptureStreams(overwriteArgs);
+
+            Assert.Equal(CommandExitCodes.Success, overwriteExitCode);
+            Assert.Equal(string.Empty, overwriteStderr);
+            Assert.Contains("support-manifest.json", ReadTarGzEntries(output).Keys);
+            Assert.Single(Directory.GetFiles(workDir));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void WriteBundle_FailurePreservesExistingBundle()
     {
         var workDir = CreateWorkDir();
@@ -372,6 +621,7 @@ public class ReportCommandRunnerTests
                 ReportCommandRunner.WriteBundle(
                     output,
                     bundle,
+                    overwrite: true,
                     beforeWriteEntries: () => throw new IOException("simulated report failure")));
 
             Assert.Equal("existing bundle", File.ReadAllText(output));
@@ -485,6 +735,14 @@ public class ReportCommandRunnerTests
             Assert.True(JsonArrayContains(
                 manifest.RootElement.GetProperty("omissions").GetProperty("schema"),
                 "raw_schema_table_names"));
+            var manifestBundle = manifest.RootElement.GetProperty("bundle");
+            Assert.True(manifestBundle.GetProperty("db_inspected").GetBoolean());
+            Assert.True(manifestBundle.GetProperty("db_diagnostics_included").GetBoolean());
+            Assert.False(manifestBundle.GetProperty("db_member_included").GetBoolean());
+            Assert.True(manifestBundle.GetProperty("db_included").GetBoolean());
+            Assert.DoesNotContain(
+                manifestBundle.GetProperty("members").EnumerateArray(),
+                static item => item.GetString() is "codeindex.db" or "database.db");
             var readiness = manifest.RootElement.GetProperty("readiness");
             Assert.Equal("database", readiness.GetProperty("source").GetString());
             Assert.True(readiness.GetProperty("graph_table_available").GetBoolean());
@@ -1017,10 +1275,15 @@ public class ReportCommandRunnerTests
             Assert.True(JsonArrayContains(json.GetProperty("recommended_extensions"), ".tar.gz"));
             Assert.True(json.GetProperty("json_metadata_stdout_only").GetBoolean());
             Assert.True(json.TryGetProperty("last_failure_included", out _));
+            Assert.True(json.TryGetProperty("last_failure_disposition", out _));
+            Assert.True(json.TryGetProperty("last_failure_reason", out _));
             Assert.Equal("1", json.GetProperty("api_version").GetString());
             Assert.Equal(0, json.GetProperty("warnings").GetArrayLength());
             Assert.True(json.GetProperty("files").GetInt32() >= 4);
             Assert.False(json.GetProperty("log_included").GetBoolean());
+            Assert.False(json.GetProperty("db_inspected").GetBoolean());
+            Assert.False(json.GetProperty("db_diagnostics_included").GetBoolean());
+            Assert.False(json.GetProperty("db_member_included").GetBoolean());
             Assert.False(json.GetProperty("db_included").GetBoolean());
         }
         finally
@@ -1125,6 +1388,9 @@ public class ReportCommandRunnerTests
             Assert.Equal(Path.GetFileName(output), json.GetProperty("output_path").GetString());
             Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("db_path").GetString());
             Assert.DoesNotContain(workDir, json.GetRawText(), StringComparison.Ordinal);
+            Assert.True(json.GetProperty("db_inspected").GetBoolean());
+            Assert.True(json.GetProperty("db_diagnostics_included").GetBoolean());
+            Assert.False(json.GetProperty("db_member_included").GetBoolean());
             Assert.True(json.GetProperty("db_included").GetBoolean());
         }
         finally
