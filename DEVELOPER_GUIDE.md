@@ -550,6 +550,10 @@ Systems-language scanners stream C/C++ construction and template groups, Rust
 calls and value/signature types, Swift property wrappers, Go concurrency and
 composite/signature types, plus shared scientific/native call groups. Preserve
 source-order emission and stop owned bounded lists at capacity.
+SQL reference scanners stream statement, source, target, generated-column,
+window-clause, procedure-call, and temporary-object matches. Helpers that accept
+multiple SQL matches must keep the sequence demand-driven, and loops that emit
+references must stop consuming it when the bounded list reaches capacity.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3589,6 +3593,10 @@ systems-language scanner は C / C++ construction と template group、Rust call
 value / signature type、Swift property wrapper、Go concurrency と composite / signature
 type、共有 scientific / native call group を逐次走査する。source-order emission を維持し、
 所有する bounded list は上限で停止する。
+SQL reference scanner は statement、source、target、generated-column、window-clause、
+procedure-call、一時 object の match を逐次走査する。複数の SQL match を受け取る helper
+は sequence を demand-driven のまま保ち、reference を出力する loop は bounded list の
+上限到達時に消費を停止する。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

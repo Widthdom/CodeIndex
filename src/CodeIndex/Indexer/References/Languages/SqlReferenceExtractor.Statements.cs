@@ -107,7 +107,7 @@ internal static partial class SqlReferenceExtractor
         if (hasFromKeyword)
         {
             EmitSourceCaptureReferences(
-                FromSourceListRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(FromSourceListRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -127,7 +127,7 @@ internal static partial class SqlReferenceExtractor
         if (hasJoinKeyword || hasApplyKeyword)
         {
             EmitSourceCaptureReferences(
-                SourceReferenceRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(SourceReferenceRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -167,7 +167,7 @@ internal static partial class SqlReferenceExtractor
             if (hasUsingKeyword)
             {
                 EmitSourceCaptureReferences(
-                    DeleteUsingSourceRegex.Matches(statement),
+                    BoundedRegex.EnumerateMatches(DeleteUsingSourceRegex, statement),
                     statement,
                     statementStart,
                     statementLineOffset,
@@ -184,7 +184,7 @@ internal static partial class SqlReferenceExtractor
             }
 
             EmitMultiTargetReferences(
-                DeleteTargetWithoutFromRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(DeleteTargetWithoutFromRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,
@@ -201,7 +201,7 @@ internal static partial class SqlReferenceExtractor
         if (hasOutputKeyword && hasIntoKeyword)
         {
             EmitMultiTargetReferences(
-                OutputIntoTargetRegex.Matches(statement),
+                BoundedRegex.EnumerateMatches(OutputIntoTargetRegex, statement),
                 statement,
                 statementStart,
                 statementLineOffset,

@@ -70,7 +70,7 @@ internal static partial class SqlReferenceExtractor
             return null;
 
         List<CteBodySpan>? spans = null;
-        foreach (Match match in CteDefinitionRegex.Matches(statement))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CteDefinitionRegex, statement))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
@@ -141,8 +141,10 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int>? suppressedCallIndices = null)
     {
-        foreach (Match match in SelectIntoTargetStatementRegex.Matches(statement))
+        foreach (Match match in BoundedRegex.EnumerateMatches(SelectIntoTargetStatementRegex, statement))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
             var nameGroup = match.Groups["name"];
@@ -172,8 +174,10 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        foreach (Match match in TargetReferenceRegex.Matches(statement))
+        foreach (Match match in BoundedRegex.EnumerateMatches(TargetReferenceRegex, statement))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
             if (!TryGetTrailingQualifiedIdentifierLeaf(match, out var rawName, out var rawIndex))
@@ -323,7 +327,7 @@ internal static partial class SqlReferenceExtractor
     }
 
     private static void EmitMultiTargetReferences(
-        MatchCollection matches,
+        IEnumerable<Match> matches,
         string statement,
         int statementStart,
         int statementLineOffset,
@@ -339,6 +343,8 @@ internal static partial class SqlReferenceExtractor
     {
         foreach (Match match in matches)
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
 

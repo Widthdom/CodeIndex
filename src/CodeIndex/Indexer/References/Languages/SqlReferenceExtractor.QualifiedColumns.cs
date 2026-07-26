@@ -286,8 +286,10 @@ internal static partial class SqlReferenceExtractor
 
         if (hasAsKeyword || hasGeneratedKeyword)
         {
-            foreach (Match match in GeneratedColumnExpressionStartRegex.Matches(statement))
+            foreach (Match match in BoundedRegex.EnumerateMatches(GeneratedColumnExpressionStartRegex, statement))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
                     continue;
                 if (match.Value.TrimStart().StartsWith("AS", StringComparison.OrdinalIgnoreCase)
@@ -326,8 +328,10 @@ internal static partial class SqlReferenceExtractor
             && statement.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase) >= 0
             && statement.IndexOf("FOR", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            foreach (Match match in DefaultNextValueForExpressionRegex.Matches(statement))
+            foreach (Match match in BoundedRegex.EnumerateMatches(DefaultNextValueForExpressionRegex, statement))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
                     continue;
 
@@ -366,8 +370,10 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName)
     {
         var expression = statement[startIndex..endIndexExclusive];
-        foreach (Match match in SqlExpressionIdentifierRegex.Matches(expression))
+        foreach (Match match in BoundedRegex.EnumerateMatches(SqlExpressionIdentifierRegex, expression))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             var rawIndex = startIndex + match.Index;
             if (rawIndex < statementLineOffset || IsInsideDoubleQuotedRegion(statement, rawIndex))
                 continue;
