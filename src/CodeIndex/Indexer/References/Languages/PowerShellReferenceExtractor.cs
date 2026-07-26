@@ -34,7 +34,7 @@ internal static class PowerShellReferenceExtractor
             return;
         }
 
-        foreach (Match match in CallRegex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CallRegex, preparedLine))
         {
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
@@ -57,7 +57,7 @@ internal static class PowerShellReferenceExtractor
                 continue;
             }
 
-            foreach (Match match in SplatAssignmentStartRegex.Matches(line))
+            foreach (Match match in BoundedRegex.EnumerateMatches(SplatAssignmentStartRegex, line))
             {
                 var start = match.Index + match.Length;
                 var builder = new System.Text.StringBuilder(Math.Max(0, line.Length - start));
@@ -127,7 +127,7 @@ internal static class PowerShellReferenceExtractor
         if (splatAssignments.Count == 0)
             return;
 
-        foreach (Match splat in SplatTokenRegex.Matches(preparedLine))
+        foreach (Match splat in BoundedRegex.EnumerateMatches(SplatTokenRegex, preparedLine))
         {
             var name = splat.Groups["name"].Value;
             if (!splatAssignments.TryGetValue(name, out var candidates))
@@ -154,7 +154,7 @@ internal static class PowerShellReferenceExtractor
             return EmptyHashtableKeys;
 
         List<string>? keys = null;
-        foreach (Match match in HashtableKeyRegex.Matches(text))
+        foreach (Match match in BoundedRegex.EnumerateMatches(HashtableKeyRegex, text))
         {
             var key = match.Groups["quoted"].Success
                 ? match.Groups["quoted"].Value

@@ -111,8 +111,10 @@ internal static partial class CssReferenceExtractor
 
         if (preparedLine.IndexOf("animation", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            foreach (Match match in CssAnimationNameValueRegex.Matches(preparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(CssAnimationNameValueRegex, preparedLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 EmitCssAnimationNameReferences(
                     match.Groups["value"].Value,
                     match.Groups["value"].Index,
@@ -125,8 +127,10 @@ internal static partial class CssReferenceExtractor
                     container);
             }
 
-            foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(CssAnimationShorthandValueRegex, preparedLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 EmitCssAnimationShorthandReferences(
                     match.Groups["value"].Value,
                     match.Groups["value"].Index,
@@ -159,8 +163,10 @@ internal static partial class CssReferenceExtractor
         if (HasCssImportMarker(originalLine))
         {
             var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
-            foreach (Match match in CssImportReferenceRegex.Matches(importScanLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(CssImportReferenceRegex, importScanLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 var nameGroup = match.Groups["name"];
                 if (!nameGroup.Success || nameGroup.Value.Length == 0)
                     continue;
@@ -587,8 +593,10 @@ internal static partial class CssReferenceExtractor
             return;
 
         var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
-        foreach (Match match in importRegex.Matches(importScanLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(importRegex, importScanLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             var nameGroup = match.Groups["name"];
             if (!nameGroup.Success || nameGroup.Value.Length == 0)
                 continue;

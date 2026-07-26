@@ -408,8 +408,10 @@ public static partial class ReferenceExtractor
             if (importMatch.Success)
             {
                 var bodyGroup = importMatch.Groups["body"];
-                foreach (Match itemMatch in SystemVerilogQualifiedReferenceRegex.Matches(bodyGroup.Value))
+                foreach (Match itemMatch in BoundedRegex.EnumerateMatches(SystemVerilogQualifiedReferenceRegex, bodyGroup.Value))
                 {
+                    if (ReferenceExtractor.ReferenceLimitReached(references))
+                        break;
                     var packageGroup = itemMatch.Groups["package"];
                     AddHdlReference(
                         request,
@@ -443,8 +445,10 @@ public static partial class ReferenceExtractor
 
             if (importMatch is not { Success: true })
             {
-                foreach (Match qualifiedMatch in SystemVerilogQualifiedReferenceRegex.Matches(structuralLine))
+                foreach (Match qualifiedMatch in BoundedRegex.EnumerateMatches(SystemVerilogQualifiedReferenceRegex, structuralLine))
                 {
+                    if (ReferenceExtractor.ReferenceLimitReached(references))
+                        break;
                     AddHdlReference(
                         request,
                         references,
@@ -495,8 +499,10 @@ public static partial class ReferenceExtractor
         if (libraryMatch.Success)
         {
             var bodyGroup = libraryMatch.Groups["body"];
-            foreach (Match nameMatch in VhdlIdentifierRegex.Matches(bodyGroup.Value))
+            foreach (Match nameMatch in BoundedRegex.EnumerateMatches(VhdlIdentifierRegex, bodyGroup.Value))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 AddHdlReference(
                     request,
                     references,
@@ -515,8 +521,10 @@ public static partial class ReferenceExtractor
         if (useMatch.Success)
         {
             var bodyGroup = useMatch.Groups["body"];
-            foreach (Match pathMatch in VhdlSelectedNameRegex.Matches(bodyGroup.Value))
+            foreach (Match pathMatch in BoundedRegex.EnumerateMatches(VhdlSelectedNameRegex, bodyGroup.Value))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 var (packageName, packageOffset) = SelectVhdlPackage(pathMatch.Value);
                 AddHdlReference(
                     request,
@@ -529,7 +537,7 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     specialPositions);
-                foreach (Match identifierMatch in VhdlIdentifierRegex.Matches(pathMatch.Value))
+                foreach (Match identifierMatch in BoundedRegex.EnumerateMatches(VhdlIdentifierRegex, pathMatch.Value))
                     specialPositions.Add(bodyGroup.Index + pathMatch.Index + identifierMatch.Index);
             }
         }
@@ -551,8 +559,10 @@ public static partial class ReferenceExtractor
         }
 
         var emittedEntityInstantiation = false;
-        foreach (Match entityMatch in VhdlEntityInstantiationRegex.Matches(structuralLine))
+        foreach (Match entityMatch in BoundedRegex.EnumerateMatches(VhdlEntityInstantiationRegex, structuralLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             emittedEntityInstantiation = true;
             AddHdlReference(
                 request,
@@ -666,8 +676,10 @@ public static partial class ReferenceExtractor
             ? VhdlIdentifierRegex
             : VerilogIdentifierRegex;
         var matchedNameCount = 0;
-        foreach (Match match in identifierRegex.Matches(structuralLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(identifierRegex, structuralLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             if (matchedNameCount >= limits.MaxNamesPerLine)
             {
                 if (!lineNameBudgetReported)

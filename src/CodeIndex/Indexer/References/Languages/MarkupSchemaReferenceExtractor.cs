@@ -155,13 +155,21 @@ internal static class MarkupSchemaReferenceExtractor
         var declarationMatch = GraphQLDeclarationRegex.Match(scanLine);
         var lineContainer = TryGetGraphQLLineContainer(declarationMatch) ?? TryGetGraphQLStateContainer(state) ?? container;
         var isDirectiveDeclaration = scanLine.TrimStart().StartsWith("directive ", StringComparison.Ordinal);
-        foreach (Match match in GraphQLFragmentSpreadRegex.Matches(scanLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(GraphQLFragmentSpreadRegex, scanLine))
+        {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             AddReference(references, seen, fileId, match, "call", context, lineNumber, lineContainer, "graphql");
+        }
 
         if (!isDirectiveDeclaration)
         {
-            foreach (Match match in GraphQLTypeConditionRegex.Matches(scanLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(GraphQLTypeConditionRegex, scanLine))
+            {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 AddGraphQLTypeReference(references, seen, fileId, match.Groups["name"], context, lineNumber, lineContainer);
+            }
         }
 
         var implementsMatch = GraphQLImplementsRegex.Match(scanLine);
@@ -172,13 +180,21 @@ internal static class MarkupSchemaReferenceExtractor
         if (unionMatch.Success)
             EmitGraphQLTypeTokens(unionMatch.Groups["tail"], context, lineNumber, references, seen, fileId, lineContainer);
 
-        foreach (Match match in GraphQLFieldTypeRegex.Matches(scanLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(GraphQLFieldTypeRegex, scanLine))
+        {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             AddGraphQLTypeReference(references, seen, fileId, match.Groups["name"], context, lineNumber, lineContainer);
+        }
 
         if (!isDirectiveDeclaration)
         {
-            foreach (Match match in GraphQLDirectiveUseRegex.Matches(scanLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(GraphQLDirectiveUseRegex, scanLine))
+            {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 AddReference(references, seen, fileId, match, "call", context, lineNumber, lineContainer, "graphql");
+            }
         }
 
         UpdateGraphQLState(scanLine, declarationMatch, state);
@@ -246,8 +262,12 @@ internal static class MarkupSchemaReferenceExtractor
         long fileId,
         SymbolRecord? container)
     {
-        foreach (Match token in GraphQLNameTokenRegex.Matches(group.Value))
+        foreach (Match token in BoundedRegex.EnumerateMatches(GraphQLNameTokenRegex, group.Value))
+        {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             AddGraphQLTypeReference(references, seen, fileId, token.Groups[0], context, lineNumber, container, group.Index);
+        }
     }
 
     private static void AddGraphQLTypeReference(
@@ -291,8 +311,10 @@ internal static class MarkupSchemaReferenceExtractor
         if (!TryPrepareHtmlLineForReferenceScan(line, state, out var scanLine))
             return;
 
-        foreach (Match tagMatch in HtmlTagRegex.Matches(scanLine))
+        foreach (Match tagMatch in BoundedRegex.EnumerateMatches(HtmlTagRegex, scanLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             if (tagMatch.Groups["closing"].Success)
                 continue;
 
@@ -328,8 +350,10 @@ internal static class MarkupSchemaReferenceExtractor
         long fileId,
         SymbolRecord? container)
     {
-        foreach (Match attrMatch in HtmlAttributeRegex.Matches(attrsGroup.Value))
+        foreach (Match attrMatch in BoundedRegex.EnumerateMatches(HtmlAttributeRegex, attrsGroup.Value))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             var attrName = attrMatch.Groups["name"].Value;
             var valueGroup = GetHtmlAttributeValueGroup(attrMatch);
             if (!valueGroup.Success || valueGroup.Value.Length == 0)
@@ -401,8 +425,10 @@ internal static class MarkupSchemaReferenceExtractor
             return;
         }
 
-        foreach (Match match in MarkdownInlineLinkRegex.Matches(scanLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(MarkdownInlineLinkRegex, scanLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             AddMarkdownTargetReference(
                 match.Groups["target"].Value,
                 match.Groups["target"].Index,
@@ -414,8 +440,10 @@ internal static class MarkupSchemaReferenceExtractor
                 container);
         }
 
-        foreach (Match match in MarkdownReferenceLinkRegex.Matches(scanLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(MarkdownReferenceLinkRegex, scanLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             var label = match.Groups["label"].Value.Trim();
             if (label.Length == 0)
                 continue;
@@ -540,7 +568,7 @@ internal static class MarkupSchemaReferenceExtractor
 
     private static void UpdateHtmlRawTextState(string line, MarkupState state)
     {
-        foreach (Match tagMatch in HtmlTagRegex.Matches(line))
+        foreach (Match tagMatch in BoundedRegex.EnumerateMatches(HtmlTagRegex, line))
         {
             if (tagMatch.Groups["closing"].Success)
                 continue;

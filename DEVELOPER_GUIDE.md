@@ -554,6 +554,10 @@ SQL reference scanners stream statement, source, target, generated-column,
 window-clause, procedure-call, and temporary-object matches. Helpers that accept
 multiple SQL matches must keep the sequence demand-driven, and loops that emit
 references must stop consuming it when the bounded list reaches capacity.
+Infrastructure and markup scanners stream CSS, XAML, HTML/GraphQL/Markdown,
+HDL, MSBuild, Dockerfile, shell, and PowerShell match groups. Keep state-only
+scans demand-driven as well, while applying bounded-list exits only where the
+scanner owns the reference list.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3597,6 +3601,10 @@ SQL reference scanner は statement、source、target、generated-column、windo
 procedure-call、一時 object の match を逐次走査する。複数の SQL match を受け取る helper
 は sequence を demand-driven のまま保ち、reference を出力する loop は bounded list の
 上限到達時に消費を停止する。
+infrastructure / markup scanner は CSS、XAML、HTML / GraphQL / Markdown、HDL、
+MSBuild、Dockerfile、shell、PowerShell の match group を逐次走査する。state-only scan
+も demand-driven のまま保ち、bounded-list の停止判定は scanner が reference list を
+所有する箇所だけに適用する。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

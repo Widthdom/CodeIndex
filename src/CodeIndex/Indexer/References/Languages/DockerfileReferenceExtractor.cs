@@ -78,8 +78,10 @@ internal static class DockerfileReferenceExtractor
             }
         }
 
-        foreach (Match match in CopyFromReferenceRegex.Matches(originalLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CopyFromReferenceRegex, originalLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             var name = match.Groups["name"].Value;
             if (!stageNames.Contains(name))
                 continue;
@@ -134,8 +136,12 @@ internal static class DockerfileReferenceExtractor
             var option = line.Substring(optionStart, optionEnd - optionStart);
             if (option.StartsWith("--mount=", StringComparison.OrdinalIgnoreCase))
             {
-                foreach (Match match in RunMountFromReferenceRegex.Matches(option["--mount=".Length..]))
+                foreach (Match match in BoundedRegex.EnumerateMatches(
+                    RunMountFromReferenceRegex,
+                    option["--mount=".Length..]))
                 {
+                    if (ReferenceExtractor.ReferenceLimitReached(references))
+                        break;
                     var name = match.Groups["name"].Value;
                     if (!stageNames.Contains(name))
                         continue;
@@ -253,8 +259,10 @@ internal static class DockerfileReferenceExtractor
             variableNames,
             container);
 
-        foreach (Match match in UnbracedVariableReferenceRegex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(UnbracedVariableReferenceRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             var name = match.Groups["name"].Value;
             if (!variableNames.Contains(name))
                 continue;

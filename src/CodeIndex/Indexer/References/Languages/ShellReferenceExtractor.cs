@@ -70,8 +70,10 @@ internal static class ShellReferenceExtractor
     {
         if (callableNames != null && callableNames.Count > 0)
         {
-            foreach (Match match in CommandCallRegex.Matches(preparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(CommandCallRegex, preparedLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 var name = match.Groups["name"].Value;
                 if (!callableNames.Contains(name))
                     continue;
@@ -110,8 +112,10 @@ internal static class ShellReferenceExtractor
             || shellSourceLine.IndexOf(". ", StringComparison.Ordinal) >= 0
             || shellSourceLine.IndexOf(".\t", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in SourceReferenceRegex.Matches(shellSourceLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(SourceReferenceRegex, shellSourceLine))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
                 var name = NormalizeSourceTargetToken(match.Groups["name"].Value);
                 if (string.IsNullOrWhiteSpace(name))
                     continue;
@@ -278,8 +282,10 @@ internal static class ShellReferenceExtractor
         // command position even though it is not literally at the start of a line.
         var inner = line.Substring(innerStart, innerEnd - innerStart);
         var virtualLine = ";" + inner;
-        foreach (Match match in CommandCallRegex.Matches(virtualLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CommandCallRegex, virtualLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
             var name = match.Groups["name"].Value;
             if (!callableNames.Contains(name))
                 continue;
