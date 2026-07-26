@@ -9,6 +9,9 @@ internal static class AtomicFileWriter
 {
     internal const int MaxTempFileNameChars = 120;
     private const int MaxTempStemChars = 48;
+    private const int AtCurrentWorkingDirectory = -100;
+    private const uint LinuxRenameNoReplace = 1;
+    private const uint MacRenameExclusiveFlag = 0x00000004;
     internal static Action<string>? FlushParentDirectoryForTesting { get; set; }
 
     public enum WriteProfile
@@ -126,6 +129,7 @@ internal static class AtomicFileWriter
             }
             else
             {
+                var deleteUnixTempAfterPublish = false;
                 try
                 {
                     if (OperatingSystem.IsWindows())
@@ -134,10 +138,7 @@ internal static class AtomicFileWriter
                     }
                     else
                     {
-                        // Creating the destination hard link is an atomic no-clobber
-                        // publication point on POSIX file systems. A plain rename can
-                        // replace a destination created after an existence check.
-                        CreateUnixHardLink(ioTempPath, path);
+                        deleteUnixTempAfterPublish = PublishUnixNoReplace(ioTempPath, path);
                     }
                 }
                 catch (IOException ex) when (PathEntryExists(path))
@@ -145,7 +146,7 @@ internal static class AtomicFileWriter
                     throw new DestinationAlreadyExistsException(path, ex);
                 }
 
-                if (!OperatingSystem.IsWindows())
+                if (deleteUnixTempAfterPublish)
                     File.Delete(ioTempPath);
                 FlushParentDirectoryAfterCreate(path);
             }
@@ -163,6 +164,44 @@ internal static class AtomicFileWriter
             return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
 
         return DataDirectorySecurity.OpenPrivateFileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+    }
+
+    private static bool PublishUnixNoReplace(string existingPath, string destinationPath)
+    {
+        try
+        {
+            // Prefer the platform no-clobber rename so publication can work on
+            // mounts that implement rename exclusion but do not support hard links.
+            int result;
+            if (OperatingSystem.IsLinux())
+            {
+                result = UnixRenameAt2(
+                    AtCurrentWorkingDirectory,
+                    existingPath,
+                    AtCurrentWorkingDirectory,
+                    destinationPath,
+                    LinuxRenameNoReplace);
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                result = MacRenameWithFlags(existingPath, destinationPath, MacRenameExclusiveFlag);
+            }
+            else
+            {
+                result = -1;
+            }
+
+            if (result == 0)
+                return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Older libc implementations may not expose the no-clobber rename
+            // entry point. The hard-link fallback below retains atomic refusal.
+        }
+
+        CreateUnixHardLink(existingPath, destinationPath);
+        return true;
     }
 
     private static void CreateUnixHardLink(string existingPath, string linkPath)
@@ -389,6 +428,17 @@ internal static class AtomicFileWriter
 
     [DllImport("libc", EntryPoint = "link", SetLastError = true)]
     private static extern int UnixLink(string existingPath, string linkPath);
+
+    [DllImport("libc", EntryPoint = "renameat2", SetLastError = true)]
+    private static extern int UnixRenameAt2(
+        int oldDirectoryFileDescriptor,
+        string oldPath,
+        int newDirectoryFileDescriptor,
+        string newPath,
+        uint flags);
+
+    [DllImport("libc", EntryPoint = "renamex_np", SetLastError = true)]
+    private static extern int MacRenameWithFlags(string oldPath, string newPath, uint flags);
 
     [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
     private static extern int UnixFsync(int fd);
