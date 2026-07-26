@@ -1004,6 +1004,12 @@ public partial class McpServerTests
         Assert.Contains("search", instructions);
         Assert.Contains("CodeIndex MCP tools", instructions);
         Assert.Contains("grep/find/cat", instructions);
+        Assert.Contains("resources/templates/list", instructions);
+        Assert.Contains("cdidx://file-path/{path}", instructions);
+        Assert.Contains("resources/list", instructions);
+        Assert.Contains("optional path, lang, includeGenerated, and maxBytes", instructions);
+        Assert.Contains("result.nextCursor", instructions);
+        Assert.Contains("unchanged filters", instructions);
         Assert.Contains("resources/read", instructions);
         Assert.Contains("startLine/endLine", instructions);
         Assert.Contains("maxBytes", instructions);
