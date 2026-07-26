@@ -23,6 +23,9 @@ affected:
   markup/XAML, shell, Ruby, Perl, Elixir, CSS, HDL, C++, and manifest parsing.
   Count-only scans no longer retain a `MatchCollection`, while preserving the
   previous all-or-nothing result if matching times out.
+  Dense XAML supplemental symbol scans now stop as soon as the shared
+  structured-data symbol budget needs its diagnostic marker, instead of
+  building an unbounded temporary list and trimming it after all phases.
 
 ## 日本語
 
@@ -37,4 +40,6 @@ affected:
   SQL、Python、Swift、GraphQL、markup / XAML、shell、Ruby、Perl、Elixir、CSS、HDL、
   C++、manifest parsing の残存 multi-match pattern を逐次走査します。count のみの scan
   は `MatchCollection` を保持せず、matching timeout 時は従来どおり all-or-nothing の
-  結果を返します。
+  結果を返します。dense XAML の supplemental symbol scan は、共有 structured-data
+  symbol budget の diagnostic marker が必要になった時点で停止し、全 phase の後まで
+  無制限の一時 list を構築してから trim しません。

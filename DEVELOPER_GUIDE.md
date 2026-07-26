@@ -564,6 +564,10 @@ needed, use `BoundedRegex.CountMatches`; it preserves the prior all-or-nothing
 timeout result without retaining a `MatchCollection`. A scanner that needs the
 first match for classification and the rest for parsing must keep one enumerator
 instead of materializing or rescanning the input.
+XAML supplemental symbol phases share the structured-data symbol budget. They
+retain at most one overflow marker for diagnostic replacement, then return
+through `TrimStructuredDataSymbols` immediately; do not accumulate an
+unbounded temporary symbol list and trim it only after every XAML phase.
 Systems-language scanners stream C/C++ construction and template groups, Rust
 calls and value/signature types, Swift property wrappers, Go concurrency and
 composite/signature types, plus shared scientific/native call groups. Preserve
@@ -3630,6 +3634,10 @@ manifest parsing をまたいで同じ逐次走査規則に従う。総数だけ
 `BoundedRegex.CountMatches` を使い、従来の timeout 時 all-or-nothing 結果を保ったまま
 `MatchCollection` を保持しない。先頭 match を分類に、残りを構文解析に使う scanner は、
 input を実体化または再走査せず1つの enumerator を維持する。
+XAML supplemental symbol phase は structured-data symbol budget を共有する。diagnostic
+置換用の overflow marker を最大1件だけ保持したら、直ちに
+`TrimStructuredDataSymbols` を通って戻る。全 XAML phase の完了後まで無制限の一時
+symbol list を蓄積してから trim してはならない。
 systems-language scanner は C / C++ construction と template group、Rust call と
 value / signature type、Swift property wrapper、Go concurrency と composite / signature
 type、共有 scientific / native call group を逐次走査する。source-order emission を維持し、

@@ -167,6 +167,43 @@ public partial class SymbolExtractorTests
         Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols + 1);
     }
 
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_XmlBroadXaml_StopsSupplementalScanAtSymbolBudget()
+    {
+        const int elementCount = 50_000;
+        var elements = string.Join(
+            '\n',
+            Enumerable.Range(0, elementCount).Select(index => $"""<Button x:Name="Button{index}" />"""));
+        var content = $$"""
+            <Window x:Class="App.MainWindow" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+            {{elements}}
+            </Window>
+            """;
+        _ = SymbolExtractor.Extract(
+            1,
+            "xml",
+            """<Window xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"><Button x:Name="Warmup" /></Window>""");
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+        stopwatch.Stop();
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "extraction_diagnostic"
+            && symbol.Name == "structured_data_xml_symbol_budget_exceeded");
+        Assert.InRange(allocatedBytes, 0, 32L * 1024 * 1024);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"Dense XAML extraction took {stopwatch.Elapsed.TotalSeconds:F2}s and allocated {allocatedBytes:N0} bytes.");
+    }
+
     [Fact]
     public void Extract_AppManifest_IndexesRelevantEntries_Issue3662()
     {

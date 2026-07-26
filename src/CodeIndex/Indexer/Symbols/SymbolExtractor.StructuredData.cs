@@ -514,6 +514,16 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool TryAddBoundedStructuredDataSymbol(
+        List<SymbolRecord> symbols,
+        SymbolRecord symbol)
+    {
+        // Retain one overflow marker so TrimStructuredDataSymbols can preserve the existing
+        // diagnostic behavior, but never let dense supplemental scans grow without bound.
+        symbols.Add(symbol);
+        return symbols.Count <= StructuredDataMaxSymbols;
+    }
+
     private static void AddStructuredDataDiagnosticSymbol(
         List<SymbolRecord> symbols,
         long fileId,
