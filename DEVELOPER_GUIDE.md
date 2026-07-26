@@ -812,6 +812,7 @@ Current stable codes and triggers:
 | `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal hit a safety cap, so family trust was not stamped authoritative | reduce generated/ignored marker trees or raise the cap in code, then run `cdidx index <projectPath> --rebuild` |
 | `partial_family_key_population` | hotspot-family metadata is stamped but some indexed symbols still have NULL `family_key` values | `cdidx index <projectPath> --rebuild` |
 | `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
+| `symbols_only_graph_omitted` | the last symbols-only generation intentionally omitted reference-graph rows | run `cdidx index <projectPath>` without `--symbols-only` |
 | `reference_graph_complete=false` | the graph generation is unavailable/stale, a symbols-only run omitted it, or persisted file/extractor/cap evidence makes the index generation incomplete | address the reported stable reasons, then run `cdidx index <projectPath>` |
 | `index_complete=false` | a symbols-only run or persisted file-size, symbol-count, reference-count, extractor-failure, or safety-cap evidence proves that indexing work was omitted | address `index_incomplete_reasons`, then run `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
@@ -3920,6 +3921,7 @@ alternative action を同じ場所へ追加してください。
 | `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal が safety cap に到達し、family trust が authoritative に stamp されなかった | generated / ignored marker tree を減らすか code 側の cap を上げてから `cdidx index <projectPath> --rebuild` |
 | `partial_family_key_population` | hotspot-family metadata は stamp 済みだが、一部の indexed symbol で `family_key` が NULL | `cdidx index <projectPath> --rebuild` |
 | `graph_table_available=false` | `symbol_references` が無い、または graph-ready ではない | `cdidx index <projectPath>` |
+| `symbols_only_graph_omitted` | 直前の symbols-only generation が reference-graph row を意図的に省略した | `--symbols-only` を付けずに `cdidx index <projectPath>` を実行 |
 | `reference_graph_complete=false` | graph generation が unavailable/stale、symbols-only run で省略、または永続化済み file/extractor/cap 証拠により index generation が incomplete | 報告された安定理由に対処してから `cdidx index <projectPath>` |
 | `index_complete=false` | symbols-only run、または永続化済みの file-size / symbol-count / reference-count / extractor-failure / safety-cap 証拠により indexing work の省略が判明 | `index_incomplete_reasons` に対処してから `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` が無い、または issue-ready ではない | `cdidx index <projectPath>` |

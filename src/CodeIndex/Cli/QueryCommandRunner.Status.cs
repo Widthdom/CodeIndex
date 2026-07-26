@@ -554,11 +554,26 @@ public static partial class QueryCommandRunner
             return DegradationReasonCodes.DynamicReferenceGraphContractStale;
         }
 
-        return status.ReferenceGraphIncompleteReasons?.Contains(
-                    DbReader.ReferenceExtractionCapStateUnavailableReason,
-                    StringComparer.Ordinal) == true
-                ? DegradationReasonCodes.ReferenceExtractionCapStateUnavailable
-                : DegradationReasonCodes.ReferenceGraphIncomplete;
+        var reasons = status.ReferenceGraphIncompleteReasons ?? [];
+        if (reasons.Contains(
+                DbReader.ReferenceExtractionCapStateUnavailableReason,
+                StringComparer.Ordinal))
+        {
+            return DegradationReasonCodes.ReferenceExtractionCapStateUnavailable;
+        }
+        if (reasons.Contains(
+                DbReader.SymbolsOnlyReferenceGraphIncompleteReason,
+                StringComparer.Ordinal))
+        {
+            return DegradationReasonCodes.SymbolsOnlyGraphOmitted;
+        }
+        if (reasons.Contains(DegradationReasonCodes.GraphTableMissing, StringComparer.Ordinal))
+            return DegradationReasonCodes.GraphTableMissing;
+        if (reasons.Any(ReferenceExtractor.IsSafetyCapDiagnosticKind))
+            return DegradationReasonCodes.ReferenceGraphIncomplete;
+        return !status.IndexComplete
+            ? DegradationReasonCodes.IndexIncomplete
+            : DegradationReasonCodes.ReferenceGraphIncomplete;
     }
 
     private static StatusReadinessDegradation BuildStatusReadinessDegradation(string field, string rootCause, QueryCommandOptions options, StatusResult status)
@@ -714,6 +729,12 @@ public static partial class QueryCommandRunner
                 "Refresh indexing to rewrite stale dynamic-language graph rows and extractor-version stamps.",
             DegradationReasonCodes.ReferenceExtractionCapStateUnavailable =>
                 "Refresh indexing to populate current per-file issue state before trusting reference-graph completeness.",
+            DegradationReasonCodes.SymbolsOnlyGraphOmitted =>
+                "Rerun indexing without --symbols-only to generate reference-graph rows.",
+            DegradationReasonCodes.GraphTableMissing =>
+                "Run normal indexing to create and stamp the reference-graph generation.",
+            DegradationReasonCodes.IndexIncomplete =>
+                "Inspect index_incomplete_reasons and address the reported omitted input or extraction work.",
             _ =>
                 "Reduce or exclude the cap-hitting generated/pathological source before rerunning indexing.",
         };

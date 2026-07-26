@@ -17,7 +17,8 @@ internal sealed record PersistedIndexGenerationReadiness(
 public partial class DbReader
 {
     internal const string SymbolsOnlyIndexIncompleteReason = "symbols_only_references_omitted";
-    internal const string SymbolsOnlyReferenceGraphIncompleteReason = "symbols_only_graph_omitted";
+    internal const string SymbolsOnlyReferenceGraphIncompleteReason =
+        DegradationReasonCodes.SymbolsOnlyGraphOmitted;
     internal const string BatchInProgressIncompleteReason = "batch_in_progress";
 
     private static readonly string[] IndexOmissionIssueKinds =
@@ -39,7 +40,7 @@ public partial class DbReader
             ParseMetaStringList(TryGetMetaStringInternal(DbContext.IndexIncompleteReasonsMetaKey)),
             ReadPersistedIndexOmissionReasons(
                 _conn,
-                _hasIssuesTable,
+                _hasIssuesPhysicalTable,
                 ParseMetaBool(TryGetMetaStringInternal(DbContext.SymbolsOnlyGraphOmittedMetaKey)) == true,
                 transaction));
         var migrationInProgress = string.Equals(

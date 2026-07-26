@@ -54,6 +54,7 @@ internal static class IndexedFileStatReuse
         string absolutePath,
         string relativePath,
         string? language,
+        long maxFileSizeBytes,
         int maxSymbolsPerFile,
         int maxReferencesPerFile,
         bool? generatedExtractionSuppressed,
@@ -66,7 +67,7 @@ internal static class IndexedFileStatReuse
         try
         {
             var info = new FileInfo(absolutePath);
-            if (!info.Exists)
+            if (!info.Exists || info.Length > maxFileSizeBytes)
                 return null;
 
             var fileId = writer.GetReusableUnchangedFileIdByStat(

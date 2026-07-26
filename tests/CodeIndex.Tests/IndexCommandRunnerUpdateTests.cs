@@ -3391,6 +3391,53 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_CapPersistsIncompleteWhenIssueReadinessWasUnset_Issue4826()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "huge.py"),
+                "print('start')\n" + new string('a', 256));
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    $"PRAGMA user_version = {DbContext.CurrentSchemaVersion & ~DbContext.IssuesReadyFlag}";
+                command.ExecuteNonQuery();
+            }
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "huge.py", "--max-file-bytes", "128", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.False(updateJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(updateJson.GetProperty("index_complete").GetBoolean());
+            AssertCompletenessReason(updateJson, "index_incomplete_reasons", "file_too_large");
+            Assert.False(updateJson.GetProperty("reference_graph_complete").GetBoolean());
+            AssertCompletenessReason(
+                updateJson,
+                "reference_graph_incomplete_reasons",
+                "file_too_large");
+
+            var (statusExitCode, statusJson) =
+                RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            AssertCompletenessSignalsEqual(updateJson, statusJson);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_VerboseRedirectedOutput_DoesNotRepeatUpdatingBanner()
     {
         var projectRoot = CreateTempProject();

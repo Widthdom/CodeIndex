@@ -2024,8 +2024,7 @@ public partial class McpServer
                 (DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey, JsonSerializer.Serialize(
                     referenceExtractionCapHits,
                     StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)));
-            writer.MarkIndexCompleteness(
-                writer.GetPersistedIndexOmissionReasons(issuesStateAvailable: true));
+            writer.MarkIndexCompleteness(writer.GetPersistedIndexOmissionReasons());
             writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also

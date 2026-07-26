@@ -333,6 +333,26 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
             AssertCompletenessSignalsEqual(indexJson, statusJson);
+            if (scenario == "symbols-only")
+            {
+                var referenceDegradation = statusJson
+                    .GetProperty("readiness_degradations")
+                    .EnumerateArray()
+                    .Single(degradation =>
+                        degradation.GetProperty("field").GetString()
+                        == "reference_graph_complete");
+                Assert.Equal(
+                    DegradationReasonCodes.SymbolsOnlyGraphOmitted,
+                    referenceDegradation.GetProperty("root_cause").GetString());
+                Assert.Contains(
+                    "symbols-only",
+                    referenceDegradation.GetProperty("degraded_reason").GetString(),
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    "safety cap",
+                    referenceDegradation.GetProperty("degraded_reason").GetString(),
+                    StringComparison.OrdinalIgnoreCase);
+            }
 
             using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
             {

@@ -853,7 +853,7 @@ public static partial class IndexCommandRunner
                 memoryTimelineForStamp,
                 indexRunDiagnostics,
                 writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter),
-                writer.GetPersistedIndexOmissionReasons(issuesTableAvailableAfter));
+                writer.GetPersistedIndexOmissionReasons());
         }
         return WriteUpdateFinalOutput(new UpdateFinalOutputContext
         {

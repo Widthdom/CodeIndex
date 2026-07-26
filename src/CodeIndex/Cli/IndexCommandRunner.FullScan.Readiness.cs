@@ -247,7 +247,7 @@ public static partial class IndexCommandRunner
                 memoryTimelineForStamp,
                 context.IndexRunDiagnostics,
                 writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter),
-                writer.GetPersistedIndexOmissionReasons(issuesTableAvailableAfter));
+                writer.GetPersistedIndexOmissionReasons());
         }
 
         return new FullScanReadinessResult(
