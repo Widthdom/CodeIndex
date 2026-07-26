@@ -94,7 +94,7 @@ public static partial class ReferenceExtractor
         {
             if (!csharpPropertiesResolved)
             {
-                foreach (var symbol in request.WorkspaceSymbols ?? symbols)
+                foreach (var symbol in symbols)
                 {
                     if (symbol.Kind == "property"
                         && symbol.ContainerQualifiedName != null)

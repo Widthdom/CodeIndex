@@ -1062,6 +1062,9 @@ before graph resolution, including when the property is declared in another part
 the type-only filter does not discard a real member dependency.
 This is a general candidate-compatibility rule rather than a framework-type blacklist, and it
 does not change Java reference resolution.
+The persisted reference-identity contract is versioned for this rule, so indexes written before
+the compatibility filter are treated as non-authoritative until a normal index refresh rebuilds
+their candidates.
 
 Reference finalization computes candidate count, minimum symbol ID, distinct target-family
 count, and stable target key in one correlated aggregate per reference. Keep these four
@@ -4190,6 +4193,8 @@ blacklist ではなく一般的な candidate compatibility rule です。`Name.T
 property receiver は graph 解決前に修飾済み member reference へ書き換え、property が partial class の
 別ファイルで宣言されている場合も、型限定 filter によって実在する member dependency を失わないようにします。
 Java の reference resolution は変更しません。
+この規則は persisted reference-identity contract の version 対象であり、compatibility filter 導入前に
+作成された index は、通常の index 更新で candidate を再構築するまで非 authoritative として扱います。
 
 reference finalization は、candidate count、最小 symbol ID、distinct target-family count、安定 target
 key を reference ごとに1回の correlated aggregate で計算します。この4つの resolution field は

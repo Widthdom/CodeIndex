@@ -148,13 +148,17 @@ public partial class DbWriter
         const string fullReferenceSourceSql = "FROM symbol_references AS r";
         const string fullInstantiateSymbolSourceSql = "FROM symbols AS s";
         const string fullInstantiateNamePredicateSql = "AND s.name_folded IS NOT NULL";
+        const string fullCSharpTypeSymbolSourceSql = "FROM symbols AS type_symbol";
+        const string fullCSharpTypeNamePredicateSql = "AND type_symbol.name_folded IS NOT NULL";
         const int expectedReferenceSourceCount = 12;
 
         if (CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullDeleteSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullReferenceSourceSql)
                 != expectedReferenceSourceCount
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateSymbolSourceSql) != 1
-            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateNamePredicateSql) != 1)
+            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateNamePredicateSql) != 1
+            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeSymbolSourceSql) != 1
+            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeNamePredicateSql) != 1)
         {
             throw new InvalidOperationException(
                 "The reference-candidate SQL shape changed without updating the dirty-scope projection.");
@@ -176,6 +180,14 @@ public partial class DbWriter
             .Replace(
                 fullInstantiateNamePredicateSql,
                 "AND lookup_name.lang = 'csharp'\n              AND s.name_folded = lookup_name.name_folded",
+                StringComparison.Ordinal)
+            .Replace(
+                fullCSharpTypeSymbolSourceSql,
+                $"FROM temp.{ReferenceGraphLookupNamesTable} AS type_lookup_name\n            CROSS JOIN symbols AS type_symbol INDEXED BY idx_symbols_name_folded",
+                StringComparison.Ordinal)
+            .Replace(
+                fullCSharpTypeNamePredicateSql,
+                "AND type_lookup_name.lang = 'csharp'\n              AND type_symbol.name_folded = type_lookup_name.name_folded",
                 StringComparison.Ordinal);
     }
 

@@ -457,6 +457,21 @@ public class DatabaseTests : IDisposable
             "SEARCH lookup_name USING PRIMARY KEY",
             StringComparison.OrdinalIgnoreCase));
 
+        var csharpTypeStatement = Assert.Single(candidateInserts.Where(static statement =>
+            statement.Contains(
+                "FROM temp.reference_graph_lookup_names AS type_lookup_name",
+                StringComparison.Ordinal)));
+        var csharpTypePlan = ReadQueryPlanDetails(_db.Connection, csharpTypeStatement);
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "idx_symbols_name_folded",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "SEARCH type_lookup_name USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(csharpTypePlan, static detail =>
+            detail.Equals("SCAN type_symbol", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN type_symbol ", StringComparison.OrdinalIgnoreCase));
+
         foreach (var statement in DbWriter.ScopedReferenceGraphUpdateStatementsForTesting)
         {
             var plan = ReadQueryPlanDetails(_db.Connection, statement);

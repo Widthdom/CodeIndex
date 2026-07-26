@@ -152,8 +152,9 @@ public partial class DbWriter
               JOIN files AS source_file ON source_file.id = source.file_id
               JOIN symbols AS target
                 ON target.name_folded = r.symbol_name_folded
+               AND target.name = r.symbol_name COLLATE BINARY
                AND target.container_qualified_name =
-                   source.container_qualified_name COLLATE NOCASE
+                   source.container_qualified_name COLLATE BINARY
               JOIN files AS target_file ON target_file.id = target.file_id
               WHERE source.id = r.source_symbol_id
                 AND source_file.lang = 'csharp'
@@ -188,8 +189,9 @@ public partial class DbWriter
               JOIN files AS source_file ON source_file.id = source.file_id
               JOIN symbols AS target
                 ON target.name_folded = r.symbol_name_folded
+               AND target.name = r.symbol_name COLLATE BINARY
                AND target.container_qualified_name =
-                   source.container_qualified_name COLLATE NOCASE
+                   source.container_qualified_name COLLATE BINARY
               JOIN files AS target_file ON target_file.id = target.file_id
               WHERE source.id = r.source_symbol_id
                 AND source_file.lang = 'csharp'

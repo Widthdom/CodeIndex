@@ -72,7 +72,7 @@ internal static class CSharpTypeReferenceArity
         int searchStart,
         string? symbolKind)
     {
-        var fallback = -1;
+        var isDelegate = string.Equals(symbolKind, "delegate", StringComparison.Ordinal);
         for (var searchAt = Math.Clamp(searchStart, 0, signature.Length);
              searchAt <= signature.Length - symbolName.Length;)
         {
@@ -82,9 +82,8 @@ internal static class CSharpTypeReferenceArity
 
             if (IsIdentifierOccurrence(signature, occurrence, symbolName.Length))
             {
-                fallback = occurrence;
-                if (!string.Equals(symbolKind, "delegate", StringComparison.Ordinal)
-                    || IsDelegateNameContinuation(signature, occurrence + symbolName.Length))
+                if (!isDelegate
+                    || IsDelegateDeclarationName(signature, occurrence, symbolName.Length))
                 {
                     return occurrence;
                 }
@@ -93,7 +92,7 @@ internal static class CSharpTypeReferenceArity
             searchAt = occurrence + Math.Max(1, symbolName.Length);
         }
 
-        return fallback;
+        return -1;
     }
 
     private static int FindDeclarationKeywordEnd(string signature, string? symbolKind)
@@ -134,12 +133,17 @@ internal static class CSharpTypeReferenceArity
         if (cursor >= text.Length || text[cursor] != '<')
             return 0;
 
-        return TryCountTopLevelTypeArguments(text, cursor, out var arity) ? arity : null;
+        return TryCountTopLevelTypeArguments(text, cursor, out var arity, out _) ? arity : null;
     }
 
-    private static bool TryCountTopLevelTypeArguments(string text, int openAngleIndex, out int arity)
+    private static bool TryCountTopLevelTypeArguments(
+        string text,
+        int openAngleIndex,
+        out int arity,
+        out int closeAngleIndex)
     {
         arity = 1;
+        closeAngleIndex = -1;
         var angleDepth = 1;
         var parenthesisDepth = 0;
         var bracketDepth = 0;
@@ -173,7 +177,10 @@ internal static class CSharpTypeReferenceArity
                 case '>':
                     angleDepth--;
                     if (angleDepth == 0)
+                    {
+                        closeAngleIndex = i;
                         return true;
+                    }
                     break;
                 case '(':
                     parenthesisDepth++;
@@ -238,10 +245,29 @@ internal static class CSharpTypeReferenceArity
         return closeIndex < 0 ? text.Length : closeIndex + 1;
     }
 
-    private static bool IsDelegateNameContinuation(string signature, int cursor)
+    private static bool IsDelegateDeclarationName(
+        string signature,
+        int occurrence,
+        int identifierLength)
     {
+        var cursor = occurrence + identifierLength;
         SkipWhitespace(signature, ref cursor);
-        return cursor < signature.Length && signature[cursor] is '<' or '(';
+        if (cursor < signature.Length && signature[cursor] == '<')
+        {
+            if (!TryCountTopLevelTypeArguments(
+                    signature,
+                    cursor,
+                    out _,
+                    out var closeAngleIndex))
+            {
+                return false;
+            }
+
+            cursor = closeAngleIndex + 1;
+            SkipWhitespace(signature, ref cursor);
+        }
+
+        return cursor < signature.Length && signature[cursor] == '(';
     }
 
     private static bool IsIdentifierOccurrence(string text, int occurrence, int length)

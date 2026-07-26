@@ -26,6 +26,17 @@ public partial class QueryCommandRunnerTests
                 public class Actual<TFirst, TSecond>
                 {
                 }
+
+                public static class NAME
+                {
+                    public static string Run() => "";
+                }
+
+                public class Handler<T>
+                {
+                }
+
+                public delegate Handler<TOut> Handler<T, TOut>(T input);
                 """);
             TestProjectHelper.WriteTextFile(
                 projectRoot,
@@ -55,6 +66,31 @@ public partial class QueryCommandRunnerTests
                     public Stream? Body { get; }
                     public Actual<string>? One { get; }
                     public Fixture.Types.Actual<string, string>? Two { get; }
+                    public Handler<int, string>? Handler { get; }
+                }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/CaseProperty.cs",
+                """
+                namespace Fixture.CaseSensitive;
+
+                public partial class CaseConsumer
+                {
+                    public string Name { get; } = "";
+                }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/CaseUse.cs",
+                """
+                using Fixture.Types;
+
+                namespace Fixture.CaseSensitive;
+
+                public partial class CaseConsumer
+                {
+                    public string Invoke() => NAME.Run();
                 }
                 """);
             TestProjectHelper.WriteTextFile(
@@ -162,6 +198,59 @@ public partial class QueryCommandRunnerTests
                         Assert.Equal("class", reference.Kind);
                         Assert.Contains("Actual<TFirst, TSecond>", reference.Signature);
                     });
+                reader.Close();
+
+                command.CommandText = """
+                    SELECT r.symbol_name,
+                           r.reference_kind,
+                           r.resolution_state,
+                           s.kind,
+                           s.signature
+                    FROM symbol_references AS r
+                    JOIN files AS source_file ON source_file.id = r.file_id
+                    LEFT JOIN symbols AS s ON s.id = r.target_symbol_id
+                    WHERE (
+                            source_file.path = 'src/CaseUse.cs'
+                            AND r.symbol_name = 'NAME'
+                          )
+                       OR (
+                            source_file.path = 'src/Consumer.cs'
+                            AND r.symbol_name = 'Handler'
+                            AND r.reference_kind = 'type_reference'
+                          )
+                    ORDER BY source_file.path, r.line, r.column_number
+                    """;
+                using var compatibilityReader = command.ExecuteReader();
+                var compatibilityReferences =
+                    new List<(string Name, string Kind, string? State, string? TargetKind, string? Signature)>();
+                while (compatibilityReader.Read())
+                {
+                    compatibilityReferences.Add((
+                        compatibilityReader.GetString(0),
+                        compatibilityReader.GetString(1),
+                        compatibilityReader.IsDBNull(2) ? null : compatibilityReader.GetString(2),
+                        compatibilityReader.IsDBNull(3) ? null : compatibilityReader.GetString(3),
+                        compatibilityReader.IsDBNull(4) ? null : compatibilityReader.GetString(4)));
+                }
+
+                Assert.Collection(
+                    compatibilityReferences,
+                    reference =>
+                    {
+                        Assert.Equal("NAME", reference.Name);
+                        Assert.Equal("type_reference", reference.Kind);
+                        Assert.Equal("resolved", reference.State);
+                        Assert.Equal("class", reference.TargetKind);
+                        Assert.Contains("class NAME", reference.Signature);
+                    },
+                    reference =>
+                    {
+                        Assert.Equal("Handler", reference.Name);
+                        Assert.Equal("type_reference", reference.Kind);
+                        Assert.Equal("resolved", reference.State);
+                        Assert.Equal("delegate", reference.TargetKind);
+                        Assert.Contains("Handler<T, TOut>", reference.Signature);
+                    });
             }
 
             var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(
@@ -195,6 +284,14 @@ public partial class QueryCommandRunnerTests
                 dependencyEdges,
                 edge => edge.GetProperty("source_path").GetString() == "src/PartialUse.cs"
                         && edge.GetProperty("target_path").GetString() == "src/PartialState.cs");
+            Assert.Contains(
+                dependencyEdges,
+                edge => edge.GetProperty("source_path").GetString() == "src/CaseUse.cs"
+                        && edge.GetProperty("target_path").GetString() == "src/Types.cs");
+            Assert.DoesNotContain(
+                dependencyEdges,
+                edge => edge.GetProperty("source_path").GetString() == "src/CaseUse.cs"
+                        && edge.GetProperty("target_path").GetString() == "src/CaseProperty.cs");
 
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var referencesRequest = JsonNode.Parse(
@@ -231,6 +328,14 @@ public partial class QueryCommandRunnerTests
                 mcpDependencyEdges,
                 edge => edge!["sourcePath"]!.GetValue<string>() == "src/PartialUse.cs"
                         && edge["targetPath"]!.GetValue<string>() == "src/PartialState.cs");
+            Assert.Contains(
+                mcpDependencyEdges,
+                edge => edge!["sourcePath"]!.GetValue<string>() == "src/CaseUse.cs"
+                        && edge["targetPath"]!.GetValue<string>() == "src/Types.cs");
+            Assert.DoesNotContain(
+                mcpDependencyEdges,
+                edge => edge!["sourcePath"]!.GetValue<string>() == "src/CaseUse.cs"
+                        && edge["targetPath"]!.GetValue<string>() == "src/CaseProperty.cs");
         }
         finally
         {
