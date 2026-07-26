@@ -19,4 +19,14 @@ public partial class DbWriter
             _conn,
             hasIssuesTable: issuesStateAvailable,
             _activeTransaction);
+
+    internal IReadOnlyList<string> GetPersistedIndexOmissionReasons(bool issuesStateAvailable)
+        => DbReader.ReadPersistedIndexOmissionReasons(
+            _conn,
+            hasIssuesTable: issuesStateAvailable,
+            symbolsOnlyGraphOmitted: string.Equals(
+                GetMetaString(DbContext.SymbolsOnlyGraphOmittedMetaKey),
+                "true",
+                StringComparison.OrdinalIgnoreCase),
+            _activeTransaction);
 }

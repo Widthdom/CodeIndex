@@ -223,6 +223,16 @@ Check-mode JSON includes `query_context.check_mode` (`explicit` or
 `implied_by_stale_after`) and the effective `query_context.stale_after_seconds`;
 ordinary status JSON omits `query_context`.
 
+Index-generation readiness is derived from persisted evidence and is shared by
+the index command result, immediate `status` / workspace status, and MCP
+responses. `index_complete=false` identifies omitted input or extraction work,
+including symbols-only runs, file-size / symbol-count / reference-count limits,
+and extractor failures or safety caps; `index_incomplete_reasons` contains the
+stable reasons. `reference_graph_complete` additionally requires an available,
+current graph generation and reports its own stable reasons. Legacy databases
+without the newer metadata remain readable, while persisted omission evidence
+still prevents a false complete result.
+
 Reference extraction has fixed safety limits of 50,000 lookup symbols, 20,000
 lookup lines, 512 names per line, and 20,000 container candidates. CLI
 `languages --json` / `status --json` and the corresponding MCP responses publish
@@ -620,6 +630,15 @@ immutable URI の選択、timeout、cancellation、WAL snapshot risk の diagnos
 check mode の JSON は `query_context.check_mode`（`explicit` または
 `implied_by_stale_after`）と有効な `query_context.stale_after_seconds` を含み、
 通常の status JSON では `query_context` を省略します。
+
+index generation の readiness は永続化済みの証拠から導出し、index command の結果、
+直後の `status` / workspace status、MCP response で同じ snapshot を共有します。
+symbols-only run、file size / symbol count / reference count の上限、extractor failure、
+safety cap などで入力または抽出処理を省略した場合は `index_complete=false` となり、
+`index_incomplete_reasons` に安定した理由を返します。
+`reference_graph_complete` はさらに利用可能かつ current な graph generation を要求し、
+専用の安定した理由を返します。新しい metadata を持たない legacy database も読み取り可能な
+ままですが、永続化済みの省略証拠がある場合は誤って complete と報告しません。
 
 reference extraction の固定 safety limit は lookup symbol 50,000件、lookup line
 20,000行、1行あたりの name 512件、container candidate 20,000件です。

@@ -58,7 +58,7 @@ public static partial class IndexCommandRunner
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = output.Writer.GetCounts();
         var signalReader = new DbReader(output.Writer.Connection);
         var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
-        var referenceGraphCompleteAfter = signalReader.IsReferenceGraphComplete(
+        var persistedReadinessAfter = signalReader.GetPersistedIndexGenerationReadiness(
             referenceExtractionCapHitsAfter);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hdlGraphContractSignalAfter = signalReader.GetHdlGraphContractSignal(lang: null);
@@ -69,7 +69,7 @@ public static partial class IndexCommandRunner
         var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
 
         var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
-            output.GraphTableAvailableAfter,
+            persistedReadinessAfter.GraphTableAvailable,
             output.IssuesTableAvailableAfter,
             sqlGraphContractReadyAfter,
             hotspotFamilyReadyAfter,
@@ -102,14 +102,17 @@ public static partial class IndexCommandRunner
                     FtsMergeRan = output.FtsMergeRan,
                 },
                 SymbolKindFilter = output.Options.SymbolKindFilter.ToJsonResult(),
-                GraphTableAvailable = output.GraphTableAvailableAfter,
-                GraphDataCurrent = output.Errors == 0
-                    && output.GraphTableAvailableAfter
-                    && referenceGraphCompleteAfter
-                    && hdlGraphContractSignalAfter.Ready,
-                IndexComplete = output.Errors == 0,
+                GraphTableAvailable = persistedReadinessAfter.GraphTableAvailable,
+                GraphDataCurrent = persistedReadinessAfter.GraphDataCurrent,
+                IndexComplete = persistedReadinessAfter.IndexComplete,
+                IndexIncompleteReasons = persistedReadinessAfter.IndexComplete
+                    ? null
+                    : persistedReadinessAfter.IndexIncompleteReasons,
                 ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
-                ReferenceGraphComplete = referenceGraphCompleteAfter,
+                ReferenceGraphComplete = persistedReadinessAfter.ReferenceGraphComplete,
+                ReferenceGraphIncompleteReasons = persistedReadinessAfter.ReferenceGraphComplete
+                    ? null
+                    : persistedReadinessAfter.ReferenceGraphIncompleteReasons,
                 ReferenceExtractionCapHits = referenceExtractionCapHitsAfter,
                 ErrorCode = output.Errors > 0 ? CommandErrorCodes.IndexPartial : null,
                 IssuesTableAvailable = output.IssuesTableAvailableAfter,
@@ -157,7 +160,14 @@ public static partial class IndexCommandRunner
             if (output.Errors > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Errors", ConsoleUi.FormatNumber(output.Errors), indent: "  "));
             if (output.SymbolsDroppedByKindFilter > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", ConsoleUi.FormatNumber(output.SymbolsDroppedByKindFilter), indent: "  "));
             if (output.FtsMergeRan) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("FTS merge", "completed", indent: "  "));
-            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Graph", output.GraphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
+                "Index",
+                persistedReadinessAfter.IndexComplete ? "complete" : "incomplete",
+                indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
+                "Graph",
+                persistedReadinessAfter.ReferenceGraphComplete ? "ready" : "degraded",
+                indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Issues", output.IssuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Hotspots", hotspotFamilyReadyAfter ? "ready" : "degraded", indent: "  "));
@@ -168,8 +178,12 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine();
             if (output.Errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{output.ProjectRoot}\"` to restore a fully ready index.");
-            if (!output.GraphTableAvailableAfter || !output.IssuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !output.CSharpSymbolNameReadyAfter || !output.CSharpMetadataTargetReadyAfter || !output.FoldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(output.GraphTableAvailableAfter, output.IssuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, output.CSharpSymbolNameReadyAfter, output.CSharpMetadataTargetReadyAfter, output.FoldReadyAfter, output.FoldReadyReasonAfter, output.ProjectRoot, output.ResolvedDbPath));
+            if (!persistedReadinessAfter.IndexComplete)
+                ConsoleUi.PrintWarning($"Index generation is incomplete: {string.Join(", ", persistedReadinessAfter.IndexIncompleteReasons)}.");
+            if (!persistedReadinessAfter.ReferenceGraphComplete)
+                ConsoleUi.PrintWarning($"Reference graph is incomplete: {string.Join(", ", persistedReadinessAfter.ReferenceGraphIncompleteReasons)}.");
+            if (!persistedReadinessAfter.GraphTableAvailable || !output.IssuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !output.CSharpSymbolNameReadyAfter || !output.CSharpMetadataTargetReadyAfter || !output.FoldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(persistedReadinessAfter.GraphTableAvailable, output.IssuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, output.CSharpSymbolNameReadyAfter, output.CSharpMetadataTargetReadyAfter, output.FoldReadyAfter, output.FoldReadyReasonAfter, output.ProjectRoot, output.ResolvedDbPath));
             if (cwdDriftDetected)
                 ConsoleUi.PrintWarning(cwdDriftNotice!);
         }
@@ -177,7 +191,9 @@ public static partial class IndexCommandRunner
         if (!output.Options.Json && !output.Options.Quiet && output.Stopwatch.Elapsed >= TimeSpan.FromSeconds(5))
             ConsoleUi.EmitCompletionNotification(
                 output.Options.NotifyMode,
-                $"cdidx index update complete ({ConsoleUi.Counted(output.Updated + output.Removed + output.Skipped, "file", format: "N0")})");
+                persistedReadinessAfter.IndexComplete
+                    ? $"cdidx index update complete ({ConsoleUi.Counted(output.Updated + output.Removed + output.Skipped, "file", format: "N0")})"
+                    : $"cdidx index update finished with omissions ({ConsoleUi.Counted(output.Updated + output.Removed + output.Skipped, "file", format: "N0")})");
 
         return output.Errors > 0 && !output.Options.AllowPartial
             ? CommandExitCodes.PartialResult

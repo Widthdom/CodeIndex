@@ -852,7 +852,8 @@ public static partial class IndexCommandRunner
                 removed,
                 memoryTimelineForStamp,
                 indexRunDiagnostics,
-                writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter));
+                writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter),
+                writer.GetPersistedIndexOmissionReasons(issuesTableAvailableAfter));
         }
         return WriteUpdateFinalOutput(new UpdateFinalOutputContext
         {

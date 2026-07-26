@@ -3379,7 +3379,8 @@ public partial class IndexCommandRunnerTests
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot, "--files", "huge.py"], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Index generation is incomplete: file_too_large.", stderr);
+            Assert.Contains("Reference graph is incomplete: file_too_large.", stderr);
             Assert.DoesNotContain("Some files failed to update", stderr);
             Assert.DoesNotContain("rerun `cdidx index", stderr);
         }

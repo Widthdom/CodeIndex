@@ -743,6 +743,17 @@ filters remain exact, so `--kind import` does not include local type declaration
 
 `status --json` emits structured readiness guidance whenever any trust field is degraded. The top-level `degraded_root_cause` is a stable machine-readable primary code, while `readiness_degradations[]` lists every degraded field with `root_cause`, human `degraded_reason`, `recommended_action`, and `alternative_action`. `migration_in_progress` is set from the active batch marker so clients can distinguish a temporary writer/migration window from a permanently degraded index. `issues_table_available` means the physical `file_issues` table exists; `file_issues_data_current` is the freshness/trust bit consumers should use before treating validate rows as authoritative.
 
+Index-generation completeness is computed by one persisted-readiness reader and
+reused by the successful full/update index response, immediate status and
+workspace status, and MCP indexing/status responses. Persisted omission evidence
+from symbols-only runs, `file_too_large`, `symbol_count_exceeded`,
+`reference_count_exceeded`, extractor failures, and reference safety caps makes
+`index_complete=false` with stable `index_incomplete_reasons`.
+`reference_graph_complete` additionally requires an available, current graph
+generation and repeats graph-specific stable reasons. A legacy database without
+the completeness metadata keeps the compatibility default unless its persisted
+rows prove that work was omitted.
+
 Reference extraction publishes its fixed safety limits through CLI
 `languages --json` / `status --json` and the corresponding MCP responses:
 50,000 lookup symbols, 20,000 lookup lines, 512 names per
@@ -801,7 +812,8 @@ Current stable codes and triggers:
 | `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal hit a safety cap, so family trust was not stamped authoritative | reduce generated/ignored marker trees or raise the cap in code, then run `cdidx index <projectPath> --rebuild` |
 | `partial_family_key_population` | hotspot-family metadata is stamped but some indexed symbols still have NULL `family_key` values | `cdidx index <projectPath> --rebuild` |
 | `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
-| `reference_graph_complete=false` | a reference-extraction safety cap was reached, or legacy storage cannot report cap state | narrow/exclude the reported generated or pathological files, then run `cdidx index <projectPath>` |
+| `reference_graph_complete=false` | the graph generation is unavailable/stale, a symbols-only run omitted it, or persisted file/extractor/cap evidence makes the index generation incomplete | address the reported stable reasons, then run `cdidx index <projectPath>` |
+| `index_complete=false` | a symbols-only run or persisted file-size, symbol-count, reference-count, extractor-failure, or safety-cap evidence proves that indexing work was omitted | address `index_incomplete_reasons`, then run `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamps are stale | `cdidx index <projectPath>` |
@@ -3821,6 +3833,16 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 
 `status --json` は trust field のいずれかが degraded の場合に structured readiness guidance を出す。トップレベルの `degraded_root_cause` は primary の安定した machine-readable code で、`readiness_degradations[]` は degraded な各 field と `root_cause`、人間向け `degraded_reason`、`recommended_action`、`alternative_action` を列挙する。`migration_in_progress` は active batch marker から設定し、一時的な writer/migration window と恒久的な degraded index をクライアントが区別できるようにする。`issues_table_available` は物理的な `file_issues` table の存在を意味し、validate rows を authoritative として扱う前の freshness/trust bit は `file_issues_data_current` を使う。
 
+index generation の completeness は単一の persisted-readiness reader で計算し、
+成功した full/update index response、直後の status / workspace status、MCP の
+indexing/status response で再利用します。symbols-only run、`file_too_large`、
+`symbol_count_exceeded`、`reference_count_exceeded`、extractor failure、
+reference safety cap の永続化済み省略証拠がある場合は
+`index_complete=false` となり、安定した `index_incomplete_reasons` を返します。
+`reference_graph_complete` はさらに利用可能かつ current な graph generation を要求し、
+graph 固有の安定した理由を返します。completeness metadata を持たない legacy database は、
+永続化済み row が処理の省略を証明しない限り compatibility default を維持します。
+
 reference extraction の固定 safety limit は lookup symbol 50,000件、lookup line
 20,000行、1行あたりの name 512件、container candidate 20,000件で、CLI の
 `languages --json` / `status --json` と対応する MCP response に公開します。cap diagnostic は file ごとの `file_issues`
@@ -3898,7 +3920,8 @@ alternative action を同じ場所へ追加してください。
 | `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal が safety cap に到達し、family trust が authoritative に stamp されなかった | generated / ignored marker tree を減らすか code 側の cap を上げてから `cdidx index <projectPath> --rebuild` |
 | `partial_family_key_population` | hotspot-family metadata は stamp 済みだが、一部の indexed symbol で `family_key` が NULL | `cdidx index <projectPath> --rebuild` |
 | `graph_table_available=false` | `symbol_references` が無い、または graph-ready ではない | `cdidx index <projectPath>` |
-| `reference_graph_complete=false` | reference-extraction safety cap に到達した、または legacy storage で cap state を報告できない | 報告された generated / pathological file を絞り込むか除外してから `cdidx index <projectPath>` |
+| `reference_graph_complete=false` | graph generation が unavailable/stale、symbols-only run で省略、または永続化済み file/extractor/cap 証拠により index generation が incomplete | 報告された安定理由に対処してから `cdidx index <projectPath>` |
+| `index_complete=false` | symbols-only run、または永続化済みの file-size / symbol-count / reference-count / extractor-failure / safety-cap 証拠により indexing work の省略が判明 | `index_incomplete_reasons` に対処してから `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` が無い、または issue-ready ではない | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamp が stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamp が stale | `cdidx index <projectPath>` |
