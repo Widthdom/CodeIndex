@@ -427,6 +427,27 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void CppHeaderDetection_LargeSample_DoesNotMaterializeLineArrays()
+    {
+        var content = string.Join(
+            '\n',
+            Enumerable.Range(0, 8_192)
+                .Select(index => $"struct record_{index} {{ int value; }};"));
+        _ = FileIndexer.ContainsCppHeaderMarkerForTesting(content);
+
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => FileIndexer.ContainsCppHeaderMarkerForTesting(content));
+
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"C/C++ header detection allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CSharpNoAliasDenseReferences_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpNoAliasReferenceFixture(referenceCount: 12_000);
