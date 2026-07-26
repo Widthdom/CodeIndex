@@ -92,8 +92,11 @@ internal static class RubyReferenceExtractor
             lineNumber,
             resolveContainerForCall);
 
-        foreach (Match match in CommandCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(CommandCallRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
             matchedCallIndices.Add(callIndex);
@@ -119,8 +122,11 @@ internal static class RubyReferenceExtractor
             lineNumber,
             resolveContainerForCall);
 
-        foreach (Match match in BlockCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(BlockCallRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
             addCallLikeReference(name, callIndex);
@@ -173,8 +179,11 @@ internal static class RubyReferenceExtractor
             resolveContainerForCall);
 
         var matchedAny = false;
-        foreach (Match match in CommandTargetTokenRegex.Matches(tail))
+        foreach (Match match in Regex.EnumerateMatches(CommandTargetTokenRegex, tail))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var rawToken = match.Groups["token"].Value;
             if (rawToken.Length == 0)
                 continue;
@@ -250,8 +259,13 @@ internal static class RubyReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        foreach (Match match in SymbolLiteralFirstArgumentRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     SymbolLiteralFirstArgumentRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var rawToken = match.Groups["token"].Value;
             var token = NormalizeCommandTargetToken(rawToken);
             if (string.IsNullOrWhiteSpace(token))
@@ -310,11 +324,21 @@ internal static class RubyReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        foreach (Match rescueMatch in RescueClauseRegex.Matches(preparedLine))
+        foreach (Match rescueMatch in Regex.EnumerateMatches(
+                     RescueClauseRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var typesGroup = rescueMatch.Groups["types"];
-            foreach (Match typeMatch in QualifiedConstantRegex.Matches(typesGroup.Value))
+            foreach (Match typeMatch in Regex.EnumerateMatches(
+                         QualifiedConstantRegex,
+                         typesGroup.Value))
             {
+                if (ReferenceExtractor.ReferenceLimitReached(references))
+                    break;
+
                 var name = typeMatch.Value;
                 var tokenIndex = typesGroup.Index + typeMatch.Index;
                 var targetContainer = resolveContainerForCall(tokenIndex);
@@ -346,8 +370,11 @@ internal static class RubyReferenceExtractor
         if (!ClassNameOptionCommandNames.Contains(commandName))
             return;
 
-        foreach (Match match in ClassNameOptionRegex.Matches(tail))
+        foreach (Match match in Regex.EnumerateMatches(ClassNameOptionRegex, tail))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"].Value;
             var tokenIndex = tailStartIndex + match.Groups["name"].Index;
             var targetContainer = resolveContainerForCall(tokenIndex);

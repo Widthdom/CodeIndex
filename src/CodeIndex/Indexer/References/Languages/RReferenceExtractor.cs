@@ -134,8 +134,13 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in NamespaceReferenceRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     NamespaceReferenceRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var package = match.Groups["package"].Value;
             var separator = match.Groups["sep"].Value;
             var backtickNameGroup = match.Groups["backtickName"];
@@ -327,8 +332,13 @@ internal static partial class RReferenceExtractor
 
                 var routinesStart = useDynLibMatch.Index + useDynLibMatch.Length;
                 var routines = directiveLine[routinesStart..];
-                foreach (Match routineMatch in NamespaceUseDynLibRoutineRegex.Matches(routines))
+                foreach (Match routineMatch in Regex.EnumerateMatches(
+                             NamespaceUseDynLibRoutineRegex,
+                             routines))
                 {
+                    if (ReferenceExtractor.ReferenceLimitReached(references))
+                        break;
+
                     var routine = GetNamespaceDirectiveToken(
                         routineMatch,
                         "backtickName",
@@ -530,8 +540,13 @@ internal static partial class RReferenceExtractor
             return;
 
         var signatureBody = signatureCall.Groups["body"];
-        foreach (Match signatureMatch in S4SignatureClassRegex.Matches(signatureBody.Value))
+        foreach (Match signatureMatch in Regex.EnumerateMatches(
+                     S4SignatureClassRegex,
+                     signatureBody.Value))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var classToken = GetNamespaceDirectiveToken(
                 signatureMatch,
                 "backtickName",

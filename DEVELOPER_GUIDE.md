@@ -542,6 +542,10 @@ Python reference scanners stream decorators, annotations, runtime type checks,
 typing factories, dataclass/attrs integrations, and dynamic imports. The
 start-offset overload of `BoundedRegex.EnumerateMatches` keeps decorator
 argument scans demand-driven without rescanning the decorator prefix.
+Dynamic-language scanners for PHP, Ruby, R, and Perl stream multi-match
+attributes/types, DSL targets, namespace/member/resource references, and arrow
+calls. Any loop that writes directly to a bounded reference list must exit at
+the cap instead of walking the rest of a dense line.
 All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
@@ -3574,6 +3578,9 @@ Python reference scanner は decorator、annotation、runtime type check、typin
 dataclass / attrs integration、dynamic import を逐次走査する。`BoundedRegex.EnumerateMatches`
 の start-offset overload により、decorator prefix を再走査せず argument scan も
 demand-driven のままにする。
+PHP、Ruby、R、Perl の dynamic-language scanner は multi-match の attribute / type、
+DSL target、namespace / member / resource reference、arrow call を逐次走査する。
+bounded reference list へ直接書く loop は dense line の残りを走査せず上限で停止する。
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。

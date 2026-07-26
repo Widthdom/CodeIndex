@@ -19,8 +19,11 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf('`') < 0 || preparedLine.IndexOf('(') < 0)
             return;
 
-        foreach (Match match in BacktickCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(BacktickCallRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = match.Groups["name"];
             var name = nameGroup.Value;
             if (definitionNames != null && definitionNames.Contains(name))
@@ -52,8 +55,13 @@ internal static partial class RReferenceExtractor
         if (preparedLine.IndexOf('%') < 0)
             return;
 
-        foreach (Match match in InfixOperatorCallRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(
+                     InfixOperatorCallRegex,
+                     preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = match.Groups["name"];
             var name = nameGroup.Value;
             if (definitionNames != null && definitionNames.Contains(name))
@@ -171,8 +179,11 @@ internal static partial class RReferenceExtractor
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
-        foreach (Match match in DataCallDatasetRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(DataCallDatasetRegex, line))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"];
             ReferenceExtractor.AddReference(
                 references,
@@ -226,8 +237,13 @@ internal static partial class RReferenceExtractor
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
-        foreach (Match match in SystemFilePathPartRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(
+                     SystemFilePathPartRegex,
+                     line))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"];
             ReferenceExtractor.AddReference(
                 references,
@@ -333,8 +349,11 @@ internal static partial class RReferenceExtractor
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
-        foreach (Match match in DocumentationTopicRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(DocumentationTopicRegex, line))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"];
             ReferenceExtractor.AddReference(
                 references,
@@ -467,8 +486,13 @@ internal static partial class RReferenceExtractor
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
-        foreach (Match match in InstallPackagesNameRegex.Matches(line))
+        foreach (Match match in Regex.EnumerateMatches(
+                     InstallPackagesNameRegex,
+                     line))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var name = match.Groups["name"];
             ReferenceExtractor.AddReference(
                 references,

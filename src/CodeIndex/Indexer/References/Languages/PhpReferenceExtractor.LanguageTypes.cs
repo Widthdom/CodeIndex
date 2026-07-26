@@ -18,8 +18,11 @@ internal static partial class PhpReferenceExtractor
         if (!preparedLine.Contains("#[", StringComparison.Ordinal))
             return;
 
-        foreach (Match match in AttributeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(AttributeRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = match.Groups["name"];
             var rawName = nameGroup.Value;
             var leadingBackslashCount = 0;
@@ -74,8 +77,11 @@ internal static partial class PhpReferenceExtractor
         if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in StaticAccessRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(StaticAccessRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var nameGroup = match.Groups["name"];
             var rawName = nameGroup.Value;
             var leadingBackslashCount = 0;
@@ -153,8 +159,11 @@ internal static partial class PhpReferenceExtractor
         if (preparedLine.IndexOf("instanceof", StringComparison.OrdinalIgnoreCase) < 0)
             return;
 
-        foreach (Match match in InstanceofRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(InstanceofRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             AddPhpTypeReferenceFromQualifiedName(
                 match.Groups["name"],
                 references,
@@ -178,8 +187,11 @@ internal static partial class PhpReferenceExtractor
         if (preparedLine.IndexOf("catch", StringComparison.OrdinalIgnoreCase) < 0)
             return;
 
-        foreach (Match match in CatchTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(CatchTypeRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             foreach (Capture capture in match.Groups["name"].Captures)
             {
                 AddPhpTypeReferenceFromQualifiedName(
@@ -209,8 +221,11 @@ internal static partial class PhpReferenceExtractor
             return;
         }
 
-        foreach (Match match in ReturnTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(ReturnTypeRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             foreach (Capture capture in match.Groups["name"].Captures)
             {
                 if (IsPhpBuiltinTypeName(capture.Value))
@@ -240,8 +255,11 @@ internal static partial class PhpReferenceExtractor
         if (preparedLine.IndexOf('$') < 0)
             return;
 
-        foreach (Match match in ParameterTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(ParameterTypeRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             foreach (Capture capture in match.Groups["name"].Captures)
             {
                 if (IsPhpBuiltinTypeName(capture.Value))
@@ -277,8 +295,11 @@ internal static partial class PhpReferenceExtractor
             return;
         }
 
-        foreach (Match match in PropertyTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(PropertyTypeRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             foreach (Capture capture in match.Groups["name"].Captures)
             {
                 if (IsPhpBuiltinTypeName(capture.Value))
@@ -311,8 +332,11 @@ internal static partial class PhpReferenceExtractor
             return;
         }
 
-        foreach (Match match in InheritanceTypeRegex.Matches(preparedLine))
+        foreach (Match match in Regex.EnumerateMatches(InheritanceTypeRegex, preparedLine))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             foreach (Capture capture in match.Groups["name"].Captures)
             {
                 AddPhpTypeReferenceFromQualifiedName(
@@ -397,8 +421,13 @@ internal static partial class PhpReferenceExtractor
             return;
 
         var importsGroup = match.Groups["imports"];
-        foreach (Match itemMatch in UseImportItemRegex.Matches(importsGroup.Value))
+        foreach (Match itemMatch in Regex.EnumerateMatches(
+                     UseImportItemRegex,
+                     importsGroup.Value))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var itemGroup = itemMatch.Groups["name"];
             AddPhpReferenceFromName(
                 itemGroup.Value,
@@ -447,8 +476,13 @@ internal static partial class PhpReferenceExtractor
             return;
 
         var importsGroup = match.Groups["imports"];
-        foreach (Match itemMatch in UseImportItemRegex.Matches(importsGroup.Value))
+        foreach (Match itemMatch in Regex.EnumerateMatches(
+                     UseImportItemRegex,
+                     importsGroup.Value))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var itemGroup = itemMatch.Groups["name"];
             AddPhpReferenceFromName(
                 itemGroup.Value,
@@ -482,8 +516,13 @@ internal static partial class PhpReferenceExtractor
 
         var prefix = prefixEnd == rawPrefix.Length ? rawPrefix : rawPrefix.Substring(0, prefixEnd);
         var itemsGroup = groupMatch.Groups["items"];
-        foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
+        foreach (Match itemMatch in Regex.EnumerateMatches(
+                     GroupUseTypeItemRegex,
+                     itemsGroup.Value))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             if (itemMatch.Groups["kind"].Success)
                 continue;
 
@@ -532,8 +571,13 @@ internal static partial class PhpReferenceExtractor
 
         var prefix = prefixEnd == rawPrefix.Length ? rawPrefix : rawPrefix.Substring(0, prefixEnd);
         var itemsGroup = groupMatch.Groups["items"];
-        foreach (Match itemMatch in GroupUseTypeItemRegex.Matches(itemsGroup.Value))
+        foreach (Match itemMatch in Regex.EnumerateMatches(
+                     GroupUseTypeItemRegex,
+                     itemsGroup.Value))
         {
+            if (ReferenceExtractor.ReferenceLimitReached(references))
+                break;
+
             var isTargetKind = itemMatch.Groups["kind"].Success
                 && itemMatch.Groups["kind"].Value.Equals(importKind, StringComparison.OrdinalIgnoreCase);
             if (requireImportKind != isTargetKind)
