@@ -1621,10 +1621,34 @@ public sealed class Caller
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        var resource = response["result"]!["resources"]!.AsArray()
+        var result = response["result"]!;
+        var resource = result["resources"]!.AsArray()
             .Single(r => r!["name"]!.GetValue<string>() == "src/app.cs")!;
         Assert.Equal("cdidx://file/src/app.cs", resource["uri"]!.GetValue<string>());
         Assert.Equal("text/x-csharp", resource["mimeType"]!.GetValue<string>());
+
+        var discovery = result["_meta"]!["discovery_contract"]!;
+        Assert.Equal(
+            ["cursor", "path", "lang", "includeGenerated", "maxBytes"],
+            discovery["accepted_params"]!.AsArray().Select(item => item!.GetValue<string>()));
+        Assert.Equal(
+            ["path", "lang", "includeGenerated"],
+            discovery["filter_params"]!.AsArray().Select(item => item!.GetValue<string>()));
+        Assert.Equal(McpServer.MaxResourceListPathFilterCount, discovery["path_filter"]!["max_items"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxResourceListPathFilterChars, discovery["path_filter"]!["max_characters_per_item"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxResourceListPathFilterWildcards, discovery["path_filter"]!["max_wildcards_per_item"]!.GetValue<int>());
+        Assert.Equal("normalized_language_name_or_alias", discovery["language_filter"]!["type"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxResourceListLanguageFilterChars, discovery["language_filter"]!["max_characters"]!.GetValue<int>());
+        Assert.True(discovery["generated_files_excluded_by_default"]!.GetValue<bool>());
+        Assert.Equal("json_rpc_envelope", discovery["max_bytes"]!["scope"]!.GetValue<string>());
+        Assert.Equal(McpServer.MinResourceListMaxBytes, discovery["max_bytes"]!["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.DefaultResourceListMaxBytes, discovery["max_bytes"]!["default"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxResourceListMaxBytes, discovery["max_bytes"]!["maximum"]!.GetValue<int>());
+        Assert.Equal("params.cursor", discovery["pagination"]!["cursor_param"]!.GetValue<string>());
+        Assert.Equal("result.nextCursor", discovery["pagination"]!["next_cursor_field"]!.GetValue<string>());
+        Assert.True(discovery["pagination"]!["cursor_is_opaque"]!.GetValue<bool>());
+        Assert.True(discovery["pagination"]!["cursor_binds_index_generation"]!.GetValue<bool>());
+        Assert.True(discovery["pagination"]!["cursor_binds_filters"]!.GetValue<bool>());
     }
 
     [Fact]

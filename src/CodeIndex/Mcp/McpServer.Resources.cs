@@ -282,6 +282,7 @@ public partial class McpServer : IDisposable
             ["resources"] = resources,
             ["_meta"] = new JsonObject
             {
+                ["discovery_contract"] = CreateResourceListDiscoveryContract(),
                 ["response_controls"] = CreateResourceListResponseControls(
                     requestedMaxBytes,
                     effectiveMaxBytes,
@@ -297,6 +298,53 @@ public partial class McpServer : IDisposable
             result["nextCursor"] = EncodeResourceListCursor(generation, lastConsumedFileId.Value, filterFingerprint);
         return CreateSuccessResponse(true, id, result);
     }
+
+    private static JsonObject CreateResourceListDiscoveryContract()
+        => new()
+        {
+            ["accepted_params"] = new JsonArray
+            {
+                "cursor",
+                "path",
+                "lang",
+                "includeGenerated",
+                "maxBytes",
+            },
+            ["filter_params"] = new JsonArray
+            {
+                "path",
+                "lang",
+                "includeGenerated",
+            },
+            ["path_filter"] = new JsonObject
+            {
+                ["type"] = "string_or_array",
+                ["max_items"] = MaxResourceListPathFilterCount,
+                ["max_characters_per_item"] = MaxResourceListPathFilterChars,
+                ["max_wildcards_per_item"] = MaxResourceListPathFilterWildcards,
+            },
+            ["language_filter"] = new JsonObject
+            {
+                ["type"] = "normalized_language_name_or_alias",
+                ["max_characters"] = MaxResourceListLanguageFilterChars,
+            },
+            ["generated_files_excluded_by_default"] = true,
+            ["max_bytes"] = new JsonObject
+            {
+                ["scope"] = "json_rpc_envelope",
+                ["minimum"] = MinResourceListMaxBytes,
+                ["default"] = DefaultResourceListMaxBytes,
+                ["maximum"] = MaxResourceListMaxBytes,
+            },
+            ["pagination"] = new JsonObject
+            {
+                ["cursor_param"] = "params.cursor",
+                ["next_cursor_field"] = "result.nextCursor",
+                ["cursor_is_opaque"] = true,
+                ["cursor_binds_index_generation"] = true,
+                ["cursor_binds_filters"] = true,
+            },
+        };
 
     private static JsonObject CreateResourceListResponseControls(
         int requestedMaxBytes,
