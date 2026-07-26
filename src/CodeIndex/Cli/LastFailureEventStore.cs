@@ -323,49 +323,28 @@ internal static class LastFailureEventStore
         return true;
     }
 
-    private static string ResolveFailureDbPath(IReadOnlyList<string> args)
+    internal static string ResolveFailureDbPath(IReadOnlyList<string> args)
     {
-        var explicitDbPath = TryReadOptionValue(args, "--db");
-        var explicitDataDir = TryReadOptionValue(args, "--data-dir");
         var workspacePath = Environment.CurrentDirectory;
         if (string.Equals(ResolveCommandCategory(args), "index", StringComparison.Ordinal))
         {
-            var projectPath = ResolveIndexProjectPath(args) ?? workspacePath;
-            return DbPathResolver.ResolveForIndex(projectPath, explicitDbPath, explicitDataDir).DbPath;
+            var indexArgs = args.Count > 0 && string.Equals(args[0], "index", StringComparison.Ordinal)
+                ? args.Skip(1).ToArray()
+                : args.ToArray();
+            var options = IndexCommandRunner.ParseArgs(indexArgs);
+            return DbPathResolver.ResolveForIndex(
+                options.ProjectPath ?? workspacePath,
+                options.DbPath,
+                options.DataDir).DbPath;
         }
 
-        return DbPathResolver.ResolveForQuery(workspacePath, explicitDbPath, explicitDataDir).DbPath;
-    }
-
-    private static string? ResolveIndexProjectPath(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0)
-            return null;
-        if (!string.Equals(args[0], "index", StringComparison.Ordinal)
-            && ProgramRunner.IsProjectPathArg(args[0]))
-        {
-            return args[0];
-        }
-        if (string.Equals(args[0], "index", StringComparison.Ordinal)
-            && args.Count > 1
-            && ProgramRunner.IsProjectPathArg(args[1]))
-        {
-            return args[1];
-        }
-        return null;
-    }
-
-    private static string? TryReadOptionValue(IReadOnlyList<string> args, string option)
-    {
-        for (var index = 0; index < args.Count; index++)
-        {
-            if (string.Equals(args[index], option, StringComparison.Ordinal))
-                return index + 1 < args.Count ? args[index + 1] : null;
-            var prefix = option + "=";
-            if (args[index].StartsWith(prefix, StringComparison.Ordinal))
-                return args[index][prefix.Length..];
-        }
-        return null;
+        var queryArgs = args.Count > 0 ? args.Skip(1).ToArray() : [];
+        return QueryCommandRunner.ParseArgs(
+            queryArgs,
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false).DbPath;
     }
 
     private static string ResolveWorkspacePath(string normalizedDbPath)

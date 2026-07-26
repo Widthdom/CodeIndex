@@ -221,7 +221,11 @@ public static class ReportCommandRunner
                 $"process-architecture: {RuntimeInformation.ProcessArchitecture}",
                 "") + "\n");
 
-        var (schemaText, tables, dbPath, dbIncluded, schemaTablesTruncated) = BuildSchemaSummary(options.DbPath);
+        var effectiveDbPath = DbPathResolver.ResolveForQuery(
+            Environment.CurrentDirectory,
+            options.DbPathExplicit ? options.DbPath : null,
+            explicitDataDir: null).DbPath;
+        var (schemaText, tables, dbPath, dbIncluded, schemaTablesTruncated) = BuildSchemaSummary(effectiveDbPath);
         bundle.SchemaTables = tables;
         bundle.SchemaTablesTruncated = schemaTablesTruncated;
         bundle.DbIncluded = dbIncluded;
@@ -728,6 +732,7 @@ public static class ReportCommandRunner
             {
                 case "--db" when i + 1 < args.Length:
                     options.DbPath = args[++i];
+                    options.DbPathExplicit = true;
                     break;
                 case "--db":
                     options.ParseError = "--db requires a value";
@@ -788,6 +793,7 @@ public static class ReportCommandRunner
 internal sealed class ReportCommandOptions
 {
     public string DbPath { get; set; } = string.Empty;
+    public bool DbPathExplicit { get; set; }
     public string? OutputPath { get; set; }
     public bool Json { get; set; }
     public bool ShowHelp { get; set; }

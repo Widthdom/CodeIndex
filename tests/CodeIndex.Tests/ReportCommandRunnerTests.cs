@@ -538,6 +538,96 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void BuildBundle_DefaultDatabaseUsesQueryResolutionForDiagnosticsAndProvenance_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        var dataDir = Path.Combine(workDir, "data");
+        var dbPath = Path.Combine(dataDir, "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(dataDir);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            using var env = EnvironmentVariableScope.Capture(DbPathResolver.DataDirEnvironmentVariable);
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, dataDir);
+            var options = ReportCommandRunner.ParseArgs(["--output", "bundle.tgz", "--no-log"]);
+            var timestamp = new DateTimeOffset(2026, 7, 27, 1, 2, 3, TimeSpan.Zero);
+            var runId = LastFailureEventStore.CreateRunId();
+
+            var bundle = ReportCommandRunner.BuildBundle(options, "1.40.3-test", timestamp, runId);
+            var expectedProvenance = LastFailureEventStore.CreateReportProvenance(
+                dbPath,
+                "1.40.3-test",
+                timestamp,
+                runId);
+
+            Assert.True(bundle.DbIncluded);
+            Assert.Equal(Path.GetFullPath(dbPath), bundle.DbPath);
+            Assert.Equal(expectedProvenance.DatabaseId, bundle.Provenance.DatabaseId);
+            Assert.Equal(expectedProvenance.WorkspaceId, bundle.Provenance.WorkspaceId);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void ResolveFailureDbPath_UsesParsedIndexProjectAfterOptions_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        var projectPath = Path.Combine(workDir, "project");
+        try
+        {
+            Directory.CreateDirectory(projectPath);
+            using var env = EnvironmentVariableScope.Capture(
+                DbPathResolver.DataDirEnvironmentVariable,
+                "XDG_DATA_HOME");
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, null);
+            env.Set("XDG_DATA_HOME", null);
+
+            var resolved = LastFailureEventStore.ResolveFailureDbPath(
+                ["index", "--rebuild", projectPath]);
+
+            Assert.Equal(
+                Path.Combine(Path.GetFullPath(projectPath), ".cdidx", "codeindex.db"),
+                resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void ResolveFailureDbPath_DoesNotInterpretLiteralQueryAsDatabaseOption_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        var literalValue = Path.Combine(workDir, "literal-query-value.db");
+        try
+        {
+            var expected = QueryCommandRunner.ParseArgs(
+                ["--", "--db", literalValue],
+                jsonDefault: false,
+                validateDefaultLimit: false,
+                validateDefaultSnippetLines: false,
+                validateDefaultMaxLineWidth: false).DbPath;
+
+            var resolved = LastFailureEventStore.ResolveFailureDbPath(
+                ["search", "--", "--db", literalValue]);
+
+            Assert.Equal(expected, resolved);
+            Assert.NotEqual(Path.GetFullPath(literalValue), DbPathResolver.NormalizeDbPath(resolved));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void Run_OutputArchiveAndEntriesUseOwnerOnlyPermissions()
     {
         var workDir = CreateWorkDir();
@@ -598,6 +688,12 @@ public class ReportCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, overwriteExitCode);
             Assert.Equal(string.Empty, overwriteStderr);
             Assert.Contains("support-manifest.json", ReadTarGzEntries(output).Keys);
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    ReportCommandRunner.BundleFileMode,
+                    File.GetUnixFileMode(output) & PermissionBits);
+            }
             Assert.Single(Directory.GetFiles(workDir));
         }
         finally
@@ -629,6 +725,33 @@ public class ReportCommandRunnerTests
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void WriteBundle_PostReplaceFlushFailureRestoresExistingBundle_Issue4828()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            File.WriteAllText(output, "existing bundle");
+            var bundle = new ReportBundle();
+            bundle.AddText("metadata.txt", "replacement");
+            AtomicFileWriter.FlushParentDirectoryForTesting =
+                _ => throw new IOException("simulated directory flush failure");
+
+            var exception = Assert.Throws<IOException>(() =>
+                ReportCommandRunner.WriteBundle(output, bundle, overwrite: true));
+
+            Assert.Contains("previous destination was restored", exception.Message, StringComparison.Ordinal);
+            Assert.Equal("existing bundle", File.ReadAllText(output));
+            Assert.Single(Directory.GetFiles(workDir));
+        }
+        finally
+        {
+            AtomicFileWriter.FlushParentDirectoryForTesting = null;
             TestProjectHelper.DeleteDirectory(workDir);
         }
     }
