@@ -109,7 +109,6 @@ internal static class AtomicFileWriter
 
         var tempPath = BuildTempPath(path);
         var ioTempPath = LongPath.EnsureWindowsPrefix(tempPath);
-        var moved = false;
 
         try
         {
@@ -129,21 +128,31 @@ internal static class AtomicFileWriter
             {
                 try
                 {
-                    MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
+                    if (OperatingSystem.IsWindows())
+                    {
+                        MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
+                    }
+                    else
+                    {
+                        // Creating the destination hard link is an atomic no-clobber
+                        // publication point on POSIX file systems. A plain rename can
+                        // replace a destination created after an existence check.
+                        CreateUnixHardLink(ioTempPath, path);
+                    }
                 }
                 catch (IOException ex) when (PathEntryExists(path))
                 {
                     throw new DestinationAlreadyExistsException(path, ex);
                 }
-                moved = true;
+
+                if (!OperatingSystem.IsWindows())
+                    File.Delete(ioTempPath);
                 FlushParentDirectoryAfterCreate(path);
             }
-            moved = true;
         }
         catch
         {
-            if (!moved)
-                TryDeleteFile(ioTempPath);
+            TryDeleteFile(ioTempPath);
             throw;
         }
     }
@@ -154,6 +163,16 @@ internal static class AtomicFileWriter
             return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
 
         return DataDirectorySecurity.OpenPrivateFileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+    }
+
+    private static void CreateUnixHardLink(string existingPath, string linkPath)
+    {
+        if (UnixLink(existingPath, linkPath) == 0)
+            return;
+
+        var errno = Marshal.GetLastPInvokeError();
+        throw new IOException(
+            $"Could not publish the atomic file without replacing the destination (errno {errno}).");
     }
 
     private static Action<string>? ResolveProfileModeCallback(WriteProfile profile)
@@ -367,6 +386,9 @@ internal static class AtomicFileWriter
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int UnixOpen(string path, int flags);
+
+    [DllImport("libc", EntryPoint = "link", SetLastError = true)]
+    private static extern int UnixLink(string existingPath, string linkPath);
 
     [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
     private static extern int UnixFsync(int fd);

@@ -1684,6 +1684,41 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void WriteExportArchiveFile_CanSkipArtifactMetadataForHumanOutput_Issue4827()
+    {
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_export_without_attestation");
+        try
+        {
+            var snapshotPath = TestProjectHelper.CreateProjectDb(workDir);
+            var outputPath = Path.Combine(workDir, "codeindex.cdidx.zip");
+            var manifest = new ExportImportCommandRunner.ExportManifest(
+                "1",
+                "test",
+                0,
+                null,
+                null,
+                new string('0', 64));
+
+            var artifact = ExportImportCommandRunner.WriteExportArchiveFile(
+                outputPath,
+                snapshotPath,
+                manifest,
+                new JsonSerializerOptions(),
+                CancellationToken.None,
+                overwrite: false,
+                includeArtifactMetadata: false);
+
+            Assert.Null(artifact);
+            Assert.True(File.Exists(outputPath));
+            Assert.Empty(Directory.GetFiles(workDir, ".cdidx-*.tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void WriteExportArchiveFile_ConcurrentDestinationCreationPreservesWinner_Issue4827()
     {
         var workDir = TestProjectHelper.CreateTempProject("cdidx_export_concurrent_destination");

@@ -65,13 +65,14 @@ internal static partial class ExportImportCommandRunner
         writer.Write(content);
     }
 
-    internal static (long SizeBytes, string Sha256) WriteExportArchiveFile(
+    internal static (long SizeBytes, string Sha256)? WriteExportArchiveFile(
         string outputPath,
         string snapshotPath,
         ExportManifest manifest,
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken,
         bool overwrite = true,
+        bool includeArtifactMetadata = true,
         Action? beforePublishForTesting = null)
     {
         var fullOutputPath = Path.GetFullPath(outputPath);
@@ -96,12 +97,12 @@ internal static partial class ExportImportCommandRunner
             tempPath =>
             {
                 VerifyPrivateArchiveMode(tempPath);
-                artifact = ReadArchiveArtifactMetadata(tempPath, cancellationToken);
+                if (includeArtifactMetadata)
+                    artifact = ReadArchiveArtifactMetadata(tempPath, cancellationToken);
                 beforePublishForTesting?.Invoke();
             });
 
-        return artifact
-            ?? throw new InvalidDataException("export archive artifact metadata was not created");
+        return artifact;
     }
 
     internal static void WriteCtagsFile(string outputPath, Action<TextWriter> writeContents)

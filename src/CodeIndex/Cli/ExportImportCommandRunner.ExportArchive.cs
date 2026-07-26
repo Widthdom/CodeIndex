@@ -188,19 +188,30 @@ internal static partial class ExportImportCommandRunner
             phase = PhaseSha256;
             manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath, cancellationToken) };
             phase = PhaseWriteArchive;
-            var artifact = WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions, cancellationToken, overwrite);
+            var artifact = WriteExportArchiveFile(
+                fullOutputPath,
+                snapshotPath,
+                manifest,
+                jsonOptions,
+                cancellationToken,
+                overwrite,
+                includeArtifactMetadata: wantsJson);
 
             if (wantsJson)
+            {
+                var attestation = artifact
+                    ?? throw new InvalidDataException("export archive artifact metadata was not created");
                 Console.WriteLine(JsonSerializer.Serialize(
                     new ExportArchiveResult(
                         "1",
                         fullOutputPath,
                         fullSourceDbPath,
-                        artifact.SizeBytes,
-                        artifact.Sha256,
+                        attestation.SizeBytes,
+                        attestation.Sha256,
                         manifest,
                         manifest.Scope ?? throw new InvalidDataException("export scope metadata was not created")),
                     jsonOptions));
+            }
             else
                 Console.WriteLine($"Exported CodeIndex archive to {fullOutputPath}");
             return CommandExitCodes.Success;
