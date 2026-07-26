@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.40.2] - 2026-07-26
+
+#### Fixed
+
+- **MCP file-resource controls are now discoverable in-band** — `initialize` instructions now explain exact-path templates and filtered `resources/list` usage, while each list response publishes accepted parameters, bounds, and cursor semantics under `_meta.discovery_contract`, so AI clients can use current resource discovery without guessing non-standard protocol extensions.
+
+#### Documentation
+
+- **Downstream MCP setup no longer duplicates a cdidx command catalog** — removed the stale Code Search Rules templates and now direct AI clients to the live MCP `initialize`, `tools/list`, and resource-discovery contracts, while correcting cloud-bootstrap references to the current documentation entry points.
+
 ### [1.40.1] - 2026-07-25
 
 #### Fixed
@@ -6191,6 +6201,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.40.2] - 2026-07-26
+
+#### 修正
+
+- **MCP の file-resource control を protocol 上で発見できるようになりました** — `initialize` の instructions が exact-path template と filter 付き `resources/list` の使い方を案内し、各 list response が accepted parameter、上限、cursor semantics を `_meta.discovery_contract` に公開するため、AI client は標準外の protocol extension を推測せず最新の resource discovery を利用できます。
+
+#### ドキュメント
+
+- **下流の MCP セットアップで cdidx のコマンド一覧を複製しないようにしました** — 古くなった Code Search Rules テンプレートを削除し、AI client が最新の MCP `initialize`、`tools/list`、resource discovery 契約を使うよう案内するとともに、cloud bootstrap の参照先を現行のドキュメント構成へ修正しました。
+
 ### [1.40.1] - 2026-07-25
 
 #### 修正
@@ -12349,7 +12369,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.40.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.40.2...HEAD
+[1.40.2]: https://github.com/Widthdom/CodeIndex/compare/v1.40.1...v1.40.2
 [1.40.1]: https://github.com/Widthdom/CodeIndex/compare/v1.40.0...v1.40.1
 [1.40.0]: https://github.com/Widthdom/CodeIndex/compare/v1.39.4...v1.40.0
 [1.39.4]: https://github.com/Widthdom/CodeIndex/compare/v1.39.3...v1.39.4
