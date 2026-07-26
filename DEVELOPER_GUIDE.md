@@ -1055,11 +1055,15 @@ fall back to a same-name edge.
 C# `type_reference` candidates are filtered before qualifier and namespace ranking. A candidate
 must be a type-like symbol (`class`, `struct`, `record`, `interface`, `enum`, or `delegate`), and
 when the reference's generic arity can be recovered from its normalized line context, that arity
-must match the declaration. Non-type name collisions and mismatched generic declarations never
+must match the declaration. Arity recovery skips valid block-comment trivia and treats the original
+source column as an upper bound after the persisted context has been trimmed, so a later same-name
+generic on the line cannot steal the reference. Non-type name collisions, ordinal-case mismatches,
+and mismatched generic declarations never
 participate in resolution; if no compatible candidate remains, the reference stays `unresolved`.
 An uppercase property receiver such as `Name.Trim()` is rewritten to a qualified member reference
-before graph resolution, including when the property is declared in another partial-class file, so
-the type-only filter does not discard a real member dependency.
+before graph resolution, including when the property is declared in another partial-class file or
+an indexed base class. The closest property in the inheritance chain is selected with ordinal name
+matching, so the type-only filter does not discard or ambiguously retarget a real member dependency.
 This is a general candidate-compatibility rule rather than a framework-type blacklist, and it
 does not change Java reference resolution.
 The persisted reference-identity contract is versioned for this rule, so indexes written before
@@ -4187,11 +4191,14 @@ resolution を再構築し、同じ transaction で marker を設定します。
 C# の `type_reference` candidate は qualifier / namespace の順位付け前に絞り込みます。candidate は
 型相当の symbol（`class`、`struct`、`record`、`interface`、`enum`、`delegate`）でなければならず、
 正規化済み行 context から reference の generic arity を復元できる場合は declaration の arity と
-一致する必要があります。型ではない同名 symbol と arity 不一致の generic declaration は解決候補に
+一致する必要があります。arity の復元では有効な block comment trivia を読み飛ばし、永続化 context の
+trim 後は元の source column を上限として扱うため、同じ行の後続同名 generic を誤って選びません。
+型ではない同名 symbol、大文字小文字が ordinal 一致しない symbol、arity 不一致の generic declaration は解決候補に
 含めず、適合 candidate が残らなければ reference は `unresolved` のままです。これは framework 型の
 blacklist ではなく一般的な candidate compatibility rule です。`Name.Trim()` のように大文字で始まる
 property receiver は graph 解決前に修飾済み member reference へ書き換え、property が partial class の
-別ファイルで宣言されている場合も、型限定 filter によって実在する member dependency を失わないようにします。
+別ファイルまたは index 済み base class で宣言されている場合も inheritance chain 上で最も近い property を
+ordinal 名一致で選び、型限定 filter によって実在する member dependency を失ったり曖昧化したりしないようにします。
 Java の reference resolution は変更しません。
 この規則は persisted reference-identity contract の version 対象であり、compatibility filter 導入前に
 作成された index は、通常の index 更新で candidate を再構築するまで非 authoritative として扱います。

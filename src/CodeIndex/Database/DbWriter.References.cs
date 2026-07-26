@@ -107,6 +107,19 @@ public partial class DbWriter
             name_folded TEXT NOT NULL,
             family_key  TEXT NOT NULL,
             PRIMARY KEY(lang, name_folded)
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_type_direct_bases (
+            derived_qualified_name TEXT NOT NULL,
+            base_qualified_name    TEXT NOT NULL,
+            PRIMARY KEY(derived_qualified_name, base_qualified_name)
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_type_inheritance (
+            derived_qualified_name TEXT NOT NULL,
+            base_qualified_name    TEXT NOT NULL,
+            distance               INTEGER NOT NULL,
+            PRIMARY KEY(derived_qualified_name, base_qualified_name)
         ) WITHOUT ROWID
         """;
 
@@ -116,6 +129,7 @@ public partial class DbWriter
             OR r.reference_kind <> 'type_reference'
             OR CASE
                 WHEN s.kind NOT IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate') THEN 0
+                WHEN s.name <> r.symbol_name COLLATE BINARY THEN 0
                 WHEN csharp_reference_type_arity(
                          COALESCE(
                              r.context,
@@ -140,6 +154,114 @@ public partial class DbWriter
 
     private static string BuildCSharpPropertyReceiverNormalizationSql(string scopePredicate) =>
         $"""
+        DELETE FROM temp.csharp_type_direct_bases;
+        DELETE FROM temp.csharp_type_inheritance;
+
+        INSERT OR IGNORE INTO temp.csharp_type_direct_bases(
+            derived_qualified_name,
+            base_qualified_name)
+        SELECT
+            CASE
+                WHEN COALESCE(derived.container_qualified_name, '') = ''
+                    THEN derived.name
+                WHEN derived.container_qualified_name = derived.name COLLATE BINARY
+                     OR substr(
+                            derived.container_qualified_name,
+                            -length(derived.name) - 1
+                        ) = ('.' || derived.name) COLLATE BINARY
+                    THEN derived.container_qualified_name
+                ELSE derived.container_qualified_name || '.' || derived.name
+            END,
+            CASE
+                WHEN COALESCE(base_type.container_qualified_name, '') = ''
+                    THEN base_type.name
+                WHEN base_type.container_qualified_name = base_type.name COLLATE BINARY
+                     OR substr(
+                            base_type.container_qualified_name,
+                            -length(base_type.name) - 1
+                        ) = ('.' || base_type.name) COLLATE BINARY
+                    THEN base_type.container_qualified_name
+                ELSE base_type.container_qualified_name || '.' || base_type.name
+            END
+        FROM symbols AS derived
+        JOIN files AS derived_file ON derived_file.id = derived.file_id
+        JOIN json_each(
+            csharp_base_identifiers_json(derived.signature)
+        ) AS base_reference
+        JOIN symbols AS base_type INDEXED BY idx_symbols_name_folded
+          ON base_type.name_folded =
+             csharp_base_name_folded(base_reference.value)
+         AND base_type.name =
+             csharp_base_name(base_reference.value) COLLATE BINARY
+        JOIN files AS base_file ON base_file.id = base_type.file_id
+        WHERE derived_file.lang = 'csharp'
+          AND base_file.lang = 'csharp'
+          AND derived.kind IN ('class', 'record')
+          AND base_type.kind IN ('class', 'record')
+          AND csharp_base_reference_matches(
+                  base_reference.value,
+                  base_type.name,
+                  CASE
+                      WHEN COALESCE(base_type.container_qualified_name, '') = ''
+                          THEN base_type.name
+                      WHEN base_type.container_qualified_name =
+                               base_type.name COLLATE BINARY
+                           OR substr(
+                                  base_type.container_qualified_name,
+                                  -length(base_type.name) - 1
+                              ) = ('.' || base_type.name) COLLATE BINARY
+                          THEN base_type.container_qualified_name
+                      ELSE base_type.container_qualified_name || '.' || base_type.name
+                  END,
+                  CASE
+                      WHEN COALESCE(derived.container_qualified_name, '') = ''
+                          THEN derived.name
+                      WHEN derived.container_qualified_name =
+                               derived.name COLLATE BINARY
+                           OR substr(
+                                  derived.container_qualified_name,
+                                  -length(derived.name) - 1
+                              ) = ('.' || derived.name) COLLATE BINARY
+                          THEN derived.container_qualified_name
+                      ELSE derived.container_qualified_name || '.' || derived.name
+                  END) = 1;
+
+        INSERT OR IGNORE INTO temp.csharp_type_inheritance(
+            derived_qualified_name,
+            base_qualified_name,
+            distance)
+        WITH RECURSIVE inheritance(
+            derived_qualified_name,
+            base_qualified_name,
+            distance,
+            path) AS (
+            SELECT direct.derived_qualified_name,
+                   direct.base_qualified_name,
+                   1,
+                   char(31) || direct.derived_qualified_name ||
+                       char(31) || direct.base_qualified_name || char(31)
+            FROM temp.csharp_type_direct_bases AS direct
+            UNION ALL
+            SELECT inheritance.derived_qualified_name,
+                   direct.base_qualified_name,
+                   inheritance.distance + 1,
+                   inheritance.path || direct.base_qualified_name || char(31)
+            FROM inheritance
+            JOIN temp.csharp_type_direct_bases AS direct
+              ON direct.derived_qualified_name =
+                 inheritance.base_qualified_name COLLATE BINARY
+            WHERE inheritance.distance < 32
+              AND instr(
+                      inheritance.path,
+                      char(31) || direct.base_qualified_name || char(31)
+                  ) = 0
+        )
+        SELECT derived_qualified_name,
+               base_qualified_name,
+               MIN(distance)
+        FROM inheritance
+        GROUP BY derived_qualified_name, base_qualified_name;
+
         UPDATE symbol_references AS r
         SET reference_kind = 'type_reference',
             target_qualifier = NULL
@@ -153,21 +275,61 @@ public partial class DbWriter
               JOIN symbols AS target
                 ON target.name_folded = r.symbol_name_folded
                AND target.name = r.symbol_name COLLATE BINARY
-               AND target.container_qualified_name =
-                   source.container_qualified_name COLLATE BINARY
               JOIN files AS target_file ON target_file.id = target.file_id
               WHERE source.id = r.source_symbol_id
                 AND source_file.lang = 'csharp'
                 AND target_file.lang = 'csharp'
                 AND target.kind = 'property'
+                AND target.container_qualified_name IN (
+                    SELECT source.container_qualified_name
+                    UNION
+                    SELECT inheritance.base_qualified_name
+                    FROM temp.csharp_type_inheritance AS inheritance
+                    WHERE inheritance.derived_qualified_name =
+                          source.container_qualified_name COLLATE BINARY
+                )
+                AND r.target_qualifier =
+                    char(31) || 'property_receiver:' ||
+                        target.container_qualified_name COLLATE BINARY
           );
 
         UPDATE symbol_references AS r
         SET reference_kind = 'reference',
             target_qualifier = char(31) || 'property_receiver:' || (
-                SELECT source.container_qualified_name
+                SELECT target.container_qualified_name
                 FROM symbols AS source
+                JOIN files AS source_file ON source_file.id = source.file_id
+                JOIN symbols AS target
+                  ON target.name_folded = r.symbol_name_folded
+                 AND target.name = r.symbol_name COLLATE BINARY
+                JOIN files AS target_file ON target_file.id = target.file_id
                 WHERE source.id = r.source_symbol_id
+                  AND source_file.lang = 'csharp'
+                  AND target_file.lang = 'csharp'
+                  AND target.kind = 'property'
+                  AND target.container_qualified_name IN (
+                      SELECT source.container_qualified_name
+                      UNION
+                      SELECT inheritance.base_qualified_name
+                      FROM temp.csharp_type_inheritance AS inheritance
+                      WHERE inheritance.derived_qualified_name =
+                            source.container_qualified_name COLLATE BINARY
+                  )
+                ORDER BY CASE
+                             WHEN target.container_qualified_name =
+                                  source.container_qualified_name COLLATE BINARY
+                                 THEN 0
+                             ELSE COALESCE((
+                                 SELECT inheritance.distance
+                                 FROM temp.csharp_type_inheritance AS inheritance
+                                 WHERE inheritance.derived_qualified_name =
+                                       source.container_qualified_name COLLATE BINARY
+                                   AND inheritance.base_qualified_name =
+                                       target.container_qualified_name COLLATE BINARY
+                             ), 33)
+                         END,
+                         target.id
+                LIMIT 1
             )
         WHERE {scopePredicate}
           AND r.reference_kind = 'type_reference'
@@ -190,13 +352,19 @@ public partial class DbWriter
               JOIN symbols AS target
                 ON target.name_folded = r.symbol_name_folded
                AND target.name = r.symbol_name COLLATE BINARY
-               AND target.container_qualified_name =
-                   source.container_qualified_name COLLATE BINARY
               JOIN files AS target_file ON target_file.id = target.file_id
               WHERE source.id = r.source_symbol_id
                 AND source_file.lang = 'csharp'
                 AND target_file.lang = 'csharp'
                 AND target.kind = 'property'
+                AND target.container_qualified_name IN (
+                    SELECT source.container_qualified_name
+                    UNION
+                    SELECT inheritance.base_qualified_name
+                    FROM temp.csharp_type_inheritance AS inheritance
+                    WHERE inheritance.derived_qualified_name =
+                          source.container_qualified_name COLLATE BINARY
+                )
           );
         """;
 
@@ -253,9 +421,10 @@ public partial class DbWriter
         WHERE source_file.lang = 'csharp'
           AND target_file.lang = 'csharp'
           AND r.reference_kind = 'reference'
+          AND s.name = r.symbol_name COLLATE BINARY
           AND r.target_qualifier =
               char(31) || 'property_receiver:' || s.container_qualified_name
-                  COLLATE NOCASE
+                  COLLATE BINARY
           AND s.kind = 'property';
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
@@ -461,6 +630,7 @@ public partial class DbWriter
         JOIN (
             SELECT MIN(type_symbol.id) AS symbol_id,
                    type_symbol.name_folded,
+                   type_symbol.name,
                    csharp_definition_type_arity(
                        type_symbol.signature,
                        type_symbol.name,
@@ -470,7 +640,7 @@ public partial class DbWriter
             WHERE target_file.lang = 'csharp'
               AND type_symbol.name_folded IS NOT NULL
               AND type_symbol.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
-            GROUP BY type_symbol.name_folded, type_arity
+            GROUP BY type_symbol.name_folded, type_symbol.name, type_arity
             HAVING type_arity IS NOT NULL
                AND COUNT(DISTINCT target_file.path || char(31) ||
                                   COALESCE(
@@ -479,6 +649,7 @@ public partial class DbWriter
                                       '') || char(31) ||
                                   COALESCE(type_symbol.name, '')) = 1
         ) AS unique_target ON unique_target.name_folded = r.symbol_name_folded
+                          AND unique_target.name = r.symbol_name COLLATE BINARY
         WHERE source_file.lang = 'csharp'
           AND r.target_qualifier IS NULL
           AND r.reference_kind = 'type_reference'

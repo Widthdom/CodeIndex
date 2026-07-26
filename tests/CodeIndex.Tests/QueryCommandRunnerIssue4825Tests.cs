@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
+using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using Microsoft.Data.Sqlite;
 
@@ -7,6 +8,23 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    [Fact]
+    public void CSharpTypeReferenceArity_SkipsBlockCommentTrivia_Issue4825()
+    {
+        Assert.Equal(
+            1,
+            CSharpTypeReferenceArity.GetReferenceArity(
+                "public Commented /* valid trivia */ <string>? Value { get; }",
+                "Commented",
+                8));
+        Assert.Equal(
+            1,
+            CSharpTypeReferenceArity.GetDefinitionArity(
+                "public class Commented /* valid trivia */ <T>",
+                "Commented",
+                "class"));
+    }
+
     [Fact]
     public void CSharpTypeReferences_ResolveOnlyToTypeLikeSymbolsWithMatchingArity_Issue4825()
     {
@@ -37,6 +55,18 @@ public partial class QueryCommandRunnerTests
                 }
 
                 public delegate Handler<TOut> Handler<T, TOut>(T input);
+
+                public class Ordinal<T>
+                {
+                }
+
+                public class ordinal<TFirst, TSecond>
+                {
+                }
+
+                public class Commented /* valid trivia */ <T>
+                {
+                }
                 """);
             TestProjectHelper.WriteTextFile(
                 projectRoot,
@@ -67,6 +97,9 @@ public partial class QueryCommandRunnerTests
                     public Actual<string>? One { get; }
                     public Fixture.Types.Actual<string, string>? Two { get; }
                     public Handler<int, string>? Handler { get; }
+                    public Commented /* valid trivia */ <string>? Trivia { get; }
+                    public Ordinal<string, string>? WrongCaseArity { get; }
+                                    public Actual<string>? SameLineOne { get; } public Actual<string, string>? SameLineTwo { get; }
                 }
                 """);
             TestProjectHelper.WriteTextFile(
@@ -102,6 +135,7 @@ public partial class QueryCommandRunnerTests
                 public partial class Service
                 {
                     public string Name { get; } = "";
+                    public string NAME { get; } = "";
                 }
                 """);
             TestProjectHelper.WriteTextFile(
@@ -111,6 +145,38 @@ public partial class QueryCommandRunnerTests
                 namespace Fixture.Partials;
 
                 public partial class Service
+                {
+                    public string Normalize() => Name.Trim();
+                }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/BaseState.cs",
+                """
+                namespace Fixture.Inheritance;
+
+                public class Base
+                {
+                    protected string Name { get; } = "";
+                }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/Middle.cs",
+                """
+                namespace Fixture.Inheritance;
+
+                public class Middle : Base
+                {
+                }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/DerivedUse.cs",
+                """
+                namespace Fixture.Inheritance;
+
+                public class Derived : Middle
                 {
                     public string Normalize() => Name.Trim();
                 }
@@ -197,6 +263,13 @@ public partial class QueryCommandRunnerTests
                         Assert.Equal("resolved", reference.State);
                         Assert.Equal("class", reference.Kind);
                         Assert.Contains("Actual<TFirst, TSecond>", reference.Signature);
+                    },
+                    reference =>
+                    {
+                        Assert.Contains("SameLineOne", reference.Context);
+                        Assert.Equal("resolved", reference.State);
+                        Assert.Equal("class", reference.Kind);
+                        Assert.Contains("Actual<T>", reference.Signature);
                     });
                 reader.Close();
 
@@ -251,6 +324,70 @@ public partial class QueryCommandRunnerTests
                         Assert.Equal("delegate", reference.TargetKind);
                         Assert.Contains("Handler<T, TOut>", reference.Signature);
                     });
+                compatibilityReader.Close();
+
+                command.CommandText = """
+                    SELECT r.resolution_state,
+                           s.signature
+                    FROM symbol_references AS r
+                    JOIN files AS source_file ON source_file.id = r.file_id
+                    LEFT JOIN symbols AS s ON s.id = r.target_symbol_id
+                    WHERE source_file.path = 'src/Consumer.cs'
+                      AND r.reference_kind = 'type_reference'
+                      AND r.symbol_name = @name
+                    """;
+                var nameParameter = command.Parameters.Add("@name", SqliteType.Text);
+
+                nameParameter.Value = "Commented";
+                using (var triviaReader = command.ExecuteReader())
+                {
+                    Assert.True(triviaReader.Read());
+                    Assert.Equal("resolved", triviaReader.GetString(0));
+                    Assert.Contains(
+                        "class Commented <T>",
+                        triviaReader.GetString(1));
+                }
+
+                nameParameter.Value = "Ordinal";
+                using (var ordinalReader = command.ExecuteReader())
+                {
+                    Assert.True(ordinalReader.Read());
+                    Assert.Equal("unresolved", ordinalReader.GetString(0));
+                    Assert.True(ordinalReader.IsDBNull(1));
+                }
+
+                command.Parameters.Clear();
+                command.CommandText = """
+                    SELECT source_file.path,
+                           r.resolution_state,
+                           r.resolution_candidate_count,
+                           s.name,
+                           target_file.path
+                    FROM symbol_references AS r
+                    JOIN files AS source_file ON source_file.id = r.file_id
+                    LEFT JOIN symbols AS s ON s.id = r.target_symbol_id
+                    LEFT JOIN files AS target_file ON target_file.id = s.file_id
+                    WHERE r.symbol_name = 'Name'
+                      AND source_file.path IN (
+                          'src/PartialUse.cs',
+                          'src/DerivedUse.cs'
+                      )
+                    ORDER BY source_file.path
+                    """;
+                using var propertyReader = command.ExecuteReader();
+                Assert.True(propertyReader.Read());
+                Assert.Equal("src/DerivedUse.cs", propertyReader.GetString(0));
+                Assert.Equal("resolved", propertyReader.GetString(1));
+                Assert.Equal(1, propertyReader.GetInt32(2));
+                Assert.Equal("Name", propertyReader.GetString(3));
+                Assert.Equal("src/BaseState.cs", propertyReader.GetString(4));
+                Assert.True(propertyReader.Read());
+                Assert.Equal("src/PartialUse.cs", propertyReader.GetString(0));
+                Assert.Equal("resolved", propertyReader.GetString(1));
+                Assert.Equal(1, propertyReader.GetInt32(2));
+                Assert.Equal("Name", propertyReader.GetString(3));
+                Assert.Equal("src/PartialState.cs", propertyReader.GetString(4));
+                Assert.False(propertyReader.Read());
             }
 
             var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(
@@ -284,6 +421,10 @@ public partial class QueryCommandRunnerTests
                 dependencyEdges,
                 edge => edge.GetProperty("source_path").GetString() == "src/PartialUse.cs"
                         && edge.GetProperty("target_path").GetString() == "src/PartialState.cs");
+            Assert.Contains(
+                dependencyEdges,
+                edge => edge.GetProperty("source_path").GetString() == "src/DerivedUse.cs"
+                        && edge.GetProperty("target_path").GetString() == "src/BaseState.cs");
             Assert.Contains(
                 dependencyEdges,
                 edge => edge.GetProperty("source_path").GetString() == "src/CaseUse.cs"
@@ -328,6 +469,10 @@ public partial class QueryCommandRunnerTests
                 mcpDependencyEdges,
                 edge => edge!["sourcePath"]!.GetValue<string>() == "src/PartialUse.cs"
                         && edge["targetPath"]!.GetValue<string>() == "src/PartialState.cs");
+            Assert.Contains(
+                mcpDependencyEdges,
+                edge => edge!["sourcePath"]!.GetValue<string>() == "src/DerivedUse.cs"
+                        && edge["targetPath"]!.GetValue<string>() == "src/BaseState.cs");
             Assert.Contains(
                 mcpDependencyEdges,
                 edge => edge!["sourcePath"]!.GetValue<string>() == "src/CaseUse.cs"

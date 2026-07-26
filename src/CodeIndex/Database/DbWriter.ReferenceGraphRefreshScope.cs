@@ -136,7 +136,14 @@ public partial class DbWriter
         =>
         [
             RefreshScopedReferenceSourceSymbolsSql,
-            NormalizeCSharpPropertyReceiverReferencesScopedSql,
+            .. NormalizeCSharpPropertyReceiverReferencesScopedSql
+                .Split(
+                    ';',
+                    StringSplitOptions.RemoveEmptyEntries
+                    | StringSplitOptions.TrimEntries)
+                .Where(static statement => statement.StartsWith(
+                    "UPDATE symbol_references",
+                    StringComparison.Ordinal)),
             RefreshScopedReferenceResolutionValuesSql,
             RefreshScopedSelfReferenceSql,
             RefreshScopedMutualRecursionFlagsSql,

@@ -5,6 +5,7 @@ using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Runtime.ExceptionServices;
+using System.Text.Json;
 
 namespace CodeIndex.Database;
 
@@ -82,6 +83,28 @@ public partial class DbContext : IDisposable
             "csharp_definition_type_arity",
             (string? signature, string? identifier, string? symbolKind) =>
                 CSharpTypeReferenceArity.GetDefinitionArity(signature, identifier, symbolKind));
+        connection.CreateFunction(
+            "csharp_base_identifiers_json",
+            (string? signature) =>
+                JsonSerializer.Serialize(DbWriter.ParseCSharpBaseIdentifiers(signature)));
+        connection.CreateFunction(
+            "csharp_base_name_folded",
+            (string? baseReference) =>
+            {
+                var leaf = GetCSharpBaseReferenceLeaf(baseReference);
+                return leaf == null ? null : NameFold.Fold(leaf) ?? leaf;
+            });
+        connection.CreateFunction(
+            "csharp_base_name",
+            (string? baseReference) => GetCSharpBaseReferenceLeaf(baseReference));
+        connection.CreateFunction(
+            "csharp_base_reference_matches",
+            (string? baseReference, string? candidateName, string? candidateQualifiedName, string? derivingQualifiedName) =>
+                CSharpBaseReferenceMatches(
+                    baseReference,
+                    candidateName,
+                    candidateQualifiedName,
+                    derivingQualifiedName) ? 1 : 0);
         connection.CreateFunction(
             "sql_normalize_exact_source_name",
             (string? text, string? lang) => string.IsNullOrWhiteSpace(text) ? null : ExactSourceSearchNormalizer.Normalize(text, lang));
@@ -180,6 +203,85 @@ public partial class DbContext : IDisposable
         }
 
         return count;
+    }
+
+    private static bool CSharpBaseReferenceMatches(
+        string? baseReference,
+        string? candidateName,
+        string? candidateQualifiedName,
+        string? derivingQualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(baseReference)
+            || string.IsNullOrWhiteSpace(candidateName)
+            || string.IsNullOrWhiteSpace(candidateQualifiedName)
+            || string.IsNullOrWhiteSpace(derivingQualifiedName))
+        {
+            return false;
+        }
+
+        var normalizedReference =
+            CSharpVerbatimNameNormalizer.Normalize(baseReference.Trim());
+        if (normalizedReference.StartsWith("global::", StringComparison.Ordinal))
+            normalizedReference = normalizedReference["global::".Length..];
+
+        var normalizedCandidateName =
+            CSharpVerbatimNameNormalizer.Normalize(candidateName.Trim());
+        var normalizedCandidateQualifiedName =
+            CSharpVerbatimNameNormalizer.Normalize(candidateQualifiedName.Trim());
+        if (normalizedReference.Contains('.', StringComparison.Ordinal)
+            || normalizedReference.Contains("::", StringComparison.Ordinal))
+        {
+            return string.Equals(
+                normalizedReference.Replace("::", ".", StringComparison.Ordinal),
+                normalizedCandidateQualifiedName,
+                StringComparison.Ordinal);
+        }
+
+        if (!string.Equals(
+                normalizedReference,
+                normalizedCandidateName,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var derivingScope = GetQualifiedNameScope(
+            CSharpVerbatimNameNormalizer.Normalize(derivingQualifiedName.Trim()));
+        var candidateScope = GetQualifiedNameScope(normalizedCandidateQualifiedName);
+        while (true)
+        {
+            if (string.Equals(
+                    derivingScope,
+                    candidateScope,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (derivingScope.Length == 0)
+                return false;
+            derivingScope = GetQualifiedNameScope(derivingScope);
+        }
+    }
+
+    private static string? GetCSharpBaseReferenceLeaf(string? baseReference)
+    {
+        if (string.IsNullOrWhiteSpace(baseReference))
+            return null;
+
+        var normalized =
+            CSharpVerbatimNameNormalizer.Normalize(baseReference.Trim());
+        if (normalized.StartsWith("global::", StringComparison.Ordinal))
+            normalized = normalized["global::".Length..];
+        normalized = normalized.Replace("::", ".", StringComparison.Ordinal);
+        var lastDot = normalized.LastIndexOf('.');
+        return lastDot < 0 ? normalized : normalized[(lastDot + 1)..];
+    }
+
+    private static string GetQualifiedNameScope(string qualifiedName)
+    {
+        var lastDot = qualifiedName.LastIndexOf('.');
+        return lastDot < 0 ? string.Empty : qualifiedName[..lastDot];
     }
 
     internal static bool HasCSharpIdentifierOccurrenceOutsideLineRange(string? text, string? identifier, int startLine, int endLine)

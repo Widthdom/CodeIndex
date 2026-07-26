@@ -41,7 +41,7 @@ internal static class CSharpTypeReferenceArity
     {
         var expectedIndex = columnNumber is > 0 and <= int.MaxValue
             ? (int)columnNumber.Value - 1
-            : 0;
+            : int.MaxValue;
         var bestIndex = -1;
         var bestDistance = int.MaxValue;
         for (var searchAt = 0; searchAt <= text.Length - identifier.Length;)
@@ -52,7 +52,23 @@ internal static class CSharpTypeReferenceArity
 
             if (IsIdentifierOccurrence(text, occurrence, identifier.Length))
             {
-                var distance = Math.Abs(occurrence - expectedIndex);
+                // Reference columns are measured against the original line while context is
+                // trimmed. Trimming can only move the matching token to the left, so an
+                // occurrence to the right of the original column cannot be the referenced
+                // token. This upper bound prevents a later same-name generic from stealing
+                // the first reference on an indented line.
+                // reference column は元の行基準だが context は trim 済みである。trim により
+                // 対象 token は左へしか動かないため、元 column より右の occurrence は候補外。
+                // これにより indent された同一行の後続同名 generic への誤対応を防ぐ。
+                if (occurrence > expectedIndex)
+                {
+                    searchAt = occurrence + Math.Max(1, identifier.Length);
+                    continue;
+                }
+
+                var distance = expectedIndex == int.MaxValue
+                    ? occurrence
+                    : expectedIndex - occurrence;
                 if (distance < bestDistance)
                 {
                     bestIndex = occurrence;
@@ -63,7 +79,22 @@ internal static class CSharpTypeReferenceArity
             searchAt = occurrence + Math.Max(1, identifier.Length);
         }
 
-        return bestIndex;
+        if (bestIndex >= 0)
+            return bestIndex;
+
+        // Legacy/plugin rows can carry a column that is already context-relative or no
+        // usable column at all. In that case retain a deterministic exact-case fallback.
+        for (var searchAt = 0; searchAt <= text.Length - identifier.Length;)
+        {
+            var occurrence = text.IndexOf(identifier, searchAt, StringComparison.Ordinal);
+            if (occurrence < 0)
+                break;
+            if (IsIdentifierOccurrence(text, occurrence, identifier.Length))
+                return occurrence;
+            searchAt = occurrence + Math.Max(1, identifier.Length);
+        }
+
+        return -1;
     }
 
     private static int FindDefinitionIdentifierOccurrence(
@@ -129,7 +160,8 @@ internal static class CSharpTypeReferenceArity
     private static int? ReadArityAfterIdentifier(string text, int occurrence, int identifierLength)
     {
         var cursor = occurrence + identifierLength;
-        SkipWhitespace(text, ref cursor);
+        if (!SkipCSharpTrivia(text, ref cursor))
+            return null;
         if (cursor >= text.Length || text[cursor] != '<')
             return 0;
 
@@ -251,7 +283,8 @@ internal static class CSharpTypeReferenceArity
         int identifierLength)
     {
         var cursor = occurrence + identifierLength;
-        SkipWhitespace(signature, ref cursor);
+        if (!SkipCSharpTrivia(signature, ref cursor))
+            return false;
         if (cursor < signature.Length && signature[cursor] == '<')
         {
             if (!TryCountTopLevelTypeArguments(
@@ -264,7 +297,8 @@ internal static class CSharpTypeReferenceArity
             }
 
             cursor = closeAngleIndex + 1;
-            SkipWhitespace(signature, ref cursor);
+            if (!SkipCSharpTrivia(signature, ref cursor))
+                return false;
         }
 
         return cursor < signature.Length && signature[cursor] == '(';
@@ -285,5 +319,35 @@ internal static class CSharpTypeReferenceArity
     {
         while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
             cursor++;
+    }
+
+    private static bool SkipCSharpTrivia(string text, ref int cursor)
+    {
+        while (cursor < text.Length)
+        {
+            SkipWhitespace(text, ref cursor);
+            if (cursor + 1 >= text.Length || text[cursor] != '/')
+                return true;
+
+            if (text[cursor + 1] == '/')
+            {
+                cursor = text.Length;
+                return false;
+            }
+
+            if (text[cursor + 1] != '*')
+                return true;
+
+            var closeIndex = text.IndexOf("*/", cursor + 2, StringComparison.Ordinal);
+            if (closeIndex < 0)
+            {
+                cursor = text.Length;
+                return false;
+            }
+
+            cursor = closeIndex + 2;
+        }
+
+        return true;
     }
 }
