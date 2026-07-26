@@ -224,6 +224,9 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("api_version")] string ApiVersion,
         [property: JsonPropertyName("archive_path")] string ArchivePath,
         [property: JsonPropertyName("db_path")] string DbPath,
+        [property: JsonPropertyName("archive_size_bytes")] long ArchiveSizeBytes,
+        [property: JsonPropertyName("archive_sha256")] string ArchiveSha256,
+        [property: JsonPropertyName("manifest")] ExportManifest Manifest,
         [property: JsonPropertyName("scope")] ArchiveExportScopeResult Scope);
     private sealed record ArchiveExportOptions(
         string? Lang,

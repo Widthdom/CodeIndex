@@ -24,6 +24,7 @@ internal static partial class ExportImportCommandRunner
         var excludePathPatterns = new List<string>();
         var projects = new List<string>();
         var excludeTests = false;
+        var overwrite = false;
         var wantsJson = Array.Exists(args, arg => arg == "--json");
 
         for (var i = 0; i < args.Length; i++)
@@ -37,6 +38,11 @@ internal static partial class ExportImportCommandRunner
             if (arg == "--exclude-tests")
             {
                 excludeTests = true;
+                continue;
+            }
+            if (arg == "--overwrite")
+            {
+                overwrite = true;
                 continue;
             }
 
@@ -120,6 +126,17 @@ internal static partial class ExportImportCommandRunner
         {
             return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_overlaps_database", "export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", ArchiveExportUsage);
         }
+        if (!overwrite && AtomicFileWriter.PathEntryExists(fullOutputPath))
+        {
+            return WriteExportError(
+                wantsJson,
+                jsonOptions,
+                PhaseWriteArchive,
+                "export_archive_exists",
+                "export archive destination already exists.",
+                "pass `--overwrite` to atomically replace the existing destination.",
+                ArchiveExportUsage);
+        }
 
         var scopeOptions = new ArchiveExportOptions(
             lang,
@@ -171,7 +188,7 @@ internal static partial class ExportImportCommandRunner
             phase = PhaseSha256;
             manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath, cancellationToken) };
             phase = PhaseWriteArchive;
-            WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions, cancellationToken);
+            var artifact = WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions, cancellationToken, overwrite);
 
             if (wantsJson)
                 Console.WriteLine(JsonSerializer.Serialize(
@@ -179,6 +196,9 @@ internal static partial class ExportImportCommandRunner
                         "1",
                         fullOutputPath,
                         fullSourceDbPath,
+                        artifact.SizeBytes,
+                        artifact.Sha256,
+                        manifest,
                         manifest.Scope ?? throw new InvalidDataException("export scope metadata was not created")),
                     jsonOptions));
             else
@@ -196,6 +216,17 @@ internal static partial class ExportImportCommandRunner
                 "retry `cdidx export` after the cancelling operation completes.",
                 ArchiveExportUsage,
                 CommandExitCodes.CancelledBySignal);
+        }
+        catch (AtomicFileWriter.DestinationAlreadyExistsException)
+        {
+            return WriteExportError(
+                wantsJson,
+                jsonOptions,
+                PhaseWriteArchive,
+                "export_archive_exists",
+                "export archive destination was created before the archive could be published.",
+                "pass `--overwrite` to atomically replace the destination, or choose another path.",
+                ArchiveExportUsage);
         }
         catch (Exception ex)
         {

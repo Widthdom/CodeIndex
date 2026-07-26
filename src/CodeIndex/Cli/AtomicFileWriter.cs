@@ -87,14 +87,23 @@ internal static class AtomicFileWriter
         => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite: true);
 
     public static void Write(string path, Action<Stream> writeContents, WriteProfile profile, bool overwrite)
-        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite);
+        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite, validateBeforePublish: null);
+
+    internal static void WriteWithPrePublishValidation(
+        string path,
+        Action<Stream> writeContents,
+        WriteProfile profile,
+        bool overwrite,
+        Action<string> validateBeforePublish)
+        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite, validateBeforePublish);
 
     private static void WriteCore(
         string path,
         Action<Stream> writeContents,
         Action<string>? applyFileMode,
         WriteProfile profile,
-        bool overwrite)
+        bool overwrite,
+        Action<string>? validateBeforePublish = null)
     {
         ArgumentNullException.ThrowIfNull(writeContents);
 
@@ -111,6 +120,7 @@ internal static class AtomicFileWriter
                 stream.Flush(flushToDisk: true);
             }
 
+            validateBeforePublish?.Invoke(tempPath);
             if (overwrite)
             {
                 MoveReplacing(tempPath, path);
@@ -121,7 +131,7 @@ internal static class AtomicFileWriter
                 {
                     MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
                 }
-                catch (IOException ex) when (File.Exists(LongPath.EnsureWindowsPrefix(path)))
+                catch (IOException ex) when (PathEntryExists(path))
                 {
                     throw new DestinationAlreadyExistsException(path, ex);
                 }
@@ -148,6 +158,29 @@ internal static class AtomicFileWriter
 
     private static Action<string>? ResolveProfileModeCallback(WriteProfile profile)
         => profile == WriteProfile.Sensitive ? DataDirectorySecurity.ApplyPrivateFileMode : null;
+
+    internal static bool PathEntryExists(string path)
+    {
+        var ioPath = LongPath.EnsureWindowsPrefix(path);
+        if (File.Exists(ioPath) || Directory.Exists(ioPath))
+            return true;
+
+        try
+        {
+            if (!string.IsNullOrEmpty(new FileInfo(ioPath).LinkTarget))
+                return true;
+
+            return !string.IsNullOrEmpty(new DirectoryInfo(ioPath).LinkTarget);
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
 
     internal static void MoveReplacing(string sourcePath, string destinationPath)
     {

@@ -297,6 +297,7 @@ public static partial class ConsoleUi
         Console.WriteLine("  cdidx index ./myproject --watch               Run an initial scan, then keep the index live as files change (Ctrl+C to stop)");
         Console.WriteLine("  cdidx export ctags --output tags              Export editor tags for Vim, Emacs, and Sublime");
         Console.WriteLine("  cdidx export codeindex.cdidx.zip              Export a portable CodeIndex archive");
+        Console.WriteLine("  cdidx export codeindex.cdidx.zip --overwrite  Explicitly replace an existing portable archive");
         Console.WriteLine("  cdidx import codeindex.cdidx.zip              Import a portable CodeIndex archive");
         Console.WriteLine("  cdidx import codeindex.cdidx.zip --dry-run    Validate an archive without replacing the DB");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");

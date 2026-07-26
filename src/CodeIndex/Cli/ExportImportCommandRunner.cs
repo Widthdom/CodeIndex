@@ -46,7 +46,7 @@ internal static partial class ExportImportCommandRunner
     private const string PhaseWriteArchive = "write_archive";
     private const string PhaseWriteCtags = "write_ctags";
     private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--limit <n<=10000>] [--offset <n>] [--json]";
-    private const string ArchiveExportUsage = "cdidx export <archive> [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]";
+    private const string ArchiveExportUsage = "cdidx export <archive> [--db <path>] [--json] [--overwrite] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]";
     private const string CtagsExportUsage = "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-generated]";
     private const string CtagsSkipInvalidName = "invalid_name";
     private const string CtagsSkipUnsupportedKind = "unsupported_kind";

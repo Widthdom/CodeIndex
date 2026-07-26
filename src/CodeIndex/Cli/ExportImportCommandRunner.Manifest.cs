@@ -65,22 +65,43 @@ internal static partial class ExportImportCommandRunner
         writer.Write(content);
     }
 
-    internal static void WriteExportArchiveFile(string outputPath, string snapshotPath, ExportManifest manifest, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
+    internal static (long SizeBytes, string Sha256) WriteExportArchiveFile(
+        string outputPath,
+        string snapshotPath,
+        ExportManifest manifest,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken,
+        bool overwrite = true,
+        Action? beforePublishForTesting = null)
     {
         var fullOutputPath = Path.GetFullPath(outputPath);
-        AtomicFileWriter.Write(
+        void WriteContents(Stream stream)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+            AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
+            var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
+            dbEntry.LastWriteTime = DeterministicZipTimestamp;
+            using var source = BoundedFile.OpenReadTrustedArchiveSource(snapshotPath);
+            using var target = dbEntry.Open();
+            CopyToExactLength(source, target, source.Length, DatabaseEntryName, cancellationToken);
+        }
+
+        (long SizeBytes, string Sha256)? artifact = null;
+        AtomicFileWriter.WriteWithPrePublishValidation(
             fullOutputPath,
-            stream =>
+            WriteContents,
+            AtomicFileWriter.WriteProfile.Sensitive,
+            overwrite,
+            tempPath =>
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
-                AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
-                var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
-                dbEntry.LastWriteTime = DeterministicZipTimestamp;
-                using var source = BoundedFile.OpenReadTrustedArchiveSource(snapshotPath);
-                using var target = dbEntry.Open();
-                CopyToExactLength(source, target, source.Length, DatabaseEntryName, cancellationToken);
+                VerifyPrivateArchiveMode(tempPath);
+                artifact = ReadArchiveArtifactMetadata(tempPath, cancellationToken);
+                beforePublishForTesting?.Invoke();
             });
+
+        return artifact
+            ?? throw new InvalidDataException("export archive artifact metadata was not created");
     }
 
     internal static void WriteCtagsFile(string outputPath, Action<TextWriter> writeContents)
@@ -106,6 +127,28 @@ internal static partial class ExportImportCommandRunner
         cancellationToken.ThrowIfCancellationRequested();
         using var stream = BoundedFile.OpenReadForHash(path);
         return Sha256StreamHasher.ComputeHex(stream, cancellationToken);
+    }
+
+    private static (long SizeBytes, string Sha256) ReadArchiveArtifactMetadata(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var stream = BoundedFile.OpenReadForHash(path);
+        var sizeBytes = stream.Length;
+        var sha256 = Sha256StreamHasher.ComputeHex(stream, cancellationToken);
+        return (sizeBytes, sha256);
+    }
+
+    private static void VerifyPrivateArchiveMode(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        DataDirectorySecurity.ApplyPrivateFileMode(path);
+        var mode = File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits;
+        if (mode != DataDirectorySecurity.PrivateFileMode)
+            throw new UnauthorizedAccessException("export archive permissions could not be restricted to the current user");
     }
 
 }

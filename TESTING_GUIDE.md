@@ -334,6 +334,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Changelog limit tests resolve checked-in files through `RepositoryTestPaths` instead of performing another root walk.
   Whole-workflow policy audits should use `RepositoryTestPaths.ReadNormalizedWorkflows()` so enumeration order, extension filtering, file naming, and normalization are shared instead of being rebuilt inside individual test classes.
   When one policy test checks several step-level rules, parse workflow step blocks once and filter the retained blocks for each rule instead of rerunning the multiline step regex for every assertion family.
+- `ExportImportCommandRunnerTests` issue-4827 portable-export coverage
+  keeps the overwrite boundary and artifact attestation deterministic. Preserve default refusal of regular and dangling-symlink destinations, explicit replacement with verifiable byte-size/SHA-256/manifest metadata and POSIX owner-only mode, failed-write temp cleanup, and a publish-boundary injection that creates a concurrent winner without using sleeps.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
 - `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`, `RunOptimizeFts_LockHeld_ReportsDbLocked`, and `RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
@@ -1219,6 +1221,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   changelog limit test も別の root walk を行わず、`RepositoryTestPaths` 経由で checked-in file を解決します。
   workflow 全体の policy audit には `RepositoryTestPaths.ReadNormalizedWorkflows()` を使い、列挙順、extension filter、file name、normalization を個別 test class 内で再構築せず共有します。
   1つの policy test が複数の step-level rule を検証する場合は、workflow step block を一度だけ解析して保持し、assertion family ごとに multiline step regex を再実行せず保持済み block を絞り込みます。
+- `ExportImportCommandRunnerTests` の issue-4827 portable-export coverage
+  overwrite 境界と artifact attestation を deterministic に固定します。通常 file と dangling symlink destination の既定拒否、明示置換で検証可能な byte size / SHA-256 / manifest metadata と POSIX owner-only mode、書き込み失敗時の temp cleanup、sleep を使わず publish 境界へ concurrent winner を生成する injection を維持してください。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
 - `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`、`RunOptimizeFts_LockHeld_ReportsDbLocked`、`RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`

@@ -59,6 +59,22 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void ArchiveExport_HelpAndCompletionExposeExplicitOverwrite_Issue4827()
+    {
+        var overwrite = Assert.Single(
+            CliFlagSchema.GetCompletionFlagsForCommand("export"),
+            static flag => flag.Name == "--overwrite");
+        Assert.Contains("atomically replace", overwrite.Description, StringComparison.OrdinalIgnoreCase);
+
+        var (printed, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("export") ? 1 : 0);
+
+        Assert.Equal(1, printed);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("--overwrite", stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DoctorAndLicense_HelpAndCompletionExposeStructuredOutputControls_Issue4713()
     {
         var doctorCompletionFlags = CliFlagSchema.GetCompletionFlagsForCommand("doctor");
