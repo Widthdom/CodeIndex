@@ -247,9 +247,9 @@ endpoint.
 
 The repo-tracked `.claude/settings.json` denies `Bash(cdidx:*)`,
 `Bash(~/.local/bin/cdidx:*)`, and `Bash($HOME/.local/bin/cdidx:*)` as a
-**best-effort tripwire** (see `CLAUDE.md`) against local sessions that
-would silently fall back to a stale global binary. Claude Code
-permission matching is textual, so invoking the installed binary via
+**best-effort tripwire** (see `AGENT_GUIDE.md` under Tool-Specific Notes)
+against local sessions that would silently fall back to a stale global binary.
+Claude Code permission matching is textual, so invoking the installed binary via
 its fully expanded absolute path is not matched by any of those three
 entries and is therefore allowed without any permission edit. In Codex, print
 the path once and paste the printed literal path into every command below:
@@ -359,11 +359,12 @@ You can fully validate changes in these areas without a .NET SDK:
 
 - `install.sh`, `.github/workflows/*.yml`, the contents and layout of the
   release tarball (inspect with `tar tzf`).
-- `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `SELF_IMPROVEMENT.md`,
-  `TESTING_GUIDE.md`, `DEVELOPER_GUIDE.md` — both the English and the
-  Japanese sections of each.
-- The `# Code Search Rules` / `# コードベース検索ルール` template in
-  `README.md`.
+- `README.md`, `USER_GUIDE.md`, `AGENT_GUIDE.md`, `SELF_IMPROVEMENT.md`,
+  `TESTING_GUIDE.md`, `DEVELOPER_GUIDE.md`, and bilingual fragments under
+  `changelog.d/unreleased/` — both language sections where the file has them.
+- The AI Integration / MCP Server guidance in `USER_GUIDE.md`; keep it aligned
+  with in-band MCP instructions and discovery metadata instead of restoring a
+  downstream agent-rules template.
 - MCP `instructions`, tool descriptions, help / usage strings, and
   user-visible error messages. Locate those strings with the literal expanded
   installed path, for example `/root/.local/bin/cdidx search "initialize"`,
@@ -378,7 +379,7 @@ You can fully validate changes in these areas without a .NET SDK:
 - Do **not** claim "verified locally" or "dotnet test passes" — you
   cannot prove either here.
 
-### Everything else follows `CLAUDE.md` and `SELF_IMPROVEMENT.md`
+### Everything else follows `AGENT_GUIDE.md` and `SELF_IMPROVEMENT.md`
 
 Per-commit checklist, bilingual English / Japanese documentation,
 ordinary implementation PRs add bilingual fragments under
@@ -622,7 +623,8 @@ mirror/proxy endpoint が必要です。
 古いグローバルバイナリに黙ってフォールバックしないよう
 `Bash(cdidx:*)`、`Bash(~/.local/bin/cdidx:*)`、
 `Bash($HOME/.local/bin/cdidx:*)` を **best-effort tripwire** として
-deny しています（詳細は `CLAUDE.md`）。Claude Code の permission
+deny しています（詳細は `AGENT_GUIDE.md` の Tool-Specific Notes）。
+Claude Code の permission
 matching はテキスト一致なので、インストール済みバイナリを**完全展開した
 絶対パス**で起動すればこの 3 エントリとは一致せず、パーミッション編集
 なしに通ります。Codex では以下のように 1 回だけパスを表示し、出力された
@@ -735,11 +737,12 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | /root/.local
 
 - `install.sh`、`.github/workflows/*.yml`、リリース tarball の内容と
   レイアウト（`tar tzf` で検査）。
-- `README.md`、`CHANGELOG.md`、`CLAUDE.md`、`SELF_IMPROVEMENT.md`、
-  `TESTING_GUIDE.md`、`DEVELOPER_GUIDE.md` — それぞれの英語セクションと
-  日本語セクションの両方。
-- `README.md` の `# Code Search Rules` / `# コードベース検索ルール`
-  テンプレート。
+- `README.md`、`USER_GUIDE.md`、`AGENT_GUIDE.md`、`SELF_IMPROVEMENT.md`、
+  `TESTING_GUIDE.md`、`DEVELOPER_GUIDE.md`、`changelog.d/unreleased/`
+  配下の英日併記 fragment — 各ファイルに両言語セクションがある場合はその両方。
+- `USER_GUIDE.md` の AI Integration / MCP Server ガイダンス。下流向け
+  agent-rules テンプレートを復活させず、MCP が protocol 上で返す instructions
+  と discovery metadata に同期させます。
 - MCP の `instructions`、ツール説明、help / usage 文字列、ユーザーが目に
   するエラーメッセージ。これらの文字列は literal な完全展開済み path で、
   例えば `/root/.local/bin/cdidx search "initialize"`、または
@@ -753,7 +756,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | /root/.local
 - 「ローカルで検証済み」「dotnet test 通過」とは**書かない** — ここでは
   どちらも証明できません。
 
-### その他は `CLAUDE.md` と `SELF_IMPROVEMENT.md` に従う
+### その他は `AGENT_GUIDE.md` と `SELF_IMPROVEMENT.md` に従う
 
 コミット毎チェックリスト、英日併記ドキュメント、通常の実装 PR では
 `CHANGELOG.md` を直接編集せず `changelog.d/unreleased/` に英日併記
