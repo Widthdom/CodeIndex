@@ -99,13 +99,19 @@ public static partial class SymbolExtractor
         var ordered = BuildContainerAssignmentOrder(symbols);
 
         var stack = new Stack<SymbolRecord>();
+        var containerPathBuffer = new List<SymbolRecord>();
         foreach (var orderedSymbol in ordered)
         {
             var symbol = orderedSymbol.Symbol;
             while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
-            var containerPath = GetEffectiveContainerPath(stack, symbol, rawLines, getCSharpLineStartStates);
+            var containerPath = GetEffectiveContainerPath(
+                stack,
+                symbol,
+                containerPathBuffer,
+                rawLines,
+                getCSharpLineStartStates);
 
             if (containerPath.Count > 0)
             {
@@ -225,34 +231,34 @@ public static partial class SymbolExtractor
         return left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
-    private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(
+    private static List<SymbolRecord> GetEffectiveContainerPath(
         Stack<SymbolRecord> containers,
         SymbolRecord symbol,
+        List<SymbolRecord> containingContainers,
         string[]? rawLines = null,
         Func<CSharpLexState[]>? getCSharpLineStartStates = null)
     {
+        containingContainers.Clear();
         if (containers.Count == 0)
-            return [];
+            return containingContainers;
 
         if (containers.Count == 1)
         {
             var container = containers.Peek();
-            return ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates)
-                ? [container]
-                : [];
+            if (ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates))
+                containingContainers.Add(container);
+            return containingContainers;
         }
 
-        var orderedContainers = containers.ToArray();
-        var containingContainers = new List<SymbolRecord>(orderedContainers.Length);
-        for (var i = orderedContainers.Length - 1; i >= 0; i--)
+        foreach (var container in containers)
         {
-            var container = orderedContainers[i];
             if (ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates))
                 containingContainers.Add(container);
         }
+        containingContainers.Reverse();
 
         if (containingContainers.Count == 0)
-            return [];
+            return containingContainers;
 
         if (symbol.Kind == "enum" && symbol.BodyStartLine == null)
         {

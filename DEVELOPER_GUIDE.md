@@ -493,6 +493,10 @@ Container ownership follows the same contract. If references repeatedly resolve
 an extracted declaration by name and source range, index candidates by name once
 and scan only that name's ordered range list. Preserve first-candidate behavior
 for duplicate names and keep the index local to one extraction call.
+Symbol container assignment keeps one reusable path buffer for the sorted
+per-symbol walk. Enumerate the active stack into that buffer and reverse it to
+outer-to-inner order; do not materialize both a stack array and a fresh path list
+for every member in a deeply nested generated file.
 
 Duplicate detection in hot extraction loops should use a `HashSet` or another
 constant-time structure keyed by the full emitted record identity. Do not add
@@ -3574,6 +3578,9 @@ container ownership にも同じ契約を適用する。reference が extracted 
 source range で繰り返し解決する場合は、candidate を name ごとに一度だけ索引化し、その name の
 ordered range list だけを走査する。duplicate name の first-candidate behavior を維持し、index は
 1 回の extraction call 内だけに保持する。
+symbol の container assignment は、sort 済みの per-symbol walk で1つの path buffer を再利用する。
+active stack を buffer へ列挙して outer-to-inner 順に反転し、深く nest した生成ファイルの member
+ごとに stack array と新しい path list の両方を実体化してはならない。
 
 hot な抽出ループでの重複検出には、出力 record の完全な identity を key にした `HashSet` などの
 定数時間構造を使う。大きな生成ファイルで local variable、parameter、call site、type reference、

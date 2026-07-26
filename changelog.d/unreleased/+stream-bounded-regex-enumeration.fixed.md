@@ -26,6 +26,8 @@ affected:
   Dense XAML supplemental symbol scans now stop as soon as the shared
   structured-data symbol budget needs its diagnostic marker, instead of
   building an unbounded temporary list and trimming it after all phases.
+  Symbol container assignment now reuses one path buffer across members instead
+  of allocating a stack snapshot and a second list for every nested symbol.
 
 ## 日本語
 
@@ -42,4 +44,5 @@ affected:
   は `MatchCollection` を保持せず、matching timeout 時は従来どおり all-or-nothing の
   結果を返します。dense XAML の supplemental symbol scan は、共有 structured-data
   symbol budget の diagnostic marker が必要になった時点で停止し、全 phase の後まで
-  無制限の一時 list を構築してから trim しません。
+  無制限の一時 list を構築してから trim しません。symbol の container assignment も
+  member ごとに stack snapshot と2つ目の list を割り当てず、1つの path buffer を再利用します。
