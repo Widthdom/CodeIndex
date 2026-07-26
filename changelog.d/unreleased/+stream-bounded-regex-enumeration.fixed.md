@@ -30,6 +30,8 @@ affected:
   of allocating a stack snapshot and a second list for every nested symbol.
   Prolog goal scans now allocate per-line call lists only when a known goal is
   emitted and update directive metadata in place instead of copying the list.
+  JSON symbol and reference extraction now build UTF-8 line-offset arrays at
+  exact capacity instead of retaining a growing list alongside its final copy.
 
 ## 日本語
 
@@ -49,4 +51,6 @@ affected:
   無制限の一時 list を構築してから trim しません。symbol の container assignment も
   member ごとに stack snapshot と2つ目の list を割り当てず、1つの path buffer を再利用します。
   Prolog goal scan も既知 goal を出力するときだけ per-line call list を割り当て、directive
-  metadata は list を copy せず in-place で更新します。
+  metadata は list を copy せず in-place で更新します。JSON symbol / reference extraction
+  も UTF-8 line-offset array を exact capacity で構築し、成長中の list と最終 copy を同時に
+  保持しません。

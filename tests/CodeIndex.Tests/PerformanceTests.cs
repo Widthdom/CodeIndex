@@ -927,6 +927,29 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void Utf8LineStarts_DenseInput_AllocatesOnlyFinalOffsetArray()
+    {
+        const int lineCount = 100_000;
+        var utf8 = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("value\n", lineCount)));
+        int[]? lineStarts = null;
+
+        var allocatedBytes = MeasureAllocatedBytes(
+            () => lineStarts = Utf8LineStarts.Build(utf8));
+
+        Assert.NotNull(lineStarts);
+        Assert.Equal(lineCount + 1, lineStarts.Length);
+        Assert.Equal(0, lineStarts[0]);
+        Assert.Equal(utf8.Length, lineStarts[^1]);
+        Assert.True(
+            allocatedBytes < 450_000,
+            $"Dense UTF-8 line offsets allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_PrologCallFreeRules_AvoidsPerLineLists()
     {
         const int ruleCount = 8_000;

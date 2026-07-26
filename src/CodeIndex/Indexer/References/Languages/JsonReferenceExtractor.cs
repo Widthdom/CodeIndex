@@ -28,7 +28,7 @@ internal static class JsonReferenceExtractor
             return references;
 
         var seen = new ReferenceDedupeSet();
-        var lineStarts = BuildUtf8LineStarts(utf8);
+        var lineStarts = Utf8LineStarts.Build(utf8);
         var reader = new Utf8JsonReader(
             utf8,
             new JsonReaderOptions
@@ -192,18 +192,6 @@ internal static class JsonReferenceExtractor
         }
 
         return true;
-    }
-
-    private static int[] BuildUtf8LineStarts(ReadOnlySpan<byte> utf8)
-    {
-        var starts = new List<int>(Math.Min(utf8.Length / 32 + 1, 4096)) { 0 };
-        for (var index = 0; index < utf8.Length; index++)
-        {
-            if (utf8[index] == (byte)'\n')
-                starts.Add(index + 1);
-        }
-
-        return starts.ToArray();
     }
 
     private static int FindLineIndex(int[] lineStarts, int byteOffset)

@@ -575,6 +575,9 @@ XAML supplemental symbol phases share the structured-data symbol budget. They
 retain at most one overflow marker for diagnostic replacement, then return
 through `TrimStructuredDataSymbols` immediately; do not accumulate an
 unbounded temporary symbol list and trim it only after every XAML phase.
+JSON symbol and reference byte-offset mapping shares `Utf8LineStarts`. It counts
+newlines first and allocates the final offset array at exact capacity; do not
+grow a `List<int>` and retain it beside a copied array for dense JSON files.
 Systems-language scanners stream C/C++ construction and template groups, Rust
 calls and value/signature types, Swift property wrappers, Go concurrency and
 composite/signature types, plus shared scientific/native call groups. Preserve
@@ -3651,6 +3654,9 @@ XAML supplemental symbol phase は structured-data symbol budget を共有する
 置換用の overflow marker を最大1件だけ保持したら、直ちに
 `TrimStructuredDataSymbols` を通って戻る。全 XAML phase の完了後まで無制限の一時
 symbol list を蓄積してから trim してはならない。
+JSON symbol / reference の byte-offset mapping は `Utf8LineStarts` を共有する。先に改行数を
+数えて最終 offset array を exact capacity で確保し、dense JSON file で `List<int>` を成長させて
+copy 後の array と同時に保持してはならない。
 systems-language scanner は C / C++ construction と template group、Rust call と
 value / signature type、Swift property wrapper、Go concurrency と composite / signature
 type、共有 scientific / native call group を逐次走査する。source-order emission を維持し、

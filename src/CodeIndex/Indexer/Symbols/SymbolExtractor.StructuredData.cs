@@ -622,7 +622,7 @@ public static partial class SymbolExtractor
     {
         var propertyLines = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
         var bytes = Encoding.UTF8.GetBytes(content);
-        var byteLineStarts = BuildUtf8LineStarts(bytes);
+        var byteLineStarts = Utf8LineStarts.Build(bytes);
         var reader = new Utf8JsonReader(bytes, StructuredJsonReaderOptions);
         while (reader.Read())
         {
@@ -644,18 +644,6 @@ public static partial class SymbolExtractor
         }
 
         return propertyLines;
-    }
-
-    private static int[] BuildUtf8LineStarts(byte[] bytes)
-    {
-        List<int>? starts = null;
-        for (var i = 0; i < bytes.Length; i++)
-        {
-            if (bytes[i] == (byte)'\n')
-                (starts ??= [0]).Add(i + 1);
-        }
-
-        return starts is null ? [0] : starts.ToArray();
     }
 
     private static bool TryDequeueJsonPropertyLine(
