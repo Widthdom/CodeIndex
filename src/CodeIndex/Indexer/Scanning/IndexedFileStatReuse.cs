@@ -94,7 +94,7 @@ internal static class IndexedFileStatReuse
     }
 
     internal static IndexedFileStatReuseResult? TryGetReusableUnchangedFile(
-        IReadOnlyDictionary<string, ReusableIndexedFileStat> reusableFiles,
+        ReusableIndexedFileStatsSnapshot reusableFiles,
         string absolutePath,
         string relativePath,
         string? language,
@@ -114,6 +114,7 @@ internal static class IndexedFileStatReuse
         {
             var info = new FileInfo(absolutePath);
             if (!info.Exists
+                || info.Length > reusableFiles.MaxFileSizeBytes
                 || info.Length != indexed.Size
                 || info.LastWriteTimeUtc != indexed.ModifiedUtc)
             {

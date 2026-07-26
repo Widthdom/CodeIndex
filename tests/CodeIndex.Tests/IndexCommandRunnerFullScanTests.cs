@@ -399,6 +399,105 @@ public partial class IndexCommandRunnerTests
     }
 
     [Theory]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, true)]
+    public void Run_FullScan_FileSizePolicyTransitionReprocessesUnchangedFile_Issue4826(
+        bool initialCap,
+        bool nextCap,
+        bool expectedComplete)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "large.py"),
+                "print('start')\n" + new string('a', 256));
+            var initialArgs = new List<string> { projectRoot, "--json", "--quiet" };
+            if (initialCap)
+                initialArgs.InsertRange(1, ["--max-file-bytes", "128"]);
+            var (initialExitCode, _) = RunAndCaptureJson([.. initialArgs]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var nextArgs = new List<string> { projectRoot, "--json", "--quiet" };
+            if (nextCap)
+                nextArgs.InsertRange(1, ["--max-file-bytes", "128"]);
+            var (nextExitCode, nextJson) = RunAndCaptureJson([.. nextArgs]);
+
+            Assert.Equal(CommandExitCodes.Success, nextExitCode);
+            Assert.Equal(expectedComplete, nextJson.GetProperty("index_complete").GetBoolean());
+            Assert.Equal(
+                expectedComplete,
+                nextJson.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.Equal(
+                1,
+                nextJson.GetProperty("summary").GetProperty("files_extracted").GetInt64());
+            Assert.Equal(
+                1,
+                nextJson.GetProperty("summary").GetProperty("files_persisted").GetInt64());
+            AssertCompletenessReason(
+                nextJson,
+                "index_incomplete_reasons",
+                expectedComplete ? null : "file_too_large");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_IncompleteGenerationDoesNotExposeFoldOnlyRemediation_Issue4826()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "large.py"), "def ready(): return True\n");
+            File.WriteAllText(Path.Combine(projectRoot, "other.py"), "def other(): return True\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM codeindex_meta
+                    WHERE key IN (@version, @fingerprint)
+                    """;
+                command.Parameters.AddWithValue("@version", "fold_key_version");
+                command.Parameters.AddWithValue("@fingerprint", "fold_key_fingerprint");
+                command.ExecuteNonQuery();
+            }
+            File.WriteAllText(
+                Path.Combine(projectRoot, "large.py"),
+                "print('start')\n" + new string('a', 256));
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--max-file-bytes", "128", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
+            Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("degraded_reason").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("recommended_action").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("alternative_action").ValueKind);
+
+            var humanArgs = new[] { projectRoot, "--max-file-bytes", "128" };
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams(humanArgs);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.DoesNotContain("fold-only", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
     [InlineData(false, true, null)]
     [InlineData(true, false, "file_too_large")]
     public void PersistedReadiness_OlderDatabaseWithoutCompletenessMetadataUsesSafeFallback_Issue4826(

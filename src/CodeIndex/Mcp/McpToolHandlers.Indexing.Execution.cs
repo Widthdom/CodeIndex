@@ -516,7 +516,9 @@ public partial class McpServer
                 staleFilePurgePlan.FileIds,
                 csharpPositiveNoOpPolicyCandidate
                     ? ObservePersistedCSharpPath
-                    : null)
+                    : null,
+                maxFileSizeBytes:
+                    maxFileBytes ?? FileIndexer.DefaultMaxFileSizeBytes)
             : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         var priorPositiveCSharpSourceNoOpCandidate = false;

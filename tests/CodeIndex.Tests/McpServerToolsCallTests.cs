@@ -8759,6 +8759,60 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_FileSizePolicyTransitionsReprocessUnchangedFile_Issue4826()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_file_size_transition_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath(
+            "cdidx_mcp_index_file_size_transition");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "large.py"),
+                "print('start')\n" + new string('a', 256));
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initial = CallIndex(server, fixtureDir);
+            var capped = CallIndex(
+                server,
+                fixtureDir,
+                args => args["maxFileBytes"] = JsonNode.Parse("128"));
+            var recovered = CallIndex(server, fixtureDir);
+
+            Assert.False(
+                initial["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initial.ToJsonString());
+            Assert.False(
+                capped["result"]?["isError"]?.GetValue<bool>() ?? false,
+                capped.ToJsonString());
+            Assert.False(
+                recovered["result"]?["isError"]?.GetValue<bool>() ?? false,
+                recovered.ToJsonString());
+            Assert.True(
+                initial["result"]!["structuredContent"]!["index_complete"]!
+                    .GetValue<bool>());
+            var cappedStructured = capped["result"]!["structuredContent"]!;
+            Assert.False(cappedStructured["index_complete"]!.GetValue<bool>());
+            Assert.Contains(
+                "file_too_large",
+                cappedStructured["index_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>()));
+            var recoveredStructured = recovered["result"]!["structuredContent"]!;
+            Assert.True(recoveredStructured["index_complete"]!.GetValue<bool>());
+            Assert.True(
+                recoveredStructured["reference_graph_complete"]!.GetValue<bool>());
+            Assert.Null(recoveredStructured["index_incomplete_reasons"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_RefreshesMutualRecursionOnceAfterBulkReferenceInsert()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_mutual_recursion_{Guid.NewGuid():N}");

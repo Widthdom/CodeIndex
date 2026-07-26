@@ -69,6 +69,8 @@ public static partial class IndexCommandRunner
         var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
 
         var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
+            persistedReadinessAfter.IndexComplete,
+            persistedReadinessAfter.ReferenceGraphComplete,
             persistedReadinessAfter.GraphTableAvailable,
             output.IssuesTableAvailableAfter,
             sqlGraphContractReadyAfter,
@@ -183,7 +185,7 @@ public static partial class IndexCommandRunner
             if (!persistedReadinessAfter.ReferenceGraphComplete)
                 ConsoleUi.PrintWarning($"Reference graph is incomplete: {string.Join(", ", persistedReadinessAfter.ReferenceGraphIncompleteReasons)}.");
             if (!persistedReadinessAfter.GraphTableAvailable || !output.IssuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !output.CSharpSymbolNameReadyAfter || !output.CSharpMetadataTargetReadyAfter || !output.FoldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(persistedReadinessAfter.GraphTableAvailable, output.IssuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, output.CSharpSymbolNameReadyAfter, output.CSharpMetadataTargetReadyAfter, output.FoldReadyAfter, output.FoldReadyReasonAfter, output.ProjectRoot, output.ResolvedDbPath));
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(persistedReadinessAfter.IndexComplete, persistedReadinessAfter.ReferenceGraphComplete, persistedReadinessAfter.GraphTableAvailable, output.IssuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, output.CSharpSymbolNameReadyAfter, output.CSharpMetadataTargetReadyAfter, output.FoldReadyAfter, output.FoldReadyReasonAfter, output.ProjectRoot, output.ResolvedDbPath));
             if (cwdDriftDetected)
                 ConsoleUi.PrintWarning(cwdDriftNotice!);
         }

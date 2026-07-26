@@ -103,6 +103,8 @@ public static partial class IndexCommandRunner
     }
 
     private static FoldOnlyRemediation? BuildFoldOnlyReadinessRemediation(
+        bool indexComplete,
+        bool referenceGraphComplete,
         bool graphTableAvailable,
         bool issuesTableAvailable,
         bool sqlGraphContractReady,
@@ -115,6 +117,8 @@ public static partial class IndexCommandRunner
         string resolvedDbPath)
     {
         if (!IsFoldOnlyReadinessDegraded(
+                indexComplete,
+                referenceGraphComplete,
                 graphTableAvailable,
                 issuesTableAvailable,
                 sqlGraphContractReady,
@@ -133,6 +137,8 @@ public static partial class IndexCommandRunner
     }
 
     private static bool IsFoldOnlyReadinessDegraded(
+        bool indexComplete,
+        bool referenceGraphComplete,
         bool graphTableAvailable,
         bool issuesTableAvailable,
         bool sqlGraphContractReady,
@@ -141,6 +147,8 @@ public static partial class IndexCommandRunner
         bool csharpMetadataTargetReady,
         bool foldReady)
         => !foldReady
+           && indexComplete
+           && referenceGraphComplete
            && graphTableAvailable
            && issuesTableAvailable
            && sqlGraphContractReady
@@ -148,9 +156,11 @@ public static partial class IndexCommandRunner
            && csharpSymbolNameReady
            && csharpMetadataTargetReady;
 
-    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool sqlGraphContractReady, bool hotspotFamilyReady, bool csharpSymbolNameReady, bool csharpMetadataTargetReady, bool foldReady, string? foldReadyReason, string projectRoot, string resolvedDbPath)
+    private static string GetIndexReadinessWarning(bool indexComplete, bool referenceGraphComplete, bool graphTableAvailable, bool issuesTableAvailable, bool sqlGraphContractReady, bool hotspotFamilyReady, bool csharpSymbolNameReady, bool csharpMetadataTargetReady, bool foldReady, string? foldReadyReason, string projectRoot, string resolvedDbPath)
     {
         var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
+            indexComplete,
+            referenceGraphComplete,
             graphTableAvailable,
             issuesTableAvailable,
             sqlGraphContractReady,
