@@ -2331,6 +2331,184 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_CSharpPartialFamiliesAggregateNestedFieldUseAcrossOutputModes_Issue4834()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_csharp_partial_fields_4834");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Primary/Writer.Fields.cs",
+                "csharp",
+                """
+                namespace Demo.Primary;
+
+                public partial class Writer
+                {
+                    private bool? _hasIssueMetadataColumns;
+
+                    private sealed partial class Parser
+                    {
+                        private bool endLineExplicit;
+                        private bool outputFormatExplicit;
+                        private bool ActuallyUnused;
+                        private bool OnlyUsedByOtherFamily;
+
+                        [System.Text.Json.Serialization.JsonPropertyName("connectionString")]
+                        public string ConnectionString { get; set; } = "";
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Primary/Writer.Usage.cs",
+                "csharp",
+                """
+                namespace Demo.Primary;
+
+                public partial class Writer
+                {
+                    public bool HasIssueMetadataColumns() => _hasIssueMetadataColumns == true;
+
+                    private sealed partial class Parser
+                    {
+                        public bool HasExplicitOptions() => endLineExplicit || outputFormatExplicit;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Unrelated/Writer.cs",
+                "csharp",
+                """
+                namespace Demo.Unrelated;
+
+                public partial class Writer
+                {
+                    private sealed partial class Parser
+                    {
+                        private bool OnlyUsedByOtherFamily;
+
+                        public bool HasOtherFamilyOption() => OnlyUsedByOtherFamily;
+                    }
+                }
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    DELETE FROM symbol_references
+                    WHERE symbol_name IN (
+                        '_hasIssueMetadataColumns',
+                        'endLineExplicit',
+                        'outputFormatExplicit',
+                        'ActuallyUnused',
+                        'OnlyUsedByOtherFamily',
+                        'ConnectionString'
+                    )
+                    """;
+                cmd.ExecuteNonQuery();
+
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            string[] commonArgs =
+            [
+                "--db", dbPath,
+                "--lang", "csharp",
+                "--path", "src/Primary/**",
+                "--limit", "50",
+            ];
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                [.. commonArgs, "--json", "--all"],
+                _jsonOptions));
+            using var jsonDocument = ParseJsonOutput(jsonStdout);
+            var jsonSymbols = jsonDocument.RootElement.GetProperty("symbols").EnumerateArray().ToArray();
+            var jsonNames = jsonSymbols
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.DoesNotContain("_hasIssueMetadataColumns", jsonNames);
+            Assert.DoesNotContain("endLineExplicit", jsonNames);
+            Assert.DoesNotContain("outputFormatExplicit", jsonNames);
+            Assert.Equal(
+                "likely_unused_private",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "ActuallyUnused")
+                    .GetProperty("unused_bucket").GetString());
+            Assert.Equal(
+                "likely_unused_private",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "OnlyUsedByOtherFamily")
+                    .GetProperty("unused_bucket").GetString());
+            Assert.Equal(
+                "reflection_or_config_suspect",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "ConnectionString")
+                    .GetProperty("unused_bucket").GetString());
+
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                [.. commonArgs, "--compact", "--all"],
+                _jsonOptions));
+            using var compactDocument = ParseJsonOutput(compactStdout);
+
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.True(compactDocument.RootElement.GetProperty("compact").GetBoolean());
+            Assert.DoesNotContain("_hasIssueMetadataColumns", compactStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("endLineExplicit", compactStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("outputFormatExplicit", compactStdout, StringComparison.Ordinal);
+            Assert.Contains("ActuallyUnused", compactStdout, StringComparison.Ordinal);
+            Assert.Contains("OnlyUsedByOtherFamily", compactStdout, StringComparison.Ordinal);
+            Assert.Contains("ConnectionString", compactStdout, StringComparison.Ordinal);
+
+            var (bucketExitCode, bucketStdout, bucketStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                [.. commonArgs, "--json", "--all", "--by-bucket"],
+                _jsonOptions));
+            using var bucketDocument = ParseJsonOutput(bucketStdout);
+            var byBucket = bucketDocument.RootElement.GetProperty("by_bucket");
+            var likelyUnusedNames = byBucket.GetProperty("likely_unused_private").EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .ToHashSet(StringComparer.Ordinal);
+            var contractSuspectNames = byBucket.GetProperty("reflection_or_config_suspect").EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, bucketExitCode);
+            Assert.Equal(string.Empty, bucketStderr);
+            Assert.Contains("ActuallyUnused", likelyUnusedNames);
+            Assert.Contains("OnlyUsedByOtherFamily", likelyUnusedNames);
+            Assert.Contains("ConnectionString", contractSuspectNames);
+            Assert.DoesNotContain("_hasIssueMetadataColumns", likelyUnusedNames);
+            Assert.DoesNotContain("endLineExplicit", likelyUnusedNames);
+            Assert.DoesNotContain("outputFormatExplicit", likelyUnusedNames);
+
+            var (actionableExitCode, actionableStdout, actionableStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                [.. commonArgs, "--json", "--actionable"],
+                _jsonOptions));
+            using var actionableDocument = ParseJsonOutput(actionableStdout);
+            var actionableNames = actionableDocument.RootElement.GetProperty("symbols").EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, actionableExitCode);
+            Assert.Equal(string.Empty, actionableStderr);
+            Assert.Contains("ActuallyUnused", actionableNames);
+            Assert.Contains("OnlyUsedByOtherFamily", actionableNames);
+            Assert.DoesNotContain("ConnectionString", actionableNames);
+            Assert.DoesNotContain("_hasIssueMetadataColumns", actionableNames);
+            Assert.DoesNotContain("endLineExplicit", actionableNames);
+            Assert.DoesNotContain("outputFormatExplicit", actionableNames);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_CSharpFieldsAndConstantsUseSpecificKinds_Issue3673()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_csharp_field_kinds_3673");

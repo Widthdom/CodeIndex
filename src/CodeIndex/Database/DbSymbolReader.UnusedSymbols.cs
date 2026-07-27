@@ -35,18 +35,10 @@ public partial class DbReader
         var containerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
         var containerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, symbolAlias);
-        var ownContainerNameSql = GetSymbolColumnSql("container_name", "''", "partial_own_type");
         var ownSignatureSql = GetSymbolColumnSql("signature", "''", "partial_own_type");
-        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "partial_peer_type");
         var peerSignatureSql = GetSymbolColumnSql("signature", "''", "partial_peer_type");
-        var ownQualifiedNameSql = $@"CASE
-                            WHEN {ownContainerNameSql} <> '' THEN {ownContainerNameSql} || '.' || partial_own_type.name
-                            ELSE partial_own_type.name
-                        END";
-        var peerQualifiedNameSql = $@"CASE
-                            WHEN {peerContainerNameSql} <> '' THEN {peerContainerNameSql} || '.' || partial_peer_type.name
-                            ELSE partial_peer_type.name
-                        END";
+        var ownQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_own_type");
+        var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_peer_type");
 
         return $@"
               AND NOT (
@@ -87,6 +79,16 @@ public partial class DbReader
                       LIMIT 1
                   )
               )";
+    }
+
+    private string BuildCSharpPartialTypeQualifiedNameSql(string typeAlias)
+    {
+        var containerNameSql = GetSymbolColumnSql("container_name", "''", typeAlias);
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, typeAlias);
+        return $@"CASE
+                    WHEN {containerQualifiedNameSql} <> '' THEN {containerQualifiedNameSql} || '.' || {typeAlias}.name
+                    ELSE {typeAlias}.name
+                END";
     }
 
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
@@ -702,18 +704,10 @@ public partial class DbReader
             return false;
         }
 
-        var ownContainerNameSql = GetSymbolColumnSql("container_name", "''", "own_type");
         var ownSignatureSql = GetSymbolColumnSql("signature", "''", "own_type");
-        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "peer_type");
         var peerSignatureSql = GetSymbolColumnSql("signature", "''", "peer_type");
-        var ownQualifiedNameSql = $@"CASE
-                WHEN {ownContainerNameSql} <> '' THEN {ownContainerNameSql} || '.' || own_type.name
-                ELSE own_type.name
-            END";
-        var peerQualifiedNameSql = $@"CASE
-                WHEN {peerContainerNameSql} <> '' THEN {peerContainerNameSql} || '.' || peer_type.name
-                ELSE peer_type.name
-            END";
+        var ownQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("own_type");
+        var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("peer_type");
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"

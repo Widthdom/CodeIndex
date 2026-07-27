@@ -657,6 +657,12 @@ When `unused` returns `next_cursor`, pass that opaque value back unchanged.
 The cursor is bound to the effective audit scope, filters, ordering, and index
 generation. Changing those inputs or refreshing the index requires restarting
 without `--cursor`; JSON pages also expose `result_stable_at`.
+For C# private members declared in partial types, `unused` aggregates use
+evidence across sibling files by fully qualified logical type name, including
+nested partial types. Same-named types in other namespaces or containing types
+do not share evidence, and genuinely unreferenced members in the family remain
+actionable candidates. Regular JSON, compact, `--by-bucket`, and `--actionable`
+all use the same family-aware classification.
 Public APIs, framework entrypoints, DTOs, serialization contracts, generated
 hooks, test-only hooks, Markdown headings and fenced-code language markers,
 reflection, and configuration-based usage can be false positives and are
@@ -3745,6 +3751,11 @@ filter context だけが必要な場合は `--compact` を使ってください�
 `unused` が `next_cursor` を返した場合は、その opaque 値を変更せず次の呼び出しへ渡してください。
 cursor は有効な audit scope、filter、ordering、index generation に束縛されます。条件を変更した場合や
 index を更新した場合は `--cursor` なしで再開する必要があり、JSON page は `result_stable_at` も返します。
+C# の partial type で宣言された private member について、`unused` は nested partial type を含む
+完全修飾された logical type 名を使い、sibling file 全体の使用 evidence を集約します。
+別 namespace または別 containing type にある同名 type とは evidence を共有せず、family 内で
+本当に参照されていない member は actionable candidate のまま残ります。通常の JSON、compact、
+`--by-bucket`、`--actionable` はすべて同じ family-aware classification を使います。
 Public API、framework entrypoint、DTO、serialization contract、generated hook、test-only hook、Markdown heading と fenced-code の
 language marker、reflection、config 経由の使用は false positive になりうるため、
 低 confidence bucket に寄せられます。
