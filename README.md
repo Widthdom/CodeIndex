@@ -104,7 +104,7 @@ The default NDJSON output of `search`, `symbols`, and `files` always ends with a
 
 Recipe/audit compact pagination returns an opaque `next_cursor`. Replay it unchanged with the same child query and filters as `--cursor <next_cursor>`; a search-score cursor can begin with `-`, and that leading minus is part of the cursor value.
 
-Ad-hoc `search --format issue-drafts` computes `source_total_count`, `returned_count`, `omitted_count`, and `truncated` from the complete filtered population before applying `--first-per-file`, deterministic `--sample`, and the effective `--limit` / `--total-limit`. Its source metadata also records those selector values, and the shell-safe replay command preserves every result-changing selector so rerunning it reproduces the same selected evidence.
+Ad-hoc `search --format issue-drafts` computes `source_total_count`, `returned_count`, `omitted_count`, and `truncated` from the complete filtered population before applying `--first-per-file`, deterministic `--sample`, and the effective `--limit` / `--total-limit`. Guarded searches retain their candidate safety cap instead of attempting an unbounded count; they omit `source_total_count` and expose `source_minimum_count`, `source_total_count_authoritative: false`, and `source_fetch_limit`. Source metadata also records selector values, and the shell-safe replay command preserves every result-changing selector so rerunning it reproduces the same selected evidence.
 
 When the byte cap omits rows, these commands return partial-result exit code `11`; pass `--allow-partial` to opt into exit code `0` while retaining the same terminal metadata. Ordinary `--limit` truncation remains a successful, explicitly described stream. Array and compact outputs keep their documented whole-response behavior; check `cdidx <command> --help` before relying on partial output.
 
@@ -517,7 +517,7 @@ JSON 形式では `--max-json-bytes` を文書全体の UTF-8 byte cap として
 
 recipe / audit の compact pagination は opaque な `next_cursor` を返します。同じ child query と filter を指定し、値を変更せず `--cursor <next_cursor>` として再利用してください。search-score cursor は `-` で始まる場合があり、その先頭のマイナス記号も cursor 値の一部です。
 
-ad-hoc の `search --format issue-drafts` は、filter 済み母集団全体から `source_total_count`、`returned_count`、`omitted_count`、`truncated` を算出してから、`--first-per-file`、決定的な `--sample`、有効な `--limit` / `--total-limit` を適用します。source metadata はこれらの selector 値も保持し、shell-safe な replay command は結果を変えるすべての selector を維持するため、再実行時に同じ evidence 集合を再現できます。
+ad-hoc の `search --format issue-drafts` は、filter 済み母集団全体から `source_total_count`、`returned_count`、`omitted_count`、`truncated` を算出してから、`--first-per-file`、決定的な `--sample`、有効な `--limit` / `--total-limit` を適用します。guard 付き検索は非上限 count を試みず candidate safety cap を維持し、`source_total_count` を省略して `source_minimum_count`、`source_total_count_authoritative: false`、`source_fetch_limit` を公開します。source metadata は selector 値も保持し、shell-safe な replay command は結果を変えるすべての selector を維持するため、再実行時に同じ evidence 集合を再現できます。
 
 byte cap により行を省略した場合、これらのコマンドは partial-result 終了コード `11` を返します。同じ終端 metadata を維持したまま終了コード `0` を明示的に許容するには `--allow-partial` を指定します。通常の `--limit` による切り詰めは、理由が明示された成功 stream のままです。array / compact 出力は文書化済みの whole-response 挙動を維持します。部分出力へ依存する前に `cdidx <command> --help` を確認してください。
 

@@ -725,7 +725,7 @@ Use the inventory below before adding or moving a test class:
 - Latest-indexed-HEAD precedence should be asserted for status and analysis result shapes from one seeded repository rather than duplicating identical Git and database setup.
 - Commits-ahead ancestor and missing-stamp behavior should share the same multi-commit repository; the missing case only requires a fresh result object without `IndexedHeadSha`.
 - Shared file-URI escaping and LSP round-trip parity should use one path/root case rather than duplicating equivalent percent-encoding setup in separate tests.
-- Ad-hoc issue-draft replay coverage should seed one 126-row fixture and compare the original and replayed selection plus metadata in one test; parse the emitted restricted POSIX quoting in-process instead of launching a platform-specific shell.
+- Ordinary ad-hoc issue-draft replay coverage should seed one 126-row fixture and compare the original and replayed selection plus metadata in one test; parse the emitted restricted POSIX quoting in-process instead of launching a platform-specific shell. Keep the broad guarded-search safety regression separate because it crosses the candidate cap and verifies lower-bound source metadata; use one indexed file with sentinel chunks rather than hundreds of files.
 - No-timeout sentinel coverage should exercise zero and infinite budgets in one contract test; both follow the same caller-cancellation path and do not need duplicate scope setup.
 - Bounded HTTP private-file success and overflow cases should share one temporary project and use distinct child paths instead of allocating and cleaning two standalone system-temp files.
 - Bounded HTTP memory-safety coverage checks huge declared-length allocation avoidance and whole pooled-buffer clearing in one contract test.
@@ -1615,7 +1615,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - latest indexed HEAD の優先順位は1つの seed 済み repo から status / analysis result shape の両方で検証し、同一 Git / DB setup を重複させない。
 - commits-ahead の ancestor / missing-stamp behavior は同じ multi-commit repo を共有する。missing case は `IndexedHeadSha` のない新しい result object だけで検証できる。
 - shared file-URI escaping と LSP round-trip parity は1つの path / root case で検証し、同等の percent-encoding setup を別 test で重複させない。
-- ad-hoc issue-draft replay coverage は 126 row の fixture を1つだけ seed し、元の selection / metadata と replay 後の値を1つの test で比較してください。platform 固有 shell を起動せず、出力された制限付き POSIX quoting を process 内で parse します。
+- 通常の ad-hoc issue-draft replay coverage は 126 row の fixture を1つだけ seed し、元の selection / metadata と replay 後の値を1つの test で比較してください。platform 固有 shell を起動せず、出力された制限付き POSIX quoting を process 内で parse します。broad な guard 付き検索の safety regression は candidate cap を越えて source lower-bound metadata を検証するため分離し、数百 file ではなく sentinel chunk を持つ1つの indexed file を使います。
 - no-timeout sentinel coverage は zero / infinite budget を1つの contract test で検証する。どちらも同じ caller-cancellation path に従うため scope setup を重複させない。
 - bounded HTTP private-file の success / overflow case は1つの temporary project と別々の child path を共有し、standalone system-temp file を2回確保・cleanup しない。
 - bounded HTTP の memory-safety coverage は、巨大な declared length の allocation 回避と pooled buffer 全体の clear を1つの contract test で検証する。

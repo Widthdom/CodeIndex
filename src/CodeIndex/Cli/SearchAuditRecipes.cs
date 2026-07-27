@@ -4613,7 +4613,13 @@ internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("first_per_file")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FirstPerFile = null,
     [property: JsonPropertyName("sample")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Sample = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Sample = null,
+    [property: JsonPropertyName("source_minimum_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SourceMinimumCount = null,
+    [property: JsonPropertyName("source_total_count_authoritative")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? SourceTotalCountAuthoritative = null,
+    [property: JsonPropertyName("source_fetch_limit")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SourceFetchLimit = null);
 
 internal sealed record SearchRecipeScopeJsonResult(
     [property: JsonPropertyName("name")] string Name,

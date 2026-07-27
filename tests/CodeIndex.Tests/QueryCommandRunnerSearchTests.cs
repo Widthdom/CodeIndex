@@ -8005,6 +8005,9 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(1, root.GetProperty("result_count").GetInt32());
             Assert.Equal(126, source.GetProperty("source_total_count").GetInt32());
+            Assert.Equal(126, source.GetProperty("source_minimum_count").GetInt32());
+            Assert.True(source.GetProperty("source_total_count_authoritative").GetBoolean());
+            Assert.False(source.TryGetProperty("source_fetch_limit", out _));
             Assert.Equal(1, source.GetProperty("returned_count").GetInt32());
             Assert.Equal(20, source.GetProperty("limit_per_query").GetInt32());
             Assert.Equal(1, source.GetProperty("total_limit").GetInt32());
@@ -8029,6 +8032,84 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("--sample", replayWords);
             Assert.Contains("src/replay's/**", replayWords);
             Assert.Contains("Owner's replay probe", replayWords);
+
+            var (replayExitCode, replayStdout, replayStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(replayWords.Skip(2).ToArray(), _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, replayExitCode);
+            Assert.Equal(string.Empty, replayStderr);
+            using var replayDocument = ParseJsonOutput(replayStdout);
+            var replayDraft = Assert.Single(replayDocument.RootElement.GetProperty("drafts").EnumerateArray());
+            Assert.Equal(source.GetRawText(), replayDraft.GetProperty("source").GetRawText());
+            Assert.Equal(
+                draft.GetProperty("evidence_paths").GetRawText(),
+                replayDraft.GetProperty("evidence_paths").GetRawText());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_AdHocIssueDraftGuardsUseBoundedSourcePopulation_Issue4838()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_draft_guard_4838");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/guarded.cs",
+                "csharp",
+                "Issue4838GuardNeedle return;\n");
+            var chunks = Enumerable.Range(0, 1001)
+                .Select(index => new ChunkRecord
+                {
+                    ChunkIndex = index,
+                    StartLine = (index * 2) + 1,
+                    EndLine = index == 0 ? 2 : (index * 2) + 1,
+                    Content = index == 0
+                        ? "Issue4838GuardNeedle\nreturn;\n"
+                        : $"Issue4838GuardNeedle candidate {index};\n"
+                })
+                .ToArray();
+            ReplaceIndexedChunks(dbPath, "src/guarded.cs", chunks);
+
+            var args = new[]
+            {
+                "--query", "Issue4838GuardNeedle",
+                "--db", dbPath,
+                "--format", "issue-drafts",
+                "--exact-substring",
+                "--require-after", "return",
+                "--guard-window", "1",
+                "--limit", "1",
+                "--snippet-lines", "0",
+                "--max-json-bytes", "200000"
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var draft = Assert.Single(document.RootElement.GetProperty("drafts").EnumerateArray());
+            var source = draft.GetProperty("source");
+            var body = draft.GetProperty("body").GetString()!;
+            var replayWords = ParseReplayShellCommand(ExtractIssueDraftReplayCommand(body));
+
+            Assert.False(source.TryGetProperty("source_total_count", out _));
+            Assert.Equal(1, source.GetProperty("source_minimum_count").GetInt32());
+            Assert.False(source.GetProperty("source_total_count_authoritative").GetBoolean());
+            Assert.Equal(200, source.GetProperty("source_fetch_limit").GetInt32());
+            Assert.Equal(1, source.GetProperty("returned_count").GetInt32());
+            Assert.Equal(0, source.GetProperty("omitted_count").GetInt32());
+            Assert.True(source.GetProperty("truncated").GetBoolean());
+            Assert.Contains("- source_total_count: `unknown`", body, StringComparison.Ordinal);
+            Assert.Contains("- source_minimum_count: `1`", body, StringComparison.Ordinal);
+            Assert.Contains("--require-after", replayWords);
+            Assert.Contains("return", replayWords);
 
             var (replayExitCode, replayStdout, replayStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunSearch(replayWords.Skip(2).ToArray(), _jsonOptions));

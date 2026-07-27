@@ -1293,9 +1293,18 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var results = ReadSearchResults(reader, options, exact, int.MaxValue);
-            var sourceRows = BuildSearchDisplayRows(results, options, exact);
             var resultLimit = GetAdHocIssueDraftResultLimit(options);
+            var sourceTotalCountAuthoritative = options.GuardFilters.Count == 0;
+            var sourceFetchLimit = sourceTotalCountAuthoritative
+                ? int.MaxValue
+                : GetSearchRecipeFetchLimit(options, resultLimit);
+            var results = ReadSearchResults(
+                reader,
+                options,
+                exact,
+                sourceFetchLimit,
+                guardRequestedLimit: resultLimit);
+            var sourceRows = BuildSearchDisplayRows(results, options, exact);
             var outputSelection = ApplySearchOutputSelection(sourceRows, options, resultLimit);
             var rows = outputSelection.Rows;
             var omittedCount = Math.Max(0, outputSelection.OriginalCount - rows.Count);
@@ -1329,12 +1338,20 @@ public static partial class QueryCommandRunner
                 resultLimit,
                 omittedCount,
                 BuildSearchRecipeTopFiles(rows),
-                outputSelection.Truncated,
+                outputSelection.Truncated || !sourceTotalCountAuthoritative,
                 null,
                 rows.Select(row => row.Compact).ToList());
             var drafts = rows.Count == 0
                 ? []
-                : new List<SearchIssueDraftJsonResult> { ToAdHocSearchIssueDraft(options, queryResult, preflight) };
+                : new List<SearchIssueDraftJsonResult>
+                {
+                    ToAdHocSearchIssueDraft(
+                        options,
+                        queryResult,
+                        preflight,
+                        sourceTotalCountAuthoritative,
+                        sourceTotalCountAuthoritative ? null : sourceFetchLimit)
+                };
 
             var json = JsonSerializer.Serialize(
                 new SearchIssueDraftExportJsonResult(
@@ -2336,7 +2353,9 @@ public static partial class QueryCommandRunner
     private static SearchIssueDraftJsonResult ToAdHocSearchIssueDraft(
         QueryCommandOptions options,
         SearchRecipeQueryResultJsonResult queryResult,
-        IssueDuplicatePreflight preflight)
+        IssueDuplicatePreflight preflight,
+        bool sourceTotalCountAuthoritative,
+        int? sourceFetchLimit)
     {
         var labels = BuildAdHocIssueDraftLabels(options);
         var title = BuildAdHocSearchIssueDraftTitle(options);
@@ -2350,7 +2369,14 @@ public static partial class QueryCommandRunner
         var missingLabels = BuildMissingIssueDraftLabels(labels, preflight);
         var labelWarning = BuildIssueDraftLabelWarning(missingLabels, preflight);
         var duplicateProbeTriage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, 0);
-        var duplicateProbeBody = BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths, evidence, duplicateProbeTriage, options);
+        var duplicateProbeBody = BuildAdHocSearchIssueDraftBody(
+            queryResult,
+            evidencePaths,
+            evidence,
+            duplicateProbeTriage,
+            options,
+            sourceTotalCountAuthoritative,
+            sourceFetchLimit);
         var duplicateMatches = preflight.FindMatches(
             title,
             labels,
@@ -2367,7 +2393,14 @@ public static partial class QueryCommandRunner
             evidencePaths,
             evidence,
             triage,
-            BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths, evidence, triage, options),
+            BuildAdHocSearchIssueDraftBody(
+                queryResult,
+                evidencePaths,
+                evidence,
+                triage,
+                options,
+                sourceTotalCountAuthoritative,
+                sourceFetchLimit),
             new SearchIssueDraftSourceJsonResult(
                 null,
                 null,
@@ -2384,12 +2417,15 @@ public static partial class QueryCommandRunner
                 queryResult.MinimumOmittedResultCount,
                 queryResult.Truncated,
                 queryResult.NextCursor,
-                queryResult.MinimumMatchedCount,
+                sourceTotalCountAuthoritative ? queryResult.MinimumMatchedCount : null,
                 queryResult.Count,
                 options.Limit,
                 options.TotalLimit,
                 options.FirstPerFile,
-                options.SampleSize),
+                options.SampleSize,
+                queryResult.MinimumMatchedCount,
+                sourceTotalCountAuthoritative,
+                sourceFetchLimit),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
                 preflight.Checked,
                 duplicateMatches.Count,
@@ -3029,7 +3065,9 @@ public static partial class QueryCommandRunner
         IReadOnlyList<string> evidencePaths,
         IReadOnlyList<SearchIssueDraftEvidenceJsonResult> evidence,
         IssueDraftTriageMetadataJsonResult triage,
-        QueryCommandOptions options)
+        QueryCommandOptions options,
+        bool sourceTotalCountAuthoritative,
+        int? sourceFetchLimit)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Summary");
@@ -3066,7 +3104,11 @@ public static partial class QueryCommandRunner
         sb.AppendLine("## Search metadata");
         sb.AppendLine("- draft_id: `search/ad-hoc`");
         sb.AppendLine($"- result_count: `{queryResult.Count}`");
-        sb.AppendLine($"- source_total_count: `{queryResult.MinimumMatchedCount}`");
+        sb.AppendLine($"- source_total_count: `{(sourceTotalCountAuthoritative ? queryResult.MinimumMatchedCount.ToString(CultureInfo.InvariantCulture) : "unknown")}`");
+        sb.AppendLine($"- source_minimum_count: `{queryResult.MinimumMatchedCount}`");
+        sb.AppendLine($"- source_total_count_authoritative: `{sourceTotalCountAuthoritative.ToString().ToLowerInvariant()}`");
+        if (sourceFetchLimit.HasValue)
+            sb.AppendLine($"- source_fetch_limit: `{sourceFetchLimit.Value.ToString(CultureInfo.InvariantCulture)}`");
         sb.AppendLine($"- returned_count: `{queryResult.Count}`");
         sb.AppendLine($"- limit_per_query: `{options.Limit}`");
         sb.AppendLine($"- total_limit: `{FormatNullableIssueDraftSelectionValue(options.TotalLimit)}`");
