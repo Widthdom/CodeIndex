@@ -4,10 +4,19 @@ namespace CodeIndex.Indexer;
 
 internal sealed partial class FileContentLoader(
     long maxFileSizeBytes,
-    Func<string, FileStream>? openReadForIndexContent = null)
+    Func<string, FileStream>? openReadForIndexContent = null,
+    Func<string, string>? resolveFileReadPath = null,
+    bool bindReadToFileSystemIdentity = false,
+    Action<string>? validateResolvedFileReadPath = null)
 {
     private readonly Func<string, FileStream> _openReadForIndexContent =
         openReadForIndexContent ?? BoundedFile.OpenReadForIndexContent;
+    private readonly Func<string, string> _resolveFileReadPath =
+        resolveFileReadPath ?? Path.GetFullPath;
+    private readonly bool _bindReadToFileSystemIdentity =
+        bindReadToFileSystemIdentity;
+    private readonly Action<string>? _validateResolvedFileReadPath =
+        validateResolvedFileReadPath;
     private const int GitLfsPointerMaxBytes = 1024;
     private static ReadOnlySpan<byte> GitLfsPointerPrefix => "version https://git-lfs.github.com/spec/v1"u8;
     private static ReadOnlySpan<byte> GitLfsExtensionPrefix => "ext-"u8;
@@ -100,13 +109,16 @@ internal sealed partial class FileContentLoader(
         bool retryOnMutation,
         CancellationToken cancellationToken)
     {
-        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+        var readPath = _resolveFileReadPath(absolutePath);
         cancellationToken.ThrowIfCancellationRequested();
-        var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
         byte[]? bytes = null;
         bool lengthChanged;
-        using (var stream = _openReadForIndexContent(absolutePath))
+        bool pathIdentityChanged;
+        DateTime modifiedBeforeRead;
+        DateTime modifiedAfterRead;
+        using (var stream = OpenValidatedReadStream(absolutePath, readPath))
         {
+            modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
             var initialLength = stream.Length;
             if (initialLength > maxFileSizeBytes)
                 throw new FileIndexer.FileTooLargeSkippedException(
@@ -134,10 +146,12 @@ internal sealed partial class FileContentLoader(
             }
 
             lengthChanged = stream.Length != initialLength;
+            modifiedAfterRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+            pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
         }
 
-        var modifiedAfterRead = File.GetLastWriteTimeUtc(ioPath);
-        if (retryOnMutation && (modifiedAfterRead != modifiedBeforeRead || lengthChanged))
+        if (retryOnMutation
+            && (modifiedAfterRead != modifiedBeforeRead || lengthChanged || pathIdentityChanged))
             return (null, RequiresRetry: true);
         if (bytes is null || IsGitLfsPointer(bytes))
             return (null, RequiresRetry: false);

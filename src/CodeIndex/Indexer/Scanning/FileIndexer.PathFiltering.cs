@@ -66,7 +66,9 @@ public partial class FileIndexer
         }
 
         fullPath = Path.GetFullPath(absolutePath);
-        if (!IsPathEqualOrParent(_projectRoot, fullPath))
+        if (!IsLexicalPathEqualOrParent(_projectRoot, fullPath)
+            || (_symlinkPolicy != SymlinkPolicy.All
+                && !IsPathEqualOrParent(_projectRoot, fullPath)))
             return CreatePathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
 
         relativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(_projectRoot, fullPath));

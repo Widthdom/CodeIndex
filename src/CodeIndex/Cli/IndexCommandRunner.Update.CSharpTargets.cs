@@ -66,7 +66,8 @@ public static partial class IndexCommandRunner
                 updateTarget.RelativePath,
                 updateTarget.DisplayRelativePath,
                 updateTarget.IndexPath,
-                language);
+                language,
+                ResolveSymlinkTargets: indexer.ResolvesSymlinkTargets);
             targets.Add(target with
             {
                 GeneratedExtractionSuppressed =

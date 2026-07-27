@@ -44,7 +44,8 @@ public static partial class IndexCommandRunner
                 indexedTarget.DisplayRelativePath,
                 indexedTarget.IndexPath,
                 indexedTarget.Language,
-                indexedTarget.GeneratedExtractionSuppressed));
+                indexedTarget.GeneratedExtractionSuppressed,
+                indexer.ResolvesSymlinkTargets));
         }
 
         return new FullScanTargetPreparation(fileTargets, csharpPrepassTargets);
