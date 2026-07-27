@@ -2721,6 +2721,81 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RegisteredExtensionPreservesPunctuatedCanonicalPluginId_Issue4842()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lang_plugin_collision_4842");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var patternDirectory = Path.Combine(project.Root, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        File.WriteAllText(
+            Path.Combine(patternDirectory, "plugin.yaml"),
+            "language: \"c-sharp\"\nextensions:\n  - extension: \".plugx\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/plugin.plugx", "c-sharp", "needle plugin\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/builtin.cs", "csharp", "needle builtin\n");
+
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    QueryCommandRunner.RunSearch(
+                        ["needle", "--db", dbPath, "--lang", ".plugx", "--json"],
+                        _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Contains("\"path\":\"src/plugin.plugx\"", stdout, StringComparison.Ordinal);
+                Assert.DoesNotContain("\"path\":\"src/builtin.cs\"", stdout, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void ParseArgs_LoadsLanguageRegistryFromWorkspaceDatabaseRoots_Issue4842()
+    {
+        using var primary = TestProjectHelper.CreateTempProjectScope("cdidx_lang_primary_4842");
+        using var member = TestProjectHelper.CreateTempProjectScope("cdidx_lang_member_4842");
+        var primaryDbPath = TestProjectHelper.CreateProjectDb(primary.Root);
+        var memberDbPath = TestProjectHelper.CreateProjectDb(member.Root);
+        var patternDirectory = Path.Combine(member.Root, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        File.WriteAllText(
+            Path.Combine(patternDirectory, "member.yaml"),
+            "language: \"member-dsl\"\nextensions:\n  - extension: \".member\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+
+                var options = QueryCommandRunner.ParseArgs(
+                    [
+                        "needle",
+                        "--db", primaryDbPath,
+                        "--workspace-db", memberDbPath,
+                        "--lang", "member-dsl",
+                    ],
+                    jsonDefault: false,
+                    allowNamedQuery: true);
+
+                Assert.Null(options.ParseError);
+                Assert.Equal("member-dsl", options.Lang);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
     public void RunSearch_AllowUnknownLanguageMatchesExactUnregisteredPluginId_Issue4842()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lang_escape_4842");

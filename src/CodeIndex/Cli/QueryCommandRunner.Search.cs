@@ -53,7 +53,7 @@ public static partial class QueryCommandRunner
             allowIssueDraftsFormat: true,
             applySearchSourceDefaults: true);
         using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
-            options.AllowUnknownLang ? options.Lang : null);
+            options.Lang);
         if (TryWriteUnsupportedOptionError(usageCommandName, validationArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand(usageCommandName), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(

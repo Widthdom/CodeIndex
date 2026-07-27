@@ -24,7 +24,7 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
         using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
-            options.AllowUnknownLang ? options.Lang : null);
+            options.Lang);
         if (TryWriteUnsupportedOptionError("unused", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("unused")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "unused", options.LanguageValidationError ? jsonOptions : null))

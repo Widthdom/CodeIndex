@@ -23,7 +23,7 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
         using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
-            options.AllowUnknownLang ? options.Lang : null);
+            options.Lang);
         if (TryWriteUnsupportedOptionError("map", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("map")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "map", options.LanguageValidationError ? jsonOptions : null))

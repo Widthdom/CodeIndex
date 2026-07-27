@@ -284,8 +284,19 @@ public static partial class QueryCommandRunner
             }
 
             var input = rawLang.Trim();
-            var workspaceRoot = ResolveProjectFilterRoot(resolvedDbPath, dbPathExplicit).Root;
-            var aliases = DbReader.GetQueryLanguageAliases(workspaceRoot);
+            var primaryRoot = s_batchReader != null && dbPathExplicit
+                ? ResolveProjectRootForDbPath(resolvedDbPath, dbPathExplicit).Root
+                : ResolveProjectFilterRoot(resolvedDbPath, dbPathExplicit).Root;
+            var queryRoots = workspaceDbPaths
+                .Select(path => ResolveProjectRootForDbPath(DbPathResolver.NormalizeDbPath(path), dbPathExplicit: true).Root)
+                .Prepend(primaryRoot)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var queryRoot in queryRoots)
+            {
+                foreach (var (alias, registeredCanonical) in DbReader.GetQueryLanguageAliases(queryRoot))
+                    aliases.TryAdd(alias, registeredCanonical);
+            }
             var lookupKey = DbReader.NormalizeQueryLanguageLookupKey(input);
             if (lookupKey.Length == 0)
             {
