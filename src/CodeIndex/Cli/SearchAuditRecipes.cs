@@ -4335,12 +4335,37 @@ internal sealed record SearchRecipeRunSummaryJsonResult(
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
     [property: JsonPropertyName("query_freshness")] SearchRecipeQueryFreshnessJsonResult QueryFreshness,
     [property: JsonPropertyName("cursoring_available")] bool CursoringAvailable,
-    [property: JsonPropertyName("cursoring_hint")] string CursoringHint);
+    [property: JsonPropertyName("cursoring_hint")] string CursoringHint,
+    [property: JsonPropertyName("source_total")] int SourceTotal,
+    [property: JsonPropertyName("source_total_authoritative")] bool SourceTotalAuthoritative,
+    [property: JsonPropertyName("source_total_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SourceTotalLowerBound,
+    [property: JsonPropertyName("selected_total")] int SelectedTotal,
+    [property: JsonPropertyName("returned")] int Returned,
+    [property: JsonPropertyName("selector_omitted_count")] int SelectorOmittedCount,
+    [property: JsonPropertyName("limit_omitted_count")] int LimitOmittedCount);
 
 internal sealed record SearchRecipeQueryFreshnessJsonResult(
     [property: JsonPropertyName("positive_evidence_query_count")] int PositiveEvidenceQueryCount,
     [property: JsonPropertyName("zero_result_query_count")] int ZeroResultQueryCount,
     [property: JsonPropertyName("stale_query_names")] List<string> StaleQueryNames);
+
+internal sealed record SearchRowSelectorJsonResult(
+    [property: JsonPropertyName("mode")] string Mode,
+    [property: JsonPropertyName("applied")] bool Applied,
+    [property: JsonPropertyName("input_total")] int InputTotal,
+    [property: JsonPropertyName("output_total")] int OutputTotal,
+    [property: JsonPropertyName("omitted_count")] int OmittedCount,
+    [property: JsonPropertyName("sample_size")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SampleSize = null,
+    [property: JsonPropertyName("sample_mode")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? SampleMode = null,
+    [property: JsonPropertyName("seed")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? Seed = null);
 
 internal sealed record SearchNamedBatchRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -4401,7 +4426,17 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("next_cursor")] string? NextCursor,
-    [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
+    [property: JsonPropertyName("results")] List<CompactSearchResult> Results,
+    [property: JsonPropertyName("source_total")] int SourceTotal,
+    [property: JsonPropertyName("source_total_authoritative")] bool SourceTotalAuthoritative,
+    [property: JsonPropertyName("source_total_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SourceTotalLowerBound,
+    [property: JsonPropertyName("selected_total")] int SelectedTotal,
+    [property: JsonPropertyName("returned")] int Returned,
+    [property: JsonPropertyName("selector_omitted_count")] int SelectorOmittedCount,
+    [property: JsonPropertyName("limit_omitted_count")] int LimitOmittedCount,
+    [property: JsonPropertyName("selectors")] List<SearchRowSelectorJsonResult> Selectors);
 
 internal sealed record SearchNamedBatchCountSummaryRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -4528,7 +4563,17 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("next_cursor")] string? NextCursor,
-    [property: JsonPropertyName("results")] List<SearchRecipeCompactResultJsonResult> Results);
+    [property: JsonPropertyName("results")] List<SearchRecipeCompactResultJsonResult> Results,
+    [property: JsonPropertyName("source_total")] int SourceTotal,
+    [property: JsonPropertyName("source_total_authoritative")] bool SourceTotalAuthoritative,
+    [property: JsonPropertyName("source_total_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SourceTotalLowerBound,
+    [property: JsonPropertyName("selected_total")] int SelectedTotal,
+    [property: JsonPropertyName("returned")] int Returned,
+    [property: JsonPropertyName("selector_omitted_count")] int SelectorOmittedCount,
+    [property: JsonPropertyName("limit_omitted_count")] int LimitOmittedCount,
+    [property: JsonPropertyName("selectors")] List<SearchRowSelectorJsonResult> Selectors);
 
 internal sealed record SearchRecipeTopFileJsonResult(
     [property: JsonPropertyName("path")] string Path,
@@ -4601,7 +4646,17 @@ internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("next_cursor")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursor);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursor,
+    [property: JsonPropertyName("source_total")] int SourceTotal,
+    [property: JsonPropertyName("source_total_authoritative")] bool SourceTotalAuthoritative,
+    [property: JsonPropertyName("source_total_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SourceTotalLowerBound,
+    [property: JsonPropertyName("selected_total")] int SelectedTotal,
+    [property: JsonPropertyName("returned")] int Returned,
+    [property: JsonPropertyName("selector_omitted_count")] int SelectorOmittedCount,
+    [property: JsonPropertyName("limit_omitted_count")] int LimitOmittedCount,
+    [property: JsonPropertyName("selectors")] List<SearchRowSelectorJsonResult> Selectors);
 
 internal sealed record SearchRecipeScopeJsonResult(
     [property: JsonPropertyName("name")] string Name,

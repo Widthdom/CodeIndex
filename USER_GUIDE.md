@@ -1383,11 +1383,22 @@ aggregations support `--count-by path|file|symbol|origin|return-type|subsystem`,
 `--group-by file|symbol|origin|return-type|subsystem --count`, and
 `--unique path|file|symbol|origin|return-type|subsystem`.
 Row-producing recipe modes (text, aggregate JSON, compact JSON, NDJSON, and
-issue drafts) apply `--first-per-file` and deterministic `--sample <n>` before
+issue drafts) apply `--first-per-file` and fixed-seed deterministic
+`--sample <n>` before
 the effective per-query `--limit` / cross-query `--total-limit`. Aggregate JSON
-and compact query objects report `selection_reason` and
-`selection_omitted_count` when selection removes rows; issue-draft `source`
-objects and NDJSON terminal records report the same fields. Selection-only
+and compact query objects, run summaries, issue-draft `source` objects, and
+NDJSON terminal records distinguish `source_total`, `selected_total`,
+`returned`, `selector_omitted_count`, and `limit_omitted_count`. Their
+`selectors` array records each applied selector in execution order, including
+per-stage input/output/omission counts and the sample size, mode, and seed.
+`source_total_authoritative` says whether the bounded fetch observed the whole
+source population; otherwise `source_total_lower_bound` is also present. The
+older `selection_reason` and `selection_omitted_count` fields remain as
+compatibility summaries. Search `query_context.row_selectors` exposes every
+applied selector with the same sample mode and seed. When a hard
+`--max-json-bytes` cap cannot fit the additive accounting fields in an NDJSON
+terminal, the writer omits those optional fields before failing the terminal
+budget; the compatibility selection fields remain. Selection-only
 omission contributes to matched and omitted counts but does not set `truncated`,
 `has_more`, or `next_cursor`. If a later limit also omits selected rows,
 `truncated` / `has_more` are set but `next_cursor` is suppressed because a raw
@@ -4506,10 +4517,18 @@ recipe count output は `--format count --summary-only --max-json-bytes <n>` に
 aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin|return-type|subsystem`、
 `--group-by file|symbol|origin|return-type|subsystem --count`、`--unique path|file|symbol|origin|return-type|subsystem` に対応します。
 row を返す recipe mode（text、aggregate JSON、compact JSON、NDJSON、issue draft）は、
-`--first-per-file` と決定的な `--sample <n>` を、有効な query ごとの `--limit` /
+`--first-per-file` と固定 seed の決定的な `--sample <n>` を、有効な query ごとの `--limit` /
 query 全体の `--total-limit` より先に適用します。aggregate JSON / compact の query object は
-selection で row が省略された場合に `selection_reason` と `selection_omitted_count` を返し、
-issue-draft の `source` object と NDJSON terminal record も同じ field を返します。
+run summary、issue-draft の `source` object、NDJSON terminal record と同様に、
+`source_total`、`selected_total`、`returned`、`selector_omitted_count`、
+`limit_omitted_count` を分けて返します。`selectors` array は適用順の各 selector について、
+各段階の入力件数、出力件数、省略件数、および sample の size / mode / seed を記録します。
+bounded fetch が source population 全体を観測できたかは `source_total_authoritative` で示し、
+そうでない場合は `source_total_lower_bound` も返します。従来の `selection_reason` と
+`selection_omitted_count` は互換用 summary として維持します。
+search の `query_context.row_selectors` も適用済み selector と同じ sample mode / seed を公開します。
+hard な `--max-json-bytes` cap で NDJSON terminal に追加 accounting field が収まらない場合、
+terminal budget 自体を失敗させる前にこれらの任意 field を省略し、互換用 selection field は維持します。
 selection だけによる省略は matched / omitted count に含まれますが、`truncated`、
 `has_more`、`next_cursor` は設定しません。後続の limit でも選択済み row が省略される場合は
 `truncated` / `has_more` を設定しますが、raw cursor では row-selection state を保持できないため

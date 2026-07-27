@@ -782,7 +782,13 @@ public static partial class QueryCommandRunner
                                 "search",
                                 limitTruncated: false,
                                 "Increase --limit or narrow the query to retrieve the remaining search results.",
-                                totalCountAuthoritative: false);
+                                totalCountAuthoritative: false,
+                                sourceTotal: selection.Selectors.Count > 0 ? selection.SourceTotal : null,
+                                sourceTotalAuthoritative: selection.Selectors.Count > 0 ? selection.SourceTotalAuthoritative : null,
+                                selectedTotal: selection.Selectors.Count > 0 ? selection.SelectedTotal : null,
+                                selectorOmittedCount: selection.Selectors.Count > 0 ? selection.SelectorOmittedCount : null,
+                                limitOmittedCount: selection.Selectors.Count > 0 ? selection.LimitOmittedCount : null,
+                                selectors: selection.Selectors.Count > 0 ? selection.Selectors : null);
                             jsonDoneTerminalLine = stream.TerminalLine;
                             return stream.ExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : stream.ExitCode;
                         }
@@ -815,6 +821,12 @@ public static partial class QueryCommandRunner
                         selection.TruncationReason is "sample" or "first_per_file"
                             ? selection.SelectionOmittedCount
                             : null,
+                        selection.SourceTotal,
+                        selection.SourceTotalAuthoritative,
+                        selection.SelectedTotal,
+                        selection.SelectorOmittedCount,
+                        selection.LimitOmittedCount,
+                        selection.Selectors,
                         options,
                         jsonOptions,
                         ndjsonOptions,
@@ -876,6 +888,12 @@ public static partial class QueryCommandRunner
                         selection.TruncationReason is "sample" or "first_per_file"
                             ? selection.SelectionOmittedCount
                             : null,
+                        selection.SourceTotal,
+                        selection.SourceTotalAuthoritative,
+                        selection.SelectedTotal,
+                        selection.SelectorOmittedCount,
+                        selection.LimitOmittedCount,
+                        selection.Selectors,
                         options,
                         ndjsonOptions,
                         reader,

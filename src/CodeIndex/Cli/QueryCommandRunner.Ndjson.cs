@@ -41,13 +41,53 @@ public static partial class QueryCommandRunner
         bool totalCountAuthoritative = true,
         string? truncationReason = null,
         string? selectionReason = null,
-        int? selectionOmittedCount = null)
+        int? selectionOmittedCount = null,
+        int? sourceTotal = null,
+        bool? sourceTotalAuthoritative = null,
+        int? selectedTotal = null,
+        int? selectorOmittedCount = null,
+        int? limitOmittedCount = null,
+        List<SearchRowSelectorJsonResult>? selectors = null)
     {
         if (options.ResultsOnly)
             return WriteResultOnlyNdjson(records, options);
 
         var emittedRecords = records.Count;
         string? terminalLine = null;
+
+        string BuildTerminal(
+            int returnedCount,
+            bool interrupted,
+            bool truncated,
+            int? firstOmittedResultBytes,
+            int omittedCount,
+            int omittedRecordCount,
+            string? recoveryGuidance,
+            bool includeSelectionAccounting)
+            => BuildJsonStreamDoneLine(
+                returnedCount,
+                totalCount,
+                jsonOptions,
+                interrupted,
+                truncated,
+                reader,
+                maxJsonBytes: options.MaxJsonBytes,
+                firstOmittedResultBytes: firstOmittedResultBytes,
+                omittedCount: omittedCount,
+                omittedRecordCount: omittedRecordCount,
+                appliedLimit: options.Limit,
+                recoveryGuidance: recoveryGuidance,
+                totalCountAuthoritative: totalCountAuthoritative,
+                truncationReason: truncationReason,
+                selectionReason: selectionReason,
+                selectionOmittedCount: selectionOmittedCount,
+                sourceTotal: includeSelectionAccounting ? sourceTotal : null,
+                sourceTotalAuthoritative: includeSelectionAccounting ? sourceTotalAuthoritative : null,
+                selectedTotal: includeSelectionAccounting ? selectedTotal : null,
+                selectorOmittedCount: includeSelectionAccounting ? selectorOmittedCount : null,
+                limitOmittedCount: includeSelectionAccounting ? limitOmittedCount : null,
+                selectors: includeSelectionAccounting ? selectors : null);
+
         if (options.MaxJsonBytes.HasValue)
         {
             for (var candidate = records.Count; candidate >= 0; candidate--)
@@ -55,26 +95,33 @@ public static partial class QueryCommandRunner
                 var candidateReturnedCount = CountResults(records, candidate);
                 var candidateInterrupted = candidate < records.Count;
                 var candidateFirstOmittedBytes = candidateInterrupted ? JsonLineBytes(records[candidate].Line) : (int?)null;
-                var candidateTerminal = BuildJsonStreamDoneLine(
+                var candidateRecoveryGuidance = candidateInterrupted
+                    ? "Increase --max-json-bytes or reduce --limit. Pass --allow-partial only when exit code 0 is acceptable for incomplete output."
+                    : limitTruncated ? limitRecoveryGuidance : null;
+                var candidateTerminal = BuildTerminal(
                     candidateReturnedCount,
-                    totalCount,
-                    jsonOptions,
-                    interrupted: candidateInterrupted,
-                    truncated: limitTruncated || candidateInterrupted,
-                    reader,
-                    maxJsonBytes: options.MaxJsonBytes,
-                    firstOmittedResultBytes: candidateFirstOmittedBytes,
-                    omittedCount: Math.Max(0, totalCount - candidateReturnedCount),
-                    omittedRecordCount: Math.Max(0, records.Count - candidate),
-                    appliedLimit: options.Limit,
-                    recoveryGuidance: candidateInterrupted
-                        ? "Increase --max-json-bytes or reduce --limit. Pass --allow-partial only when exit code 0 is acceptable for incomplete output."
-                        : limitTruncated ? limitRecoveryGuidance : null,
-                    totalCountAuthoritative: totalCountAuthoritative,
-                    truncationReason: truncationReason,
-                    selectionReason: selectionReason,
-                    selectionOmittedCount: selectionOmittedCount);
-                if (PrefixBytes(records, candidate) + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value)
+                    candidateInterrupted,
+                    limitTruncated || candidateInterrupted,
+                    candidateFirstOmittedBytes,
+                    Math.Max(0, totalCount - candidateReturnedCount),
+                    Math.Max(0, records.Count - candidate),
+                    candidateRecoveryGuidance,
+                    includeSelectionAccounting: true);
+                var candidatePrefixBytes = PrefixBytes(records, candidate);
+                if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value
+                    && sourceTotal.HasValue)
+                {
+                    candidateTerminal = BuildTerminal(
+                        candidateReturnedCount,
+                        candidateInterrupted,
+                        limitTruncated || candidateInterrupted,
+                        candidateFirstOmittedBytes,
+                        Math.Max(0, totalCount - candidateReturnedCount),
+                        Math.Max(0, records.Count - candidate),
+                        candidateRecoveryGuidance,
+                        includeSelectionAccounting: false);
+                }
+                if (candidatePrefixBytes + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value)
                     continue;
 
                 emittedRecords = candidate;
@@ -84,23 +131,28 @@ public static partial class QueryCommandRunner
 
             if (terminalLine == null)
             {
-                var requiredTerminal = BuildJsonStreamDoneLine(
-                    count: 0,
+                var requiredTerminal = BuildTerminal(
+                    0,
+                    records.Count > 0,
+                    limitTruncated || records.Count > 0,
+                    records.Count > 0 ? JsonLineBytes(records[0].Line) : null,
                     totalCount,
-                    jsonOptions,
-                    interrupted: records.Count > 0,
-                    truncated: limitTruncated || records.Count > 0,
-                    reader,
-                    maxJsonBytes: options.MaxJsonBytes,
-                    firstOmittedResultBytes: records.Count > 0 ? JsonLineBytes(records[0].Line) : null,
-                    omittedCount: totalCount,
-                    omittedRecordCount: records.Count,
-                    appliedLimit: options.Limit,
-                    recoveryGuidance: "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
-                    totalCountAuthoritative: totalCountAuthoritative,
-                    truncationReason: truncationReason,
-                    selectionReason: selectionReason,
-                    selectionOmittedCount: selectionOmittedCount);
+                    records.Count,
+                    "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
+                    includeSelectionAccounting: true);
+                if (JsonLineBytes(requiredTerminal) > options.MaxJsonBytes.Value
+                    && sourceTotal.HasValue)
+                {
+                    requiredTerminal = BuildTerminal(
+                        0,
+                        records.Count > 0,
+                        limitTruncated || records.Count > 0,
+                        records.Count > 0 ? JsonLineBytes(records[0].Line) : null,
+                        totalCount,
+                        records.Count,
+                        "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
+                        includeSelectionAccounting: false);
+                }
                 WriteUsageError(
                     $"{commandName} NDJSON terminal record is {JsonLineBytes(requiredTerminal)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
                     GetUsageLineOrThrow(commandName),
@@ -111,21 +163,15 @@ public static partial class QueryCommandRunner
         else
         {
             var returnedCount = CountResults(records, emittedRecords);
-            terminalLine = BuildJsonStreamDoneLine(
+            terminalLine = BuildTerminal(
                 returnedCount,
-                totalCount,
-                jsonOptions,
                 interrupted: false,
-                truncated: limitTruncated,
-                reader,
-                omittedCount: Math.Max(0, totalCount - returnedCount),
+                limitTruncated,
+                firstOmittedResultBytes: null,
+                Math.Max(0, totalCount - returnedCount),
                 omittedRecordCount: 0,
-                appliedLimit: options.Limit,
-                recoveryGuidance: limitTruncated ? limitRecoveryGuidance : null,
-                totalCountAuthoritative: totalCountAuthoritative,
-                truncationReason: truncationReason,
-                selectionReason: selectionReason,
-                selectionOmittedCount: selectionOmittedCount);
+                limitTruncated ? limitRecoveryGuidance : null,
+                includeSelectionAccounting: true);
         }
 
         for (var i = 0; i < emittedRecords; i++)

@@ -369,47 +369,48 @@ public static partial class QueryCommandRunner
         => NormalizeSearchAggregationKey(value) is "file" or "symbol" or "origin" or "return_type" or "subsystem";
 
     private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
-        => ApplySearchOutputSelection(rows, options, options.Limit);
+        => ApplySearchOutputSelection(
+            rows,
+            options,
+            options.Limit,
+            !options.FirstPerFile && !options.SampleSize.HasValue
+                || rows.Count < SearchOriginFilterMaxCandidates);
 
     private static SearchOutputSelection ApplySearchOutputSelection(
         List<SearchDisplayRow> rows,
         QueryCommandOptions options,
-        int limit)
+        int limit,
+        bool sourceTotalAuthoritative = true)
     {
-        var originalCount = rows.Count;
-        rows = ApplySearchPostSelectors(
-            rows,
-            options,
-            out var firstPerFileTruncated,
-            out var sampleTruncated);
-        var postSelectionCount = rows.Count;
+        var sourceTotal = rows.Count;
+        var selectors = new List<SearchRowSelectorJsonResult>();
+        rows = ApplySearchPostSelectors(rows, options, selectors);
+        var selectedTotal = rows.Count;
         var limitTruncated = rows.Count > limit;
         if (limitTruncated)
             rows = rows.Take(limit).ToList();
 
-        var truncationReason = firstPerFileTruncated
-            ? "first_per_file"
-            : sampleTruncated
-                ? "sample"
-                : limitTruncated
-                    ? "limit"
-                    : null;
+        var selectionReason = selectors.FirstOrDefault(selector => selector.OmittedCount > 0)?.Mode;
+        var truncationReason = selectionReason ?? (limitTruncated ? "limit" : null);
         return new SearchOutputSelection(
             rows,
-            originalCount,
-            rows.Count < originalCount,
+            sourceTotal,
+            selectedTotal,
+            rows.Count,
+            Math.Max(0, sourceTotal - selectedTotal),
+            Math.Max(0, selectedTotal - rows.Count),
+            sourceTotalAuthoritative,
+            rows.Count < sourceTotal,
             limitTruncated,
             truncationReason,
-            Math.Max(0, originalCount - postSelectionCount));
+            selectors);
     }
 
     private static List<SearchDisplayRow> ApplySearchPostSelectors(
         List<SearchDisplayRow> rows,
         QueryCommandOptions options,
-        out bool firstPerFileTruncated,
-        out bool sampleTruncated)
+        List<SearchRowSelectorJsonResult> selectors)
     {
-        firstPerFileTruncated = false;
         if (options.FirstPerFile)
         {
             var beforeFirstPerFile = rows.Count;
@@ -417,14 +418,28 @@ public static partial class QueryCommandRunner
                 .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
                 .Select(group => group.First())
                 .ToList();
-            firstPerFileTruncated = rows.Count < beforeFirstPerFile;
+            selectors.Add(new SearchRowSelectorJsonResult(
+                "first_per_file",
+                true,
+                beforeFirstPerFile,
+                rows.Count,
+                Math.Max(0, beforeFirstPerFile - rows.Count)));
         }
 
-        sampleTruncated = false;
-        if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
+        if (options.SampleSize.HasValue)
         {
-            sampleTruncated = true;
-            rows = SampleSearchRows(rows, options.SampleSize.Value);
+            var beforeSample = rows.Count;
+            if (rows.Count > options.SampleSize.Value)
+                rows = SampleSearchRows(rows, options.SampleSize.Value);
+            selectors.Add(new SearchRowSelectorJsonResult(
+                "sample",
+                true,
+                beforeSample,
+                rows.Count,
+                Math.Max(0, beforeSample - rows.Count),
+                options.SampleSize.Value,
+                SearchSampleMode,
+                SearchSampleSeed));
         }
         return rows;
     }
@@ -436,14 +451,44 @@ public static partial class QueryCommandRunner
         if (sampleSize == 1)
             return [rows[0]];
 
-        var sampled = new List<SearchDisplayRow>(sampleSize);
-        var lastIndex = rows.Count - 1;
-        for (var i = 0; i < sampleSize; i++)
+        return rows
+            .Select((row, index) => new
+            {
+                Row = row,
+                Index = index,
+                Key = ComputeSearchSampleKey(row, index),
+            })
+            .OrderBy(candidate => candidate.Key)
+            .ThenBy(candidate => candidate.Index)
+            .Take(sampleSize)
+            .OrderBy(candidate => candidate.Index)
+            .Select(candidate => candidate.Row)
+            .ToList();
+    }
+
+    private static ulong ComputeSearchSampleKey(SearchDisplayRow row, int index)
+    {
+        const ulong offsetBasis = 14695981039346656037;
+        const ulong prime = 1099511628211;
+        var hash = offsetBasis ^ (uint)SearchSampleSeed;
+
+        Add(row.Result.Path);
+        Add(row.Result.ChunkId.ToString(CultureInfo.InvariantCulture));
+        Add(row.Result.StartLine.ToString(CultureInfo.InvariantCulture));
+        Add(row.Result.EndLine.ToString(CultureInfo.InvariantCulture));
+        Add(index.ToString(CultureInfo.InvariantCulture));
+        return hash;
+
+        void Add(string value)
         {
-            var index = (int)Math.Round(i * (lastIndex / (double)(sampleSize - 1)), MidpointRounding.AwayFromZero);
-            sampled.Add(rows[Math.Clamp(index, 0, lastIndex)]);
+            foreach (var character in value)
+            {
+                hash ^= character;
+                hash *= prime;
+            }
+            hash ^= 0xff;
+            hash *= prime;
         }
-        return sampled;
     }
 
     private static int WriteGroupedSearchResults(
@@ -545,6 +590,12 @@ public static partial class QueryCommandRunner
         string? truncationReason,
         string? selectionReason,
         int? selectionOmittedCount,
+        int sourceTotal,
+        bool sourceTotalAuthoritative,
+        int selectedTotal,
+        int selectorOmittedCount,
+        int limitOmittedCount,
+        List<SearchRowSelectorJsonResult> selectors,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         JsonSerializerOptions ndjsonOptions,
@@ -586,7 +637,13 @@ public static partial class QueryCommandRunner
             totalCountAuthoritative: false,
             truncationReason: truncationReason,
             selectionReason: selectionReason,
-            selectionOmittedCount: selectionOmittedCount);
+            selectionOmittedCount: selectionOmittedCount,
+            sourceTotal: selectors.Count > 0 ? sourceTotal : null,
+            sourceTotalAuthoritative: selectors.Count > 0 ? sourceTotalAuthoritative : null,
+            selectedTotal: selectors.Count > 0 ? selectedTotal : null,
+            selectorOmittedCount: selectors.Count > 0 ? selectorOmittedCount : null,
+            limitOmittedCount: selectors.Count > 0 ? limitOmittedCount : null,
+            selectors: selectors.Count > 0 ? selectors : null);
         terminalLine = stream.TerminalLine;
         return stream.ExitCode;
     }
@@ -653,6 +710,12 @@ public static partial class QueryCommandRunner
         string? truncationReason,
         string? selectionReason,
         int? selectionOmittedCount,
+        int sourceTotal,
+        bool sourceTotalAuthoritative,
+        int selectedTotal,
+        int selectorOmittedCount,
+        int limitOmittedCount,
+        List<SearchRowSelectorJsonResult> selectors,
         QueryCommandOptions options,
         JsonSerializerOptions ndjsonOptions,
         DbReader reader,
@@ -674,7 +737,13 @@ public static partial class QueryCommandRunner
             totalCountAuthoritative: false,
             truncationReason: truncationReason,
             selectionReason: selectionReason,
-            selectionOmittedCount: selectionOmittedCount);
+            selectionOmittedCount: selectionOmittedCount,
+            sourceTotal: selectors.Count > 0 ? sourceTotal : null,
+            sourceTotalAuthoritative: selectors.Count > 0 ? sourceTotalAuthoritative : null,
+            selectedTotal: selectors.Count > 0 ? selectedTotal : null,
+            selectorOmittedCount: selectors.Count > 0 ? selectorOmittedCount : null,
+            limitOmittedCount: selectors.Count > 0 ? limitOmittedCount : null,
+            selectors: selectors.Count > 0 ? selectors : null);
         terminalLine = stream.TerminalLine;
         return stream.ExitCode;
     }
@@ -745,11 +814,20 @@ public static partial class QueryCommandRunner
 
     private sealed record SearchOutputSelection(
         List<SearchDisplayRow> Rows,
-        int OriginalCount,
+        int SourceTotal,
+        int SelectedTotal,
+        int Returned,
+        int SelectorOmittedCount,
+        int LimitOmittedCount,
+        bool SourceTotalAuthoritative,
         bool Truncated,
         bool LimitTruncated,
         string? TruncationReason,
-        int SelectionOmittedCount);
+        List<SearchRowSelectorJsonResult> Selectors)
+    {
+        public int OriginalCount => SourceTotal;
+        public int SelectionOmittedCount => SelectorOmittedCount;
+    }
 
     private sealed record SearchGroupOutputSelection(
         List<SearchGroupedCountItemJsonResult> Groups,
@@ -1115,8 +1193,7 @@ public static partial class QueryCommandRunner
             var selectedRows = ApplySearchPostSelectors(
                 boundedRows,
                 options,
-                out _,
-                out _);
+                []);
             JsonEnvelopeWrapper.ReportBoundedResponseTotal(
                 "search",
                 selectedRows.Count,
@@ -1218,8 +1295,7 @@ public static partial class QueryCommandRunner
             return requested;
         if (!options.FirstPerFile && !options.SampleSize.HasValue)
             return requested == int.MaxValue ? requested : requested + 1;
-        var sampleTarget = Math.Max(requested, options.SampleSize ?? requested);
-        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(requested + 1, sampleTarget * SearchOriginFilterOverFetchFactor));
+        return SearchOriginFilterMaxCandidates;
     }
 
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
@@ -1569,7 +1645,13 @@ public static partial class QueryCommandRunner
         bool totalCountAuthoritative = true,
         string? truncationReason = null,
         string? selectionReason = null,
-        int? selectionOmittedCount = null)
+        int? selectionOmittedCount = null,
+        int? sourceTotal = null,
+        bool? sourceTotalAuthoritative = null,
+        int? selectedTotal = null,
+        int? selectorOmittedCount = null,
+        int? limitOmittedCount = null,
+        List<SearchRowSelectorJsonResult>? selectors = null)
     {
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         return JsonSerializer.Serialize(
@@ -1585,6 +1667,14 @@ public static partial class QueryCommandRunner
                 TotalCountLowerBound: totalCountAuthoritative ? null : totalCount,
                 SelectionReason: selectionReason,
                 SelectionOmittedCount: selectionOmittedCount,
+                SourceTotal: sourceTotal,
+                SourceTotalAuthoritative: sourceTotalAuthoritative,
+                SourceTotalLowerBound: sourceTotalAuthoritative == false ? sourceTotal : null,
+                SelectedTotal: selectedTotal,
+                Returned: sourceTotal.HasValue ? count : null,
+                SelectorOmittedCount: selectorOmittedCount,
+                LimitOmittedCount: limitOmittedCount,
+                Selectors: selectors,
                 InterruptionReason: interrupted ? "max_json_bytes_exceeded" : null,
                 TruncationReason: interrupted ? "max_json_bytes_exceeded" : truncated ? truncationReason ?? "limit" : null,
                 AppliedLimit: truncated ? appliedLimit : null,

@@ -7203,7 +7203,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, sampleSummary.GetProperty("emitted_result_count").GetInt32());
             Assert.Equal(0, sampleSummary.GetProperty("truncated_query_count").GetInt32());
             Assert.Equal(4, sampleSummary.GetProperty("minimum_omitted_result_count").GetInt32());
+            Assert.Equal(5, sampleSummary.GetProperty("source_total").GetInt32());
+            Assert.Equal(1, sampleSummary.GetProperty("selected_total").GetInt32());
+            Assert.Equal(1, sampleSummary.GetProperty("returned").GetInt32());
+            Assert.Equal(4, sampleSummary.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, sampleSummary.GetProperty("limit_omitted_count").GetInt32());
             Assert.False(sampleSummary.GetProperty("cursoring_available").GetBoolean());
+            Assert.True(sampleSummary.GetProperty("source_total_authoritative").GetBoolean());
             var sampleQuery = Assert.Single(sampleDocument.RootElement.GetProperty("queries").EnumerateArray());
             Assert.Equal(1, sampleQuery.GetProperty("count").GetInt32());
             Assert.Equal(1, sampleQuery.GetProperty("emitted_count").GetInt32());
@@ -7211,6 +7217,21 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(4, sampleQuery.GetProperty("omitted_count").GetInt32());
             Assert.Equal("sample", sampleQuery.GetProperty("selection_reason").GetString());
             Assert.Equal(4, sampleQuery.GetProperty("selection_omitted_count").GetInt32());
+            Assert.Equal(5, sampleQuery.GetProperty("source_total").GetInt32());
+            Assert.True(sampleQuery.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.Equal(1, sampleQuery.GetProperty("selected_total").GetInt32());
+            Assert.Equal(1, sampleQuery.GetProperty("returned").GetInt32());
+            Assert.Equal(4, sampleQuery.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, sampleQuery.GetProperty("limit_omitted_count").GetInt32());
+            var sampleSelector = Assert.Single(sampleQuery.GetProperty("selectors").EnumerateArray());
+            Assert.Equal("sample", sampleSelector.GetProperty("mode").GetString());
+            Assert.True(sampleSelector.GetProperty("applied").GetBoolean());
+            Assert.Equal(5, sampleSelector.GetProperty("input_total").GetInt32());
+            Assert.Equal(1, sampleSelector.GetProperty("output_total").GetInt32());
+            Assert.Equal(4, sampleSelector.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(1, sampleSelector.GetProperty("sample_size").GetInt32());
+            Assert.Equal("deterministic_seeded_v1", sampleSelector.GetProperty("sample_mode").GetString());
+            Assert.Equal(0, sampleSelector.GetProperty("seed").GetInt32());
             Assert.False(sampleQuery.GetProperty("truncated").GetBoolean());
             Assert.Equal(JsonValueKind.Null, sampleQuery.GetProperty("next_cursor").ValueKind);
             Assert.Single(sampleQuery.GetProperty("results").EnumerateArray());
@@ -7249,6 +7270,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(5, compactQuery.GetProperty("minimum_matched_count").GetInt32());
             Assert.Equal("sample", compactQuery.GetProperty("selection_reason").GetString());
             Assert.Equal(4, compactQuery.GetProperty("selection_omitted_count").GetInt32());
+            Assert.Equal(5, compactQuery.GetProperty("source_total").GetInt32());
+            Assert.True(compactQuery.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.Equal(1, compactQuery.GetProperty("selected_total").GetInt32());
+            Assert.Equal(1, compactQuery.GetProperty("returned").GetInt32());
+            Assert.Equal(4, compactQuery.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, compactQuery.GetProperty("limit_omitted_count").GetInt32());
+            Assert.Single(compactQuery.GetProperty("selectors").EnumerateArray());
             Assert.False(compactQuery.GetProperty("truncated").GetBoolean());
             var compactNextCommand = Assert.Single(compactDocument.RootElement.GetProperty("next_commands").EnumerateArray()).GetString()!;
             Assert.Contains("--sample 1", compactNextCommand, StringComparison.Ordinal);
@@ -7285,6 +7313,13 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("--sample 1", draft.GetProperty("body").GetString(), StringComparison.Ordinal);
             Assert.Equal("sample", draft.GetProperty("source").GetProperty("selection_reason").GetString());
             Assert.Equal(4, draft.GetProperty("source").GetProperty("selection_omitted_count").GetInt32());
+            Assert.Equal(5, draft.GetProperty("source").GetProperty("source_total").GetInt32());
+            Assert.True(draft.GetProperty("source").GetProperty("source_total_authoritative").GetBoolean());
+            Assert.Equal(1, draft.GetProperty("source").GetProperty("selected_total").GetInt32());
+            Assert.Equal(1, draft.GetProperty("source").GetProperty("returned").GetInt32());
+            Assert.Equal(4, draft.GetProperty("source").GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, draft.GetProperty("source").GetProperty("limit_omitted_count").GetInt32());
+            Assert.Single(draft.GetProperty("source").GetProperty("selectors").EnumerateArray());
 
             var (ndjsonExitCode, ndjsonStdout, ndjsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--json=ndjson", "--sample", "1", "--limit", "20"],
@@ -7301,8 +7336,167 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(5, ndjsonTerminal.RootElement.GetProperty("total_count_lower_bound").GetInt32());
             Assert.Equal("sample", ndjsonTerminal.RootElement.GetProperty("selection_reason").GetString());
             Assert.Equal(4, ndjsonTerminal.RootElement.GetProperty("selection_omitted_count").GetInt32());
+            Assert.Equal(5, ndjsonTerminal.RootElement.GetProperty("source_total").GetInt32());
+            Assert.True(ndjsonTerminal.RootElement.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.Equal(1, ndjsonTerminal.RootElement.GetProperty("selected_total").GetInt32());
+            Assert.Equal(1, ndjsonTerminal.RootElement.GetProperty("returned").GetInt32());
+            Assert.Equal(4, ndjsonTerminal.RootElement.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, ndjsonTerminal.RootElement.GetProperty("limit_omitted_count").GetInt32());
+            Assert.Single(ndjsonTerminal.RootElement.GetProperty("selectors").EnumerateArray());
             Assert.False(ndjsonTerminal.RootElement.GetProperty("truncated").GetBoolean());
             Assert.False(ndjsonTerminal.RootElement.GetProperty("has_more").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeSelectionAccountingReportsSourceSelectorsAndLimit_Issue4843()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_selection_accounting");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var fileIndex = 0; fileIndex < 6; fileIndex++)
+            {
+                var path = $"src/selection-{fileIndex}.cs";
+                TestProjectHelper.InsertIndexedFile(dbPath, path, "csharp", "Console.WriteLine(ex.Message);\n");
+                ReplaceIndexedChunks(
+                    dbPath,
+                    path,
+                    [.. Enumerable.Range(0, 21).Select(chunkIndex => new ChunkRecord
+                    {
+                        ChunkIndex = chunkIndex,
+                        StartLine = (chunkIndex * 10) + 1,
+                        EndLine = (chunkIndex * 10) + 5,
+                        Content = $"Console.WriteLine(ex.Message); // file {fileIndex}, chunk {chunkIndex}\n"
+                    })]);
+            }
+
+            string[] sampleArgs =
+            [
+                "--recipe", "risky-code/raw-diagnostic-echo",
+                "--db", dbPath,
+                "--json",
+                "--sample", "5",
+                "--limit", "20",
+            ];
+            var (sampleExitCode, sampleStdout, sampleStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(sampleArgs, _jsonOptions));
+            var (repeatExitCode, repeatStdout, repeatStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(sampleArgs, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, sampleExitCode);
+            Assert.Equal(CommandExitCodes.Success, repeatExitCode);
+            Assert.Equal(string.Empty, sampleStderr);
+            Assert.Equal(string.Empty, repeatStderr);
+            using var sampleDocument = ParseJsonOutput(sampleStdout);
+            using var repeatDocument = ParseJsonOutput(repeatStdout);
+            var sampleQuery = Assert.Single(sampleDocument.RootElement.GetProperty("queries").EnumerateArray());
+            var repeatQuery = Assert.Single(repeatDocument.RootElement.GetProperty("queries").EnumerateArray());
+
+            Assert.Equal(126, sampleQuery.GetProperty("source_total").GetInt32());
+            Assert.True(sampleQuery.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.Equal(5, sampleQuery.GetProperty("selected_total").GetInt32());
+            Assert.Equal(5, sampleQuery.GetProperty("returned").GetInt32());
+            Assert.Equal(121, sampleQuery.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, sampleQuery.GetProperty("limit_omitted_count").GetInt32());
+            var sampleSelector = Assert.Single(sampleQuery.GetProperty("selectors").EnumerateArray());
+            Assert.Equal(126, sampleSelector.GetProperty("input_total").GetInt32());
+            Assert.Equal(5, sampleSelector.GetProperty("output_total").GetInt32());
+            Assert.Equal(121, sampleSelector.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(
+                sampleQuery.GetProperty("results").GetRawText(),
+                repeatQuery.GetProperty("results").GetRawText());
+
+            var (combinedExitCode, combinedStdout, combinedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(
+                    [
+                        "--recipe", "risky-code/raw-diagnostic-echo",
+                        "--db", dbPath,
+                        "--format", "compact",
+                        "--first-per-file",
+                        "--sample", "5",
+                        "--limit", "3",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, combinedExitCode);
+            Assert.Equal(string.Empty, combinedStderr);
+            using var combinedDocument = ParseJsonOutput(combinedStdout);
+            var combinedQuery = Assert.Single(combinedDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal(126, combinedQuery.GetProperty("source_total").GetInt32());
+            Assert.Equal(5, combinedQuery.GetProperty("selected_total").GetInt32());
+            Assert.Equal(3, combinedQuery.GetProperty("returned").GetInt32());
+            Assert.Equal(121, combinedQuery.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(2, combinedQuery.GetProperty("limit_omitted_count").GetInt32());
+            var combinedSelectors = combinedQuery.GetProperty("selectors").EnumerateArray().ToArray();
+            Assert.Equal(2, combinedSelectors.Length);
+            Assert.Equal("first_per_file", combinedSelectors[0].GetProperty("mode").GetString());
+            Assert.Equal(126, combinedSelectors[0].GetProperty("input_total").GetInt32());
+            Assert.Equal(6, combinedSelectors[0].GetProperty("output_total").GetInt32());
+            Assert.Equal(120, combinedSelectors[0].GetProperty("omitted_count").GetInt32());
+            Assert.Equal("sample", combinedSelectors[1].GetProperty("mode").GetString());
+            Assert.Equal(6, combinedSelectors[1].GetProperty("input_total").GetInt32());
+            Assert.Equal(5, combinedSelectors[1].GetProperty("output_total").GetInt32());
+            Assert.Equal(1, combinedSelectors[1].GetProperty("omitted_count").GetInt32());
+
+            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(
+                    [
+                        "--recipe", "risky-code/raw-diagnostic-echo",
+                        "--db", dbPath,
+                        "--json",
+                        "--sample", "5",
+                        "--path", "missing/**",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+            Assert.Equal(string.Empty, emptyStderr);
+            using var emptyDocument = ParseJsonOutput(emptyStdout);
+            var emptyQuery = Assert.Single(emptyDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal(0, emptyQuery.GetProperty("source_total").GetInt32());
+            Assert.Equal(0, emptyQuery.GetProperty("selected_total").GetInt32());
+            Assert.Equal(0, emptyQuery.GetProperty("returned").GetInt32());
+            Assert.Equal(0, emptyQuery.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, emptyQuery.GetProperty("limit_omitted_count").GetInt32());
+            var emptySelector = Assert.Single(emptyQuery.GetProperty("selectors").EnumerateArray());
+            Assert.True(emptySelector.GetProperty("applied").GetBoolean());
+            Assert.Equal(0, emptySelector.GetProperty("omitted_count").GetInt32());
+
+            var (contextExitCode, contextStdout, contextStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(
+                    [
+                        "Issue4843DefinitelyMissing",
+                        "--db", dbPath,
+                        "--json",
+                        "--first-per-file",
+                        "--sample", "5",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, contextExitCode);
+            Assert.Equal(string.Empty, contextStderr);
+            var contextLines = contextStdout.Split(
+                '\n',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            using var contextDocument = JsonDocument.Parse(contextLines[0]);
+            var contextSelectors = contextDocument.RootElement
+                .GetProperty("query_context")
+                .GetProperty("row_selectors")
+                .EnumerateArray()
+                .ToArray();
+            Assert.Equal(2, contextSelectors.Length);
+            Assert.Equal("first_per_file", contextSelectors[0].GetProperty("mode").GetString());
+            Assert.True(contextSelectors[0].GetProperty("applied").GetBoolean());
+            Assert.Equal("sample", contextSelectors[1].GetProperty("mode").GetString());
+            Assert.True(contextSelectors[1].GetProperty("applied").GetBoolean());
+            Assert.Equal(5, contextSelectors[1].GetProperty("sample_size").GetInt32());
+            Assert.Equal("deterministic_seeded_v1", contextSelectors[1].GetProperty("sample_mode").GetString());
+            Assert.Equal(0, contextSelectors[1].GetProperty("seed").GetInt32());
         }
         finally
         {
@@ -7342,8 +7536,29 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("sample", query.GetProperty("selection_reason").GetString());
             Assert.Equal(1, query.GetProperty("selection_omitted_count").GetInt32());
             Assert.Equal(199, query.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(201, query.GetProperty("source_total").GetInt32());
+            Assert.Equal(200, query.GetProperty("selected_total").GetInt32());
+            Assert.Equal(2, query.GetProperty("returned").GetInt32());
+            Assert.Equal(1, query.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(198, query.GetProperty("limit_omitted_count").GetInt32());
             Assert.True(query.GetProperty("truncated").GetBoolean());
             Assert.Equal(JsonValueKind.Null, query.GetProperty("next_cursor").ValueKind);
+
+            var (boundedExitCode, boundedStdout, boundedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--json", "--sample", "1", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, boundedExitCode);
+            Assert.Equal(string.Empty, boundedStderr);
+            using var boundedDocument = ParseJsonOutput(boundedStdout);
+            var boundedQuery = Assert.Single(boundedDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Equal(200, boundedQuery.GetProperty("source_total").GetInt32());
+            Assert.False(boundedQuery.GetProperty("source_total_authoritative").GetBoolean());
+            Assert.Equal(200, boundedQuery.GetProperty("source_total_lower_bound").GetInt32());
+            Assert.Equal(1, boundedQuery.GetProperty("selected_total").GetInt32());
+            Assert.Equal(1, boundedQuery.GetProperty("returned").GetInt32());
+            Assert.Equal(199, boundedQuery.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, boundedQuery.GetProperty("limit_omitted_count").GetInt32());
         }
         finally
         {
@@ -7371,6 +7586,34 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains(testCase.Expected, stderr);
+        }
+    }
+
+    [Fact]
+    public void RunAudit_CountRejectsRowSelectorsBeforeExecution_Issue4843()
+    {
+        foreach (var selectorArgs in new[]
+        {
+            new[] { "--sample", "5" },
+            new[] { "--first-per-file" },
+        })
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "audit",
+                    "risky-code/raw-diagnostic-echo",
+                    "--format", "count",
+                    .. selectorArgs,
+                ],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(
+                "recipe row-selection controls cannot be combined with count",
+                stderr,
+                StringComparison.Ordinal);
         }
     }
 
