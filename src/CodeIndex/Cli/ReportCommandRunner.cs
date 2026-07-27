@@ -37,9 +37,13 @@ public static class ReportCommandRunner
     internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     internal static readonly DateTimeOffset BundleEntryModificationTime = DateTimeOffset.UnixEpoch;
     private const string SchemaTableLabelPrefix = "table_";
-    private const int SupportManifestVersion = 3;
+    private const int SupportManifestVersion = 4;
 
-    public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
+    public static int Run(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        string? appVersion = null,
+        string? runId = null)
     {
         var options = ParseArgs(cmdArgs);
         if (options.ShowHelp)
@@ -69,10 +73,20 @@ public static class ReportCommandRunner
         try
         {
             var fullOutputPath = Path.GetFullPath(options.OutputPath!);
+            if (!options.Overwrite && File.Exists(LongPath.EnsureWindowsPrefix(fullOutputPath)))
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "report output already exists",
+                    CommandExitCodes.UsageError,
+                    "Choose a new --output path, or pass --overwrite to replace the existing report bundle.",
+                    CommandErrorCodes.UsageError);
+            }
             var outputExtensionWarning = GetOutputExtensionWarning(fullOutputPath);
             var resolvedVersion = appVersion ?? ConsoleUi.LoadVersion();
-            var bundle = BuildBundle(options, resolvedVersion);
-            WriteBundle(fullOutputPath, bundle);
+            var bundle = BuildBundle(options, resolvedVersion, reportRunId: runId);
+            WriteBundle(fullOutputPath, bundle, options.Overwrite);
             if (outputExtensionWarning is not null)
                 CommandErrorWriter.WriteWarning(outputExtensionWarning);
 
@@ -89,6 +103,11 @@ public static class ReportCommandRunner
                 bundle.LogLinesIncluded,
                 bundle.LogIncluded,
                 bundle.LastFailureIncluded,
+                bundle.LastFailureEvidence.Disposition,
+                bundle.LastFailureEvidence.Reason,
+                bundle.DbIncluded,
+                bundle.DbIncluded,
+                DbMemberIncluded: false,
                 bundle.DbIncluded,
                 options.Json ? RedactLocalJsonPath(bundle.DbPath) : bundle.DbPath);
 
@@ -106,14 +125,25 @@ public static class ReportCommandRunner
                 Console.WriteLine($"  files        : {summary.Files}");
                 Console.WriteLine($"  schema rows  : {summary.SchemaTables}");
                 Console.WriteLine($"  log lines    : {(summary.LogIncluded ? summary.LogLinesIncluded.ToString() : "skipped")}");
-                Console.WriteLine($"  last failure : {(summary.LastFailureIncluded ? "included" : "unavailable")}");
-                Console.WriteLine($"  schema source: {(summary.DbIncluded ? bundle.DbPath : "(no DB found)")}");
+                Console.WriteLine($"  last failure : {summary.LastFailureDisposition} ({summary.LastFailureReason})");
+                Console.WriteLine($"  schema source: {(summary.DbInspected ? bundle.DbPath : "(no DB found)")}");
+                Console.WriteLine("  database file: not included");
                 Console.WriteLine();
                 Console.WriteLine("Attach the tarball to the GitHub issue. Path lists, query strings, and");
                 Console.WriteLine("`args=` log lines are redacted by default; rerun with `--include-args` to");
                 Console.WriteLine("include literal command-line arguments only when you trust the recipient.");
             }
             return CommandExitCodes.Success;
+        }
+        catch (AtomicFileWriter.DestinationAlreadyExistsException)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "report output already exists",
+                CommandExitCodes.UsageError,
+                "Choose a new --output path, or pass --overwrite to replace the existing report bundle.",
+                CommandErrorCodes.UsageError);
         }
         catch (Exception ex)
         {
@@ -159,7 +189,8 @@ public static class ReportCommandRunner
     internal static ReportBundle BuildBundle(
         ReportCommandOptions options,
         string version,
-        DateTimeOffset? generatedAtUtcForTesting = null)
+        DateTimeOffset? generatedAtUtcForTesting = null,
+        string? reportRunId = null)
     {
         var nowUtc = generatedAtUtcForTesting ?? DateTimeOffset.UtcNow;
         var bundle = new ReportBundle
@@ -192,12 +223,22 @@ public static class ReportCommandRunner
                 $"process-architecture: {RuntimeInformation.ProcessArchitecture}",
                 "") + "\n");
 
-        var (schemaText, tables, dbPath, dbIncluded, schemaTablesTruncated) = BuildSchemaSummary(options.DbPath);
+        var effectiveDbPath = DbPathResolver.ResolveForQuery(
+            Environment.CurrentDirectory,
+            options.DbPathExplicit ? options.DbPath : null,
+            explicitDataDir: null).DbPath;
+        var (schemaText, tables, dbPath, dbIncluded, schemaTablesTruncated) = BuildSchemaSummary(effectiveDbPath);
         bundle.SchemaTables = tables;
         bundle.SchemaTablesTruncated = schemaTablesTruncated;
         bundle.DbIncluded = dbIncluded;
         bundle.DbPath = dbPath;
         bundle.AddText("schema.txt", schemaText);
+        bundle.Provenance = LastFailureEventStore.CreateReportProvenance(
+            dbPath ?? options.DbPath,
+            version,
+            nowUtc,
+            reportRunId ?? LastFailureEventStore.CreateRunId(),
+            options.ProvenanceWorkspacePathForTesting);
 
         bundle.LogIncluded = options.IncludeLog;
         bundle.LogLinesIncluded = 0;
@@ -217,11 +258,15 @@ public static class ReportCommandRunner
             bundle.AddText("log/stderr-recent.log", logText);
         }
 
-        if (LastFailureEventStore.TryBuildReportPayload(out var lastFailurePayload))
+        if (LastFailureEventStore.TryBuildReportPayload(
+                bundle.Provenance,
+                out var lastFailurePayload,
+                out var lastFailureEvidence))
         {
             bundle.LastFailureIncluded = true;
             bundle.AddText(LastFailureEventStore.FileName, lastFailurePayload);
         }
+        bundle.LastFailureEvidence = lastFailureEvidence;
 
         var supportManifest = BuildSupportManifest(options, bundle, nowUtc, redactions);
         bundle.AddText(
@@ -250,8 +295,10 @@ public static class ReportCommandRunner
         sb.AppendLine("- `schema.txt` — capped SQLite table labels and bounded row counts (no raw table names or row contents).");
         sb.AppendLine("- `support-manifest.json` — machine-readable redaction, omission, readiness, and diagnostic summary.");
         sb.AppendLine(lastFailureIncluded
-            ? $"- `{LastFailureEventStore.FileName}` — the bounded, redacted failure event that most recently recommended running `cdidx report`; literal arguments are never included."
-            : $"- `{LastFailureEventStore.FileName}` is unavailable because no valid saved failure event was found.");
+            ? $"- `{LastFailureEventStore.FileName}` — a bounded, redacted failure event whose workspace, database, binary version, and timestamp match this report; literal arguments are never included."
+            : $"- `{LastFailureEventStore.FileName}` is not included because no saved failure event matched this report's provenance.");
+        sb.AppendLine("- The database is inspected only for bounded diagnostics; the database file itself is never an archive member.");
+        sb.AppendLine("- `support-manifest.json` lists every archive member and records included/excluded failure evidence.");
         sb.AppendLine("- Archive entry modification times are fixed for reproducible tar metadata; generation time is recorded in `metadata.json`, `env.txt`, and `support-manifest.json`.");
         if (includeLog)
         {
@@ -400,9 +447,15 @@ public static class ReportCommandRunner
         var readiness = BuildReadinessSnapshot(bundle.DbPath, bundle.DbIncluded);
         var diagnostics = BuildDiagnosticSummary();
         var omissions = BuildOmissionSummary(options, bundle, readiness);
+        var memberNames = bundle.Files
+            .Select(static file => file.Name)
+            .Append("support-manifest.json")
+            .Append("README.md")
+            .ToList();
         return new ReportSupportManifest(
             ManifestVersion: SupportManifestVersion,
             GeneratedAtUtc: generatedAtUtc.ToString("O"),
+            Provenance: bundle.Provenance,
             Artifact: new ReportManifestArtifact(
                 BundleArtifactFormat,
                 BundleArtifactMediaType,
@@ -418,13 +471,18 @@ public static class ReportCommandRunner
                 MaxRecentLogFiles,
                 LastFailureEventStore.MaxEventBytes),
             Bundle: new ReportManifestBundle(
+                DbInspected: bundle.DbIncluded,
+                DbDiagnosticsIncluded: bundle.DbIncluded,
+                DbMemberIncluded: false,
                 DbIncluded: bundle.DbIncluded,
                 LogIncluded: bundle.LogIncluded,
                 LastFailureIncluded: bundle.LastFailureIncluded,
                 IncludeArgs: options.IncludeArgs,
-                Files: bundle.Files.Count + 2,
+                Files: memberNames.Count,
+                Members: memberNames,
                 SchemaTables: bundle.SchemaTables.Count,
                 LogLinesIncluded: bundle.LogLinesIncluded),
+            LastFailure: bundle.LastFailureEvidence,
             Redactions: redactions,
             Omissions: omissions,
             Readiness: readiness,
@@ -469,7 +527,7 @@ public static class ReportCommandRunner
 
         var lastFailure = bundle.LastFailureIncluded
             ? new List<string>()
-            : new List<string> { "last_failure_event_unavailable" };
+            : new List<string> { $"last_failure_{bundle.LastFailureEvidence.Reason}" };
 
         return new ReportManifestOmissions(schema, log, status, lastFailure);
     }
@@ -653,8 +711,12 @@ public static class ReportCommandRunner
     internal static string RedactLogLine(string line, bool includeArgs) =>
         DiagnosticRedactor.RedactReportLogLine(line, includeArgs, RedactedPlaceholder);
 
-    internal static void WriteBundle(string outputPath, ReportBundle bundle, Action? beforeWriteEntries = null)
-        => ReportBundleWriter.Write(outputPath, bundle, beforeWriteEntries);
+    internal static void WriteBundle(
+        string outputPath,
+        ReportBundle bundle,
+        bool overwrite = false,
+        Action? beforeWriteEntries = null)
+        => ReportBundleWriter.Write(outputPath, bundle, overwrite, beforeWriteEntries);
 
     internal static ReportCommandOptions ParseArgs(string[] args)
     {
@@ -672,6 +734,7 @@ public static class ReportCommandRunner
             {
                 case "--db" when i + 1 < args.Length:
                     options.DbPath = args[++i];
+                    options.DbPathExplicit = true;
                     break;
                 case "--db":
                     options.ParseError = "--db requires a value";
@@ -684,6 +747,9 @@ public static class ReportCommandRunner
                     break;
                 case "--json":
                     options.Json = true;
+                    break;
+                case "--overwrite":
+                    options.Overwrite = true;
                     break;
                 case "--redact-paths":
                     break;
@@ -729,13 +795,16 @@ public static class ReportCommandRunner
 internal sealed class ReportCommandOptions
 {
     public string DbPath { get; set; } = string.Empty;
+    public bool DbPathExplicit { get; set; }
     public string? OutputPath { get; set; }
     public bool Json { get; set; }
     public bool ShowHelp { get; set; }
     public bool IncludeLog { get; set; } = true;
     public bool IncludeArgs { get; set; }
+    public bool Overwrite { get; set; }
     public int LogLines { get; set; } = ReportCommandRunner.DefaultLogLines;
     public string? ParseError { get; set; }
+    internal string? ProvenanceWorkspacePathForTesting { get; set; }
 }
 
 internal sealed class ReportBundle
@@ -751,6 +820,8 @@ internal sealed class ReportBundle
     public bool LogTailTruncated { get; set; }
     public bool LogLineCharsTruncated { get; set; }
     public bool LastFailureIncluded { get; set; }
+    public ReportProvenance Provenance { get; set; } = ReportProvenance.Empty;
+    public ReportLastFailureEvidence LastFailureEvidence { get; set; } = ReportLastFailureEvidence.Unavailable("not_found");
 
     public void AddText(string name, string content) =>
         Files.Add((name, Encoding.UTF8.GetBytes(content)));
@@ -828,9 +899,11 @@ internal sealed class ReportRedactionCounter
 internal sealed record ReportSupportManifest(
     int ManifestVersion,
     string GeneratedAtUtc,
+    ReportProvenance Provenance,
     ReportManifestArtifact Artifact,
     ReportManifestLimits Limits,
     ReportManifestBundle Bundle,
+    ReportLastFailureEvidence LastFailure,
     ReportRedactionSummary Redactions,
     ReportManifestOmissions Omissions,
     ReportReadinessSnapshot Readiness,
@@ -853,13 +926,45 @@ internal sealed record ReportManifestLimits(
     int MaxLastFailureEventBytes);
 
 internal sealed record ReportManifestBundle(
+    bool DbInspected,
+    bool DbDiagnosticsIncluded,
+    bool DbMemberIncluded,
     bool DbIncluded,
     bool LogIncluded,
     bool LastFailureIncluded,
     bool IncludeArgs,
     int Files,
+    List<string> Members,
     int SchemaTables,
     int LogLinesIncluded);
+
+internal sealed record ReportProvenance(
+    string WorkspaceId,
+    string DatabaseId,
+    string BinaryVersion,
+    string TimestampUtc,
+    string RunId)
+{
+    public static ReportProvenance Empty { get; } = new(
+        WorkspaceId: "unavailable",
+        DatabaseId: "unavailable",
+        BinaryVersion: "unavailable",
+        TimestampUtc: DateTimeOffset.UnixEpoch.ToString("O"),
+        RunId: "unavailable");
+}
+
+internal sealed record ReportLastFailureEvidence(
+    string Disposition,
+    string Reason,
+    string? OccurredAtUtc,
+    string? BinaryVersion,
+    string? WorkspaceId,
+    string? DatabaseId,
+    string? RunId)
+{
+    public static ReportLastFailureEvidence Unavailable(string reason) =>
+        new("unavailable", reason, null, null, null, null, null);
+}
 
 internal sealed record ReportRedactionSummary(int Total, Dictionary<string, int> Categories)
 {

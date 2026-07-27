@@ -121,7 +121,11 @@ internal static partial class ProgramRunner
                 context.JsonOptions,
                 context.CancellationToken),
             "db" => DbCommandRunner.Run(subArgs, context.JsonOptions, context.CancellationToken),
-            "report" => ReportCommandRunner.Run(subArgs, context.JsonOptions, context.AppVersion),
+            "report" => ReportCommandRunner.Run(
+                subArgs,
+                context.JsonOptions,
+                context.AppVersion,
+                context.RunId),
             "test-extractor" => RunTestExtractor(subArgs, context.JsonOptions),
             _ when IsProjectPathArg(commandName)
                 => IndexCommandRunner.Run(originalArgs, context.JsonOptions),
