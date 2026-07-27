@@ -342,7 +342,7 @@ public partial class McpServer
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
             if (format == "compact")
-                ApplyCompactResults(payload, results, result => result.Path, result => result.FirstLine);
+                ApplyCompactResults(payload, results, result => result.Path, result => result.FirstLine, result => result.FirstColumn);
             payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);

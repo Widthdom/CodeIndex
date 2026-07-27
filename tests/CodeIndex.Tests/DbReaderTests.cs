@@ -2076,6 +2076,50 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallees_PreservesFirstPreciseCallSiteAndLegacyLineOnlyFallback_Issue4841()
+    {
+        const string targetName = "Issue4841Target";
+        const string callerName = "Issue4841Caller";
+        const string callLine = "    void Issue4841Caller() { var text = \"日本語\";\tIssue4841Target(); Issue4841Target(); }";
+        var source = string.Join('\n',
+            "class Issue4841Probe",
+            "{",
+            "    void Issue4841Target() { }",
+            callLine,
+            "}",
+            "");
+        var expectedColumn = callLine.IndexOf(targetName, StringComparison.Ordinal) + 1;
+        InsertIndexedFile("src/Issue4841Probe.cs", "csharp", source);
+
+        var precise = Assert.Single(_reader.GetCallees(callerName, lang: "csharp", exact: true));
+
+        Assert.Equal(4, precise.FirstLine);
+        Assert.Equal(expectedColumn, precise.FirstColumn);
+        Assert.Equal(targetName.Length, precise.FirstLength);
+        Assert.Equal(2, precise.ReferenceCount);
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE symbol_references
+                SET column_number = NULL
+                WHERE container_name = @caller
+                  AND symbol_name = @target;
+                """;
+            command.Parameters.AddWithValue("@caller", callerName);
+            command.Parameters.AddWithValue("@target", targetName);
+            Assert.Equal(2, command.ExecuteNonQuery());
+        }
+
+        var legacy = Assert.Single(_reader.GetCallees(callerName, lang: "csharp", exact: true));
+
+        Assert.Equal(4, legacy.FirstLine);
+        Assert.Null(legacy.FirstColumn);
+        Assert.Equal(targetName.Length, legacy.FirstLength);
+        Assert.Equal(2, legacy.ReferenceCount);
+    }
+
+    [Fact]
     public void GetCallers_CppFriendReferenceRequiresExplicitKind()
     {
         InsertIndexedFile("src/widget.cpp", "cpp",

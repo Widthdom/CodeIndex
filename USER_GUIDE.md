@@ -1643,6 +1643,8 @@ By default, `callers` and `callees` return only executable call, construction, a
 
 `callers` and `callees` rank results by weighted structural importance by default: `instantiate` edges count as `3.0`, direct `call` edges as `1.0`, and event `subscribe` edges as `0.1`. This keeps factory or composition-root constructor use from being buried under noisy event subscriptions. Use `--rank-by count` to restore raw `reference_count` ordering, or `--rank-by kind` to group `instantiate`, `call`, then `subscribe` before count. JSON rows keep the raw `reference_count` and add `reference_kind_counts` plus `reference_weight_score` so consumers can re-rank without losing the source counts; MCP structured rows expose the same data as `referenceKindCounts` and `referenceWeightScore`.
 
+Grouped `callees` rows preserve the earliest precise call site separately from the aggregate `reference_count`. CLI JSON exposes its 1-based `first_line`, nullable `first_column`, and token-sized `first_length`; MCP uses the corresponding `firstLine`, `firstColumn`, and `firstLength` fields. Compact and quickfix output use the same 1-based column, SARIF carries the same token-sized region, and LSP converts it to a zero-based, non-empty token range. If every contributing legacy reference lacks a column, the column remains `null`, quickfix reports column `0`, SARIF omits `endColumn`, and LSP returns a zero-width range at the start of the retained source line instead of inventing a precise token location.
+
 ### Outline a single file
 
 ```bash
@@ -4739,6 +4741,8 @@ cdidx callees AddToGitExclude --exclude-tests
 既定の `callers` / `callees` は、実行可能な call、construction、subscription edge だけを返します。公開される `reference_kind`、`reference_kinds`、`reference_kind_counts` は、`call`、`instantiate`、`subscribe` という 1 つの canonical 語彙を共有します。`generic_type_argument`、`capture`、`friend`、`project_reference` などの型 / metadata edge は `references` または明示 kind filter で引き続き利用できます。`unsubscribe` や `razor_event_binding` のような extractor label が必要な場合は `--raw-kinds` を使ってください。
 
 `callers` と `callees` は既定で構造的重要度の weighted 順に並びます。`instantiate` は `3.0`、直接 `call` は `1.0`、event `subscribe` は `0.1` として数えるため、factory や composition root の constructor 利用が大量の event subscription に埋もれにくくなります。従来どおり生の `reference_count` で並べたい場合は `--rank-by count`、reference kind を優先して `instantiate`、`call`、`subscribe` の順でまとめたい場合は `--rank-by kind` を使ってください。JSON の各行は生の `reference_count` を維持し、`reference_kind_counts` と `reference_weight_score` も追加で返します。MCP structured row では同じ情報を `referenceKindCounts` と `referenceWeightScore` として返すため、consumer 側で再ランキングできます。
+
+集約された `callees` 行は、集約値の `reference_count` とは別に、最初の精密な call site を保持します。CLI JSON は 1-based の `first_line`、nullable な `first_column`、token 幅の `first_length` を返し、MCP は対応する `firstLine`、`firstColumn`、`firstLength` を使います。compact / quickfix も同じ 1-based 列を使い、SARIF は同じ token 幅の region、LSP は 0-based の非空 token range に変換します。寄与する legacy reference の全てで列が欠けている場合は列を `null` のまま保ち、quickfix は列 `0`、SARIF は `endColumn` を省略し、LSP は保持した source line の先頭に zero-width range を返すため、精密な token 位置を捏造しません。
 
 ### 1ファイルのアウトラインを見る
 

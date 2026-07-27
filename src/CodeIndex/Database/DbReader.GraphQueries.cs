@@ -510,7 +510,11 @@ public partial class DbReader
                        {calleeGroupKindSql} AS count_reference_kind,
                        COUNT(*) AS reference_count,
                        {ReferenceWeightedScoreSql("r.reference_kind")} AS weighted_score,
-                       r.line
+                       r.line,
+                       CASE
+                           WHEN r.column_number IS NULL THEN NULL
+                           ELSE (CAST(r.line AS INTEGER) * 4294967296 + r.column_number)
+                       END AS location_key
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
@@ -568,7 +572,10 @@ public partial class DbReader
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, r.reference_kind
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
-                   reference_kind, MIN(line) AS first_line, SUM(r.reference_count) AS reference_count,
+                   reference_kind,
+                   COALESCE((MIN(location_key) / 4294967296), MIN(line)) AS first_line,
+                   (MIN(location_key) % 4294967296) AS first_column,
+                   SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds,
                    GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score
@@ -619,25 +626,28 @@ public partial class DbReader
         while (reader.TrackedRead())
         {
             var primaryKind = reader.GetString(5);
-            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 8), out var kindsTruncated);
-            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 9), out var countsTruncated);
+            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 9), out var kindsTruncated);
+            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 10), out var countsTruncated);
             var kinds = ParseDistinctReferenceKinds(kindAggregate, primaryKind);
-            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(7));
+            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(8));
+            var calleeName = reader.GetString(4);
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
                 Lang = GetNullableString(reader, 1),
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
-                CalleeName = reader.GetString(4),
+                CalleeName = calleeName,
                 ReferenceKind = primaryKind,
                 ReferenceKinds = kinds,
                 HasMixedReferenceKinds = kinds.Count > 1,
                 ReferenceKindCounts = counts,
                 AggregateTruncated = kindsTruncated || countsTruncated,
-                ReferenceWeightScore = reader.GetDouble(10),
+                ReferenceWeightScore = reader.GetDouble(11),
                 FirstLine = reader.GetInt32(6),
-                ReferenceCount = reader.GetInt32(7),
+                FirstColumn = GetNullableInt32(reader, 7),
+                FirstLength = calleeName.Length,
+                ReferenceCount = reader.GetInt32(8),
             });
         }
         return results;

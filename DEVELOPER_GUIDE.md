@@ -1109,6 +1109,8 @@ mixed-language evidence unresolved.
 
 `symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose the canonical public vocabulary `call`, `instantiate`, and `subscribe`. The primary `reference_kind`, `reference_kinds`, and `reference_kind_counts` keys use that same vocabulary. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
 
+`DbReader.GetCallees` must preserve a representative physical call-site span while aggregating counts. It selects the smallest `(line, column_number)` among rows with a stored column, exposes that 1-based pair as `first_line` / nullable `first_column`, and exposes the called token width as `first_length`; `reference_count` remains the independent aggregate. When every contributing legacy row has `column_number IS NULL`, the reader retains the minimum line and a null column so CLI/MCP location adapters can degrade to line-only output without fabricating precision.
+
 Reference extraction deduplicates only within the same indexed file and language context. When adding extractor paths, include the file id and language hint in shared `seen` keys so same line/column/name edges from polyglot workspaces do not collapse across Java, Rust, C#, SQL, or other language-specific normalization contexts.
 
 | Raw kind | Logical graph kind | Notes |
@@ -4272,6 +4274,8 @@ authoritative な判定と一貫した推論を区別し、複数言語の evide
 ### 参照 taxonomy
 
 `symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は、公開 canonical 語彙 `call`、`instantiate`、`subscribe` を返す。primary `reference_kind`、`reference_kinds`、`reference_kind_counts` の key はすべて同じ語彙を使う。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。
+
+`DbReader.GetCallees` は count を集約しながら、代表となる物理 call-site span を保持しなければならない。列が保存された row のうち最小の `(line, column_number)` を選び、その 1-based 座標を `first_line` / nullable な `first_column`、呼び出し token 幅を `first_length` として公開し、`reference_count` は独立した集約値のままにする。寄与する legacy row がすべて `column_number IS NULL` の場合、reader は最小行と null 列を保持し、CLI/MCP の location adapter が精度を捏造せず line-only 出力へ劣化できるようにする。
 
 | Raw kind | Logical graph kind | 備考 |
 |---|---|---|

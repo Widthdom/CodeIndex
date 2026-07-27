@@ -10,6 +10,144 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunCallees_LocationFormatsPreserveFirstCallSiteSpanAndLegacyFallback_Issue4841()
+    {
+        const string targetName = "Issue4841CliTarget";
+        const string callerName = "Issue4841CliCaller";
+        const string callLine = "    void Issue4841CliCaller() { var text = \"日本語\";\tIssue4841CliTarget(); Issue4841CliTarget(); }";
+        var source = string.Join('\n',
+            "class Issue4841CliProbe",
+            "{",
+            "    void Issue4841CliTarget() { }",
+            callLine,
+            "}",
+            "");
+        var expectedColumn = callLine.IndexOf(targetName, StringComparison.Ordinal) + 1;
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callees_locations_issue4841");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Issue4841CliProbe.cs", "csharp", source);
+            MarkGraphAndFoldReady(dbPath);
+            string[] baseArgs = [callerName, "--db", dbPath, "--lang", "csharp", "--exact"];
+
+            var (jsonExit, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--json"],
+                _jsonOptions));
+            var jsonRow = Assert.Single(ParseJsonLines(jsonStdout)).RootElement;
+            Assert.Equal(CommandExitCodes.Success, jsonExit);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal(4, jsonRow.GetProperty("first_line").GetInt32());
+            Assert.Equal(expectedColumn, jsonRow.GetProperty("first_column").GetInt32());
+            Assert.Equal(targetName.Length, jsonRow.GetProperty("first_length").GetInt32());
+            Assert.Equal(2, jsonRow.GetProperty("reference_count").GetInt32());
+
+            var (compactExit, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "compact"],
+                _jsonOptions));
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            var compactRow = compactDocument.RootElement.GetProperty("results")[0];
+            Assert.Equal(CommandExitCodes.Success, compactExit);
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.Equal(expectedColumn, compactRow.GetProperty("column").GetInt32());
+
+            var (quickfixExit, quickfixStdout, quickfixStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "qf"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, quickfixExit);
+            Assert.Equal(string.Empty, quickfixStderr);
+            Assert.Equal(
+                $"src/Issue4841CliProbe.cs:4:{expectedColumn}:{callerName} -> {targetName}",
+                quickfixStdout.Trim());
+
+            var (lspExit, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "lsp"],
+                _jsonOptions));
+            using var lspDocument = ParseJsonOutput(lspStdout);
+            var preciseRange = lspDocument.RootElement[0].GetProperty("range");
+            Assert.Equal(CommandExitCodes.Success, lspExit);
+            Assert.Equal(string.Empty, lspStderr);
+            Assert.Equal(3, preciseRange.GetProperty("start").GetProperty("line").GetInt32());
+            Assert.Equal(expectedColumn - 1, preciseRange.GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(expectedColumn - 1 + targetName.Length, preciseRange.GetProperty("end").GetProperty("character").GetInt32());
+
+            var (sarifExit, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "sarif"],
+                _jsonOptions));
+            using var sarifDocument = ParseJsonOutput(sarifStdout);
+            var preciseRegion = sarifDocument.RootElement
+                .GetProperty("runs")[0]
+                .GetProperty("results")[0]
+                .GetProperty("locations")[0]
+                .GetProperty("physicalLocation")
+                .GetProperty("region");
+            Assert.Equal(CommandExitCodes.Success, sarifExit);
+            Assert.Equal(string.Empty, sarifStderr);
+            Assert.Equal(4, preciseRegion.GetProperty("startLine").GetInt32());
+            Assert.Equal(expectedColumn, preciseRegion.GetProperty("startColumn").GetInt32());
+            Assert.Equal(expectedColumn + targetName.Length, preciseRegion.GetProperty("endColumn").GetInt32());
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE symbol_references
+                    SET column_number = NULL
+                    WHERE container_name = @caller
+                      AND symbol_name = @target;
+                    """;
+                command.Parameters.AddWithValue("@caller", callerName);
+                command.Parameters.AddWithValue("@target", targetName);
+                Assert.Equal(2, command.ExecuteNonQuery());
+            }
+
+            var (legacyJsonExit, legacyJsonStdout, legacyJsonStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--json"],
+                _jsonOptions));
+            var legacyJsonRow = Assert.Single(ParseJsonLines(legacyJsonStdout)).RootElement;
+            Assert.Equal(CommandExitCodes.Success, legacyJsonExit);
+            Assert.Equal(string.Empty, legacyJsonStderr);
+            Assert.Equal(JsonValueKind.Null, legacyJsonRow.GetProperty("first_column").ValueKind);
+
+            var (legacyQuickfixExit, legacyQuickfixStdout, legacyQuickfixStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "qf"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, legacyQuickfixExit);
+            Assert.Equal(string.Empty, legacyQuickfixStderr);
+            Assert.Contains(":4:0:", legacyQuickfixStdout, StringComparison.Ordinal);
+
+            var (legacyLspExit, legacyLspStdout, legacyLspStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "lsp"],
+                _jsonOptions));
+            using var legacyLspDocument = ParseJsonOutput(legacyLspStdout);
+            var legacyRange = legacyLspDocument.RootElement[0].GetProperty("range");
+            Assert.Equal(CommandExitCodes.Success, legacyLspExit);
+            Assert.Equal(string.Empty, legacyLspStderr);
+            Assert.Equal(0, legacyRange.GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(0, legacyRange.GetProperty("end").GetProperty("character").GetInt32());
+
+            var (legacySarifExit, legacySarifStdout, legacySarifStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "sarif"],
+                _jsonOptions));
+            using var legacySarifDocument = ParseJsonOutput(legacySarifStdout);
+            var legacyRegion = legacySarifDocument.RootElement
+                .GetProperty("runs")[0]
+                .GetProperty("results")[0]
+                .GetProperty("locations")[0]
+                .GetProperty("physicalLocation")
+                .GetProperty("region");
+            Assert.Equal(CommandExitCodes.Success, legacySarifExit);
+            Assert.Equal(string.Empty, legacySarifStderr);
+            Assert.Equal(1, legacyRegion.GetProperty("startColumn").GetInt32());
+            Assert.False(legacyRegion.TryGetProperty("endColumn", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ConfigLanguageSelectsRulesReferences_Issue4740()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_config_language");
