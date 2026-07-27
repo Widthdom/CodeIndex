@@ -826,10 +826,10 @@ public partial class DbReaderTests : IDisposable
             Content = normalized,
         }]);
 
-        var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
+        var symbols = SymbolExtractor.Extract(fileId, lang, normalized, filePath: path);
         SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey ?? FileIndexer.DeriveFallbackFamilyScopeKey(path));
         _writer.InsertSymbols(symbols);
-        _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
+        _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols, path: path));
     }
 
     private string ExplainQueryPlan(string sql)

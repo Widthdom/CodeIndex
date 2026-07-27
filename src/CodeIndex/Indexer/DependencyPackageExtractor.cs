@@ -17,9 +17,10 @@ internal readonly record struct DependencyPackageInfo(
     string? Role,
     int Line,
     int Column,
+    int EndLine,
     string Signature);
 
-internal static class DependencyPackageExtractor
+internal static partial class DependencyPackageExtractor
 {
     internal const int MaxJsonLockParseBytes = 16 * 1024 * 1024;
     internal const int MaxJsonLockParseDepth = 64;
@@ -64,7 +65,7 @@ internal static class DependencyPackageExtractor
                 Line = package.Line,
                 StartLine = package.Line,
                 StartColumn = Math.Max(0, package.Column - 1),
-                EndLine = package.Line,
+                EndLine = package.EndLine,
                 Signature = package.Signature,
                 ContainerKind = package.Scope == null ? null : "project",
                 ContainerName = package.Scope,
@@ -188,7 +189,12 @@ internal static class DependencyPackageExtractor
         {
             var fileName = Path.GetFileName(path ?? string.Empty);
             if (string.Equals(fileName, "packages.lock.json", StringComparison.OrdinalIgnoreCase))
-                ExtractNuGetLockDependencyReferences(fileId, document.RootElement, lines, references);
+                ExtractNuGetLockDependencyReferences(
+                    fileId,
+                    document.RootElement,
+                    lines,
+                    TryParseJsonObjectLocations(content),
+                    references);
             else if (string.Equals(fileName, "package-lock.json", StringComparison.OrdinalIgnoreCase)
                      || string.Equals(fileName, "npm-shrinkwrap.json", StringComparison.OrdinalIgnoreCase))
                 ExtractNpmLockDependencyReferences(fileId, document.RootElement, lines, references);
@@ -201,27 +207,37 @@ internal static class DependencyPackageExtractor
         long fileId,
         JsonElement root,
         string[] lines,
+        JsonObjectLocations? rootLocations,
         List<ReferenceRecord> references)
     {
         if (!root.TryGetProperty("dependencies", out var frameworks) || frameworks.ValueKind != JsonValueKind.Object)
             return;
 
-        foreach (var framework in frameworks.EnumerateObject())
+        var frameworkLocations = FindLocatedProperty(rootLocations, "dependencies")?.ObjectValue;
+        foreach (var (framework, frameworkLocation) in EnumerateLocatedProperties(frameworks, frameworkLocations))
         {
             if (framework.Value.ValueKind != JsonValueKind.Object)
                 continue;
 
-            var packageSearchLine = FindJsonProperty(lines, framework.Name).Line;
-            foreach (var package in framework.Value.EnumerateObject())
+            foreach (var (package, packageLocation) in EnumerateLocatedProperties(
+                         framework.Value,
+                         frameworkLocation?.ObjectValue))
             {
                 if (package.Value.ValueKind != JsonValueKind.Object
                     || !package.Value.TryGetProperty("dependencies", out var dependencies)
                     || dependencies.ValueKind != JsonValueKind.Object)
                     continue;
 
-                var packageLocation = FindJsonProperty(lines, package.Name, packageSearchLine);
-                packageSearchLine = packageLocation.Line + 1;
-                if (!AddPackageDependencyReferences(fileId, dependencies, package.Name, packageLocation.Line, lines, references))
+                var dependencyLocations = FindLocatedProperty(packageLocation?.ObjectValue, "dependencies")?.ObjectValue;
+                if (!AddPackageDependencyReferences(
+                        fileId,
+                        dependencies,
+                        package.Name,
+                        packageLocation?.Line ?? 1,
+                        lines,
+                        references,
+                        dependencyLocations,
+                        targetQualifier: framework.Name))
                     return;
             }
         }
@@ -265,12 +281,16 @@ internal static class DependencyPackageExtractor
         string parentName,
         int parentLine,
         string[] lines,
-        List<ReferenceRecord> references)
+        List<ReferenceRecord> references,
+        JsonObjectLocations? dependencyLocations = null,
+        string? targetQualifier = null)
     {
         var dependencySearchLine = parentLine;
-        foreach (var dependency in dependencies.EnumerateObject())
+        foreach (var (dependency, dependencyLocation) in EnumerateLocatedProperties(dependencies, dependencyLocations))
         {
-            var location = FindJsonProperty(lines, dependency.Name, dependencySearchLine);
+            var location = dependencyLocation == null
+                ? FindJsonProperty(lines, dependency.Name, dependencySearchLine)
+                : (dependencyLocation.Line, dependencyLocation.Column);
             dependencySearchLine = location.Line + 1;
             if (!ReferenceExtractor.TryAddReference(
                     references,
@@ -284,6 +304,7 @@ internal static class DependencyPackageExtractor
                         Context = GetContext(lines, location.Line),
                         ContainerKind = "package",
                         ContainerName = parentName,
+                        TargetQualifier = targetQualifier,
                     }))
                 return false;
         }
@@ -426,7 +447,12 @@ internal static class DependencyPackageExtractor
         using (document)
         {
             if (string.Equals(fileName, "packages.lock.json", StringComparison.OrdinalIgnoreCase))
-                ExtractNuGetPackagesLock(document.RootElement, lines, packages, seen);
+                ExtractNuGetPackagesLock(
+                    document.RootElement,
+                    lines,
+                    TryParseJsonObjectLocations(content),
+                    packages,
+                    seen);
             else if (string.Equals(fileName, "package-lock.json", StringComparison.OrdinalIgnoreCase)
                      || string.Equals(fileName, "npm-shrinkwrap.json", StringComparison.OrdinalIgnoreCase))
                 ExtractNpmPackageLock(document.RootElement, lines, packages, seen);
@@ -436,24 +462,30 @@ internal static class DependencyPackageExtractor
     private static void ExtractNuGetPackagesLock(
         JsonElement root,
         string[] lines,
+        JsonObjectLocations? rootLocations,
         List<DependencyPackageInfo> packages,
         HashSet<string> seen)
     {
         if (!root.TryGetProperty("dependencies", out var dependencies) || dependencies.ValueKind != JsonValueKind.Object)
             return;
 
-        foreach (var framework in dependencies.EnumerateObject())
+        var frameworkLocations = FindLocatedProperty(rootLocations, "dependencies")?.ObjectValue;
+        foreach (var (framework, frameworkLocation) in EnumerateLocatedProperties(dependencies, frameworkLocations))
         {
             if (framework.Value.ValueKind != JsonValueKind.Object)
                 continue;
 
-            foreach (var package in framework.Value.EnumerateObject())
+            foreach (var (package, packageLocation) in EnumerateLocatedProperties(
+                         framework.Value,
+                         frameworkLocation?.ObjectValue))
             {
                 var packageObject = package.Value;
                 var role = GetStringProperty(packageObject, "type");
                 var resolved = GetStringProperty(packageObject, "resolved");
                 var requested = GetStringProperty(packageObject, "requested");
-                var location = FindJsonProperty(lines, package.Name);
+                var location = packageLocation == null
+                    ? FindJsonProperty(lines, package.Name)
+                    : (packageLocation.Line, packageLocation.Column);
                 var normalizedRole = NormalizeRole(role);
 
                 AddPackage(
@@ -467,7 +499,8 @@ internal static class DependencyPackageExtractor
                     scope: framework.Name,
                     role: normalizedRole,
                     location.Line,
-                    location.Column);
+                    location.Column,
+                    endLine: packageLocation?.EndLine);
             }
         }
     }
@@ -709,7 +742,8 @@ internal static class DependencyPackageExtractor
         string? scope,
         string? role,
         int line,
-        int column)
+        int column,
+        int? endLine = null)
     {
         var trimmedName = name.AsSpan().Trim();
         if (trimmedName.IsEmpty)
@@ -718,6 +752,7 @@ internal static class DependencyPackageExtractor
         name = TrimDependencyField(name, trimmedName);
         line = Math.Max(1, line);
         column = Math.Max(1, column);
+        endLine = Math.Max(line, endLine ?? line);
         version = NormalizeEmpty(version);
         requestedVersion = NormalizeEmpty(requestedVersion);
         scope = NormalizeEmpty(scope);
@@ -746,6 +781,7 @@ internal static class DependencyPackageExtractor
             role,
             line,
             column,
+            endLine.Value,
             BuildSignature(name, version, requestedVersion, sourceKind, scope, role)));
     }
 

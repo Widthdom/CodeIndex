@@ -443,6 +443,7 @@ public partial class DbWriter
                AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
+          AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier IS NOT NULL
           AND r.target_qualifier NOT LIKE char(31) || 'receiver:%'
