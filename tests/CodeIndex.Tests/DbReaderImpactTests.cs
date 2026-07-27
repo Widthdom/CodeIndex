@@ -263,6 +263,109 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void AnalyzeImpact_UnresolvedUpstreamCallerRemainsVisibleButCannotCreateCanonicalCycle_Issue4847()
+    {
+        InsertIndexedFile("src/ImpactUnresolvedHop.cs", "csharp",
+            """
+            namespace ImpactIdentity.Unresolved;
+
+            public static class Root
+            {
+                public static void Leaf() { }
+            }
+
+            public static class Middle
+            {
+                public static void Mid()
+                {
+                    Root.Leaf();
+                }
+            }
+
+            public static class Outer
+            {
+                public static void Top(dynamic receiver)
+                {
+                    receiver.Mid();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact(
+            "ImpactIdentity.Unresolved.Root.Leaf",
+            maxDepth: 2,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/ImpactUnresolvedHop.cs"],
+            withPaths: true);
+
+        Assert.False(analysis.CycleDetected);
+        Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
+        Assert.Equal(2, analysis.Callers.Count);
+        var unresolvedCaller = Assert.Single(analysis.Callers.Where(caller => caller.Depth == 2));
+        Assert.Equal("Top", unresolvedCaller.CallerName);
+        Assert.NotNull(unresolvedCaller.CallerSymbolId);
+        Assert.Null(unresolvedCaller.CalleeSymbolId);
+        Assert.Equal([new List<string> { "Leaf", "Mid", "Top" }], unresolvedCaller.Paths);
+        Assert.All(Assert.Single(unresolvedCaller.PathDetails!), node => Assert.NotNull(node.SymbolId));
+    }
+
+    [Fact]
+    public void AnalyzeImpact_MixedTargetIdentitiesAggregateCallerWithoutGuessingPathRootIdentity_Issue4847()
+    {
+        InsertIndexedFile("src/ImpactMixedTargets.cs", "csharp",
+            """
+            namespace ImpactIdentity.Mixed;
+
+            public static class First
+            {
+                public static void Target() { }
+            }
+
+            public static class Second
+            {
+                public static void Target() { }
+            }
+
+            public static class Source
+            {
+                public static void Caller()
+                {
+                    First.Target();
+                    Second.Target();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact(
+            "Target",
+            maxDepth: 1,
+            limit: 1,
+            lang: "csharp",
+            pathPatterns: ["src/ImpactMixedTargets.cs"],
+            withPaths: true);
+
+        Assert.False(analysis.Truncated);
+        Assert.False(analysis.CycleDetected);
+        var caller = Assert.Single(analysis.Callers);
+        Assert.Equal("Caller", caller.CallerName);
+        Assert.Equal(2, caller.ReferenceCount);
+        Assert.Equal(2, caller.ReferenceKindCounts["call"]);
+        Assert.NotNull(caller.CallerSymbolId);
+        Assert.Null(caller.CalleeSymbolId);
+        var pathDetails = Assert.Single(caller.PathDetails!);
+        Assert.Null(pathDetails[0].SymbolId);
+        Assert.Equal(caller.CallerSymbolId, pathDetails[1].SymbolId);
+
+        var structured = JsonNode.Parse(JsonSerializer.Serialize(
+            analysis,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }))!;
+        var structuredCaller = structured["callers"]![0]!;
+        Assert.Null(structuredCaller["callee_symbol_id"]);
+        Assert.Null(structuredCaller["path_details"]![0]![0]!["symbol_id"]);
+    }
+
+    [Fact]
     public void AnalyzeImpact_DirectRecursionReportsRealSingletonCycle_Issue4847()
     {
         InsertIndexedFile("src/ImpactDirectRecursion.cs", "csharp",

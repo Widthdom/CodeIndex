@@ -1068,8 +1068,22 @@ public partial class DbReader
         var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
         var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
         var sourceSymbolIdSql = _referenceColumns.Contains("source_symbol_id") ? "r.source_symbol_id" : "NULL";
-        var targetSymbolIdSql = targetSymbolId != null && HasTable("symbol_reference_candidates")
-            ? "@targetSymbolId"
+        var hasIdentityTargetScope = targetSymbolId != null
+                                     && _referenceColumns.Contains("target_symbol_id")
+                                     && _referenceColumns.Contains("resolution_state")
+                                     && HasTable("symbol_reference_candidates");
+        var targetSymbolIdSql = hasIdentityTargetScope
+            ? @"CASE
+                    WHEN r.resolution_state IN ('resolved', 'resolved_group')
+                         AND EXISTS (
+                             SELECT 1
+                             FROM symbol_reference_candidates projected_identity_candidate
+                             WHERE projected_identity_candidate.reference_id = r.id
+                               AND projected_identity_candidate.symbol_id = @targetSymbolId
+                         )
+                    THEN @targetSymbolId
+                    ELSE r.target_symbol_id
+                END"
             : _referenceColumns.Contains("target_symbol_id") ? "r.target_symbol_id" : "NULL";
 
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "callerLang");
@@ -1103,7 +1117,12 @@ public partial class DbReader
               AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
                 : @"
               AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
-        var targetCondition = targetSymbolId != null && HasTable("symbol_reference_candidates")
+        // Resolved rows must match the requested canonical target. Unresolved/ambiguous rows
+        // retain the historical name-based conservative traversal, but their null target IDs
+        // keep them out of canonical cycle detection.
+        // resolved 行は要求された正規 target と一致させる。unresolved/ambiguous 行は従来の
+        // 名前ベース保守的 traversal に残すが、null target ID により正規 cycle 判定から除外する。
+        var targetCondition = hasIdentityTargetScope
             ? @"
               AND (
                   EXISTS (
@@ -1112,6 +1131,10 @@ public partial class DbReader
                       WHERE identity_candidate.reference_id = r.id
                         AND identity_candidate.symbol_id = @targetSymbolId
                         AND r.resolution_state IN ('resolved', 'resolved_group')
+                  )
+                  OR (
+                      COALESCE(r.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group')
+                      " + nameCondition + @"
                   )" + polymorphicNameCondition + @"
               )"
             : nameCondition;
@@ -1154,10 +1177,15 @@ public partial class DbReader
                    MAX(is_self_reference) AS is_self_reference,
                    MAX(is_mutual_recursion) AS is_mutual_recursion,
                    source_symbol_id,
-                   target_symbol_id
+                   CASE
+                       WHEN COUNT(DISTINCT COALESCE(target_symbol_id, -1)) = 1
+                       THEN MIN(target_symbol_id)
+                       ELSE NULL
+                   END AS target_symbol_id,
+                   GROUP_CONCAT(DISTINCT target_symbol_id) AS target_symbol_ids
             FROM logical_references r
-            GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind, source_symbol_id, target_symbol_id";
-        sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, reference_kind, first_line LIMIT @limit OFFSET @offset";
+            GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind, source_symbol_id";
+        sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, reference_kind, first_line, COALESCE(source_symbol_id, -1) LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         SqliteCommandPolicy.Add(cmd, "@symbolName", symbolName);
@@ -1205,6 +1233,13 @@ public partial class DbReader
                 HasMutualRecursion = reader.GetInt32(9) != 0,
                 CallerSymbolId = reader.IsDBNull(10) ? null : reader.GetInt64(10),
                 CalleeSymbolId = reader.IsDBNull(11) ? null : reader.GetInt64(11),
+                CalleeSymbolIds = reader.IsDBNull(12)
+                    ? Array.Empty<long>()
+                    : reader.GetString(12)
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(long.Parse)
+                        .Order()
+                        .ToArray(),
             });
         }
         return results;
@@ -1366,29 +1401,27 @@ public partial class DbReader
 
                     var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
                     var callerSymbolId = hasResolvedIdentityGraph ? caller.CallerSymbolId : null;
-                    var calleeSymbolId = hasResolvedIdentityGraph ? caller.CalleeSymbolId ?? currentSymbolId : null;
-                    var callerCycleNode = BuildImpactCycleNode(callerSymbolId, callerName, hasResolvedIdentityGraph);
-                    var currentCycleNode = BuildImpactCycleNode(calleeSymbolId, currentSymbol, hasResolvedIdentityGraph);
-                    if (callerCycleNode is { } callerNode && currentCycleNode is { } currentNode)
+                    var calleeSymbolId = hasResolvedIdentityGraph ? caller.CalleeSymbolId : null;
+                    var cycleEdges = BuildImpactCycleEdges(caller, callerName, currentSymbol, hasResolvedIdentityGraph);
+                    foreach (var cycleEdge in cycleEdges)
                     {
-                        RegisterImpactCycleNode(cycleNodesByKey, callerNode);
-                        RegisterImpactCycleNode(cycleNodesByKey, currentNode);
-                        if (IsCycleEdge(callerNode.Key, currentNode.Key, cycleParentsByKey))
-                            AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerNode.Key, currentNode.Key, cycleParentsByKey), cycleNodesByKey);
+                        RegisterImpactCycleNode(cycleNodesByKey, cycleEdge.Caller);
+                        RegisterImpactCycleNode(cycleNodesByKey, cycleEdge.Callee);
+                        if (IsCycleEdge(cycleEdge.Caller.Key, cycleEdge.Callee.Key, cycleParentsByKey))
+                            AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(cycleEdge.Caller.Key, cycleEdge.Callee.Key, cycleParentsByKey), cycleNodesByKey);
                     }
                     if (IsImpactRootCaller(caller, callerName, resolvedName, rootDefinitionPaths, identityRootSymbolId))
                         continue;
                     var callerNodeKey = BuildImpactTraversalNodeKey(callerSymbolId, callerName);
                     var key = BuildImpactVisitedKey(caller, callerName, hasResolvedIdentityGraph);
-                    if (callerCycleNode is { } callerCycleParent
-                        && currentCycleNode is { } currentCycleParent)
+                    foreach (var cycleEdge in cycleEdges)
                     {
-                        if (!cycleParentsByKey.TryGetValue(callerCycleParent.Key, out var cycleParentSet))
+                        if (!cycleParentsByKey.TryGetValue(cycleEdge.Caller.Key, out var cycleParentSet))
                         {
                             cycleParentSet = new HashSet<string>(StringComparer.Ordinal);
-                            cycleParentsByKey[callerCycleParent.Key] = cycleParentSet;
+                            cycleParentsByKey[cycleEdge.Caller.Key] = cycleParentSet;
                         }
-                        cycleParentSet.Add(currentCycleParent.Key);
+                        cycleParentSet.Add(cycleEdge.Callee.Key);
                     }
                     if (ImpactGraphStateEntryCount(parentsByNodeKey, cycleParentsByKey, depthByNodeKey, resultIndicesByNodeKey) > graphStateEntryBudget)
                     {
@@ -1609,6 +1642,7 @@ public partial class DbReader
 
     private readonly record struct ImpactBoundaryInspection(bool HasUnvisitedCaller, bool ProbeBudgetHit);
     private readonly record struct ImpactCycleNode(string Key, long? SymbolId, string Name);
+    private readonly record struct ImpactCycleEdge(ImpactCycleNode Caller, ImpactCycleNode Callee);
 
     private static void RegisterImpactCycleNode(
         Dictionary<string, ImpactCycleMemberResult> nodesByKey,
@@ -1626,6 +1660,36 @@ public partial class DbReader
         if (symbolId is long canonicalSymbolId)
             return new ImpactCycleNode($"id:{canonicalSymbolId}", canonicalSymbolId, name);
         return null;
+    }
+
+    private static List<ImpactCycleEdge> BuildImpactCycleEdges(
+        CallerResult caller,
+        string callerName,
+        string calleeName,
+        bool hasResolvedIdentityGraph)
+    {
+        var callerNode = BuildImpactCycleNode(caller.CallerSymbolId, callerName, hasResolvedIdentityGraph);
+        if (callerNode is not { } canonicalCaller)
+            return [];
+
+        if (!hasResolvedIdentityGraph)
+        {
+            var legacyCallee = BuildImpactCycleNode(symbolId: null, calleeName, hasResolvedIdentityGraph: false)!.Value;
+            return [new ImpactCycleEdge(canonicalCaller, legacyCallee)];
+        }
+
+        var calleeSymbolIds = caller.CalleeSymbolIds.Count > 0
+            ? caller.CalleeSymbolIds
+            : caller.CalleeSymbolId is long calleeSymbolId
+                ? [calleeSymbolId]
+                : Array.Empty<long>();
+        return calleeSymbolIds
+            .Distinct()
+            .Order()
+            .Select(calleeSymbolId => new ImpactCycleEdge(
+                canonicalCaller,
+                new ImpactCycleNode($"id:{calleeSymbolId}", calleeSymbolId, calleeName)))
+            .ToList();
     }
 
     private static bool IsImpactRootCaller(
@@ -1677,30 +1741,26 @@ public partial class DbReader
             foreach (var caller in page)
             {
                 var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
-                var callerSymbolId = hasResolvedIdentityGraph ? caller.CallerSymbolId : null;
-                var calleeSymbolId = hasResolvedIdentityGraph ? caller.CalleeSymbolId ?? symbolId : null;
-                var callerCycleNode = BuildImpactCycleNode(callerSymbolId, callerName, hasResolvedIdentityGraph);
-                var currentCycleNode = BuildImpactCycleNode(calleeSymbolId, symbolName, hasResolvedIdentityGraph);
-                if (callerCycleNode is { } callerNode && currentCycleNode is { } currentNode)
+                var cycleEdges = BuildImpactCycleEdges(caller, callerName, symbolName, hasResolvedIdentityGraph);
+                foreach (var cycleEdge in cycleEdges)
                 {
-                    RegisterImpactCycleNode(cycleNodesByKey, callerNode);
-                    RegisterImpactCycleNode(cycleNodesByKey, currentNode);
-                    if (IsCycleEdge(callerNode.Key, currentNode.Key, cycleParentsByKey))
-                        AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(callerNode.Key, currentNode.Key, cycleParentsByKey), cycleNodesByKey);
+                    RegisterImpactCycleNode(cycleNodesByKey, cycleEdge.Caller);
+                    RegisterImpactCycleNode(cycleNodesByKey, cycleEdge.Callee);
+                    if (IsCycleEdge(cycleEdge.Caller.Key, cycleEdge.Callee.Key, cycleParentsByKey))
+                        AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(cycleEdge.Caller.Key, cycleEdge.Callee.Key, cycleParentsByKey), cycleNodesByKey);
                 }
                 var isRoot = IsImpactRootCaller(caller, callerName, resolvedName, rootDefinitionPaths, identityRootSymbolId);
                 if (isRoot)
                     continue;
 
-                if (callerCycleNode is { } callerCycleParent
-                    && currentCycleNode is { } currentCycleParent)
+                foreach (var cycleEdge in cycleEdges)
                 {
-                    if (!cycleParentsByKey.TryGetValue(callerCycleParent.Key, out var cycleParentSet))
+                    if (!cycleParentsByKey.TryGetValue(cycleEdge.Caller.Key, out var cycleParentSet))
                     {
                         cycleParentSet = new HashSet<string>(StringComparer.Ordinal);
-                        cycleParentsByKey[callerCycleParent.Key] = cycleParentSet;
+                        cycleParentsByKey[cycleEdge.Caller.Key] = cycleParentSet;
                     }
-                    cycleParentSet.Add(currentCycleParent.Key);
+                    cycleParentSet.Add(cycleEdge.Callee.Key);
                 }
 
                 var key = BuildImpactVisitedKey(caller, callerName, hasResolvedIdentityGraph);
@@ -1917,7 +1977,8 @@ public partial class DbReader
                    {containerNameSql} AS container_name,
                    {containerQualifiedNameSql} AS container_qualified_name,
                    {familyKeySql} AS family_key,
-                   s.file_id
+                   s.file_id,
+                   COUNT(*) OVER () AS matching_definition_count
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE ((@symbolId IS NOT NULL AND s.id = @symbolId)
@@ -1951,10 +2012,11 @@ public partial class DbReader
         var containerQualifiedName = GetNullableString(reader, 7);
         var familyKey = GetNullableString(reader, 8);
         var fileId = reader.GetInt64(9);
+        var matchingDefinitionCount = reader.GetInt64(10);
 
         return new ImpactPathNode
         {
-            SymbolId = definitionSymbolId,
+            SymbolId = symbolId ?? (matchingDefinitionCount == 1 ? definitionSymbolId : null),
             Name = definitionName,
             Kind = definitionKind,
             Lang = definitionLang,

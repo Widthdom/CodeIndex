@@ -739,9 +739,11 @@ return heuristic file-level dependency hints.
 On a current index, cycle detection follows the resolved source/target symbol IDs
 on real directed edges. Two distinct methods with the same display name are not a
 cycle, while direct recursion is reported as a singleton cycle. JSON caller rows
-include `caller_symbol_id` and `callee_symbol_id`; `path_details` nodes include
-`symbol_id`; and each cycle can include `member_identities` alongside the
-compatibility `members` display-name list.
+include `caller_symbol_id` and, when the callee is uniquely resolved,
+`callee_symbol_id`; uniquely resolved `path_details` nodes include `symbol_id`;
+and each cycle can include `member_identities` alongside the compatibility
+`members` display-name list. Unresolved or ambiguous caller edges remain visible
+in traversal results but do not contribute canonical cycle edges.
 
 ## Performance tuning for large repositories
 
@@ -3858,9 +3860,12 @@ dependency hints が返る場合があります。
 
 current index では、cycle 判定は実在する有向辺の解決済み source/target symbol ID を
 辿ります。表示名が同じ別 method は cycle にせず、直接再帰は singleton cycle として
-報告します。JSON の caller row は `caller_symbol_id` / `callee_symbol_id`、
-`path_details` node は `symbol_id` を含み、各 cycle は互換用の表示名 `members` に加えて
-`member_identities` を含む場合があります。
+報告します。JSON の caller row は `caller_symbol_id` と、callee を一意に解決できる場合は
+`callee_symbol_id` を含み、`path_details` node は node を一意に解決できる場合に
+`symbol_id` を含み、
+各 cycle は互換用の表示名 `members` に加えて `member_identities` を含む場合があります。
+未解決または曖昧な caller edge は traversal 結果には残りますが、正規 cycle edge には
+使用しません。
 
 ## 大規模リポジトリの performance tuning
 
