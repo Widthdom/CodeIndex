@@ -2961,6 +2961,12 @@ Contract guarantees that downstream consumers can rely on:
 
 The flag parser (`ProgramRunner.TryConsumeAuditLogFlags`) is run before `QueryCommandRunner.ParseArgs` and consumes only the audit-specific tokens — `--db` and anything after `--` is left intact so existing escape semantics survive. `--audit-log-include-values` and `--audit-log-strict` require `--audit-log <path>` because neither value echo nor strict durability has meaning without a configured destination.
 
+## Report artifact contract
+
+`ReportBundleWriter` stages a complete gzip/tar sibling file and publishes it through `AtomicFileWriter`. Publication uses a no-overwrite move unless `ReportCommandOptions.Overwrite` came from an explicit `--overwrite`. Explicit replacement uses an atomic filesystem backup and retains it through the parent-directory durability flush; a publication failure restores that backup before surfacing the error. `support-manifest.json.bundle.members` is the authoritative archive member list. `db_inspected` and `db_diagnostics_included` describe read-only diagnostic collection, while `db_member_included` describes archive membership and is currently always `false`. The legacy `db_included` field remains an additive-compatibility alias for `db_inspected`.
+
+`LastFailureEventStore` schema 3 adds opaque `workspace_id`, `database_id`, and `run_id` provenance to the existing binary version and UTC timestamp. Failure capture derives the effective database from the same parsed index or query options used by the command, including positional ordering and the `--` literal sentinel. Report resolves its default database through the normal query precedence (`CDIDX_DATA_DIR`, active workspace, XDG, and ancestor workspace), so collection and correlation use the same database identity. A report includes the saved event only when workspace, database, and binary version match and the event is no more than 24 hours old, allowing at most five minutes of future clock skew. Other records are excluded from the archive; the manifest publishes only a bounded `last_failure.disposition` / `reason` plus validated opaque provenance fields. Raw workspace and database paths never enter those fields.
+
 ## Coding conventions
 
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
@@ -5524,6 +5530,12 @@ caller と operator が依存できる契約:
 - **best effort / strict shutdown。** serialization、queue-full、IO、rotation failure が本体ツール呼び出しを crash させることはありません。既定の shutdown は best-effort のままですが、flush deadline を超えると、audit path を含まない count-only の上限付き warning を stderr に正確に 1 回出します。`--audit-log-strict` は `--audit-log` を必須とし、shutdown が未完了なら `ProgramRunner.RunMcp` は本来成功する exit だけを `CommandExitCodes.RuntimeError` (`10`) に変更し、既存の nonzero exit はすべて保持します。構築時の不正 path は引き続き constructor が早期失敗させ、tool dispatch 前に operator が startup misconfiguration を認識できます。
 
 フラグパーサ (`ProgramRunner.TryConsumeAuditLogFlags`) は `QueryCommandRunner.ParseArgs` より前に走り、audit 関連トークンのみを消費します。`--db` と `--` 以降はそのまま残し、既存の escape semantics を保ちます。`--audit-log-include-values` と `--audit-log-strict` は `--audit-log <path>` を必須とします。値の echo も strict durability も、出力先が設定されていなければ意味を持たないためです。
+
+## report artifact 契約
+
+`ReportBundleWriter` は完全な gzip/tar sibling file を staging し、`AtomicFileWriter` で公開します。`ReportCommandOptions.Overwrite` が明示的な `--overwrite` から設定されていない限り no-overwrite move を使います。明示的な置換では atomic な filesystem backup を作り、親 directory の durability flush が完了するまで保持します。公開に失敗した場合は error を返す前にその backup を復元します。`support-manifest.json.bundle.members` が archive member の正式な一覧です。`db_inspected` と `db_diagnostics_included` は read-only の診断収集を表し、`db_member_included` は archive membership を表して現在は常に `false` です。legacy の `db_included` は `db_inspected` の additive compatibility alias として残します。
+
+`LastFailureEventStore` schema 3 は、従来の binary version と UTC timestamp に加えて、不透明な `workspace_id`、`database_id`、`run_id` provenance を持ちます。failure capture は command が実際に使った index / query option parser から実効 DB を導出し、positional ordering と `--` literal sentinel も同じ規則で扱います。report の既定 DB は通常の query precedence（`CDIDX_DATA_DIR`、active workspace、XDG、ancestor workspace）で解決するため、診断収集と correlation は同じ database identity を使います。report は workspace、database、binary version が一致し、event が24時間以内で、未来方向の clock skew が5分以内の場合だけ保存 event を同梱します。それ以外は archive から除外し、manifest には上限付きの `last_failure.disposition` / `reason` と、検証済みの不透明 provenance field だけを出力します。workspace / database の raw path はこれらの field に入りません。
 
 ## コーディング規約
 

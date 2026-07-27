@@ -108,7 +108,8 @@ internal static partial class ProgramRunner
         string AppVersion,
         DateTimeOffset StartTimestamp,
         Stopwatch Stopwatch,
-        CancellationToken CancellationToken);
+        CancellationToken CancellationToken,
+        string RunId);
 
     internal sealed record UpgradeHandoff(
         string Command,
@@ -228,7 +229,13 @@ internal static partial class ProgramRunner
         if (versionPinExit != CommandExitCodes.Success)
             return versionPinExit;
 
-        var context = new CommandRunContext(jsonOptions, appVersion, commandStartTimestamp, commandStopwatch, cancellationToken);
+        var context = new CommandRunContext(
+            jsonOptions,
+            appVersion,
+            commandStartTimestamp,
+            commandStopwatch,
+            cancellationToken,
+            LastFailureEventStore.CreateRunId());
         if (TryRunImmediateCommand(args, context, out var immediateExitCode))
             return immediateExitCode;
 
@@ -271,7 +278,8 @@ internal static partial class ProgramRunner
                 context.AppVersion,
                 unhandledExitCode,
                 ex,
-                TimeProvider.GetUtcNow());
+                TimeProvider.GetUtcNow(),
+                context.RunId);
             CommandErrorWriter.WriteStderr(failureCaptured
                 ? "Error: command failed before it could complete. Run `cdidx report` for details."
                 : "Error: command failed before it could complete; current failure diagnostics could not be saved.");

@@ -473,6 +473,14 @@ internal sealed record ReportBundleSummary(
     [property: JsonPropertyName("log_lines_included")] int LogLinesIncluded,
     [property: JsonPropertyName("log_included")] bool LogIncluded,
     [property: JsonPropertyName("last_failure_included")] bool LastFailureIncluded,
+    [property: JsonPropertyName("last_failure_disposition")] string LastFailureDisposition,
+    [property: JsonPropertyName("last_failure_reason")] string LastFailureReason,
+    [property: JsonPropertyName("db_inspected")] bool DbInspected,
+    [property: JsonPropertyName("db_diagnostics_included")] bool DbDiagnosticsIncluded,
+    [property: JsonPropertyName("db_member_included")] bool DbMemberIncluded,
+    // Compatibility alias: historically db_included meant the DB was inspected,
+    // not that the database file was an archive member.
+    // 互換 alias: 従来の db_included は DB file の同梱ではなく検査済みを意味する。
     [property: JsonPropertyName("db_included")] bool DbIncluded,
     [property: JsonPropertyName("db_path")] string? DbPath,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
