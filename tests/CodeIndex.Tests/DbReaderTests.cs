@@ -409,6 +409,8 @@ public partial class DbReaderTests : IDisposable
             path,
             "csharp",
             """
+            using System.Linq;
+
             struct Payload {}
             class Wrapper<T> {}
 
@@ -421,6 +423,19 @@ public partial class DbReaderTests : IDisposable
                 {
                     first = default;
                     second = default;
+                }
+
+                static void Final(
+                    Payload first,
+                    out Wrapper<Payload> last)
+                {
+                    last = default;
+                }
+
+                static bool TryPayload(out Payload value)
+                {
+                    value = default;
+                    return true;
                 }
 
                 static void Consume(
@@ -452,6 +467,11 @@ public partial class DbReaderTests : IDisposable
                         input);
                     Multi(
                         out Payload first, out Wrapper<Payload> second);
+                    Final(
+                        input,
+                        out Wrapper<Payload> final);
+                    var inferredMatch = new[] { input }.Any(item => TryPayload(out var nested) && nested.Equals(item));
+                    var explicitMatch = new[] { input }.Any(item => TryPayload(out Payload nested) && nested.Equals(item));
                 }
             }
             """);
@@ -476,6 +496,8 @@ public partial class DbReaderTests : IDisposable
             reference.Context.Contains("out Payload output", StringComparison.Ordinal));
         Assert.Contains(payloadReferences, reference =>
             reference.Context.Contains("this scoped ref Payload target", StringComparison.Ordinal));
+        Assert.Contains(payloadReferences, reference =>
+            reference.Context.Contains("TryPayload(out Payload nested)", StringComparison.Ordinal));
         Assert.All(payloadReferences, reference => Assert.Equal("resolved", reference.ResolutionState));
 
         var wrapperReferences = _reader.SearchReferences(
@@ -488,6 +510,10 @@ public partial class DbReaderTests : IDisposable
             reference.Context.Contains("ref Wrapper<Payload> byRef", StringComparison.Ordinal));
         Assert.Equal(2, wrapperReferences.Count(reference =>
             reference.Context.Contains("out Payload first, out Wrapper<Payload> second", StringComparison.Ordinal)));
+        Assert.Contains(wrapperReferences, reference =>
+            reference.Context.Contains("out Wrapper<Payload> last)", StringComparison.Ordinal));
+        Assert.Contains(wrapperReferences, reference =>
+            reference.Context.Contains("out Wrapper<Payload> final)", StringComparison.Ordinal));
         Assert.All(wrapperReferences, reference => Assert.Equal("resolved", reference.ResolutionState));
 
         var callers = _reader.GetCallers(

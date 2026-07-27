@@ -64,7 +64,7 @@ public static partial class ReferenceExtractor
                 ignoredSegments);
         }
 
-        EmitCSharpModifierContinuationTypeReferences(
+        EmitCSharpModifierTypeReferences(
             language,
             line,
             references,
@@ -680,7 +680,7 @@ public static partial class ReferenceExtractor
         return true;
     }
 
-    private static void EmitCSharpModifierContinuationTypeReferences(
+    private static void EmitCSharpModifierTypeReferences(
         string language,
         string line,
         List<ReferenceRecord> references,
@@ -694,46 +694,92 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return;
 
-        var fragments = SplitTopLevelCommaSpans(line);
-        if (fragments.Count <= 1)
-            return;
-
-        foreach (var (fragmentStart, fragmentLength) in fragments)
+        for (int tokenStart = 0; tokenStart < line.Length;)
         {
-            var fragment = line.Substring(fragmentStart, fragmentLength);
-            var tokens = GetTopLevelTokenSpans(fragment);
-            int first = 0;
-            while (first < tokens.Count)
+            if (!IsTypeExpressionIdentifierStart(language, line[tokenStart]))
             {
-                var token = fragment.Substring(tokens[first].Start, tokens[first].Length);
-                if (!token.StartsWith("[", StringComparison.Ordinal))
-                    break;
-                first++;
-            }
-
-            if (first >= tokens.Count)
-                continue;
-
-            var firstToken = fragment.Substring(tokens[first].Start, tokens[first].Length);
-            if (!IsParameterModifier(language, firstToken)
-                || !TryGetParameterTypeRelativeSpan(fragment, language, out var typeRelativeStart, out var typeRelativeLength))
-            {
+                tokenStart++;
                 continue;
             }
 
-            int absoluteStart = fragmentStart + typeRelativeStart;
-            AddTypeExpressionSegmentsForLanguage(
-                language,
-                references,
-                seen,
-                fileId,
-                fragment.Substring(typeRelativeStart, typeRelativeLength),
-                absoluteStart,
-                context,
-                lineNumber,
-                resolveContainerForColumn(absoluteStart),
-                ignoredSegments);
+            int tokenEnd = tokenStart + 1;
+            while (tokenEnd < line.Length && IsTypeExpressionIdentifierPart(language, line[tokenEnd]))
+                tokenEnd++;
+            var token = line.Substring(tokenStart, tokenEnd - tokenStart);
+            if (!IsCSharpParameterModifierPosition(line, tokenStart, tokenEnd, token))
+            {
+                tokenStart = tokenEnd;
+                continue;
+            }
+
+            int fragmentEnd = FindCSharpModifierFragmentEnd(line, tokenEnd);
+            var fragment = line.Substring(tokenStart, fragmentEnd - tokenStart);
+            if (TryGetParameterTypeRelativeSpan(fragment, language, out var typeRelativeStart, out var typeRelativeLength))
+            {
+                int absoluteStart = tokenStart + typeRelativeStart;
+                AddTypeExpressionSegmentsForLanguage(
+                    language,
+                    references,
+                    seen,
+                    fileId,
+                    fragment.Substring(typeRelativeStart, typeRelativeLength),
+                    absoluteStart,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(absoluteStart),
+                    ignoredSegments);
+            }
+
+            tokenStart = tokenEnd;
         }
+    }
+
+    private static int FindCSharpModifierFragmentEnd(string line, int startIndex)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+
+        for (int i = startIndex; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0)
+            {
+                if (c is ',' or ')' or ';')
+                    return i;
+            }
+
+            switch (c)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+            }
+        }
+
+        return line.Length;
     }
 
     private static bool TryGetSimpleDeclarationTypeSpan(string line, string language, out int typeStart, out int typeLength)

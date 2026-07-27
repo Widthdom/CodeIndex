@@ -149,6 +149,14 @@ public static partial class ReferenceExtractor
             if (language == "csharp")
                 segment = NormalizeCSharpIdentifier(rawSegment);
 
+            if (language == "csharp"
+                && !isEscapedCSharpIdentifier
+                && IsCSharpParameterModifierPosition(expression, segmentStart, i, segment))
+            {
+                i--;
+                continue;
+            }
+
             if (language == "kotlin" && KotlinTypeProjectionModifierNames.Contains(segment))
             {
                 i--;
@@ -178,5 +186,40 @@ public static partial class ReferenceExtractor
         }
     }
 
+    private static bool IsCSharpParameterModifierPosition(
+        string expression,
+        int segmentStart,
+        int segmentEnd,
+        string segment)
+    {
+        if (!IsParameterModifier("csharp", segment))
+            return false;
+
+        int next = SkipWhitespace(expression, segmentEnd);
+        if (next >= expression.Length
+            || (expression[next] != '(' && !IsTypeExpressionIdentifierStart("csharp", expression[next])))
+        {
+            return false;
+        }
+
+        int previous = segmentStart - 1;
+        while (previous >= 0 && char.IsWhiteSpace(expression[previous]))
+            previous--;
+        if (previous < 0 || expression[previous] is '(' or ',')
+            return true;
+        if (!IsTypeExpressionIdentifierPart("csharp", expression[previous]))
+            return false;
+
+        int previousEnd = previous + 1;
+        while (previous >= 0 && IsTypeExpressionIdentifierPart("csharp", expression[previous]))
+            previous--;
+        int previousStart = previous + 1;
+        var previousSegment = expression.Substring(previousStart, previousEnd - previousStart);
+        return IsCSharpParameterModifierPosition(
+            expression,
+            previousStart,
+            previousEnd,
+            previousSegment);
+    }
 
 }

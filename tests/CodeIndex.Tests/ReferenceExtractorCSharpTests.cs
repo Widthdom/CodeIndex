@@ -58,6 +58,8 @@ public partial class ReferenceExtractorTests
     public void Extract_CsharpParameterAndArgumentModifiers_KeepFollowingTypeReferences_Issue4832()
     {
         const string content = """
+            using System.Linq;
+
             struct Payload {}
             class Wrapper<T> {}
             ref struct RefPacket {}
@@ -72,6 +74,19 @@ public partial class ReferenceExtractorTests
                 {
                     first = default;
                     second = default;
+                }
+
+                static void Final(
+                    Payload first,
+                    out Wrapper<Payload> last)
+                {
+                    last = default;
+                }
+
+                static bool TryPayload(out Payload value)
+                {
+                    value = default;
+                    return true;
                 }
 
                 static void Consume(
@@ -103,10 +118,18 @@ public partial class ReferenceExtractorTests
                         input);
                     Multi(
                         out Payload first, out Wrapper<Payload> second);
+                    Final(
+                        input,
+                        out Wrapper<Payload> final);
+                    var inferredMatch = new[] { input }.Any(item => TryPayload(out var nested) && nested.Equals(item));
+                    var explicitMatch = new[] { input }.Any(item => TryPayload(out Payload nested) && nested.Equals(item));
                     _ = declared;
                     _ = inferred;
                     _ = first;
                     _ = second;
+                    _ = final;
+                    _ = inferredMatch;
+                    _ = explicitMatch;
                 }
             }
             """;
@@ -144,6 +167,18 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "Payload"
             && reference.ReferenceKind == "type_reference"
             && reference.Context.Contains("this scoped ref Payload target", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Payload"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.Contains("TryPayload(out Payload nested)", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Wrapper"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.Contains("out Wrapper<Payload> last)", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Wrapper"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.Contains("out Wrapper<Payload> final)", StringComparison.Ordinal));
         Assert.Contains(references, reference =>
             reference.SymbolName == "Payload"
             && reference.ReferenceKind == "type_reference"
