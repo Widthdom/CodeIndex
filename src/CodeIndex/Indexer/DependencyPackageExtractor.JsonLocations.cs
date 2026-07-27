@@ -44,35 +44,35 @@ internal static partial class DependencyPackageExtractor
                 switch (reader.TokenType)
                 {
                     case JsonTokenType.StartObject:
-                    {
-                        var objectLocations = new JsonObjectLocations();
-                        if (pendingProperty is not null)
                         {
-                            pendingProperty.ObjectValue = objectLocations;
-                        }
+                            var objectLocations = new JsonObjectLocations();
+                            if (pendingProperty is not null)
+                            {
+                                pendingProperty.ObjectValue = objectLocations;
+                            }
 
-                        root ??= objectLocations;
-                        containers.Push(new JsonLocationContainer(objectLocations, pendingProperty));
-                        pendingProperty = null;
-                        break;
-                    }
+                            root ??= objectLocations;
+                            containers.Push(new JsonLocationContainer(objectLocations, pendingProperty));
+                            pendingProperty = null;
+                            break;
+                        }
 
                     case JsonTokenType.EndObject:
-                    {
-                        if (containers.Count == 0)
                         {
-                            return null;
-                        }
+                            if (containers.Count == 0)
+                            {
+                                return null;
+                            }
 
-                        var container = containers.Pop();
-                        if (container.OwningProperty is not null)
-                        {
-                            container.OwningProperty.EndLine = locator.GetLine(reader.TokenStartIndex);
-                        }
+                            var container = containers.Pop();
+                            if (container.OwningProperty is not null)
+                            {
+                                container.OwningProperty.EndLine = locator.GetLine(reader.TokenStartIndex);
+                            }
 
-                        pendingProperty = null;
-                        break;
-                    }
+                            pendingProperty = null;
+                            break;
+                        }
 
                     case JsonTokenType.StartArray:
                         containers.Push(new JsonLocationContainer(null, pendingProperty));
@@ -80,35 +80,35 @@ internal static partial class DependencyPackageExtractor
                         break;
 
                     case JsonTokenType.EndArray:
-                    {
-                        if (containers.Count == 0)
                         {
-                            return null;
-                        }
+                            if (containers.Count == 0)
+                            {
+                                return null;
+                            }
 
-                        var container = containers.Pop();
-                        if (container.OwningProperty is not null)
-                        {
-                            container.OwningProperty.EndLine = locator.GetLine(reader.TokenStartIndex);
-                        }
+                            var container = containers.Pop();
+                            if (container.OwningProperty is not null)
+                            {
+                                container.OwningProperty.EndLine = locator.GetLine(reader.TokenStartIndex);
+                            }
 
-                        pendingProperty = null;
-                        break;
-                    }
+                            pendingProperty = null;
+                            break;
+                        }
 
                     case JsonTokenType.PropertyName:
-                    {
-                        if (containers.Count == 0 || containers.Peek().ObjectValue is not { } parent)
                         {
-                            return null;
-                        }
+                            if (containers.Count == 0 || containers.Peek().ObjectValue is not { } parent)
+                            {
+                                return null;
+                            }
 
-                        var (line, column) = locator.GetLocation(reader.TokenStartIndex);
-                        var property = new JsonPropertyLocation(reader.GetString() ?? string.Empty, line, column);
-                        parent.Properties.Add(property);
-                        pendingProperty = property;
-                        break;
-                    }
+                            var (line, column) = locator.GetLocation(reader.TokenStartIndex);
+                            var property = new JsonPropertyLocation(reader.GetString() ?? string.Empty, line, column);
+                            parent.Properties.Add(property);
+                            pendingProperty = property;
+                            break;
+                        }
 
                     case JsonTokenType.String:
                     case JsonTokenType.Number:
