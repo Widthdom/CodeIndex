@@ -1382,17 +1382,21 @@ names, aggregate counts, per-query counts, and query freshness. Recipe count
 aggregations support `--count-by path|file|symbol|origin|return-type|subsystem`,
 `--group-by file|symbol|origin|return-type|subsystem --count`, and
 `--unique path|file|symbol|origin|return-type|subsystem`.
-Row-producing recipe modes (text, aggregate JSON, compact JSON, NDJSON, and
-issue drafts) apply `--first-per-file` and fixed-seed deterministic
-`--sample <n>` before
+Row-producing search and recipe modes (text, aggregate JSON, compact JSON,
+NDJSON, JSON array envelopes, and issue drafts) apply `--first-per-file` and
+fixed-seed deterministic `--sample <n>` before
 the effective per-query `--limit` / cross-query `--total-limit`. Aggregate JSON
-and compact query objects, run summaries, issue-draft `source` objects, and
-NDJSON terminal records distinguish `source_total`, `selected_total`,
-`returned`, `selector_omitted_count`, and `limit_omitted_count`. Their
+and compact query objects, plain compact roots, run summaries, issue-draft
+`source` objects, NDJSON terminal records, and array-envelope
+`metadata.stream_terminal` objects distinguish `source_total`,
+`selected_total`, `returned`, `selector_omitted_count`, and
+`limit_omitted_count`. Their
 `selectors` array records each applied selector in execution order, including
 per-stage input/output/omission counts and the sample size, mode, and seed.
 `source_total_authoritative` says whether the bounded fetch observed the whole
-source population; otherwise `source_total_lower_bound` is also present. The
+source population; guard filters, origin/facet post-filters, bounded candidate
+windows, and recipe file-reject post-filters conservatively produce
+`source_total_authoritative=false` with `source_total_lower_bound`. The
 older `selection_reason` and `selection_omitted_count` fields remain as
 compatibility summaries. Search `query_context.row_selectors` exposes every
 applied selector with the same sample mode and seed. When a hard
@@ -1407,8 +1411,12 @@ rerun instead. For the same reason, recipe row selectors reject an incoming
 `--cursor`. Generated compact and issue-draft replay commands retain the active
 selector. Count, aggregation,
 and summary-only compact recipe output reject row-selection controls because
-they cannot represent selected rows, and recipe execution rejects
-`--per-file-limit` because it does not produce grouped search output.
+they cannot represent selected rows. Plain count/aggregation, named-query and
+recipe-list modes, `--results-only`, metadata-free `--json=array`, and formatted
+row outputs without selector accounting also reject them instead of silently
+ignoring them. Add `--json-envelope` to an array request to retain selector
+accounting. Recipe execution rejects `--per-file-limit` because it does not
+produce grouped search output.
 Recipe SARIF emits one bounded finding per returned recipe result. Its rule IDs
 use `recipe/query`, result fingerprints are stable for the recipe/query/source
 location, and result/run properties preserve severity, confidence, scope,
@@ -4516,15 +4524,19 @@ child query 全体の emitted row 数を制限でき、NDJSON では `--max-json
 recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
 aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin|return-type|subsystem`、
 `--group-by file|symbol|origin|return-type|subsystem --count`、`--unique path|file|symbol|origin|return-type|subsystem` に対応します。
-row を返す recipe mode（text、aggregate JSON、compact JSON、NDJSON、issue draft）は、
-`--first-per-file` と固定 seed の決定的な `--sample <n>` を、有効な query ごとの `--limit` /
+row を返す search / recipe mode（text、aggregate JSON、compact JSON、NDJSON、
+JSON array envelope、issue draft）は、`--first-per-file` と固定 seed の決定的な
+`--sample <n>` を、有効な query ごとの `--limit` /
 query 全体の `--total-limit` より先に適用します。aggregate JSON / compact の query object は
-run summary、issue-draft の `source` object、NDJSON terminal record と同様に、
-`source_total`、`selected_total`、`returned`、`selector_omitted_count`、
-`limit_omitted_count` を分けて返します。`selectors` array は適用順の各 selector について、
+plain compact の root、run summary、issue-draft の `source` object、NDJSON terminal record、
+array envelope の `metadata.stream_terminal` と同様に、`source_total`、`selected_total`、
+`returned`、`selector_omitted_count`、`limit_omitted_count` を分けて返します。
+`selectors` array は適用順の各 selector について、
 各段階の入力件数、出力件数、省略件数、および sample の size / mode / seed を記録します。
 bounded fetch が source population 全体を観測できたかは `source_total_authoritative` で示し、
-そうでない場合は `source_total_lower_bound` も返します。従来の `selection_reason` と
+guard filter、origin / facet の後段 filter、bounded candidate window、recipe の file-reject
+後段 filter がある場合は保守的に `source_total_authoritative=false` と
+`source_total_lower_bound` を返します。従来の `selection_reason` と
 `selection_omitted_count` は互換用 summary として維持します。
 search の `query_context.row_selectors` も適用済み selector と同じ sample mode / seed を公開します。
 hard な `--max-json-bytes` cap で NDJSON terminal に追加 accounting field が収まらない場合、
@@ -4535,8 +4547,12 @@ selection だけによる省略は matched / omitted count に含まれますが
 `next_cursor` は抑止します。この場合は該当 limit を増やして再実行してください。同じ理由で、
 recipe の row selector は受け取った `--cursor` も拒否します。compact / issue-draft が生成する
 replay command は有効な selector を保持します。count、aggregation、summary-only compact の
-recipe output は選択済み row を表現できないため row-selection control を拒否し、recipe
-execution は grouped search output を生成しないため `--per-file-limit` を拒否します。
+recipe output は選択済み row を表現できないため row-selection control を拒否します。
+plain count / aggregation、named-query、recipe-list、`--results-only`、metadata を持たない
+`--json=array`、selector accounting を持たない formatted row output も、黙って無視せず
+row-selection control を拒否します。array request で accounting を保持するには
+`--json-envelope` を追加します。recipe execution は grouped search output を生成しないため
+`--per-file-limit` を拒否します。
 recipe SARIF は返却された recipe result ごとに上限付き finding を1件出力します。rule ID は
 `recipe/query` を使い、result fingerprint は recipe / query / source location に対して安定し、
 result / run properties は severity、confidence、scope、適用済み result limit、

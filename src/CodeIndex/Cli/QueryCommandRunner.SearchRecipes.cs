@@ -1320,7 +1320,8 @@ public static partial class QueryCommandRunner
         return WithDb(options, jsonOptions, reader =>
         {
             var resultLimit = GetAdHocIssueDraftResultLimit(options);
-            var sourceTotalCountAuthoritative = options.GuardFilters.Count == 0;
+            var sourceTotalCountAuthoritative = options.GuardFilters.Count == 0
+                                                && !HasSearchOriginFilters(options);
             var sourceFetchLimit = sourceTotalCountAuthoritative
                 ? int.MaxValue
                 : GetSearchRecipeFetchLimit(options, resultLimit);
@@ -1461,7 +1462,12 @@ public static partial class QueryCommandRunner
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
                 resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
-            var sourceTotalAuthoritative = results.Count < fetchLimit;
+            var sourceTotalAuthoritative = IsSearchRecipeSourceTotalAuthoritative(
+                options,
+                recipeQuery,
+                guardFilters,
+                results.Count,
+                fetchLimit);
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
@@ -1557,7 +1563,12 @@ public static partial class QueryCommandRunner
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
                 resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
-            var sourceTotalAuthoritative = results.Count < fetchLimit;
+            var sourceTotalAuthoritative = IsSearchRecipeSourceTotalAuthoritative(
+                options,
+                recipeQuery,
+                guardFilters,
+                results.Count,
+                fetchLimit);
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
@@ -1626,6 +1637,17 @@ public static partial class QueryCommandRunner
             && selection.TruncationReason is "first_per_file" or "sample"
                 ? selection.TruncationReason
                 : null;
+
+    private static bool IsSearchRecipeSourceTotalAuthoritative(
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery,
+        IReadOnlyCollection<SearchGuardFilter> guardFilters,
+        int resultCount,
+        int fetchLimit)
+        => guardFilters.Count == 0
+           && recipeQuery.RejectFileQueries.Count == 0
+           && !HasSearchOriginFilters(BuildSearchDisplayFacetFilters(options, recipeQuery))
+           && resultCount < fetchLimit;
 
     private static int GetSearchRecipeFetchLimit(QueryCommandOptions options, int resultLimit)
     {

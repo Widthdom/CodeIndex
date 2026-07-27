@@ -268,6 +268,14 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (options.ListRecipes)
         {
+            if (options.FirstPerFile || options.SampleSize.HasValue)
+            {
+                WriteUsageError(
+                    "row-selection controls are not supported with --list-recipes because recipe discovery does not emit search rows.",
+                    GetUsageLineOrThrow(usageCommandName),
+                    "Remove --first-per-file / --sample, or execute a recipe or plain search that returns rows.");
+                return CommandExitCodes.UsageError;
+            }
             if (options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
             {
                 WriteUsageError(
@@ -297,6 +305,14 @@ public static partial class QueryCommandRunner
         }
         if (options.NamedSearchQueries.Count > 0)
         {
+            if (options.FirstPerFile || options.SampleSize.HasValue)
+            {
+                WriteUsageError(
+                    "row-selection controls are not supported with --named-query because named batches do not expose selector accounting.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove --first-per-file / --sample, or run each query as a plain search or recipe row output.");
+                return CommandExitCodes.UsageError;
+            }
             if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
             {
                 WriteUsageError(
@@ -426,10 +442,11 @@ public static partial class QueryCommandRunner
                     || options.GroupBy != null
                     || options.CountBy != null
                     || options.UniqueBy != null
+                    || options.ResultsOnly
                     || (options.SummaryOnly && (options.Compact || options.OutputFormat == OutputFormatCompact))))
             {
                 WriteUsageError(
-                    "recipe row-selection controls cannot be combined with count, aggregation, or summary-only compact output.",
+                    "recipe row-selection controls cannot be combined with count, aggregation, results-only, or summary-only compact output.",
                     GetUsageLineOrThrow("search"),
                     "Remove --first-per-file / --sample to keep the non-row output, or choose text, JSON, compact, NDJSON, or issue-drafts row output.");
                 return CommandExitCodes.UsageError;
@@ -550,6 +567,48 @@ public static partial class QueryCommandRunner
         }
         if (TryWriteUnexpectedExtraPositionals("search", options))
             return CommandExitCodes.UsageError;
+        if ((options.FirstPerFile || options.SampleSize.HasValue)
+            && (options.CountOnly
+                || options.GroupBy != null
+                || options.CountBy != null
+                || options.UniqueBy != null
+                || options.OutputFormat == OutputFormatGrouped))
+        {
+            WriteUsageError(
+                "search row-selection controls cannot be combined with count or aggregation output.",
+                GetUsageLineOrThrow("search"),
+                "Remove --first-per-file / --sample to count the full filtered population, or choose a row output that reports selector accounting.");
+            return CommandExitCodes.UsageError;
+        }
+        if ((options.FirstPerFile || options.SampleSize.HasValue) && options.ResultsOnly)
+        {
+            WriteUsageError(
+                "search row-selection controls cannot be combined with --results-only because that stream omits selector accounting.",
+                GetUsageLineOrThrow("search"),
+                "Remove --results-only to retain the NDJSON terminal record, or remove --first-per-file / --sample.");
+            return CommandExitCodes.UsageError;
+        }
+        if ((options.FirstPerFile || options.SampleSize.HasValue)
+            && options.JsonOutputFormat == JsonOutputFormatArray)
+        {
+            WriteUsageError(
+                "search row-selection controls cannot be combined with metadata-free --json=array output.",
+                GetUsageLineOrThrow("search"),
+                "Add --json-envelope to retain selector accounting, use --json=ndjson / --format compact, or remove --first-per-file / --sample.");
+            return CommandExitCodes.UsageError;
+        }
+        if ((options.FirstPerFile || options.SampleSize.HasValue)
+            && options.OutputFormat is not OutputFormatText
+                and not OutputFormatJson
+                and not OutputFormatCompact
+                and not OutputFormatIssueDrafts)
+        {
+            WriteUsageError(
+                "search row-selection controls are only supported by text, JSON, compact, and issue-drafts row output.",
+                GetUsageLineOrThrow("search"),
+                "Choose an output shape that reports selector accounting, or remove --first-per-file / --sample.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.GroupBy != null)
         {
             if (!IsSupportedSearchGroupByValue(options.GroupBy))
@@ -724,8 +783,8 @@ public static partial class QueryCommandRunner
             var groupedCounts = options.OutputFormat == OutputFormatGrouped
                 ? CountSearchMatches(reader, options, exactSearch)
                 : default;
-            var displayRows = ReadSearchDisplayRows(reader, options, exactSearch);
-            var selection = ApplySearchOutputSelection(displayRows, options);
+            var displayRows = ReadSearchDisplayRows(reader, options, exactSearch, out var boundedSelection);
+            var selection = boundedSelection ?? ApplySearchOutputSelection(displayRows, options);
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
             {
@@ -738,6 +797,13 @@ public static partial class QueryCommandRunner
                 {
                     var groupedExitCode = WriteGroupedSearchResults([], groupedCounts, options, jsonOptions);
                     return groupedExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : groupedExitCode;
+                }
+                if (options.Json
+                    && options.OutputFormat == OutputFormatCompact
+                    && selection.Selectors.Count > 0)
+                {
+                    var compactExitCode = WriteCompactSearchResults([], options, jsonOptions, selection);
+                    return compactExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : compactExitCode;
                 }
                 if (options.Json && TryWriteEmptySearchJsonWithOptionalByteLimit(options, jsonOptions, out var emptyJsonExitCode))
                     return emptyJsonExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : emptyJsonExitCode;
@@ -836,7 +902,7 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatCompact)
                 {
-                    return WriteCompactSearchResults(compactResults, options, jsonOptions);
+                    return WriteCompactSearchResults(compactResults, options, jsonOptions, selection);
                 }
                 if (options.OutputFormat == OutputFormatGrouped)
                 {
