@@ -1435,6 +1435,8 @@ Supported symbol kinds by language:
 | Zig / PowerShell / CSS-SCSS / Batch / Assembly / HTML | language-specific functions, labels, selectors, stages, Web Components, properties, imports | language-specific references where implemented | mixed |
 | XML | bounded element/attribute paths plus NuGet.config security-policy values | XAML references where implemented | mixed |
 
+C# parameter and argument-list modifier tokens (`out`, `ref`, `in`, `params`, `this`, and `scoped`) are excluded only when parsed in modifier positions. A following concrete or generic type retains its `type_reference`, while `out var` emits neither the modifier nor the implicit `var` as a type. Do not implement this as a global keyword blacklist because contextual keywords can remain legal identifiers outside modifier positions.
+
 Shell and PowerShell files also expose a synthetic `<script>` function symbol spanning the file. Top-level call references use this scope as their graph container, while references inside declared functions retain the declared function container.
 
 Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
@@ -4579,6 +4581,8 @@ SQL 固有の symbol extraction:
 | VB.NET | Sub/Function、Class/Module、Structure、Interface、Enum、Property、Event | Namespace、Imports、`AddressOf`、`Handles` | yes |
 | Zig / PowerShell / CSS-SCSS / Batch / Assembly / HTML | 言語別 function、label、selector、stage、Web Component、property、import | 実装済みの言語別 reference | mixed |
 | XML | 上限付き element / attribute path と NuGet.config security-policy value | 実装済みの XAML reference | mixed |
+
+C# の parameter / argument-list modifier token（`out`、`ref`、`in`、`params`、`this`、`scoped`）は、modifier 位置として解析された場合だけ除外します。後続の concrete type / generic type の `type_reference` は維持し、`out var` では modifier も暗黙の `var` も型として出力しません。contextual keyword は modifier 位置以外では合法な identifier になり得るため、global keyword blacklist にしてはいけません。
 
 Shell と PowerShell のファイルには、ファイル全体を覆う合成 `<script>` 関数シンボルも作成される。トップレベルの call reference はこのスコープを graph container として使い、宣言済み関数内の reference はその関数 container を維持する。
 
