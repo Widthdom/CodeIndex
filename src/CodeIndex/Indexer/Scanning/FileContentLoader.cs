@@ -113,6 +113,7 @@ internal sealed partial class FileContentLoader(
         cancellationToken.ThrowIfCancellationRequested();
         byte[]? bytes = null;
         bool lengthChanged;
+        bool pathIdentityChanged;
         DateTime modifiedBeforeRead;
         DateTime modifiedAfterRead;
         using (var stream = OpenValidatedReadStream(absolutePath, readPath))
@@ -146,9 +147,11 @@ internal sealed partial class FileContentLoader(
 
             lengthChanged = stream.Length != initialLength;
             modifiedAfterRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+            pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
         }
 
-        if (retryOnMutation && (modifiedAfterRead != modifiedBeforeRead || lengthChanged))
+        if (retryOnMutation
+            && (modifiedAfterRead != modifiedBeforeRead || lengthChanged || pathIdentityChanged))
             return (null, RequiresRetry: true);
         if (bytes is null || IsGitLfsPointer(bytes))
             return (null, RequiresRetry: false);

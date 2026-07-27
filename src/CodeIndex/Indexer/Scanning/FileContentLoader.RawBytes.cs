@@ -28,10 +28,11 @@ internal sealed partial class FileContentLoader
         byte[] bytes;
         long sizeBytes;
         DateTime modifiedUtc;
-        var readPath = _resolveFileReadPath(absolutePath);
         for (var attempt = 0; ; attempt++)
         {
+            var readPath = _resolveFileReadPath(absolutePath);
             DateTime modifiedBeforeRead;
+            bool pathIdentityChanged;
             using (var stream = OpenValidatedReadStream(absolutePath, readPath))
             {
                 modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
@@ -49,8 +50,9 @@ internal sealed partial class FileContentLoader
                     normalizedRelativePath,
                     cancellationToken);
                 modifiedUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+                pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
             }
-            if (modifiedUtc == modifiedBeforeRead || attempt > 0)
+            if ((modifiedUtc == modifiedBeforeRead && !pathIdentityChanged) || attempt > 0)
                 break;
         }
 
@@ -63,11 +65,12 @@ internal sealed partial class FileContentLoader
         RawByteChunkPredicate chunkPredicate,
         CancellationToken cancellationToken)
     {
-        var readPath = _resolveFileReadPath(absolutePath);
         for (var attempt = 0; ; attempt++)
         {
+            var readPath = _resolveFileReadPath(absolutePath);
             DateTime modifiedBeforeRead;
             DateTime modifiedUtc;
+            bool pathIdentityChanged;
             bool matched;
             using (var stream = OpenValidatedReadStream(absolutePath, readPath))
             {
@@ -87,12 +90,13 @@ internal sealed partial class FileContentLoader
                     chunkPredicate,
                     cancellationToken);
                 modifiedUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+                pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
             }
 
             if (matched)
                 return true;
 
-            if (modifiedUtc == modifiedBeforeRead || attempt > 0)
+            if ((modifiedUtc == modifiedBeforeRead && !pathIdentityChanged) || attempt > 0)
                 return false;
         }
     }
@@ -128,6 +132,15 @@ internal sealed partial class FileContentLoader
             stream.Dispose();
             throw;
         }
+    }
+
+    private static bool ReadPathIdentityChanged(string absolutePath, FileStream stream)
+    {
+        if (!FileIndexer.TryGetFileIdentity(stream.SafeFileHandle, out var openedIdentity))
+            return false;
+
+        return !FileIndexer.TryGetFileIdentity(absolutePath, out var currentIdentity)
+            || currentIdentity != openedIdentity;
     }
 
     private (byte[] Bytes, long SizeBytes) ReadStreamBytesWithKnownInitialLength(
