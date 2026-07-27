@@ -741,7 +741,14 @@ public static partial class QueryCommandRunner
                 }
                 if (options.Json && TryWriteEmptySearchJsonWithOptionalByteLimit(options, jsonOptions, out var emptyJsonExitCode))
                     return emptyJsonExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : emptyJsonExitCode;
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                var emptySarifRunProperties = options.OutputFormat == OutputFormatSarif
+                    ? BuildAdHocSearchSarifRunProperties(
+                        options,
+                        selection,
+                        CountSearchMatches(reader, options, exactSearch).Count,
+                        returnedResultCount: 0)
+                    : null;
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions, emptySarifRunProperties))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                 {
@@ -852,7 +859,16 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch)).Take(options.Limit), jsonOptions);
+                    var sarifItems = displayRows
+                        .SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch))
+                        .Take(options.Limit)
+                        .ToList();
+                    var runProperties = BuildAdHocSearchSarifRunProperties(
+                        options,
+                        selection,
+                        CountSearchMatches(reader, options, exactSearch).Count,
+                        sarifItems.Count);
+                    WriteSarif(sarifItems, jsonOptions, runProperties: runProperties);
                     return CommandExitCodes.Success;
                 }
                 if (options.JsonOutputFormat == JsonOutputFormatArray)

@@ -31,6 +31,52 @@ public static partial class QueryCommandRunner
         return string.IsNullOrWhiteSpace(result.Name) ? kind : $"{kind} {result.Name}";
     }
 
+    private static JsonObject BuildAdHocSearchSarifRunProperties(
+        QueryCommandOptions options,
+        SearchOutputSelection selection,
+        int sourceResultCount,
+        int returnedResultCount)
+    {
+        var omittedResultCount = Math.Max(0, sourceResultCount - returnedResultCount);
+        var truncated = selection.Truncated || omittedResultCount > 0;
+        var replayCommand = BuildAdHocSearchReplayCommand(options, OutputFormatSarif);
+        var querySummary = new JsonObject
+        {
+            ["name"] = "ad-hoc",
+            ["query"] = options.Query,
+            ["source_result_count"] = sourceResultCount,
+            ["result_count"] = returnedResultCount,
+            ["result_limit"] = options.Limit,
+            ["truncated"] = truncated,
+            ["minimum_omitted_result_count"] = omittedResultCount,
+            ["next_cursor"] = null,
+            ["replay_command"] = replayCommand,
+        };
+        if (selection.TruncationReason is "sample" or "first_per_file")
+        {
+            querySummary["selection_reason"] = selection.TruncationReason;
+            querySummary["selection_omitted_count"] = selection.SelectionOmittedCount;
+        }
+
+        return new JsonObject
+        {
+            ["format"] = "search",
+            ["query_count"] = 1,
+            ["source_result_count"] = sourceResultCount,
+            ["result_count"] = returnedResultCount,
+            ["limit_per_query"] = options.Limit,
+            ["queries"] = new JsonArray(querySummary),
+            ["truncation"] = new JsonObject
+            {
+                ["truncated"] = truncated,
+                ["truncated_query_count"] = truncated ? 1 : 0,
+                ["minimum_omitted_result_count"] = omittedResultCount,
+            },
+            ["cursoring_available"] = false,
+            ["replay_command"] = replayCommand,
+        };
+    }
+
     private static void WriteSarif(
         IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> items,
         JsonSerializerOptions jsonOptions,

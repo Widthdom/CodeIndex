@@ -3049,6 +3049,9 @@ public static partial class QueryCommandRunner
     }
 
     private static string BuildAdHocSearchIssueDraftReplayCommand(QueryCommandOptions options)
+        => BuildAdHocSearchReplayCommand(options, OutputFormatIssueDrafts);
+
+    private static string BuildAdHocSearchReplayCommand(QueryCommandOptions options, string outputFormat)
     {
         var args = new List<string>
         {
@@ -3056,21 +3059,39 @@ public static partial class QueryCommandRunner
             "search",
             options.Query!,
             "--format",
-            OutputFormatIssueDrafts,
+            outputFormat,
             "--limit",
             options.Limit.ToString(CultureInfo.InvariantCulture),
         };
 
         if (options.DbPathExplicit)
             AddReplayValueOption(args, "--db", options.DbPath);
+        if (!string.IsNullOrWhiteSpace(options.DataDir))
+            AddReplayValueOption(args, "--data-dir", options.DataDir);
+        if (options.SourceOnly)
+            args.Add("--source-only");
+        else if (options.AuditScopeExplicit)
+            AddReplayValueOption(args, "--audit-scope", options.AuditScope);
         if (!string.IsNullOrWhiteSpace(options.Lang))
             AddReplayValueOption(args, "--lang", options.Lang);
+        if (!string.IsNullOrWhiteSpace(options.SolutionFilter))
+            AddReplayValueOption(args, "--solution", options.SolutionFilter);
+        foreach (var projectFilter in options.ProjectFilters)
+            AddReplayValueOption(args, "--project", projectFilter);
         foreach (var pathPattern in options.PathPatterns)
             AddReplayValueOption(args, "--path", pathPattern);
         foreach (var excludePath in options.ExcludePaths)
             AddReplayValueOption(args, "--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
+        if (options.IncludeGenerated)
+            args.Add("--include-generated");
+        if (options.ExcludeComments)
+            args.Add("--exclude-comments");
+        if (options.ExcludeStrings)
+            args.Add("--exclude-strings");
+        if (options.ExcludeFixtures)
+            args.Add("--exclude-fixtures");
         if (options.Since.HasValue)
             AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
@@ -3081,6 +3102,19 @@ public static partial class QueryCommandRunner
             args.Add("--exact");
         if (options.ExactSubstring)
             args.Add("--exact-substring");
+        if (options.RawFts)
+            args.Add("--raw-fts");
+        if (options.Prefix)
+            args.Add("--prefix");
+        if (options.TokenBoundary)
+            args.Add("--token-boundary");
+        AddSearchRecipeRowSelectionReplayOptions(args, options);
+        foreach (var origin in options.MatchOrigins)
+            AddReplayValueOption(args, "--origin", origin);
+        foreach (var origin in options.ExcludeOrigins)
+            AddReplayValueOption(args, "--exclude-origin", origin);
+        foreach (var resultKind in options.ResultKinds)
+            AddReplayValueOption(args, "--result-kind", resultKind);
         foreach (var guardFilter in options.GuardFilters)
             AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
         if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
@@ -3090,23 +3124,26 @@ public static partial class QueryCommandRunner
         AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
         AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
-        if (!string.IsNullOrWhiteSpace(options.OpenIssuesPath))
-            AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
-        if (!string.IsNullOrWhiteSpace(options.OpenIssuesRepository))
-            AddReplayValueOption(args, "--repo", options.OpenIssuesRepository);
-        if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState)
-            AddReplayValueOption(args, "--issue-state", options.IssueState);
-        if (options.DuplicatePreflightTuningExplicit)
+        if (string.Equals(outputFormat, OutputFormatIssueDrafts, StringComparison.Ordinal))
         {
-            if (string.Equals(options.DuplicateConfidence, IssueDuplicatePreflight.CustomDuplicateConfidence, StringComparison.Ordinal))
-                AddReplayValueOption(args, "--duplicate-threshold", options.DuplicateThreshold.ToString("0.###", CultureInfo.InvariantCulture));
-            else
-                AddReplayValueOption(args, "--duplicate-confidence", options.DuplicateConfidence);
+            if (!string.IsNullOrWhiteSpace(options.OpenIssuesPath))
+                AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
+            if (!string.IsNullOrWhiteSpace(options.OpenIssuesRepository))
+                AddReplayValueOption(args, "--repo", options.OpenIssuesRepository);
+            if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState)
+                AddReplayValueOption(args, "--issue-state", options.IssueState);
+            if (options.DuplicatePreflightTuningExplicit)
+            {
+                if (string.Equals(options.DuplicateConfidence, IssueDuplicatePreflight.CustomDuplicateConfidence, StringComparison.Ordinal))
+                    AddReplayValueOption(args, "--duplicate-threshold", options.DuplicateThreshold.ToString("0.###", CultureInfo.InvariantCulture));
+                else
+                    AddReplayValueOption(args, "--duplicate-confidence", options.DuplicateConfidence);
+            }
+            foreach (var label in options.IssueLabels)
+                AddReplayValueOption(args, "--issue-label", label);
+            if (!string.IsNullOrWhiteSpace(options.IssueTitle))
+                AddReplayValueOption(args, "--issue-title", options.IssueTitle);
         }
-        foreach (var label in options.IssueLabels)
-            AddReplayValueOption(args, "--issue-label", label);
-        if (!string.IsNullOrWhiteSpace(options.IssueTitle))
-            AddReplayValueOption(args, "--issue-title", options.IssueTitle);
 
         return string.Join(" ", args.Select(QuoteReplayShellArg));
     }
