@@ -120,6 +120,7 @@ public static partial class SymbolExtractor
         var getPrivateScopeColumns = scanInputs.GetPrivateScopeColumns;
         Func<CSharpTypeBodyScope> GetCSharpInsideTypeBody = scanInputs.GetCSharpInsideTypeBody;
         Func<CSharpCallableParameterScope> GetCSharpCallableParameterScope = scanInputs.GetCSharpCallableParameterScope;
+        Func<CSharpDeclarationStartScope> GetCSharpDeclarationStartScope = scanInputs.GetCSharpDeclarationStartScope;
         var getCSharpSwitchExpressionLines = scanInputs.GetCSharpSwitchExpressionLines;
         var getCssQualifiedRuleAncestors = scanInputs.GetCssQualifiedRuleAncestors;
         var initialSymbolCapacity = EstimateSymbolListInitialCapacity(lines.Length);
@@ -462,6 +463,28 @@ public static partial class SymbolExtractor
                             // だけを除外し、本物の static member / local function は維持する。
                             // Closes #4830; regression of #4453.
                             lineOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            continue;
+                        }
+
+                        if (lang == "csharp"
+                            && pattern.Kind == "function"
+                            && pattern.BodyStyle == BodyStyle.Brace
+                            && !GetCSharpDeclarationStartScope().CanStartDeclarationAt(i, csharpGateRawStartColumn))
+                        {
+                            // Method and constructor patterns are intentionally broad enough to
+                            // recognize multi-line declarations. Do not let that merger begin from
+                            // an invocation argument or callable-parameter continuation, even when
+                            // a later declaration brace makes the combined text look method-shaped.
+                            // The scope is column-aware so a real same-line sibling remains eligible.
+                            // メソッドとコンストラクタのパターンは複数行宣言を認識するため意図的に
+                            // 広い。後続の宣言 brace によって結合テキストがメソッド形に見えても、
+                            // 呼び出し引数や callable parameter の継続位置から開始してはならない。
+                            // 列単位の scope により、同一行の後続にある本物の sibling は維持する。
+                            // Fixes #4831; prevents regressions covered by #496 and #4413.
+                            lineOffset = FindNextSameLineBraceStatementStart(
+                                matchLine,
+                                absoluteStartColumn + Math.Max(1, match.Length),
+                                lang);
                             continue;
                         }
 

@@ -227,6 +227,455 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    /// <summary>
+    /// Records positions where a C# declaration may start without inheriting an
+    /// unmatched expression delimiter. Block lambdas establish a nested statement
+    /// baseline so valid local functions inside callback bodies remain eligible.
+    /// C# 宣言が未閉じの式 delimiter を引き継がずに開始できる位置を記録する。
+    /// block lambda は入れ子の statement baseline を作り、callback 本体内の正当な
+    /// local function を引き続き宣言候補として扱う。
+    /// </summary>
+    private sealed class CSharpDeclarationStartScope
+    {
+        public static readonly CSharpDeclarationStartScope Empty = new(null, null);
+
+        private readonly bool[]? _lineStartInsideExpressionContinuation;
+        private readonly List<(int Column, bool IsInsideExpressionContinuation)>?[]? _transitions;
+
+        public CSharpDeclarationStartScope(
+            bool[]? lineStartInsideExpressionContinuation,
+            List<(int Column, bool IsInsideExpressionContinuation)>?[]? transitions)
+        {
+            _lineStartInsideExpressionContinuation = lineStartInsideExpressionContinuation;
+            _transitions = transitions;
+        }
+
+        public bool CanStartDeclarationAt(int lineIndex, int column)
+        {
+            var isInsideExpressionContinuation =
+                _lineStartInsideExpressionContinuation?[lineIndex] ?? false;
+            var transitions = _transitions?[lineIndex];
+            if (transitions == null)
+                return !isInsideExpressionContinuation;
+
+            foreach (var (transitionColumn, transitionState) in transitions)
+            {
+                if (transitionColumn >= column)
+                    break;
+                isInsideExpressionContinuation = transitionState;
+            }
+
+            return !isInsideExpressionContinuation;
+        }
+    }
+
+    private enum CSharpPreprocessorDirectiveKind
+    {
+        None,
+        If,
+        ElseIf,
+        Else,
+        EndIf,
+        Other,
+    }
+
+    private readonly record struct CSharpDeclarationDelimiterState(
+        int ParenDepth,
+        int ParenBaseline,
+        bool[] ParenContributions,
+        (int ParenDepth, bool RestoresBaseline)[] BraceBaselines,
+        string StatementText);
+
+    private sealed class CSharpConditionalBranchFrame
+    {
+        public CSharpConditionalBranchFrame(CSharpDeclarationDelimiterState startState)
+        {
+            StartState = startState;
+        }
+
+        public CSharpDeclarationDelimiterState StartState { get; }
+        public List<CSharpDeclarationDelimiterState> BranchEndStates { get; } = [];
+        public bool HasElse { get; set; }
+    }
+
+    private static CSharpDeclarationStartScope BuildCSharpDeclarationStartScope(
+        string[] structuralLines,
+        CSharpTypeBodyScope typeBodyScope)
+    {
+        if (!LinesContain(structuralLines, '('))
+            return CSharpDeclarationStartScope.Empty;
+
+        bool[]? lineStartInsideExpressionContinuation = null;
+        List<(int Column, bool IsInsideExpressionContinuation)>?[]? transitions = null;
+        var statementBuffer = new StringBuilder(256);
+        var braceBaselines = new Stack<(int ParenDepth, bool RestoresBaseline)>();
+        var parenContributions = new Stack<bool>();
+        var conditionalBranchFrames = new Stack<CSharpConditionalBranchFrame>();
+        var parenDepth = 0;
+        var parenBaseline = 0;
+
+        for (var lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            var isInsideExpressionContinuation = parenDepth > parenBaseline;
+            if (isInsideExpressionContinuation)
+            {
+                (lineStartInsideExpressionContinuation ??=
+                    new bool[structuralLines.Length])[lineIndex] = true;
+            }
+
+            var line = structuralLines[lineIndex];
+            var directiveKind = GetCSharpPreprocessorDirectiveKind(line);
+            if (directiveKind != CSharpPreprocessorDirectiveKind.None)
+            {
+                switch (directiveKind)
+                {
+                    case CSharpPreprocessorDirectiveKind.If:
+                        conditionalBranchFrames.Push(new CSharpConditionalBranchFrame(
+                            CaptureCSharpDeclarationDelimiterState(
+                                parenDepth,
+                                parenBaseline,
+                                parenContributions,
+                                braceBaselines,
+                                statementBuffer)));
+                        break;
+                    case CSharpPreprocessorDirectiveKind.ElseIf:
+                    case CSharpPreprocessorDirectiveKind.Else:
+                        if (conditionalBranchFrames.TryPeek(out var branchFrame))
+                        {
+                            branchFrame.BranchEndStates.Add(
+                                CaptureCSharpDeclarationDelimiterState(
+                                    parenDepth,
+                                    parenBaseline,
+                                    parenContributions,
+                                    braceBaselines,
+                                    statementBuffer));
+                            if (directiveKind == CSharpPreprocessorDirectiveKind.Else)
+                                branchFrame.HasElse = true;
+                            RestoreCSharpDeclarationDelimiterState(
+                                branchFrame.StartState,
+                                ref parenDepth,
+                                ref parenBaseline,
+                                parenContributions,
+                                braceBaselines,
+                                statementBuffer);
+                        }
+                        break;
+                    case CSharpPreprocessorDirectiveKind.EndIf:
+                        if (conditionalBranchFrames.TryPop(out var completedFrame))
+                        {
+                            completedFrame.BranchEndStates.Add(
+                                CaptureCSharpDeclarationDelimiterState(
+                                    parenDepth,
+                                    parenBaseline,
+                                    parenContributions,
+                                    braceBaselines,
+                                    statementBuffer));
+                            if (!completedFrame.HasElse)
+                            {
+                                // With no `#else`, none of the conditional branches may be
+                                // active, so the entry state is also a possible branch end.
+                                // `#else` が無い場合は全 conditional branch が非採用になり得る
+                                // ため、entry state も branch end 候補に含める。
+                                completedFrame.BranchEndStates.Add(completedFrame.StartState);
+                            }
+
+                            var mergedState = MergeCSharpDeclarationDelimiterStates(
+                                completedFrame.BranchEndStates,
+                                completedFrame.StartState);
+                            RestoreCSharpDeclarationDelimiterState(
+                                mergedState,
+                                ref parenDepth,
+                                ref parenBaseline,
+                                parenContributions,
+                                braceBaselines,
+                                statementBuffer);
+                        }
+                        break;
+                }
+
+                // Preprocessor payloads are not C# expressions. In particular, arbitrary
+                // `#region` text may contain unmatched delimiters and conditional branches
+                // are mutually exclusive rather than one linear token stream.
+                // preprocessor payload は C# 式ではない。特に任意の `#region` text は
+                // 未閉じ delimiter を含み得て、conditional branch は一つの線形 token
+                // stream ではなく相互排他的である。
+                statementBuffer.Append(' ');
+                continue;
+            }
+
+            for (var column = 0; column < line.Length; column++)
+            {
+                var previousState = isInsideExpressionContinuation;
+                var ch = line[column];
+                switch (ch)
+                {
+                    case '(':
+                        {
+                            // A type-body attribute opener cannot contain a declaration. Exclude
+                            // only that same-line `[Attr(` parenthesis from expression depth so
+                            // incomplete-attribute recovery stays intact without letting unrelated
+                            // square-bracket syntax disable continuation tracking later in the file.
+                            // 型本体の attribute opener 内から宣言は始まらない。同一行の
+                            // `[Attr(` 括弧だけを expression depth から除外し、未完了 attribute
+                            // の回復を維持しつつ、後続の無関係な角括弧構文で追跡を無効化しない。
+                            var contributesToExpressionDepth =
+                                !IsCSharpTypeBodyAttributeArgumentOpeningParen(
+                                    line,
+                                    lineIndex,
+                                    column,
+                                    typeBodyScope);
+                            parenContributions.Push(contributesToExpressionDepth);
+                            if (contributesToExpressionDepth)
+                                parenDepth++;
+                            statementBuffer.Append(ch);
+                            break;
+                        }
+                    case ')':
+                        if (parenContributions.Count > 0
+                            && parenContributions.Pop()
+                            && parenDepth > 0)
+                        {
+                            parenDepth--;
+                        }
+                        statementBuffer.Append(ch);
+                        break;
+                    case '[':
+                        statementBuffer.Append(ch);
+                        break;
+                    case ']':
+                        statementBuffer.Append(ch);
+                        break;
+                    case '{':
+                        {
+                            var establishesStatementBaseline =
+                                IsCSharpAnonymousCallableBlock(statementBuffer);
+                            braceBaselines.Push((
+                                parenBaseline,
+                                establishesStatementBaseline));
+                            if (establishesStatementBaseline)
+                                parenBaseline = parenDepth;
+                            statementBuffer.Clear();
+                            break;
+                        }
+                    case '}':
+                        if (braceBaselines.Count > 0)
+                        {
+                            var priorBaseline = braceBaselines.Pop();
+                            if (priorBaseline.RestoresBaseline)
+                                parenBaseline = priorBaseline.ParenDepth;
+                        }
+                        statementBuffer.Clear();
+                        break;
+                    case ';':
+                        statementBuffer.Clear();
+                        break;
+                    default:
+                        statementBuffer.Append(ch);
+                        break;
+                }
+
+                isInsideExpressionContinuation = parenDepth > parenBaseline;
+                if (isInsideExpressionContinuation != previousState)
+                {
+                    var transitionsByLine = transitions ??=
+                        new List<(int, bool)>?[structuralLines.Length];
+                    (transitionsByLine[lineIndex] ??= []).Add((
+                        column,
+                        isInsideExpressionContinuation));
+                }
+            }
+
+            statementBuffer.Append(' ');
+        }
+
+        return new CSharpDeclarationStartScope(
+            lineStartInsideExpressionContinuation,
+            transitions);
+    }
+
+    private static CSharpPreprocessorDirectiveKind GetCSharpPreprocessorDirectiveKind(string line)
+    {
+        var cursor = SkipWhitespace(line, 0);
+        if (cursor >= line.Length || line[cursor] != '#')
+            return CSharpPreprocessorDirectiveKind.None;
+
+        cursor = SkipWhitespace(line, cursor + 1);
+        var directiveStart = cursor;
+        while (cursor < line.Length && char.IsLetter(line[cursor]))
+            cursor++;
+
+        var directive = line[directiveStart..cursor];
+        return directive switch
+        {
+            "if" => CSharpPreprocessorDirectiveKind.If,
+            "elif" => CSharpPreprocessorDirectiveKind.ElseIf,
+            "else" => CSharpPreprocessorDirectiveKind.Else,
+            "endif" => CSharpPreprocessorDirectiveKind.EndIf,
+            _ => CSharpPreprocessorDirectiveKind.Other,
+        };
+    }
+
+    private static CSharpDeclarationDelimiterState CaptureCSharpDeclarationDelimiterState(
+        int parenDepth,
+        int parenBaseline,
+        Stack<bool> parenContributions,
+        Stack<(int ParenDepth, bool RestoresBaseline)> braceBaselines,
+        StringBuilder statementBuffer) =>
+        new(
+            parenDepth,
+            parenBaseline,
+            parenContributions.ToArray(),
+            braceBaselines.ToArray(),
+            statementBuffer.ToString());
+
+    private static CSharpDeclarationDelimiterState MergeCSharpDeclarationDelimiterStates(
+        IReadOnlyList<CSharpDeclarationDelimiterState> states,
+        CSharpDeclarationDelimiterState fallback)
+    {
+        if (states.Count == 0)
+            return fallback;
+
+        var parenContributions = GetCommonCSharpDeclarationStackBottom(
+            states.Select(state => state.ParenContributions).ToArray());
+        var braceBaselines = GetCommonCSharpDeclarationStackBottom(
+            states.Select(state => state.BraceBaselines).ToArray());
+        var parenDepth = parenContributions.Count(contributes => contributes);
+        var parenBaseline = states.All(state => state.ParenBaseline == states[0].ParenBaseline)
+            ? Math.Min(states[0].ParenBaseline, parenDepth)
+            : Math.Min(fallback.ParenBaseline, parenDepth);
+        var statementText = states.All(
+            state => string.Equals(
+                state.StatementText,
+                states[0].StatementText,
+                StringComparison.Ordinal))
+            ? states[0].StatementText
+            : states.All(state => IsCSharpAnonymousCallableBlock(state.StatementText))
+                ? "=>"
+                : fallback.StatementText;
+
+        return new CSharpDeclarationDelimiterState(
+            parenDepth,
+            parenBaseline,
+            parenContributions,
+            braceBaselines,
+            statementText);
+    }
+
+    private static T[] GetCommonCSharpDeclarationStackBottom<T>(T[][] topFirstStacks)
+    {
+        if (topFirstStacks.Length == 0)
+            return [];
+
+        var first = topFirstStacks[0];
+        var commonCount = 0;
+        var maxCommonCount = topFirstStacks.Min(stack => stack.Length);
+        while (commonCount < maxCommonCount)
+        {
+            var firstItem = first[first.Length - commonCount - 1];
+            if (topFirstStacks.Skip(1).Any(
+                    stack => !EqualityComparer<T>.Default.Equals(
+                        firstItem,
+                        stack[stack.Length - commonCount - 1])))
+            {
+                break;
+            }
+
+            commonCount++;
+        }
+
+        return commonCount == 0 ? [] : first[^commonCount..];
+    }
+
+    private static void RestoreCSharpDeclarationDelimiterState(
+        CSharpDeclarationDelimiterState state,
+        ref int parenDepth,
+        ref int parenBaseline,
+        Stack<bool> parenContributions,
+        Stack<(int ParenDepth, bool RestoresBaseline)> braceBaselines,
+        StringBuilder statementBuffer)
+    {
+        parenDepth = state.ParenDepth;
+        parenBaseline = state.ParenBaseline;
+        RestoreCSharpDeclarationDelimiterStack(
+            parenContributions,
+            state.ParenContributions);
+        RestoreCSharpDeclarationDelimiterStack(
+            braceBaselines,
+            state.BraceBaselines);
+        statementBuffer.Clear();
+        statementBuffer.Append(state.StatementText);
+    }
+
+    private static void RestoreCSharpDeclarationDelimiterStack<T>(
+        Stack<T> destination,
+        T[] topFirstItems)
+    {
+        destination.Clear();
+        for (var index = topFirstItems.Length - 1; index >= 0; index--)
+            destination.Push(topFirstItems[index]);
+    }
+
+    private static bool IsCSharpTypeBodyAttributeArgumentOpeningParen(
+        string line,
+        int lineIndex,
+        int column,
+        CSharpTypeBodyScope typeBodyScope)
+    {
+        if (!typeBodyScope.IsInsideTypeBodyAt(lineIndex, column))
+            return false;
+
+        var cursor = SkipWhitespace(line, 0);
+        while (cursor < column && line[cursor] == '[')
+        {
+            var closeBracket = line.IndexOf(']', cursor + 1, column - cursor - 1);
+            if (closeBracket < 0)
+                return true;
+            cursor = SkipWhitespace(line, closeBracket + 1);
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpAnonymousCallableBlock(StringBuilder statementBuffer)
+    {
+        return IsCSharpAnonymousCallableBlock(statementBuffer.ToString());
+    }
+
+    private static bool IsCSharpAnonymousCallableBlock(string statementText)
+    {
+        var text = statementText.TrimEnd();
+        if (text.EndsWith("=>", StringComparison.Ordinal))
+            return true;
+
+        const string delegateKeyword = "delegate";
+        var delegateIndex = text.LastIndexOf(delegateKeyword, StringComparison.Ordinal);
+        if (delegateIndex < 0
+            || (delegateIndex > 0
+                && (text[delegateIndex - 1] == '@'
+                    || text[delegateIndex - 1] == '_'
+                    || char.IsLetterOrDigit(text[delegateIndex - 1]))))
+        {
+            return false;
+        }
+
+        var suffix = text[(delegateIndex + delegateKeyword.Length)..].Trim();
+        if (suffix.Length == 0)
+            return true;
+        if (suffix[0] != '(' || suffix[^1] != ')')
+            return false;
+
+        var depth = 0;
+        foreach (var ch in suffix)
+        {
+            if (ch == '(')
+                depth++;
+            else if (ch == ')' && --depth < 0)
+                return false;
+        }
+
+        return depth == 0;
+    }
+
     private sealed class CSharpCallableParameterScope
     {
         public static readonly CSharpCallableParameterScope Empty = new(null, null);

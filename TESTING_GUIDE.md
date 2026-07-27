@@ -78,6 +78,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Console writer synchronization coverage yields between character writes instead of sleeping per character; use enough whole-line iterations to expose interleaving without adding wall-clock delay.
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
+  C# declaration-boundary regressions should pair a direct extractor fixture with a real-index `symbols --exact-name` query. Keep invocation and parameter continuations beside valid multi-line methods, constructors, delegates, and local functions so both false-positive rejection and declaration ranges remain observable.
   Repository-metadata coverage lives in `SymbolExtractorRepositoryMetadataTests.cs` and `ReferenceExtractorRepositoryMetadataTests.cs`; keep TOML, JSON Lines, ignore/attributes, EditorConfig, `.rules`, and application-manifest capability assertions coordinated with conservative local-path and malformed-record controls.
   Capability-regression fixtures that require an unsupported language use the explicit `text` placeholder or an ambiguity bucket; do not use a recognized repository-metadata format as the unsupported control.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
@@ -968,6 +969,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   console writer synchronization coverageは文字writeごとのsleepではなくyieldを使い、wall-clock delayを追加せずinterleavingを露出できる十分なwhole-line iterationを維持してください。
 - `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
   extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
+  C# の declaration boundary に関する regression では、extractor を直接呼ぶ fixture と、実 index に対する `symbols --exact-name` query を組み合わせてください。呼び出し・parameter の continuation と、正当な複数行 method、constructor、delegate、local function を同居させ、false positive の拒否と宣言 range の両方を観測可能にします。
   repository metadata の coverage は `SymbolExtractorRepositoryMetadataTests.cs` と `ReferenceExtractorRepositoryMetadataTests.cs` に置きます。TOML、JSON Lines、ignore / attributes、EditorConfig、`.rules`、application manifest の capability assertion を、保守的な local-path 抽出と malformed-record control に同期させてください。
   未対応言語を必要とする capability regression fixture には明示的な `text` placeholder または ambiguity bucket を使い、認識済み repository metadata 形式を未対応 control に使わないでください。
   巨大 suite から繰り返しの extractor シナリオを切り出す場合は、言語、build-file 形式、protocol surface など読みやすい領域ごとの partial file にまとめ、raw substring や predicate assertion の繰り返しより小さな semantic assertion helper を優先してください。
