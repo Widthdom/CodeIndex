@@ -28,12 +28,14 @@ internal sealed partial class FileContentLoader
         byte[] bytes;
         long sizeBytes;
         DateTime modifiedUtc;
-        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
         for (var attempt = 0; ; attempt++)
         {
-            var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
-            using (var stream = _openReadForIndexContent(absolutePath))
+            var readPath = _resolveFileReadPath(absolutePath);
+            DateTime modifiedBeforeRead;
+            bool pathIdentityChanged;
+            using (var stream = OpenValidatedReadStream(absolutePath, readPath))
             {
+                modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
                     throw new FileIndexer.FileTooLargeSkippedException(
@@ -47,9 +49,10 @@ internal sealed partial class FileContentLoader
                     initialLength,
                     normalizedRelativePath,
                     cancellationToken);
+                modifiedUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+                pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
             }
-            modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
-            if (modifiedUtc == modifiedBeforeRead || attempt > 0)
+            if ((modifiedUtc == modifiedBeforeRead && !pathIdentityChanged) || attempt > 0)
                 break;
         }
 
@@ -62,13 +65,16 @@ internal sealed partial class FileContentLoader
         RawByteChunkPredicate chunkPredicate,
         CancellationToken cancellationToken)
     {
-        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
         for (var attempt = 0; ; attempt++)
         {
-            var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
+            var readPath = _resolveFileReadPath(absolutePath);
+            DateTime modifiedBeforeRead;
+            DateTime modifiedUtc;
+            bool pathIdentityChanged;
             bool matched;
-            using (var stream = _openReadForIndexContent(absolutePath))
+            using (var stream = OpenValidatedReadStream(absolutePath, readPath))
             {
+                modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
                     throw new FileIndexer.FileTooLargeSkippedException(
@@ -83,15 +89,58 @@ internal sealed partial class FileContentLoader
                     normalizedRelativePath,
                     chunkPredicate,
                     cancellationToken);
+                modifiedUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+                pathIdentityChanged = ReadPathIdentityChanged(absolutePath, stream);
             }
 
             if (matched)
                 return true;
 
-            var modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
-            if (modifiedUtc == modifiedBeforeRead || attempt > 0)
+            if ((modifiedUtc == modifiedBeforeRead && !pathIdentityChanged) || attempt > 0)
                 return false;
         }
+    }
+
+    private FileStream OpenValidatedReadStream(string absolutePath, string expectedReadPath)
+    {
+        _validateResolvedFileReadPath?.Invoke(expectedReadPath);
+        FileIndexer.FileIdentity expectedIdentity = default;
+        if (_bindReadToFileSystemIdentity
+            && !FileIndexer.TryGetFileIdentity(expectedReadPath, out expectedIdentity))
+        {
+            throw new IOException(
+                "Failed to capture the filesystem identity of a symlink target before opening it.");
+        }
+
+        var stream = _openReadForIndexContent(absolutePath);
+        try
+        {
+            if (!_bindReadToFileSystemIdentity)
+                return stream;
+
+            if (!FileIndexer.TryGetFileIdentity(stream.SafeFileHandle, out var openedIdentity)
+                || openedIdentity != expectedIdentity)
+            {
+                throw new IOException(
+                    "File symlink target identity changed while it was opened; rerun indexing.");
+            }
+
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    private static bool ReadPathIdentityChanged(string absolutePath, FileStream stream)
+    {
+        if (!FileIndexer.TryGetFileIdentity(stream.SafeFileHandle, out var openedIdentity))
+            return false;
+
+        return !FileIndexer.TryGetFileIdentity(absolutePath, out var currentIdentity)
+            || currentIdentity != openedIdentity;
     }
 
     private (byte[] Bytes, long SizeBytes) ReadStreamBytesWithKnownInitialLength(

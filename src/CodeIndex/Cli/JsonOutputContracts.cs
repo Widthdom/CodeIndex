@@ -706,6 +706,10 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public List<IndexLanguageDetectionJsonResult>? LanguageDetections { get; init; }
     public bool LanguageDetectionsTruncated { get; init; }
     public int LanguageDetectionLimit { get; init; }
+    public int WarningsTotal { get; init; }
+    public List<CliJsonMessage>? Warnings { get; init; }
+    public bool WarningsTruncated { get; init; }
+    public int WarningLimit { get; init; }
     public int ErrorsTotal { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public bool ErrorsTruncated { get; init; }

@@ -241,8 +241,14 @@ public partial class FileIndexer
         _nestedGitRepositoryCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _openReadForIndexContent = openReadForIndexContent ?? BoundedFile.OpenReadForIndexContent;
-        _contentLoader = new FileContentLoader(_maxFileSizeBytes, _openReadForIndexContent);
         _symlinkPolicy = symlinkPolicy;
+        _contentLoader = new FileContentLoader(
+            _maxFileSizeBytes,
+            _openReadForIndexContent,
+            symlinkPolicy == SymlinkPolicy.None ? null : ResolveFileReadPath,
+            bindReadToFileSystemIdentity: symlinkPolicy != SymlinkPolicy.None,
+            validateResolvedFileReadPath:
+                symlinkPolicy == SymlinkPolicy.Internal ? ValidateResolvedFileReadPath : null);
         _pathAccessValidator = pathAccessValidator;
         _bindConfigurationReadsToFileSystemIdentity = bindConfigurationReadsToFileSystemIdentity;
         _maxDanglingFileSystemEntryScanCandidates = Math.Max(

@@ -2085,6 +2085,73 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void Run_FullScan_RetargetedExternalFileLinkFailsWorkspaceValidation_Issue4829()
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var retargeted = false;
+        try
+        {
+            var firstTarget = Path.Combine(outsideRoot, "First.cs");
+            var secondTarget = Path.Combine(outsideRoot, "Second.cs");
+            var linkPath = Path.Combine(projectRoot, "ExternalLink.cs");
+            const string source = "public class External4829 { }\n";
+            File.WriteAllText(firstTarget, source);
+            File.WriteAllText(secondTarget, source);
+            var sharedModifiedUtc = DateTime.UtcNow.AddMinutes(-5);
+            File.SetLastWriteTimeUtc(firstTarget, sharedModifiedUtc);
+            File.SetLastWriteTimeUtc(secondTarget, sharedModifiedUtc);
+            try
+            {
+                File.CreateSymbolicLink(linkPath, firstTarget);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (retargeted || path != "ExternalLink.cs")
+                    return;
+
+                File.Delete(linkPath);
+                File.CreateSymbolicLink(linkPath, secondTarget);
+                retargeted = true;
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--follow-symlinks",
+                "all",
+                "--parallelism",
+                "1",
+                "--json",
+                "--quiet",
+            ]);
+
+            Assert.True(retargeted);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Contains(
+                json.GetProperty("file_errors").EnumerateArray(),
+                error => error.GetProperty("file").GetString() == "ExternalLink.cs"
+                    && error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+            Assert.DoesNotContain(
+                "ExternalLink.cs",
+                ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
     [Theory]
     [InlineData("csharp")]
     [InlineData("sql")]
