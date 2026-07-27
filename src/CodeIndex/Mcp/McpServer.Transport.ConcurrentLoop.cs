@@ -154,7 +154,12 @@ public partial class McpServer
                 // bounded EOF drain は late request task を残すことがある。finally が走るまで gate や
                 // stdio writer を使い得るため、drain 自体が異常終了しても aggregate を公開し、全
                 // accepted task 完了後に gate を dispose する (#3999, #4543)。
-                var transportWork = BuildDrainOperationsTask(Tasks, TerminalTransportWriteTask);
+                // Retain a roots refresh that can be published after the bounded drain snapshot.
+                // The refresh can still own the stdio writer gate after accepted frame tasks finish.
+                // bounded drain snapshot 後に公開され得る roots refresh も保持する。accepted frame
+                // task 完了後も stdio writer gate を所有し得るため、最終 dispose barrier に含める。
+                var transportWork = _server.IncludeClientRootsHandshakeRefreshAsync(
+                    BuildDrainOperationsTask(Tasks, TerminalTransportWriteTask));
                 if (Transport is StdioMcpTransport stdioTransport)
                     stdioTransport.DeferDisposalUntil(transportWork);
                 _ = DisposeConcurrentLoopGatesAfterAsync(transportWork, WriteGate, AdmissionGate);

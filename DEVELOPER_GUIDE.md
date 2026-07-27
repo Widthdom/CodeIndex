@@ -2448,16 +2448,30 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   `serverInfo.name`, `serverInfo.version` (read via
   `ConsoleUi.LoadVersion()` — the same `version.json` source), and the
   long `instructions` string that guides AI clients on tool selection.
-  The client then sends `notifications/initialized`; cdidx accepts that
-  client-to-server notification as a no-op and does not synthesize a
-  server-origin copy (#4433). HTTP sessions can receive opt-in keep-alive notifications
+  Its capability object contains only server-provided `tools`, `resources`,
+  `prompts`, and `logging`; client-provided `roots` and `sampling` are never
+  advertised as server capabilities. The client then sends
+  `notifications/initialized` to complete the handshake. When the negotiated
+  protocol supports roots, the client advertised `roots`, and the transport can
+  carry server-to-client requests, cdidx follows that notification with a
+  `roots/list` request; it sends no roots request when the capability is absent.
+  That handshake-triggered refresh is coalesced to one task per session.
+  Transport teardown drains it and retains the final stdio writer/disposal
+  barrier even when the bounded drain expires, so repeated initialized
+  notifications cannot accumulate detached client requests or race transport
+  resource disposal.
+  cdidx does not synthesize a
+  server-origin `notifications/initialized` copy (#4433). HTTP sessions can receive opt-in keep-alive notifications
   on `/events` when `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` is configured.
   On HTTP transport, out-of-band notifications are delivered only to connected
   `/events` SSE streams; POST-only clients receive the initialize response but
   no separate notification frame.
 - Every request frame must carry an exact `"jsonrpc":"2.0"` member. Except for
   `initialize`, responded methods are rejected until initialization succeeds
-  (#4468). EOF, invalid UTF-8, and oversized stdio input share a bounded
+  (#4468). Exactly one `initialize` may be accepted per session: concurrent or
+  later attempts receive structured `-32600` / `duplicate_initialize` errors,
+  and responded methods are also rejected while the session is initializing,
+  shutting down, or closed (#4848). EOF, invalid UTF-8, and oversized stdio input share a bounded
   teardown policy: accepted requests receive a grace period, then cancellation,
   then a post-cancel deadline (#4543). Malformed-input protocol-error writes and
   asynchronous shutdown-cancellation callbacks are included in those same
@@ -2484,8 +2498,9 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   independently (#4545). Base `IMcpTransport` loops do not reserve an outer frame
   slot, so a single request at `maxConcurrency: 1` acquires `_concurrencyGate`
   exactly once; single requests and batch items consume slots only at dispatch.
-- The advertised capability surface includes `tools`, `resources`, and
-  `prompts`. `resources/templates/list` advertises
+- The advertised capability surface includes only server-provided `tools`,
+  `resources`, `prompts`, and `logging`; client-provided `roots` and `sampling`
+  are deliberately omitted. `resources/templates/list` advertises
   `cdidx://file-path/{path}` for direct, percent-encoded resolution of a
   known exact repository-relative path; successful reads return the canonical
   `cdidx://file/<path>` identity. `resources/list` pages indexed files as
@@ -2549,16 +2564,23 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   `ProtocolVersion` aligned with its first entry. The lifecycle transport
   regression test sends the Codex `2025-06-18` handshake through
   `notifications/initialized` and `tools/list`, rather than testing version
-  echoing alone. Client identity, caller,
-  roots, and capabilities are parsed into a detached initialize draft and
-  committed only after negotiation and complete success-response serialization
-  finish (#4540); a rejected handshake, `CDIDX_MCP_RESPONSE_MAX_BYTES`
-  fallback, or serializer failure leaves all established session state
-  unchanged. A successful commit publishes initialization lifecycle, caller,
-  client info, capabilities, and roots through one immutable snapshot, so a
-  concurrent or draining request observes one complete generation. A
-  `roots/list` refresh publishes only if no newer initialize or roots-change
-  notification replaced the snapshot while the client response was in flight.
+  echoing alone. The session advances through explicit pre-initialize,
+  initializing, initialized, shutting-down, and closed phases (#4848). Client
+  identity, caller, roots, and capabilities are parsed into a detached
+  initialize draft and committed only after negotiation and complete
+  success-response serialization finish (#4540); a rejected handshake,
+  `CDIDX_MCP_RESPONSE_MAX_BYTES` fallback, or serializer failure rolls the
+  initializing claim back so one corrected retry can proceed without inheriting
+  failed metadata. Frame cleanup seals its deferred initialize drafts, so a
+  timeout-delayed worker that arrives after response serialization releases its
+  claim instead of leaving the session stuck in the initializing phase. After
+  the successful commit, every duplicate initialize is rejected and cannot
+  replace the established session. The commit publishes
+  initialization lifecycle, caller, client info, capabilities, and roots
+  through one immutable snapshot, so a concurrent or draining request observes
+  one complete generation. A `roots/list` refresh publishes only if no
+  roots-change notification invalidated the snapshot while the client response
+  was in flight.
   This guarantee covers the server-side JSON-RPC serialization
   boundary; HTTP delivery has a separate fail-closed boundary described below.
 - **Authentication middleware** (#1559). `McpServer` runs every parsed
@@ -2581,8 +2603,10 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   body-token gate, failures uniformly return JSON-RPC `-32001 "Unauthorized"`
   (per #1530 sanitization — the
   wire never distinguishes missing-from-wrong), and `BuildAuthFailureLog`
-  emits the detailed reason to stderr. Side-effect-free notifications such as
-  `notifications/initialized` may short-circuit without authentication.
+  emits the detailed reason to stderr. The handshake-control
+  `notifications/initialized` may short-circuit without
+  authentication; any roots request it triggers is constrained by the capability
+  snapshot committed from the authenticated initialize request.
   State-changing notifications (`$/cancelRequest`, `notifications/cancelled`,
   `notifications/roots/list_changed`, `notifications/shutdown`, and
   `notifications/exit`) pass through the gate before mutating cancellation,
@@ -5407,16 +5431,16 @@ sequenceDiagram
 
 ### フェーズ5 — MCP パス: `cdidx mcp`
 
-`initialize` の client identity、caller、roots、capabilities は frame-local な draft に保持し、protocol 交渉と success response の serialization が完了した後だけ commit する（#4540）。拒否された handshake、`CDIDX_MCP_RESPONSE_MAX_BYTES` fallback、serializer failure は確立済み session state を変更せず、修正した retry に失敗 request の metadata を引き継がせない。成功した commit は initialization lifecycle、caller、client info、capabilities、roots を単一の immutable snapshot として公開するため、並行中または drain 中の request は完全な 1 世代だけを参照する。`roots/list` refresh は client response の待機中に新しい initialize または roots-change notification が snapshot を置き換えていない場合だけ公開される。この保証は server-side JSON-RPC serialization の境界に適用され、HTTP 配送には後述する別の fail-closed 境界がある。
+session は明示的な初期化前、初期化中、初期化済み、shutdown 中、closed の各 phase を進む（#4848）。`initialize` の client identity、caller、roots、capabilities は frame-local な draft に保持し、protocol 交渉と success response の serialization が完了した後だけ commit する（#4540）。拒否された handshake、`CDIDX_MCP_RESPONSE_MAX_BYTES` fallback、serializer failure は初期化の取得を取り消すため、失敗 request の metadata を引き継がない修正済み retry を行える。frame cleanup は deferred initialize draft を seal するため、response serialization 後に timeout で遅れて到着した worker も claim を解放し、session を初期化中 phase に残留させない。commit 成功後の重複 `initialize` はすべて拒否され、確立済み session を置き換えられない。成功した commit は initialization lifecycle、caller、client info、capabilities、roots を単一の immutable snapshot として公開するため、並行中または drain 中の request は完全な 1 世代だけを参照する。`roots/list` refresh は client response の待機中に roots-change notification が snapshot を無効化していない場合だけ公開される。この保証は server-side JSON-RPC serialization の境界に適用され、HTTP 配送には後述する別の fail-closed 境界がある。
 
 `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` を `cdidx mcp` にパイプすると別のコードパスが走る:
 
 - `McpServer` が stdin/stdout を持ち、JSON-RPC 2.0 フレームを解析する。
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
-- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。その後 client が `notifications/initialized` を送信し、cdidx は client-to-server 通知として no-op で受理するが、server 側から同じ通知を生成しない（#4433）。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification を `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
-- すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。stdio の EOF、不正 UTF-8、oversized input は、grace period、cancellation、post-cancel deadline の共通 bounded teardown を使う（#4543）。不正入力の protocol-error write と非同期 shutdown-cancellation callback も同じ deadline に含めるため、writer、write gate、callback の停止で teardown が無期限に残らない。`notifications/shutdown` は read と request action を cancel するが、起点の transport completion（HTTP では `204 No Content`）は cancel しない。初回 drain snapshot 後に開始した callback と concurrent loop の全終了経路も bounded drain に含める。stdio input は速やかに close し、output dispose は response writer に到達し得る accepted task の完了まで defer する。最終 diagnostic には未完了カテゴリごとの状態を記録し、外部 transport または process cancellation はどちらの cleanup window も中断できる。
+- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。capability object が公開するのは server 提供の `tools`、`resources`、`prompts`、`logging` だけで、client 提供の `roots` と `sampling` は server capability として公開しない。その後 client が handshake 完了を示す `notifications/initialized` を送信する。交渉済み protocol が roots に対応し、client が `roots` capability を提示し、transport が server-to-client request を配送できる場合、cdidx は `roots/list` request を送る。capability がなければ送信しない。この handshake 起点の refresh は session ごとに1つの task へ集約し、transport teardown で drain する。bounded drain が期限切れになっても最後の stdio writer / disposal barrier で保持するため、`notifications/initialized` が再送されても detached client request は増殖せず、transport resource の dispose と競合しない。server 側から `notifications/initialized` 自体は生成しない（#4433）。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification を `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
+- すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。1 session で受理できる `initialize` は1回だけで、並行または後続の試行には構造化された `-32600` / `duplicate_initialize` error を返す。初期化中、shutdown 中、closed の phase でも応答対象 method を拒否する（#4848）。stdio の EOF、不正 UTF-8、oversized input は、grace period、cancellation、post-cancel deadline の共通 bounded teardown を使う（#4543）。不正入力の protocol-error write と非同期 shutdown-cancellation callback も同じ deadline に含めるため、writer、write gate、callback の停止で teardown が無期限に残らない。`notifications/shutdown` は read と request action を cancel するが、起点の transport completion（HTTP では `204 No Content`）は cancel しない。初回 drain snapshot 後に開始した callback と concurrent loop の全終了経路も bounded drain に含める。stdio input は速やかに close し、output dispose は response writer に到達し得る accepted task の完了まで defer する。最終 diagnostic には未完了カテゴリごとの状態を記録し、外部 transport または process cancellation はどちらの cleanup window も中断できる。
 - 独立した stdio request と HTTP POST は、設定された MCP request 上限まで並行実行する（#4536）。実行 slot が全て使用中でも read loop は cancellation/client-response frame を受け続ける。accepted-frame backlog は execution 上限 + 64 に別途制限し、超過 request には retry-safe な `-32003` / `server_busy` を返す。request id は protocol/gate 待機前に登録し、execution timeout は slot 取得後に開始し、timeout 後も cancellation を無視して動く action は実際に drain するまで slot を保持する。initialize など session mutation の受信順は protocol barrier で維持し、可変な request state は `AsyncLocal` または request-scoped snapshot に置き、shared writer tool は直列化する。JSON-RPC batch の各 item も同じ global execution slot を個別に消費する（#4545）。基本 `IMcpTransport` loop は outer frame slot を確保しないため、`maxConcurrency: 1` の single request は `_concurrencyGate` を1回だけ取得し、single request と batch item は dispatch 時だけ slot を消費する。
-- advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`resources/list` はインデックス済みファイルを `cdidx://file/<path>` URI としてページングし、世代対応の不透明 keyset cursor を返す。ページ間でインデックス済みファイルが変わった場合は、再開必須の stale-index error を明示的に返す。任意の `maxBytes`（4,096〜1,000,000、既定 1,000,000）で JSON-RPC envelope 全体を制限し、省略件数と継続理由を `_meta.response_controls` に有界な形で返す。`resources/read` は inclusive な `startLine` / `endLine` と UTF-8 本文の `maxBytes`（最小 4 byte、既定 64 KiB、最大 128 KiB）を任意指定として受け付ける。各ページは論理行 1,000 行でも上限化される。成功レスポンスは標準の `contents` item を維持し、`result._meta` に実効範囲、返却 byte 数、切り詰め理由、不透明な `nextCursor` を追加する。継続時は行境界を再送せず、その cursor と任意の新しい `maxBytes` を渡す。cursor は index 済みファイル版に結び付くため、resource 変更後は stale として失敗する。database reader は長い単一行を含め、managed response string を構築する前に incremental SQLite BLOB read で範囲と byte 上限を適用する。server は MCP レスポンス上限と active transport のレスポンス上限のうち小さい方から実効本文 budget を算出し、JSON-RPC envelope と最悪ケースの JSON escape に必要な領域を確保する。1 つの JSON-RPC batch に複数の `resources/read` call がある場合は aggregate frame 上限を共有し、各 item を frame の残り領域に合わせて budget 化する。page 化できない item が割当内に収まらない場合は、元の request ID を保持した構造化 `batch_response_budget_too_small` error に置換する。file metadata の取得、cursor 検証、chunk BLOB 読み取りは単一の deferred SQLite read snapshot 内で実行するため、並行 reindex によって異なる resource 版が混在しない。実際に空の index 済みファイルは空の成功レスポンスを返すが、非空 resource の content 欠落、chunk coverage の不足、安全上限を超える chunk topology は部分的または空の成功として返さず、構造化された `index_missing`、`index_stale`、`index_corrupted` error として失敗する。専用の range partial index がない read-only または immutable な legacy database では、既存の `idx_chunks_file` index を使い、SQLite VM-step budget 内で metadata-only の predecessor / candidate query を実行する。budget 超過時は無制限に scan せず、構造化された `resource_bounded_read_index_unavailable` を返す。stable reason には `resource_content_unavailable`、`resource_bounded_read_index_unavailable`、`resource_chunk_coverage_incomplete`、`chunk_limit_exceeded`、`chunk_candidate_scan_limit_exceeded`、`resource_file_metadata_inconsistent`、`resource_chunk_topology_invalid`、`scan_limit_exceeded` がある。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
+- advertised capability には server 提供の `tools`、`resources`、`prompts`、`logging` だけが含まれ、client 提供の `roots` と `sampling` は含まれない。`resources/list` はインデックス済みファイルを `cdidx://file/<path>` URI としてページングし、世代対応の不透明 keyset cursor を返す。ページ間でインデックス済みファイルが変わった場合は、再開必須の stale-index error を明示的に返す。任意の `maxBytes`（4,096〜1,000,000、既定 1,000,000）で JSON-RPC envelope 全体を制限し、省略件数と継続理由を `_meta.response_controls` に有界な形で返す。`resources/read` は inclusive な `startLine` / `endLine` と UTF-8 本文の `maxBytes`（最小 4 byte、既定 64 KiB、最大 128 KiB）を任意指定として受け付ける。各ページは論理行 1,000 行でも上限化される。成功レスポンスは標準の `contents` item を維持し、`result._meta` に実効範囲、返却 byte 数、切り詰め理由、不透明な `nextCursor` を追加する。継続時は行境界を再送せず、その cursor と任意の新しい `maxBytes` を渡す。cursor は index 済みファイル版に結び付くため、resource 変更後は stale として失敗する。database reader は長い単一行を含め、managed response string を構築する前に incremental SQLite BLOB read で範囲と byte 上限を適用する。server は MCP レスポンス上限と active transport のレスポンス上限のうち小さい方から実効本文 budget を算出し、JSON-RPC envelope と最悪ケースの JSON escape に必要な領域を確保する。1 つの JSON-RPC batch に複数の `resources/read` call がある場合は aggregate frame 上限を共有し、各 item を frame の残り領域に合わせて budget 化する。page 化できない item が割当内に収まらない場合は、元の request ID を保持した構造化 `batch_response_budget_too_small` error に置換する。file metadata の取得、cursor 検証、chunk BLOB 読み取りは単一の deferred SQLite read snapshot 内で実行するため、並行 reindex によって異なる resource 版が混在しない。実際に空の index 済みファイルは空の成功レスポンスを返すが、非空 resource の content 欠落、chunk coverage の不足、安全上限を超える chunk topology は部分的または空の成功として返さず、構造化された `index_missing`、`index_stale`、`index_corrupted` error として失敗する。専用の range partial index がない read-only または immutable な legacy database では、既存の `idx_chunks_file` index を使い、SQLite VM-step budget 内で metadata-only の predecessor / candidate query を実行する。budget 超過時は無制限に scan せず、構造化された `resource_bounded_read_index_unavailable` を返す。stable reason には `resource_content_unavailable`、`resource_bounded_read_index_unavailable`、`resource_chunk_coverage_incomplete`、`chunk_limit_exceeded`、`chunk_candidate_scan_limit_exceeded`、`resource_file_metadata_inconsistent`、`resource_chunk_topology_invalid`、`scan_limit_exceeded` がある。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `resources/templates/list` は正確な既知 path の直接解決用に `cdidx://file-path/{path}` を公開し、成功した read は canonical な `cdidx://file/<path>` identity を返す。`resources/list` の `path`、`lang`、`includeGenerated` filter は server-side で有界に適用され、継続 cursor は canonical filter と generation の両方に結び付く。generated file は既定で list と read から除外され、明示的な `includeGenerated: true` が必要になる。
 - `initialize` の `instructions` はこれらの resource template / list control を直接案内し、各 `resources/list` response は accepted extension parameter と上限を `_meta.discovery_contract` に公開する。これにより AI client は標準外の protocol extension を推測する必要がない。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは
@@ -5433,11 +5457,12 @@ sequenceDiagram
   client identity、caller、roots、capabilities は切り離した initialize draft へ解析し、
   protocol 交渉と success response の serialization が完了した後だけ commit する
   （#4540）。拒否された handshake、`CDIDX_MCP_RESPONSE_MAX_BYTES` fallback、
-  serializer failure は確立済み session state を変更しない。成功時は lifecycle と
-  すべての metadata を単一の immutable snapshot として同時に公開し、進行中の古い
-  `roots/list` response は新しい initialize を上書きできない。この保証は server-side
+  serializer failure は初期化の取得を取り消し、確立済み session state を変更しない。
+  成功時は lifecycle とすべての metadata を単一の immutable snapshot として同時に
+  公開する。以後の重複 initialize は拒否され、進行中の古い `roots/list` response は
+  roots-change notification が snapshot を無効化した場合に公開できない。この保証は server-side
   JSON-RPC serialization の境界に適用され、HTTP 配送には別の fail-closed 境界がある。
-- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。副作用のない `notifications/initialized` は認証せず short-circuit できる。一方、state-changing notification（`$/cancelRequest`、`notifications/cancelled`、`notifications/roots/list_changed`、`notifications/shutdown`、`notifications/exit`）は cancellation / roots / lifecycle state を変更する前に認証する。認証失敗時も notification は応答を返さず、bounded な stderr 診断だけを残す（#4537）。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
+- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。handshake 制御の `notifications/initialized` は認証せず short-circuit できるが、それによって送る roots request は認証済み initialize で commit した capability snapshot に制限される。一方、state-changing notification（`$/cancelRequest`、`notifications/cancelled`、`notifications/roots/list_changed`、`notifications/shutdown`、`notifications/exit`）は cancellation / roots / lifecycle state を変更する前に認証する。認証失敗時も notification は応答を返さず、bounded な stderr 診断だけを残す（#4537）。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 

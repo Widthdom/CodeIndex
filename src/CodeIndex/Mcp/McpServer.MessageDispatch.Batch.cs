@@ -409,7 +409,7 @@ public partial class McpServer
             && deferredInitializeCommits?.TryGetRegisteredState(fenceResponse, out var initializeState) == true)
         {
             _frameInitializeState.Value = new FrameInitializeState(
-                BuildCommittedInitializeState(CurrentInitializeState, initializeState, logCallerSwap: false),
+                BuildCommittedInitializeState(initializeState),
                 isProvisionalGeneration: true);
         }
         else if (_frameInitializeState.Value is { } currentFrameState
