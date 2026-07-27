@@ -7598,6 +7598,133 @@ public partial class ReferenceExtractorTests
             && (column is null || reference.Column == column.Value);
     }
 
+    [Fact]
+    public void Extract_CsharpNamedArgumentLabels_DoNotBecomeTypeReferences_Issue4833()
+    {
+        // Named-argument labels are parameter selectors, not type positions. Keep the
+        // expressions after each label visible to their dedicated reference scanners,
+        // including attributes, constructors, nested calls, and multiline argument lists.
+        // named argument label は parameter selector であり、型位置ではない。attribute、
+        // constructor、nested call、multiline 引数でも label 後の式は各参照 scanner に残す。
+        const string content = """
+            extern alias Alias;
+            using System;
+            using System.Collections.Generic;
+
+            public sealed class ProbeAttribute : Attribute
+            {
+                public ProbeAttribute(Type payload, bool overwrite = false) {}
+            }
+
+            public sealed class ExpressionPayload {}
+            public sealed class PatternHolder
+            {
+                public object Value { get; init; } = new();
+            }
+
+            public sealed class ConstructorTarget
+            {
+                public ConstructorTarget(bool overwrite, Type payload) {}
+            }
+
+            public sealed class Demo
+            {
+                private static void Invoke(int positional, bool overwrite, Type payload) {}
+                private static object InvokeAdapter(bool overwrite, Type payload) => new();
+                private static void InvokeOut(out ExpressionPayload payload) => payload = new();
+                private static void Outer(object inner) {}
+                private static void Consume(Func<ExpressionPayload, ExpressionPayload> transform) {}
+                private static void ConsumeQuery(object query, object other) {}
+
+                [Probe(typeof(ExpressionPayload), overwrite: true)]
+                public void Run(bool condition, object value, IEnumerable<ExpressionPayload> source)
+                {
+                    Invoke(1, overwrite: true, payload: typeof(ExpressionPayload));
+                    Invoke(payload: typeof(ExpressionPayload), positional: 2, overwrite: false);
+                    _ = new ConstructorTarget(overwrite: true, payload: typeof(ExpressionPayload));
+                    Outer(inner: InvokeAdapter(overwrite: true, payload: typeof(ExpressionPayload)));
+                    InvokeOut(payload: out ExpressionPayload declaredPayload);
+                    Consume(transform: (ExpressionPayload item) => item);
+                    Consume(transform: delegate(ExpressionPayload item) { return item; });
+                    ConsumeQuery(query: from ExpressionPayload item in source select item, other: value);
+                    ConsumeQuery(
+                        query: from ExpressionPayload item in source select item,
+                        other: value);
+                    Invoke(
+                        positional: 3,
+                        payload: typeof(ExpressionPayload),
+                        overwrite: condition ? true : false);
+
+                retry:
+                    if (value is ExpressionPayload matched)
+                        goto done;
+                    if (value is PatternHolder
+                        {
+                            Value: ExpressionPayload propertyPayload,
+                        })
+                    {
+                        _ = propertyPayload;
+                    }
+                    switch (value)
+                    {
+                        case ExpressionPayload casePayload:
+                            goto done;
+                    }
+
+                    ExpressionPayload? nullablePayload = null;
+                    Alias::ExpressionPayload aliasQualified = default!;
+                    if (condition)
+                        goto retry;
+
+                done:
+                    _ = nullablePayload;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var colonLabels = new HashSet<string>(
+            ["overwrite", "payload", "positional", "inner", "transform", "query", "other", "Value"],
+            StringComparer.Ordinal);
+
+        Assert.DoesNotContain(
+            references,
+            reference => reference.ReferenceKind == "type_reference"
+                && colonLabels.Contains(reference.SymbolName));
+        Assert.True(
+            references.Count(reference =>
+                reference.SymbolName == "ExpressionPayload"
+                && reference.ReferenceKind == "type_reference") >= 17);
+        var namedValueTypeLines = content
+            .Split('\n')
+            .Select((line, index) => (Line: line, Number: index + 1))
+            .Where(item => item.Line.Contains("transform:", StringComparison.Ordinal)
+                           || item.Line.Contains("query: from", StringComparison.Ordinal))
+            .Select(item => item.Number)
+            .ToArray();
+        Assert.Equal(4, namedValueTypeLines.Length);
+        Assert.All(
+            namedValueTypeLines,
+            expectedLine => Assert.Contains(
+                references,
+                reference => reference.SymbolName == "ExpressionPayload"
+                    && reference.ReferenceKind == "type_reference"
+                    && reference.Line == expectedLine));
+        Assert.Contains(
+            references,
+            reference => reference.SymbolName == "ConstructorTarget"
+                && reference.ReferenceKind == "instantiate");
+        Assert.Contains(
+            references,
+            reference => reference.SymbolName == "InvokeAdapter"
+                && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(
+            references,
+            reference => reference.SymbolName == "Alias"
+                && reference.ReferenceKind == "type_reference");
+    }
+
 #if NET8_0
     [Fact]
 #else
