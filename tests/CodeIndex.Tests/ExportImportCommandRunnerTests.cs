@@ -1690,6 +1690,7 @@ public class ExportImportCommandRunnerTests
         try
         {
             var snapshotPath = TestProjectHelper.CreateProjectDb(workDir);
+            SqliteConnection.ClearAllPools();
             var outputPath = Path.Combine(workDir, "codeindex.cdidx.zip");
             var manifest = new ExportImportCommandRunner.ExportManifest(
                 "1",
@@ -1725,6 +1726,7 @@ public class ExportImportCommandRunnerTests
         try
         {
             var snapshotPath = TestProjectHelper.CreateProjectDb(workDir);
+            SqliteConnection.ClearAllPools();
             var outputPath = Path.Combine(workDir, "codeindex.cdidx.zip");
             var manifest = new ExportImportCommandRunner.ExportManifest(
                 "1",
