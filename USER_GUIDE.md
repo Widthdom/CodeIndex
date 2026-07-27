@@ -2667,6 +2667,14 @@ but do not speak MCP. It also advertises full `textDocument` sync and
 conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
 `codeLens`, and `inlayHint` providers backed by indexed symbols and references
 where available.
+Clients must follow the standard LSP lifecycle: send one `initialize` request
+first, optionally send the `initialized` notification after its response, then
+send ordinary requests, finish with one `shutdown` request, and finally send the
+`exit` notification. Requests received before initialization completes return
+JSON-RPC `-32002` (`Server not initialized`). A duplicate `initialize`, or any
+request received after `shutdown`, returns `-32600` (`Invalid Request`);
+out-of-phase notifications are ignored. Sending `exit` before a successful
+`shutdown` terminates the server with a usage error.
 `textDocument/inlayHint` honors the requested LSP range (including its exclusive
 end position) and omits type labels when the indexed return type is already
 written immediately before the symbol name, so explicit field, property, and
@@ -5748,6 +5756,12 @@ MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 
 indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
 `documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
 advertise します。
+client は標準の LSP lifecycle に従う必要があります。最初に `initialize` request を 1 回だけ
+送り、その response 後に必要なら `initialized` notification を送り、通常 request を処理した後、
+`shutdown` request、最後に `exit` notification の順で終了してください。初期化完了前に受信した
+request は JSON-RPC `-32002`（`Server not initialized`）を返します。重複した `initialize`、
+または `shutdown` 後の request は `-32600`（`Invalid Request`）を返し、順序外の notification は
+無視します。成功した `shutdown` より前に `exit` を送ると、server は usage error で終了します。
 `textDocument/inlayHint` は end position を含まない requested LSP range を尊重し、
 indexed return type が symbol name の直前にすでに明記されている場合は type label を
 省略するため、field / property / method の明示型を hint として重複表示しません。

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -14,6 +15,8 @@ namespace CodeIndex.Tests;
 
 public class LspServerTests
 {
+    private static readonly ConditionalWeakTable<LspServer, object> InitializedServers = new();
+
     [Fact]
     public void ExtractTokenAtUtf16Position_ReturnsIdentifierUnderCursor()
     {
@@ -337,6 +340,176 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_EnforcesLifecycleOrdering_Issue4849()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_lifecycle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+            const string symbolRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"Needle\"}}";
+
+            Assert.Null(server.HandleMessage("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"));
+            var beforeInitialize = server.HandleMessage(symbolRequest);
+            Assert.Equal(
+                LspServer.LspServerNotInitializedCode,
+                beforeInitialize!["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(
+                LspServer.LspServerNotInitializedCode,
+                server.CreateOverloadResponse(symbolRequest)!["error"]!["code"]!.GetValue<int>());
+
+            Assert.Null(server.HandleMessage("{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{}}"));
+            var stillBeforeInitialize = server.HandleMessage(symbolRequest);
+            Assert.Equal(
+                LspServer.LspServerNotInitializedCode,
+                stillBeforeInitialize!["error"]!["code"]!.GetValue<int>());
+
+            var initialize = server.HandleMessage(
+                "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{}}");
+            Assert.NotNull(initialize);
+            Assert.Null(initialize!["error"]);
+            Assert.Null(server.HandleMessage("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"));
+            Assert.Equal(
+                -32000,
+                server.CreateOverloadResponse(symbolRequest)!["error"]!["code"]!.GetValue<int>());
+            Assert.Null(server.CreateOverloadResponse(
+                "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"shutdown\"}"));
+
+            var duplicateInitialize = server.HandleMessage(
+                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}");
+            Assert.Equal(-32600, duplicateInitialize!["error"]!["code"]!.GetValue<int>());
+
+            Assert.Null(server.HandleMessage("{\"jsonrpc\":\"2.0\",\"method\":\"shutdown\"}"));
+            var runningResponse = server.HandleMessage(
+                "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"unknown\"}");
+            Assert.Equal(-32601, runningResponse!["error"]!["code"]!.GetValue<int>());
+
+            var shutdown = server.HandleMessage(
+                "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"shutdown\"}");
+            Assert.NotNull(shutdown);
+            Assert.Null(shutdown!["result"]);
+
+            Assert.Null(server.HandleMessage(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{}}"));
+            var afterShutdown = server.HandleMessage(symbolRequest);
+            Assert.Equal(-32600, afterShutdown!["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(
+                -32600,
+                server.CreateOverloadResponse(symbolRequest)!["error"]!["code"]!.GetValue<int>());
+
+            Assert.Null(server.HandleMessage("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"));
+            Assert.Null(server.HandleMessage(symbolRequest));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HandleMessage_ConcurrentInitialize_AllowsExactlyOne_Issue4849()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_concurrent_initialize");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+            var requests = Enumerable.Range(1, 2)
+                .Select<int, Func<JsonObject?>>(
+                    id => () => server.HandleMessage(
+                        $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"initialize\",\"params\":{{}}}}"));
+
+            var responses = await TestDeterminism.RunConcurrentlyAsync(requests);
+
+            Assert.Single(responses, response => response!["error"] == null);
+            Assert.Single(
+                responses,
+                response => response!["error"] is JsonNode error
+                    && error["code"]!.GetValue<int>() == -32600);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HandleMessage_ShutdownWaitsForActiveRequestAndDisposesOwnedResourcesOnce_Issue4849()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_concurrent_shutdown");
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var server = new LspServer(
+                queryDb,
+                dbPath,
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot)
+            {
+                BeforeSessionDispatchForTesting = method =>
+                {
+                    if (!string.Equals(method, "workspace/symbol", StringComparison.Ordinal))
+                        return;
+
+                    entered.Set();
+                    release.Wait();
+                },
+            };
+            InitializeSession(server);
+
+            var requestTask = Task.Factory.StartNew(
+                () => server.HandleMessage(
+                    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"Needle\"}}"),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default);
+            Assert.True(entered.Wait(TestDeterminism.DefaultTimeout));
+
+            var shutdownTask = Task.Run(() => server.HandleMessage(
+                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\"}"));
+            try
+            {
+                await TestDeterminism.WaitUntilAsync(
+                    () => server.ShutdownStartedForTests,
+                    "the LSP shutdown transition");
+                await TestDeterminism.AssertTaskRemainsBlockedAsync(shutdownTask);
+            }
+            finally
+            {
+                release.Set();
+            }
+
+            Assert.NotNull(await requestTask.WaitAsync(TestDeterminism.DefaultTimeout));
+            var shutdown = await shutdownTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.NotNull(shutdown);
+            Assert.Null(shutdown!["result"]);
+            Assert.Equal(1, server.OwnedResourceDisposeCountForTests);
+
+            server.Dispose();
+            Assert.Equal(1, server.OwnedResourceDisposeCountForTests);
+        }
+        finally
+        {
+            release.Set();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_LiveDocumentSync_UsesChangedBufferForPositionRequests_Issue3536()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_live_sync");
@@ -351,9 +524,9 @@ public class LspServerTests
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
-            Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, diskSource, version: 1)));
-            Assert.Null(server.HandleMessage(CreateDidChangeRequest(sourcePath, liveSource, version: 2)));
-            var liveResponse = server.HandleMessage(CreateDefinitionRequest(
+            Assert.Null(HandleInitializedMessage(server, CreateDidOpenRequest(sourcePath, diskSource, version: 1)));
+            Assert.Null(HandleInitializedMessage(server, CreateDidChangeRequest(sourcePath, liveSource, version: 2)));
+            var liveResponse = HandleInitializedMessage(server, CreateDefinitionRequest(
                 sourcePath,
                 3536,
                 0,
@@ -362,8 +535,8 @@ public class LspServerTests
             Assert.NotNull(liveResponse);
             Assert.NotEmpty(liveResponse!["result"]!.AsArray());
 
-            Assert.Null(server.HandleMessage(CreateDidCloseRequest(sourcePath)));
-            var closedResponse = server.HandleMessage(CreateDefinitionRequest(
+            Assert.Null(HandleInitializedMessage(server, CreateDidCloseRequest(sourcePath)));
+            var closedResponse = HandleInitializedMessage(server, CreateDefinitionRequest(
                 sourcePath,
                 35361,
                 0,
@@ -417,13 +590,13 @@ public class LspServerTests
             for (var i = 0; i < sources.Count; i++)
             {
                 var source = sources[i];
-                Assert.Null(server.HandleMessage(CreateDidOpenRequest(source.Path, source.DiskSource, version: i + 1)));
-                Assert.Null(server.HandleMessage(CreateDidChangeRequest(source.Path, source.LiveSource, version: i + 100)));
+                Assert.Null(HandleInitializedMessage(server, CreateDidOpenRequest(source.Path, source.DiskSource, version: i + 1)));
+                Assert.Null(HandleInitializedMessage(server, CreateDidChangeRequest(source.Path, source.LiveSource, version: i + 100)));
             }
 
             Assert.NotNull(firstPath);
             Assert.NotNull(firstLiveSource);
-            var evictedResponse = server.HandleMessage(CreateDefinitionRequest(
+            var evictedResponse = HandleInitializedMessage(server, CreateDefinitionRequest(
                 firstPath!,
                 35368,
                 0,
@@ -434,7 +607,7 @@ public class LspServerTests
 
             Assert.NotNull(lastPath);
             Assert.NotNull(lastLiveSource);
-            var retainedResponse = server.HandleMessage(CreateDefinitionRequest(
+            var retainedResponse = HandleInitializedMessage(server, CreateDefinitionRequest(
                 lastPath!,
                 35369,
                 0,
@@ -471,7 +644,7 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreatePositionRequest(method, sourcePath, 4360, 0, 6);
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Equal(-32601, response!["error"]!["code"]!.GetValue<int>());
@@ -505,23 +678,23 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var countCallCharacter = CharacterOf(source, 3, "Count();");
 
-            var hover = server.HandleMessage(CreatePositionRequest("textDocument/hover", sourcePath, 35362, 3, countCallCharacter));
+            var hover = HandleInitializedMessage(server, CreatePositionRequest("textDocument/hover", sourcePath, 35362, 3, countCallCharacter));
             Assert.NotNull(hover);
             Assert.Contains("Count", hover!["result"]!["contents"]!["value"]!.GetValue<string>(), StringComparison.Ordinal);
 
-            var completion = server.HandleMessage(CreatePositionRequest("textDocument/completion", sourcePath, 35363, 3, countCallCharacter + 3));
+            var completion = HandleInitializedMessage(server, CreatePositionRequest("textDocument/completion", sourcePath, 35363, 3, countCallCharacter + 3));
             Assert.NotNull(completion);
             Assert.Contains(completion!["result"]!["items"]!.AsArray(), item => item!["label"]!.GetValue<string>() == "Count");
 
-            var highlights = server.HandleMessage(CreatePositionRequest("textDocument/documentHighlight", sourcePath, 35364, 3, countCallCharacter));
+            var highlights = HandleInitializedMessage(server, CreatePositionRequest("textDocument/documentHighlight", sourcePath, 35364, 3, countCallCharacter));
             Assert.NotNull(highlights);
             Assert.NotEmpty(highlights!["result"]!.AsArray());
 
-            var semanticTokens = server.HandleMessage(CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 35365));
+            var semanticTokens = HandleInitializedMessage(server, CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 35365));
             Assert.NotNull(semanticTokens);
             Assert.NotEmpty(semanticTokens!["result"]!["data"]!.AsArray());
 
-            var inlayHints = server.HandleMessage(CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, 35367));
+            var inlayHints = HandleInitializedMessage(server, CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, 35367));
             Assert.NotNull(inlayHints);
             Assert.True(inlayHints!["error"] is null, inlayHints["error"]?.ToJsonString());
             Assert.Empty(inlayHints!["result"]!.AsArray());
@@ -560,7 +733,7 @@ public class LspServerTests
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
-            var response = server.HandleMessage(CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 4444));
+            var response = HandleInitializedMessage(server, CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 4444));
 
             Assert.NotNull(response);
             var tokens = DecodeSemanticTokens(response!["result"]!["data"]!.AsArray(), source);
@@ -628,7 +801,7 @@ public class LspServerTests
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
-            var response = server.HandleMessage(CreateInlayHintRequest(sourcePath, 4418, 1001, 0, 1002, 0));
+            var response = HandleInitializedMessage(server, CreateInlayHintRequest(sourcePath, 4418, 1001, 0, 1002, 0));
 
             Assert.NotNull(response);
             Assert.True(response!["error"] is null, response["error"]?.ToJsonString());
@@ -664,7 +837,7 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var missingCharacter = CharacterOf(source, 3, "MissingPrefix();") + 3;
 
-            var completion = server.HandleMessage(CreatePositionRequest("textDocument/completion", sourcePath, 43601, 3, missingCharacter));
+            var completion = HandleInitializedMessage(server, CreatePositionRequest("textDocument/completion", sourcePath, 43601, 3, missingCharacter));
 
             Assert.NotNull(completion);
             Assert.False(completion!["result"]!["isIncomplete"]!.GetValue<bool>());
@@ -686,7 +859,7 @@ public class LspServerTests
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
-            var response = server.HandleMessage(BuildNestedLspRequest(LspServer.MaxJsonDepth + 1));
+            var response = HandleInitializedMessage(server, BuildNestedLspRequest(LspServer.MaxJsonDepth + 1));
 
             Assert.NotNull(response);
             Assert.Equal(-32700, response!["error"]!["code"]!.GetValue<int>());
@@ -718,7 +891,7 @@ public class LspServerTests
                 method,
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var error = response!["error"]!;
@@ -746,7 +919,7 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"" + new string('m', LspServer.MaxLspFrameBytes) + "\"}";
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Equal(-32700, response!["error"]!["code"]!.GetValue<int>());
@@ -775,7 +948,7 @@ public class LspServerTests
                 method,
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var error = response!["error"]!;
@@ -801,6 +974,7 @@ public class LspServerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            InitializeSession(server);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -808,7 +982,7 @@ public class LspServerTests
                 method = "textDocument/unknownHover",
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Equal(-32601, response!["error"]!["code"]!.GetValue<int>());
@@ -830,7 +1004,7 @@ public class LspServerTests
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
-            var response = server.HandleMessage("""{"jsonrpc":"2.0","id":{"nested":1},"method":"initialize"}""");
+            var response = HandleInitializedMessage(server, """{"jsonrpc":"2.0","id":{"nested":1},"method":"initialize"}""");
 
             Assert.NotNull(response);
             Assert.Equal(-32600, response!["error"]!["code"]!.GetValue<int>());
@@ -859,7 +1033,7 @@ public class LspServerTests
                 method = "initialize",
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Equal(-32600, response!["error"]!["code"]!.GetValue<int>());
@@ -881,6 +1055,7 @@ public class LspServerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            InitializeSession(server);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -892,7 +1067,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Equal(-32602, response!["error"]!["code"]!.GetValue<int>());
@@ -927,7 +1102,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Equal(-32603, response!["error"]!["code"]!.GetValue<int>());
@@ -958,7 +1133,7 @@ public class LspServerTests
                 @params = new { query = "AddedAfterLspStart" },
             });
 
-            var before = server.HandleMessage(request);
+            var before = HandleInitializedMessage(server, request);
             Assert.NotNull(before);
             Assert.Empty(before!["result"]!.AsArray());
 
@@ -988,7 +1163,7 @@ public class LspServerTests
             ]);
 
             var expectedArtifacts = CaptureDatabaseArtifactsForLsp(dbPath);
-            var after = server.HandleMessage(request);
+            var after = HandleInitializedMessage(server, request);
 
             Assert.NotNull(after);
             var symbol = Assert.Single(after!["result"]!.AsArray());
@@ -1044,7 +1219,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var error = response!["error"]!;
@@ -1088,7 +1263,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Equal(2, response!["result"]!.AsArray().Count);
@@ -1116,6 +1291,7 @@ public class LspServerTests
 
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            InitializeSession(server);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -1192,6 +1368,7 @@ public class LspServerTests
                     release.Wait(cancellationToken);
                 },
             };
+            InitializeSession(server);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -1247,6 +1424,7 @@ public class LspServerTests
 
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            InitializeSession(server);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -1301,6 +1479,7 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "cancel.cs", "csharp", source);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            InitializeSession(server);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -1361,6 +1540,7 @@ public class LspServerTests
                     cancellationToken.ThrowIfCancellationRequested();
                 },
             };
+            InitializeSession(server);
             var frames = new StringBuilder();
             frames.Append(Frame(
                 """
@@ -1372,8 +1552,7 @@ public class LspServerTests
                 {
                     jsonrpc = "2.0",
                     id = 5000 + i,
-                    method = "initialize",
-                    @params = new { },
+                    method = "unknown",
                 })));
             }
             frames.Append(Frame(
@@ -1423,6 +1602,7 @@ public class LspServerTests
                     release.Wait(cancellationToken);
                 },
             };
+            InitializeSession(server);
             var frames = new StringBuilder();
             frames.Append(Frame(
                 """
@@ -1434,8 +1614,7 @@ public class LspServerTests
                 {
                     jsonrpc = "2.0",
                     id = 6000 + i,
-                    method = "initialize",
-                    @params = new { },
+                    method = "unknown",
                 })));
             }
             frames.Append(Frame(JsonSerializer.Serialize(new
@@ -1507,6 +1686,7 @@ public class LspServerTests
                     requestRelease.Wait(cancellationToken);
                 },
             };
+            InitializeSession(server);
             var frames = new StringBuilder();
             frames.Append(Frame(
                 """
@@ -1518,8 +1698,7 @@ public class LspServerTests
                 {
                     jsonrpc = "2.0",
                     id = 7000 + i,
-                    method = "initialize",
-                    @params = new { },
+                    method = "unknown",
                 })));
             }
             const string cancel =
@@ -1587,6 +1766,7 @@ public class LspServerTests
                     cancellationToken.Register(() => cancellationObserved.TrySetResult());
                 },
             };
+            InitializeSession(server);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -1689,7 +1869,7 @@ public class LspServerTests
 
             foreach (var request in requests)
             {
-                var response = server.HandleMessage(request);
+                var response = HandleInitializedMessage(server, request);
                 Assert.NotNull(response);
                 Assert.Equal(-32602, response!["error"]!["code"]!.GetValue<int>());
                 Assert.Equal("Invalid params", response["error"]!["message"]!.GetValue<string>());
@@ -1738,7 +1918,7 @@ public class LspServerTests
     }
 
     [Fact]
-    public void Run_ShutdownThenExit_StopsBeforeLaterFrames()
+    public void Run_ShutdownThenExit_StopsBeforeLaterFrames_Issue4849()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_shutdown_exit");
         try
@@ -1748,19 +1928,36 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             const string shutdownRequest = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}";
             const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
-            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}";
+            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+            const string initializedNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}";
+            const string postShutdownNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{}}";
+            const string postShutdownRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"Needle\"}}";
+            const string lateInitializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"initialize\",\"params\":{}}";
             using var input = new MemoryStream(Encoding.UTF8.GetBytes(
-                Frame(shutdownRequest) + Frame(exitNotification) + Frame(initializeRequest)));
+                Frame(initializeRequest)
+                + Frame(initializedNotification)
+                + Frame(shutdownRequest)
+                + Frame(postShutdownNotification)
+                + Frame(postShutdownRequest)
+                + Frame(exitNotification)
+                + Frame(lateInitializeRequest)));
             using var output = new MemoryStream();
 
             var exitCode = server.Run(input, output);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             output.Position = 0;
+            Assert.True(LspServer.TryReadMessage(output, out var initializePayload));
+            using var initialize = JsonDocument.Parse(initializePayload);
+            Assert.Equal(1, initialize.RootElement.GetProperty("id").GetInt32());
             Assert.True(LspServer.TryReadMessage(output, out var shutdownPayload));
             using var shutdown = JsonDocument.Parse(shutdownPayload);
             Assert.Equal(2, shutdown.RootElement.GetProperty("id").GetInt32());
             Assert.Equal(JsonValueKind.Null, shutdown.RootElement.GetProperty("result").ValueKind);
+            Assert.True(LspServer.TryReadMessage(output, out var postShutdownPayload));
+            using var postShutdown = JsonDocument.Parse(postShutdownPayload);
+            Assert.Equal(3, postShutdown.RootElement.GetProperty("id").GetInt32());
+            Assert.Equal(-32600, postShutdown.RootElement.GetProperty("error").GetProperty("code").GetInt32());
             Assert.False(LspServer.TryReadMessage(output, out _));
         }
         finally
@@ -1818,7 +2015,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var symbols = response!["result"]!.AsArray();
@@ -1856,7 +2053,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var symbols = response!["result"]!.AsArray();
@@ -1895,7 +2092,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var symbols = response!["result"]!.AsArray();
@@ -1933,7 +2130,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var roots = response!["result"]!.AsArray();
@@ -1977,7 +2174,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var roots = response!["result"]!.AsArray();
@@ -2019,7 +2216,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var symbols = response!["result"]!.AsArray();
@@ -2061,7 +2258,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var names = response!["result"]!
@@ -2103,7 +2300,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
@@ -2135,7 +2332,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var error = response!["error"]!;
@@ -2188,7 +2385,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var symbols = response!["result"]!.AsArray();
@@ -2246,7 +2443,7 @@ public class LspServerTests
             });
 
             using var activity = new Activity("lsp-document-symbol-test").Start();
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var roots = response!["result"]!.AsArray();
@@ -2287,7 +2484,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var error = response!["error"]!;
@@ -2324,7 +2521,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var error = response!["error"]!;
@@ -2363,7 +2560,7 @@ public class LspServerTests
                 },
             });
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var locations = response!["result"]!.AsArray();
@@ -2401,9 +2598,9 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var classCharacter = CharacterOf(source, 0, "Widget");
 
-            var definition = server.HandleMessage(CreateDefinitionRequest(sourcePath, 44431, 0, classCharacter));
-            var hover = server.HandleMessage(CreatePositionRequest("textDocument/hover", sourcePath, 44432, 0, classCharacter));
-            var references = server.HandleMessage(CreateReferencesRequest(sourcePath, 44433, 0, classCharacter, includeDeclaration: true));
+            var definition = HandleInitializedMessage(server, CreateDefinitionRequest(sourcePath, 44431, 0, classCharacter));
+            var hover = HandleInitializedMessage(server, CreatePositionRequest("textDocument/hover", sourcePath, 44432, 0, classCharacter));
+            var references = HandleInitializedMessage(server, CreateReferencesRequest(sourcePath, 44433, 0, classCharacter, includeDeclaration: true));
 
             Assert.NotNull(definition);
             var definitionLocation = Assert.Single(definition!["result"]!.AsArray());
@@ -2445,7 +2642,7 @@ public class LspServerTests
                 0,
                 source.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var locations = response!["result"]!.AsArray();
@@ -2480,7 +2677,9 @@ public class LspServerTests
 
             var beforeInitialize = server.HandleMessage(request);
             Assert.NotNull(beforeInitialize);
-            Assert.Empty(beforeInitialize!["result"]!.AsArray());
+            Assert.Equal(
+                LspServer.LspServerNotInitializedCode,
+                beforeInitialize!["error"]!["code"]!.GetValue<int>());
 
             var initialize = JsonSerializer.Serialize(new
             {
@@ -2495,9 +2694,9 @@ public class LspServerTests
                     },
                 },
             });
-            Assert.NotNull(server.HandleMessage(initialize));
+            Assert.NotNull(InitializeSession(server, initialize));
 
-            var afterInitialize = server.HandleMessage(request);
+            var afterInitialize = HandleInitializedMessage(server, request);
             Assert.NotNull(afterInitialize);
             var locations = afterInitialize!["result"]!.AsArray();
             var location = Assert.Single(locations);
@@ -2519,9 +2718,9 @@ public class LspServerTests
                     },
                 },
             });
-            Assert.Null(server.HandleMessage(removeFolder));
+            Assert.Null(HandleInitializedMessage(server, removeFolder));
 
-            var afterRemove = server.HandleMessage(request);
+            var afterRemove = HandleInitializedMessage(server, request);
             Assert.NotNull(afterRemove);
             Assert.Empty(afterRemove!["result"]!.AsArray());
         }
@@ -2547,9 +2746,9 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", primarySource);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-            Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(secondaryRoot, 35372)));
+            Assert.NotNull(HandleInitializedMessage(server, CreateInitializeRequestWithWorkspaceFolder(secondaryRoot, 35372)));
 
-            var response = server.HandleMessage(CreateDefinitionRequest(
+            var response = HandleInitializedMessage(server, CreateDefinitionRequest(
                 secondaryPath,
                 35373,
                 0,
@@ -2583,9 +2782,9 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, callerPath, "csharp", callerSource);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-            Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(secondaryRoot, 35376)));
+            Assert.NotNull(InitializeSession(server, CreateInitializeRequestWithWorkspaceFolder(secondaryRoot, 35376)));
 
-            var response = server.HandleMessage(CreateDefinitionRequest(
+            var response = HandleInitializedMessage(server, CreateDefinitionRequest(
                 callerPath,
                 35377,
                 0,
@@ -2634,7 +2833,7 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(betaPath, 31, 3, CharacterOf(betaSource, 3, "Run();"));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var locations = response!["result"]!.AsArray();
@@ -2670,7 +2869,7 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(callerPath, 3537, 0, callerSource.IndexOf("Shared();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var uris = response!["result"]!
@@ -2720,7 +2919,7 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateReferencesRequest(betaPath, 32, 4, CharacterOf(betaSource, 4, "Worker();"));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var locations = response!["result"]!.AsArray();
@@ -2757,8 +2956,8 @@ public class LspServerTests
             var withoutDeclaration = CreateReferencesRequest(sourcePath, 3537, 3, character, includeDeclaration: false);
             var withDeclaration = CreateReferencesRequest(sourcePath, 3538, 3, character, includeDeclaration: true);
 
-            var withoutResponse = server.HandleMessage(withoutDeclaration);
-            var withResponse = server.HandleMessage(withDeclaration);
+            var withoutResponse = HandleInitializedMessage(server, withoutDeclaration);
+            var withResponse = HandleInitializedMessage(server, withDeclaration);
 
             Assert.NotNull(withoutResponse);
             Assert.NotNull(withResponse);
@@ -2847,20 +3046,20 @@ public class LspServerTests
             Assert.Equal(CharacterOf(twoArgCallerSource, 0, "Choose") + 1, twoArgumentReference.Column);
             Assert.Equal(requestCharacter + 1, sameFileReference.Column);
 
-            var withoutDeclaration = server.HandleMessage(CreateReferencesRequest(
+            var withoutDeclaration = HandleInitializedMessage(server, CreateReferencesRequest(
                 definitionPath,
                 46223,
                 4,
                 requestCharacter,
                 includeDeclaration: false));
-            var withDeclaration = server.HandleMessage(CreateReferencesRequest(
+            var withDeclaration = HandleInitializedMessage(server, CreateReferencesRequest(
                 definitionPath,
                 46224,
                 4,
                 requestCharacter,
                 includeDeclaration: true));
             var lastCappedCallLine = 8 + cappedCallCount - 1;
-            var cappedDefinition = server.HandleMessage(CreateDefinitionRequest(
+            var cappedDefinition = HandleInitializedMessage(server, CreateDefinitionRequest(
                 cappedDefinitionPath,
                 46225,
                 lastCappedCallLine,
@@ -2935,7 +3134,7 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateReferencesRequest(betaPath, 33, 2, CharacterOf(betaSource, 2, "WriteLine"));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             var locations = response!["result"]!.AsArray();
@@ -2964,13 +3163,14 @@ public class LspServerTests
             File.WriteAllText(unindexedPath, unindexedSource);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            InitializeSession(server);
             var request = CreateDefinitionRequest(
                 unindexedPath,
                 4,
                 0,
                 unindexedSource.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
@@ -2997,6 +3197,7 @@ public class LspServerTests
             File.WriteAllText(unindexedPath, unindexedSource);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            InitializeSession(server);
             var request = CreateDefinitionRequest(
                 unindexedPath,
                 3428,
@@ -3007,7 +3208,7 @@ public class LspServerTests
             var expectedTraceId = parentActivity.TraceId;
             using var listener = CaptureCodeIndexActivities(activities);
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
@@ -3047,7 +3248,7 @@ public class LspServerTests
                 0,
                 outsideSource.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
@@ -3079,7 +3280,7 @@ public class LspServerTests
                 0,
                 oversizedSource.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
@@ -3110,7 +3311,7 @@ public class LspServerTests
                 0,
                 oversizedLine.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
@@ -3145,7 +3346,7 @@ public class LspServerTests
                     0,
                     source.IndexOf("Needle();", StringComparison.Ordinal));
 
-                var response = server.HandleMessage(request);
+                var response = HandleInitializedMessage(server, request);
 
                 Assert.NotNull(response);
                 Assert.NotEmpty(response!["result"]!.AsArray());
@@ -3181,7 +3382,7 @@ public class LspServerTests
                     0,
                     source.IndexOf("Needle();", StringComparison.Ordinal));
 
-                var response = server.HandleMessage(request);
+                var response = HandleInitializedMessage(server, request);
 
                 Assert.NotNull(response);
                 Assert.Empty(response!["result"]!.AsArray());
@@ -3223,7 +3424,7 @@ public class LspServerTests
                 0,
                 source.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.NotEmpty(response!["result"]!.AsArray());
@@ -3264,7 +3465,7 @@ public class LspServerTests
                 0,
                 source.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
@@ -3289,6 +3490,7 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", source);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
+            InitializeSession(server);
             var request = CreateDefinitionRequest(
                 sourcePath,
                 3426,
@@ -3299,7 +3501,7 @@ public class LspServerTests
             var expectedTraceId = parentActivity.TraceId;
             using var listener = CaptureCodeIndexActivities(activities);
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
@@ -3329,14 +3531,14 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", source);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
-            Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(projectRoot, 34260)));
+            Assert.NotNull(InitializeSession(server, CreateInitializeRequestWithWorkspaceFolder(projectRoot, 34260)));
             var request = CreateDefinitionRequest(
                 sourcePath,
                 34261,
                 0,
                 source.IndexOf("Needle();", StringComparison.Ordinal));
 
-            var response = server.HandleMessage(request);
+            var response = HandleInitializedMessage(server, request);
 
             Assert.NotNull(response);
             Assert.NotEmpty(response!["result"]!.AsArray());
@@ -3509,6 +3711,32 @@ public class LspServerTests
         return lines[line].IndexOf(value, StringComparison.Ordinal);
     }
 
+    private static JsonObject? HandleInitializedMessage(LspServer server, string payload)
+    {
+        lock (server)
+        {
+            if (!InitializedServers.TryGetValue(server, out _))
+                InitializeSession(server);
+        }
+
+        return server.HandleMessage(payload);
+    }
+
+    private static JsonObject InitializeSession(
+        LspServer server,
+        string payload = """{"jsonrpc":"2.0","id":"__test_initialize__","method":"initialize","params":{}}""")
+    {
+        lock (server)
+        {
+            var initialize = server.HandleMessage(payload);
+            Assert.NotNull(initialize);
+            Assert.Null(initialize!["error"]);
+            if (!InitializedServers.TryGetValue(server, out _))
+                InitializedServers.Add(server, new object());
+            return initialize;
+        }
+    }
+
     private static List<(int Line, int Character, string Text, int Type, int Modifiers)> DecodeSemanticTokens(
         JsonArray data,
         string source)
@@ -3621,15 +3849,15 @@ public class LspServerTests
         string sourcePath,
         IReadOnlyList<string> sourceLines)
     {
-        var documentSymbols = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 46220));
-        var workspaceSymbols = server.HandleMessage(JsonSerializer.Serialize(new
+        var documentSymbols = HandleInitializedMessage(server, CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 46220));
+        var workspaceSymbols = HandleInitializedMessage(server, JsonSerializer.Serialize(new
         {
             jsonrpc = "2.0",
             id = 46221,
             method = "workspace/symbol",
             @params = new { query = "Widget" },
         }));
-        var inlayHints = server.HandleMessage(CreateInlayHintRequest(sourcePath, 46222, 0, 0, 4, int.MaxValue));
+        var inlayHints = HandleInitializedMessage(server, CreateInlayHintRequest(sourcePath, 46222, 0, 0, 4, int.MaxValue));
 
         Assert.NotNull(documentSymbols);
         Assert.NotNull(workspaceSymbols);

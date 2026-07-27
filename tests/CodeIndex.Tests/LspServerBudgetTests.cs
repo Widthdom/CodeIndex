@@ -28,6 +28,7 @@ public class LspServerBudgetTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            Initialize(server);
             var text = new string('x', LspServer.MaxPositionDocumentBytes);
             for (var i = 0; i < 5; i++)
             {
@@ -59,6 +60,7 @@ public class LspServerBudgetTests
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", diskSource);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            Initialize(server);
             var contentChanges = Enumerable.Range(0, LspServer.MaxContentChangesPerNotification + 5)
                 .Select(i => new { text = i == LspServer.MaxContentChangesPerNotification + 4 ? latestSource : diskSource })
                 .ToArray();
@@ -109,6 +111,7 @@ public class LspServerBudgetTests
             MarkGraphReady(dbPath);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            Initialize(server);
 
             var hover = server.HandleMessage(CreatePositionRequest(
                 "textDocument/hover",
@@ -142,6 +145,7 @@ public class LspServerBudgetTests
             MarkGraphReady(dbPath);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
+            Initialize(server);
 
             var hover = server.HandleMessage(CreatePositionRequest(
                 "textDocument/hover",
@@ -163,6 +167,14 @@ public class LspServerBudgetTests
 
     private static string CreateDefinitionRequest(string sourcePath, int id, int line, int character) =>
         CreatePositionRequest("textDocument/definition", sourcePath, id, line, character);
+
+    private static void Initialize(LspServer server)
+    {
+        var response = server.HandleMessage(
+            """{"jsonrpc":"2.0","id":"__test_initialize__","method":"initialize","params":{}}""");
+        Assert.NotNull(response);
+        Assert.Null(response!["error"]);
+    }
 
     private static string CreatePositionRequest(string method, string sourcePath, int id, int line, int character) =>
         JsonSerializer.Serialize(new

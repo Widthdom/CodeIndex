@@ -57,13 +57,17 @@ internal sealed partial class LspServer : IDisposable
     internal const int MaxDocumentPathFallbackCandidates = 32;
     internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
+    private const int JsonRpcInvalidRequestCode = -32600;
     private const int JsonRpcInternalErrorCode = -32603;
     private const int JsonRpcRequestCancelledCode = -32800;
     private const int JsonRpcServerBusyCode = -32000;
+    internal const int LspServerNotInitializedCode = -32002;
+    private const string JsonRpcInvalidRequestMessage = "Invalid Request";
     private const string JsonRpcInvalidParamsMessage = "Invalid params";
     private const string JsonRpcInternalErrorMessage = "Internal error";
     private const string JsonRpcRequestCancelledMessage = "Request cancelled";
     private const string JsonRpcServerBusyMessage = "Server busy";
+    private const string LspServerNotInitializedMessage = "Server not initialized";
     private const string LspLookupFailureEventName = "lsp.lookup_failed";
     private const string LspLookupFailureReasonTag = "lsp.lookup.failure_reason";
     private const string LspMethodTag = "lsp.method";
@@ -135,13 +139,18 @@ internal sealed partial class LspServer : IDisposable
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string? _projectRoot;
     private readonly StringComparison _pathStringComparison;
-    private bool _shutdownRequested;
-    private bool _exitRequested;
-    private bool _exitRequestedBeforeShutdown;
+    private readonly object _sessionStateGate = new();
+    private LspSessionState _sessionState;
+    private int _activeSessionDispatches;
+    private int _ownedResourcesDisposed;
+    private int _ownedResourceDisposeCount;
+    private volatile bool _exitRequested;
+    private volatile bool _exitRequestedBeforeShutdown;
     private readonly List<string> _workspaceFolders = [];
     private readonly LspLiveDocumentStore _liveDocumentStore;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _requestCancellations = new(StringComparer.Ordinal);
     private long _contentChangeEntriesDropped;
+    internal Action<string>? BeforeSessionDispatchForTesting { get; set; }
     internal Action<CancellationToken>? BeforeSymbolRequestForTesting { get; set; }
 
     private readonly record struct PositionTokenContext(string Token, string ResolvedPath, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
@@ -161,6 +170,24 @@ internal sealed partial class LspServer : IDisposable
         string Message,
         int? ContentLength = null,
         int? MaxContentLength = null);
+
+    private enum LspSessionState
+    {
+        BeforeInitialize,
+        Initializing,
+        Running,
+        Shutdown,
+        Exited,
+    }
+
+    private enum SessionDispatchAction
+    {
+        Dispatch,
+        Ignore,
+        Shutdown,
+        ServerNotInitialized,
+        InvalidRequest,
+    }
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -206,6 +233,17 @@ internal sealed partial class LspServer : IDisposable
     internal long LiveDocumentEvictedBytesForTests => _liveDocumentStore.EvictedBytes;
 
     internal long ContentChangeEntriesDroppedForTests => _contentChangeEntriesDropped;
+
+    internal int OwnedResourceDisposeCountForTests => Volatile.Read(ref _ownedResourceDisposeCount);
+
+    internal bool ShutdownStartedForTests
+    {
+        get
+        {
+            lock (_sessionStateGate)
+                return _sessionState is LspSessionState.Shutdown or LspSessionState.Exited;
+        }
+    }
 
     /// <summary>
     /// Compatibility wrapper that runs without caller cancellation. Prefer <see cref="RunAsync"/>
@@ -267,7 +305,7 @@ internal sealed partial class LspServer : IDisposable
                 if (messages.Writer.TryWrite(inbound))
                     continue;
 
-                var busyResponse = CreateServerBusyResponse(read.Payload);
+                var busyResponse = CreateOverloadResponse(read.Payload);
                 if (busyResponse != null)
                 {
                     ReleaseInboundMessage(inbound);
@@ -347,49 +385,95 @@ internal sealed partial class LspServer : IDisposable
                 if (root.ValueKind != JsonValueKind.Object)
                     return Error(null, -32600, "Invalid Request");
 
-                var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
                 hasId = root.TryGetProperty("id", out var idElement);
                 if (hasId && !LspProtocol.TryParseRequestId(payload, idElement, out id, out var requestIdError))
                     return Error(null, -32600, requestIdError);
 
-                if (method == null)
-                    return hasId ? Error(id, -32600, "Invalid Request") : null;
-
-                RefreshOwnedQuerySnapshot();
-                using var activity = StartLspRequestActivity(method);
-                return method switch
+                if (!root.TryGetProperty("method", out var methodElement)
+                    || methodElement.ValueKind != JsonValueKind.String
+                    || methodElement.GetString() is not { } method)
                 {
-                    "initialize" => HandleInitialize(id, root),
-                    "initialized" => null,
-                    "shutdown" => HandleShutdown(id),
-                    "exit" => HandleExit(),
-                    "workspace/didChangeWorkspaceFolders" => HandleDidChangeWorkspaceFolders(root),
-                    "textDocument/didOpen" => HandleDidOpenTextDocument(root),
-                    "textDocument/didChange" => HandleDidChangeTextDocument(root),
-                    "textDocument/didClose" => HandleDidCloseTextDocument(root),
-                    "$/cancelRequest" => null,
-                    "workspace/symbol" => HandleSymbolRequest(
-                        id,
-                        root,
-                        documentSymbols: false,
-                        outbound,
-                        requestCancellation),
-                    "textDocument/documentSymbol" => HandleSymbolRequest(
-                        id,
-                        root,
-                        documentSymbols: true,
-                        outbound,
-                        requestCancellation),
-                    "textDocument/definition" => Result(id, Definition(root, "textDocument/definition")),
-                    "textDocument/declaration" => Result(id, Definition(root, "textDocument/declaration")),
-                    "textDocument/references" => Result(id, References(root, "textDocument/references")),
-                    "textDocument/hover" => Result(id, Hover(root, "textDocument/hover")),
-                    "textDocument/completion" => Result(id, Completion(root, "textDocument/completion")),
-                    "textDocument/documentHighlight" => Result(id, DocumentHighlight(root, "textDocument/documentHighlight")),
-                    "textDocument/semanticTokens/full" => Result(id, SemanticTokensFull(root)),
-                    "textDocument/inlayHint" => Result(id, InlayHint(root)),
-                    _ => hasId ? Error(id, -32601, $"Method not found: {SanitizeUnknownMethod(method)}") : null,
-                };
+                    return hasId ? Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage) : null;
+                }
+
+                var dispatchAction = BeginSessionDispatch(method, hasId);
+                switch (dispatchAction)
+                {
+                    case SessionDispatchAction.Ignore:
+                        return null;
+                    case SessionDispatchAction.ServerNotInitialized:
+                        return Error(id, LspServerNotInitializedCode, LspServerNotInitializedMessage);
+                    case SessionDispatchAction.InvalidRequest:
+                        return Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage);
+                    case SessionDispatchAction.Shutdown:
+                        return HandleShutdown(id);
+                }
+
+                var initializationCompleted = false;
+                try
+                {
+                    BeforeSessionDispatchForTesting?.Invoke(method);
+                    RefreshOwnedQuerySnapshot();
+                    using var activity = StartLspRequestActivity(method);
+                    var response = method switch
+                    {
+                        "initialize" => HandleInitialize(id, root),
+                        "initialized" => null,
+                        "exit" => null,
+                        "workspace/didChangeWorkspaceFolders" => HandleDidChangeWorkspaceFolders(root),
+                        "textDocument/didOpen" => HandleDidOpenTextDocument(root),
+                        "textDocument/didChange" => HandleDidChangeTextDocument(root),
+                        "textDocument/didClose" => HandleDidCloseTextDocument(root),
+                        "$/cancelRequest" => HandleCancellationNotification(root),
+                        "workspace/symbol" => HandleSymbolRequest(
+                            id,
+                            root,
+                            documentSymbols: false,
+                            outbound,
+                            requestCancellation),
+                        "textDocument/documentSymbol" => HandleSymbolRequest(
+                            id,
+                            root,
+                            documentSymbols: true,
+                            outbound,
+                            requestCancellation),
+                        "textDocument/definition" => Result(id, Definition(root, "textDocument/definition")),
+                        "textDocument/declaration" => Result(id, Definition(root, "textDocument/declaration")),
+                        "textDocument/references" => Result(id, References(root, "textDocument/references")),
+                        "textDocument/hover" => Result(id, Hover(root, "textDocument/hover")),
+                        "textDocument/completion" => Result(id, Completion(root, "textDocument/completion")),
+                        "textDocument/documentHighlight" => Result(id, DocumentHighlight(root, "textDocument/documentHighlight")),
+                        "textDocument/semanticTokens/full" => Result(id, SemanticTokensFull(root)),
+                        "textDocument/inlayHint" => Result(id, InlayHint(root)),
+                        _ => hasId ? Error(id, -32601, $"Method not found: {SanitizeUnknownMethod(method)}") : null,
+                    };
+
+                    if (string.Equals(method, "initialize", StringComparison.Ordinal))
+                    {
+                        CompleteInitialization();
+                        initializationCompleted = true;
+                    }
+
+                    return response;
+                }
+                catch (Exception ex) when (ex is ArgumentException or JsonException)
+                {
+                    return hasId ? Error(id, JsonRpcInvalidParamsCode, JsonRpcInvalidParamsMessage) : null;
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or IOException)
+                {
+                    return hasId ? Error(id, JsonRpcInternalErrorCode, JsonRpcInternalErrorMessage) : null;
+                }
+                finally
+                {
+                    if (string.Equals(method, "initialize", StringComparison.Ordinal)
+                        && !initializationCompleted)
+                    {
+                        AbortInitialization();
+                    }
+
+                    EndSessionDispatch();
+                }
             }
             catch (Exception ex) when (ex is ArgumentException or JsonException)
             {
@@ -581,19 +665,17 @@ internal sealed partial class LspServer : IDisposable
                 return false;
             }
 
-            if (TryGet(root, out var requestId, "params", "id")
-                && TryGetRequestKey(requestId, out var requestKey)
-                && _requestCancellations.TryGetValue(requestKey, out var requestCancellation))
+            var dispatchAction = BeginSessionDispatch("$/cancelRequest", hasId: false);
+            if (dispatchAction != SessionDispatchAction.Dispatch)
+                return true;
+
+            try
             {
-                try
-                {
-                    requestCancellation.Cancel();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // The request completed while cancellation was being dispatched.
-                    // cancellation dispatch 中に request が完了した。
-                }
+                HandleCancellationNotification(root);
+            }
+            finally
+            {
+                EndSessionDispatch();
             }
 
             return true;
@@ -604,7 +686,27 @@ internal sealed partial class LspServer : IDisposable
         }
     }
 
-    private static JsonObject? CreateServerBusyResponse(string payload)
+    private JsonObject? HandleCancellationNotification(JsonElement root)
+    {
+        if (TryGet(root, out var requestId, "params", "id")
+            && TryGetRequestKey(requestId, out var requestKey)
+            && _requestCancellations.TryGetValue(requestKey, out var requestCancellation))
+        {
+            try
+            {
+                requestCancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The request completed while cancellation was being dispatched.
+                // cancellation dispatch 中に request が完了した。
+            }
+        }
+
+        return null;
+    }
+
+    internal JsonObject? CreateOverloadResponse(string payload)
     {
         try
         {
@@ -619,7 +721,55 @@ internal sealed partial class LspServer : IDisposable
                 return null;
             }
 
-            return Error(id, JsonRpcServerBusyCode, JsonRpcServerBusyMessage);
+            var methodName = method.GetString();
+            lock (_sessionStateGate)
+            {
+                if (string.Equals(methodName, "initialize", StringComparison.Ordinal))
+                {
+                    return _sessionState switch
+                    {
+                        LspSessionState.BeforeInitialize => null,
+                        LspSessionState.Exited => null,
+                        _ => Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage),
+                    };
+                }
+
+                if (string.Equals(methodName, "shutdown", StringComparison.Ordinal))
+                {
+                    return _sessionState switch
+                    {
+                        LspSessionState.BeforeInitialize or LspSessionState.Initializing =>
+                            Error(id, LspServerNotInitializedCode, LspServerNotInitializedMessage),
+                        LspSessionState.Running => null,
+                        LspSessionState.Shutdown =>
+                            Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage),
+                        _ => null,
+                    };
+                }
+
+                if (string.Equals(methodName, "exit", StringComparison.Ordinal))
+                {
+                    return _sessionState switch
+                    {
+                        LspSessionState.BeforeInitialize or LspSessionState.Initializing =>
+                            Error(id, LspServerNotInitializedCode, LspServerNotInitializedMessage),
+                        LspSessionState.Running or LspSessionState.Shutdown =>
+                            Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage),
+                        _ => null,
+                    };
+                }
+
+                return _sessionState switch
+                {
+                    LspSessionState.BeforeInitialize or LspSessionState.Initializing =>
+                        Error(id, LspServerNotInitializedCode, LspServerNotInitializedMessage),
+                    LspSessionState.Running =>
+                        Error(id, JsonRpcServerBusyCode, JsonRpcServerBusyMessage),
+                    LspSessionState.Shutdown =>
+                        Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage),
+                    _ => null,
+                };
+            }
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
@@ -721,15 +871,146 @@ internal sealed partial class LspServer : IDisposable
 
     private JsonObject HandleShutdown(JsonNode? id)
     {
-        _shutdownRequested = true;
+        WaitForActiveSessionDispatches();
+        DisposeOwnedResourcesOnce();
         return Result(id, null);
     }
 
-    private JsonObject? HandleExit()
+    private SessionDispatchAction BeginSessionDispatch(string method, bool hasId)
     {
-        _exitRequestedBeforeShutdown = !_shutdownRequested;
-        _exitRequested = true;
-        return null;
+        lock (_sessionStateGate)
+        {
+            switch (_sessionState)
+            {
+                case LspSessionState.BeforeInitialize:
+                    if (string.Equals(method, "initialize", StringComparison.Ordinal))
+                    {
+                        if (!hasId)
+                            return SessionDispatchAction.Ignore;
+
+                        _sessionState = LspSessionState.Initializing;
+                        _activeSessionDispatches++;
+                        return SessionDispatchAction.Dispatch;
+                    }
+
+                    if (string.Equals(method, "exit", StringComparison.Ordinal) && !hasId)
+                    {
+                        _sessionState = LspSessionState.Exited;
+                        _exitRequestedBeforeShutdown = true;
+                        _exitRequested = true;
+                        return SessionDispatchAction.Ignore;
+                    }
+
+                    return hasId
+                        ? SessionDispatchAction.ServerNotInitialized
+                        : SessionDispatchAction.Ignore;
+
+                case LspSessionState.Initializing:
+                    if (string.Equals(method, "initialize", StringComparison.Ordinal))
+                    {
+                        return hasId
+                            ? SessionDispatchAction.InvalidRequest
+                            : SessionDispatchAction.Ignore;
+                    }
+
+                    if (string.Equals(method, "exit", StringComparison.Ordinal) && !hasId)
+                    {
+                        _sessionState = LspSessionState.Exited;
+                        _exitRequestedBeforeShutdown = true;
+                        _exitRequested = true;
+                        return SessionDispatchAction.Ignore;
+                    }
+
+                    return hasId
+                        ? SessionDispatchAction.ServerNotInitialized
+                        : SessionDispatchAction.Ignore;
+
+                case LspSessionState.Running:
+                    if (string.Equals(method, "initialize", StringComparison.Ordinal))
+                    {
+                        return hasId
+                            ? SessionDispatchAction.InvalidRequest
+                            : SessionDispatchAction.Ignore;
+                    }
+
+                    if (string.Equals(method, "shutdown", StringComparison.Ordinal))
+                    {
+                        if (!hasId)
+                            return SessionDispatchAction.Ignore;
+
+                        _sessionState = LspSessionState.Shutdown;
+                        return SessionDispatchAction.Shutdown;
+                    }
+
+                    if (string.Equals(method, "exit", StringComparison.Ordinal))
+                    {
+                        if (hasId)
+                            return SessionDispatchAction.InvalidRequest;
+
+                        _sessionState = LspSessionState.Exited;
+                        _exitRequestedBeforeShutdown = true;
+                        _exitRequested = true;
+                        return SessionDispatchAction.Ignore;
+                    }
+
+                    _activeSessionDispatches++;
+                    return SessionDispatchAction.Dispatch;
+
+                case LspSessionState.Shutdown:
+                    if (string.Equals(method, "exit", StringComparison.Ordinal) && !hasId)
+                    {
+                        _sessionState = LspSessionState.Exited;
+                        _exitRequested = true;
+                        return SessionDispatchAction.Ignore;
+                    }
+
+                    return hasId
+                        ? SessionDispatchAction.InvalidRequest
+                        : SessionDispatchAction.Ignore;
+
+                default:
+                    return SessionDispatchAction.Ignore;
+            }
+        }
+    }
+
+    private void CompleteInitialization()
+    {
+        lock (_sessionStateGate)
+        {
+            if (_sessionState == LspSessionState.Initializing)
+                _sessionState = LspSessionState.Running;
+        }
+    }
+
+    private void AbortInitialization()
+    {
+        lock (_sessionStateGate)
+        {
+            if (_sessionState == LspSessionState.Initializing)
+                _sessionState = LspSessionState.BeforeInitialize;
+        }
+    }
+
+    private void EndSessionDispatch()
+    {
+        lock (_sessionStateGate)
+        {
+            _activeSessionDispatches--;
+            if (_activeSessionDispatches < 0)
+                throw new InvalidOperationException("LSP session dispatch count became negative.");
+            if (_activeSessionDispatches == 0)
+                Monitor.PulseAll(_sessionStateGate);
+        }
+    }
+
+    private void WaitForActiveSessionDispatches()
+    {
+        lock (_sessionStateGate)
+        {
+            while (_activeSessionDispatches != 0)
+                Monitor.Wait(_sessionStateGate);
+        }
     }
 
     private JsonObject HandleInitialize(JsonNode? id, JsonElement root)
