@@ -4601,7 +4601,25 @@ internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("next_cursor")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursor);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursor,
+    [property: JsonPropertyName("source_total_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SourceTotalCount = null,
+    [property: JsonPropertyName("returned_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? ReturnedCount = null,
+    [property: JsonPropertyName("limit_per_query")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? LimitPerQuery = null,
+    [property: JsonPropertyName("total_limit")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? TotalLimit = null,
+    [property: JsonPropertyName("first_per_file")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? FirstPerFile = null,
+    [property: JsonPropertyName("sample")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Sample = null,
+    [property: JsonPropertyName("source_minimum_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SourceMinimumCount = null,
+    [property: JsonPropertyName("source_total_count_authoritative")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? SourceTotalCountAuthoritative = null,
+    [property: JsonPropertyName("source_fetch_limit")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SourceFetchLimit = null);
 
 internal sealed record SearchRecipeScopeJsonResult(
     [property: JsonPropertyName("name")] string Name,
