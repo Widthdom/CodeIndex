@@ -13,6 +13,7 @@ public static partial class SymbolExtractor
         private JavaScriptScopePrivacyFlags[][]? _privateScopeColumns;
         private CSharpTypeBodyScope? _csharpInsideTypeBody;
         private CSharpCallableParameterScope? _csharpCallableParameterScope;
+        private CSharpDeclarationStartScope? _csharpDeclarationStartScope;
         private bool[]? _csharpSwitchExpressionLines;
         private bool _csharpSwitchExpressionLinesInitialized;
         private bool[]? _cssQualifiedRuleAncestors;
@@ -116,6 +117,11 @@ public static partial class SymbolExtractor
 
         public CSharpCallableParameterScope GetCSharpCallableParameterScope() =>
             _csharpCallableParameterScope ??= BuildCSharpCallableParameterScope(
+                StructuralLines,
+                GetCSharpInsideTypeBody());
+
+        public CSharpDeclarationStartScope GetCSharpDeclarationStartScope() =>
+            _csharpDeclarationStartScope ??= BuildCSharpDeclarationStartScope(
                 StructuralLines,
                 GetCSharpInsideTypeBody());
 

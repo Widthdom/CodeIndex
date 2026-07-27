@@ -227,6 +227,219 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    /// <summary>
+    /// Records positions where a C# declaration may start without inheriting an
+    /// unmatched expression delimiter. Block lambdas establish a nested statement
+    /// baseline so valid local functions inside callback bodies remain eligible.
+    /// C# 宣言が未閉じの式 delimiter を引き継がずに開始できる位置を記録する。
+    /// block lambda は入れ子の statement baseline を作り、callback 本体内の正当な
+    /// local function を引き続き宣言候補として扱う。
+    /// </summary>
+    private sealed class CSharpDeclarationStartScope
+    {
+        public static readonly CSharpDeclarationStartScope Empty = new(null, null);
+
+        private readonly bool[]? _lineStartInsideExpressionContinuation;
+        private readonly List<(int Column, bool IsInsideExpressionContinuation)>?[]? _transitions;
+
+        public CSharpDeclarationStartScope(
+            bool[]? lineStartInsideExpressionContinuation,
+            List<(int Column, bool IsInsideExpressionContinuation)>?[]? transitions)
+        {
+            _lineStartInsideExpressionContinuation = lineStartInsideExpressionContinuation;
+            _transitions = transitions;
+        }
+
+        public bool CanStartDeclarationAt(int lineIndex, int column)
+        {
+            var isInsideExpressionContinuation =
+                _lineStartInsideExpressionContinuation?[lineIndex] ?? false;
+            var transitions = _transitions?[lineIndex];
+            if (transitions == null)
+                return !isInsideExpressionContinuation;
+
+            foreach (var (transitionColumn, transitionState) in transitions)
+            {
+                if (transitionColumn >= column)
+                    break;
+                isInsideExpressionContinuation = transitionState;
+            }
+
+            return !isInsideExpressionContinuation;
+        }
+    }
+
+    private static CSharpDeclarationStartScope BuildCSharpDeclarationStartScope(
+        string[] structuralLines,
+        CSharpTypeBodyScope typeBodyScope)
+    {
+        if (!LinesContain(structuralLines, '('))
+            return CSharpDeclarationStartScope.Empty;
+
+        bool[]? lineStartInsideExpressionContinuation = null;
+        List<(int Column, bool IsInsideExpressionContinuation)>?[]? transitions = null;
+        var statementBuffer = new StringBuilder(256);
+        var braceBaselines = new Stack<(int ParenDepth, bool RestoresBaseline)>();
+        var parenContributions = new Stack<bool>();
+        var parenDepth = 0;
+        var parenBaseline = 0;
+
+        for (var lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            var isInsideExpressionContinuation = parenDepth > parenBaseline;
+            if (isInsideExpressionContinuation)
+            {
+                (lineStartInsideExpressionContinuation ??=
+                    new bool[structuralLines.Length])[lineIndex] = true;
+            }
+
+            var line = structuralLines[lineIndex];
+            for (var column = 0; column < line.Length; column++)
+            {
+                var previousState = isInsideExpressionContinuation;
+                var ch = line[column];
+                switch (ch)
+                {
+                    case '(':
+                        {
+                            // A type-body attribute opener cannot contain a declaration. Exclude
+                            // only that same-line `[Attr(` parenthesis from expression depth so
+                            // incomplete-attribute recovery stays intact without letting unrelated
+                            // square-bracket syntax disable continuation tracking later in the file.
+                            // 型本体の attribute opener 内から宣言は始まらない。同一行の
+                            // `[Attr(` 括弧だけを expression depth から除外し、未完了 attribute
+                            // の回復を維持しつつ、後続の無関係な角括弧構文で追跡を無効化しない。
+                            var contributesToExpressionDepth =
+                                !IsCSharpTypeBodyAttributeArgumentOpeningParen(
+                                    line,
+                                    lineIndex,
+                                    column,
+                                    typeBodyScope);
+                            parenContributions.Push(contributesToExpressionDepth);
+                            if (contributesToExpressionDepth)
+                                parenDepth++;
+                            statementBuffer.Append(ch);
+                            break;
+                        }
+                    case ')':
+                        if (parenContributions.Count > 0
+                            && parenContributions.Pop()
+                            && parenDepth > 0)
+                        {
+                            parenDepth--;
+                        }
+                        statementBuffer.Append(ch);
+                        break;
+                    case '[':
+                        statementBuffer.Append(ch);
+                        break;
+                    case ']':
+                        statementBuffer.Append(ch);
+                        break;
+                    case '{':
+                        {
+                            var establishesStatementBaseline =
+                                IsCSharpAnonymousCallableBlock(statementBuffer);
+                            braceBaselines.Push((
+                                parenBaseline,
+                                establishesStatementBaseline));
+                            if (establishesStatementBaseline)
+                                parenBaseline = parenDepth;
+                            statementBuffer.Clear();
+                            break;
+                        }
+                    case '}':
+                        if (braceBaselines.Count > 0)
+                        {
+                            var priorBaseline = braceBaselines.Pop();
+                            if (priorBaseline.RestoresBaseline)
+                                parenBaseline = priorBaseline.ParenDepth;
+                        }
+                        statementBuffer.Clear();
+                        break;
+                    case ';':
+                        statementBuffer.Clear();
+                        break;
+                    default:
+                        statementBuffer.Append(ch);
+                        break;
+                }
+
+                isInsideExpressionContinuation = parenDepth > parenBaseline;
+                if (isInsideExpressionContinuation != previousState)
+                {
+                    var transitionsByLine = transitions ??=
+                        new List<(int, bool)>?[structuralLines.Length];
+                    (transitionsByLine[lineIndex] ??= []).Add((
+                        column,
+                        isInsideExpressionContinuation));
+                }
+            }
+
+            statementBuffer.Append(' ');
+        }
+
+        return new CSharpDeclarationStartScope(
+            lineStartInsideExpressionContinuation,
+            transitions);
+    }
+
+    private static bool IsCSharpTypeBodyAttributeArgumentOpeningParen(
+        string line,
+        int lineIndex,
+        int column,
+        CSharpTypeBodyScope typeBodyScope)
+    {
+        if (!typeBodyScope.IsInsideTypeBodyAt(lineIndex, column))
+            return false;
+
+        var cursor = SkipWhitespace(line, 0);
+        while (cursor < column && line[cursor] == '[')
+        {
+            var closeBracket = line.IndexOf(']', cursor + 1, column - cursor - 1);
+            if (closeBracket < 0)
+                return true;
+            cursor = SkipWhitespace(line, closeBracket + 1);
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpAnonymousCallableBlock(StringBuilder statementBuffer)
+    {
+        var text = statementBuffer.ToString().TrimEnd();
+        if (text.EndsWith("=>", StringComparison.Ordinal))
+            return true;
+
+        const string delegateKeyword = "delegate";
+        var delegateIndex = text.LastIndexOf(delegateKeyword, StringComparison.Ordinal);
+        if (delegateIndex < 0
+            || (delegateIndex > 0
+                && (text[delegateIndex - 1] == '@'
+                    || text[delegateIndex - 1] == '_'
+                    || char.IsLetterOrDigit(text[delegateIndex - 1]))))
+        {
+            return false;
+        }
+
+        var suffix = text[(delegateIndex + delegateKeyword.Length)..].Trim();
+        if (suffix.Length == 0)
+            return true;
+        if (suffix[0] != '(' || suffix[^1] != ')')
+            return false;
+
+        var depth = 0;
+        foreach (var ch in suffix)
+        {
+            if (ch == '(')
+                depth++;
+            else if (ch == ')' && --depth < 0)
+                return false;
+        }
+
+        return depth == 0;
+    }
+
     private sealed class CSharpCallableParameterScope
     {
         public static readonly CSharpCallableParameterScope Empty = new(null, null);
