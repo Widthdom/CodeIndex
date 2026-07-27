@@ -9,6 +9,8 @@ public static partial class QueryCommandRunner
     {
         if (!TryParseGraphCommandOptions("references", cmdArgs, out var options, out var optionExitCode))
             return optionExitCode;
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (TryWriteInvalidKindFilterError(options, "references", AllValidReferenceKinds, AllValidKinds))
             return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "references", options.LanguageValidationError ? jsonOptions : null))
@@ -143,6 +145,8 @@ public static partial class QueryCommandRunner
     {
         if (!TryParseGraphCommandOptions("callers", cmdArgs, out var options, out var optionExitCode))
             return optionExitCode;
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (TryWriteParseError(options, "callers", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "callers"))
@@ -280,6 +284,8 @@ public static partial class QueryCommandRunner
     {
         if (!TryParseGraphCommandOptions("callees", cmdArgs, out var options, out var optionExitCode))
             return optionExitCode;
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (TryWriteParseError(options, "callees", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "callees"))

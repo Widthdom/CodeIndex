@@ -19,6 +19,8 @@ public static partial class QueryCommandRunner
             jsonDefault: false,
             allowNamedQuery: true,
             validateDefaultSnippetLines: false);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (TryWriteUnsupportedOptionError("inspect", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("inspect"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteNonPositiveCoordinateJsonError(options, jsonOptions, "--line", "--start", "--start-line", "--end", "--end-line"))

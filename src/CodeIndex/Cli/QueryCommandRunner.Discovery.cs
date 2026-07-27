@@ -24,6 +24,8 @@ public static partial class QueryCommandRunner
             allowNamedQuery: true,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (TryWriteUnsupportedOptionError("symbols", effectiveCmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows, `--format compact` for bounded compact rows, `--format count` for symbol totals, or `--format lsp|qf|sarif` for editor/diagnostic locations."))
@@ -413,6 +415,8 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false,
             positionalGlobAsPath: true);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (TryWriteUnsupportedOptionError("files", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("files"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("files", options, FilesOutputFormats, "Use `--format json` for file rows, `--format compact` for bounded compact rows, or `--format count` for file totals."))

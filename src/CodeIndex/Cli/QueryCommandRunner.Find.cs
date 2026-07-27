@@ -42,6 +42,8 @@ public static partial class QueryCommandRunner
             jsonDefault: false,
             allowNamedQuery: true,
             validateDefaultSnippetLines: false);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (options.ParseError != null)
         {
             if (options.LanguageValidationError && TryWriteParseError(options, "find", jsonOptions))

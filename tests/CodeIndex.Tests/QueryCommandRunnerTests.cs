@@ -1725,6 +1725,17 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(expected == "sql", DbReader.IsSqlLanguage(input));
     }
 
+    [Fact]
+    public void NormalizeQueryLanguage_PreservesUnknownSpellingOnlyInsideExplicitScope_Issue4842()
+    {
+        Assert.Equal("toydsl", DbReader.NormalizeQueryLanguage("ToyDsl"));
+
+        using (DbReader.BeginExactQueryLanguageScope("ToyDsl"))
+            Assert.Equal("ToyDsl", DbReader.NormalizeQueryLanguage("ToyDsl"));
+
+        Assert.Equal("toydsl", DbReader.NormalizeQueryLanguage("ToyDsl"));
+    }
+
     [Theory]
     [InlineData("ts")]
     [InlineData("tsx")]
@@ -2673,18 +2684,20 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void ParseArgs_UsesWorkspacePluginRegistryForIdsAndExtensionSpellings_Issue4842()
+    public void ParseArgs_LoadsWorkspacePatternRegistryForIdsAndExtensionSpellings_Issue4842()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lang_plugin_4842");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var patternDirectory = Path.Combine(project.Root, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        File.WriteAllText(
+            Path.Combine(patternDirectory, "plugin.yaml"),
+            "language: \"My-Plugin.ID\"\nextensions:\n  - extension: \".plugx\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
         lock (TestConsoleLock.Gate)
         {
             try
             {
                 ExtractorPluginRegistry.ResetForTests();
-                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
-                    project.Root,
-                    new WorkspaceCatalogSymbolExtractor("My-Plugin.ID", ".plugx"));
 
                 var byId = QueryCommandRunner.ParseArgs(
                     ["needle", "--db", dbPath, "--lang", "My-Plugin.ID"],

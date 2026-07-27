@@ -24,6 +24,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (TryWriteUnsupportedOptionError("impact", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("impact"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "impact", options.LanguageValidationError ? jsonOptions : null))
@@ -464,6 +466,8 @@ public static partial class QueryCommandRunner
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.AllowUnknownLang ? options.Lang : null);
         if (TryWriteUnsupportedOptionError("deps", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("deps")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "deps", options.LanguageValidationError ? jsonOptions : null))

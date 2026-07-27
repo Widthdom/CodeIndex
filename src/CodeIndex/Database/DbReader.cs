@@ -44,6 +44,8 @@ internal readonly record struct IndexedFileSnapshot(string Path, string? Checksu
 /// </summary>
 public partial class DbReader : IDisposable
 {
+    private static readonly AsyncLocal<string?> ExactQueryLanguage = new();
+
     public const string VerifyFoldReadyRowsEnvironmentVariable = "CDIDX_VERIFY_FOLD_READY_ROWS";
     internal const int MaxReferenceKindAggregateCharacters = 16 * 1024;
     private const int SqliteInterruptErrorCode = 9;
@@ -1667,19 +1669,47 @@ public partial class DbReader : IDisposable
     {
         if (lang == null)
             return null;
+        if (string.Equals(lang, ExactQueryLanguage.Value, StringComparison.Ordinal))
+            return lang;
 
         var normalized = NormalizeQueryLanguageKey(lang);
         return QueryLanguageAliases.TryGetValue(normalized, out var canonical)
             ? canonical
-            : normalized.Length == 0
-                ? normalized
-                : lang.Trim();
+            : normalized;
+    }
+
+    internal static IDisposable BeginExactQueryLanguageScope(string? lang)
+    {
+        var previous = ExactQueryLanguage.Value;
+        ExactQueryLanguage.Value = lang;
+        return new ExactQueryLanguageScope(previous);
+    }
+
+    private sealed class ExactQueryLanguageScope(string? previous) : IDisposable
+    {
+        private bool disposed;
+
+        public void Dispose()
+        {
+            if (disposed)
+                return;
+            ExactQueryLanguage.Value = previous;
+            disposed = true;
+        }
     }
 
     internal static IReadOnlyDictionary<string, string> GetQueryLanguageAliases(string? workspaceRoot)
-        => string.IsNullOrWhiteSpace(workspaceRoot)
-            ? QueryLanguageAliases
-            : BuildQueryLanguageAliases(workspaceRoot);
+    {
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+            return QueryLanguageAliases;
+
+        // Query commands run in a fresh process after indexing, so hydrate the same
+        // workspace pattern/plugin registry before validating the language filter.
+        // query command は indexing 後の新しい process で実行されるため、言語 filter の
+        // 検証前に同じ workspace pattern/plugin registry を読み込む。
+        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
+        return BuildQueryLanguageAliases(workspaceRoot);
+    }
 
     internal static string NormalizeQueryLanguageLookupKey(string lang)
         => NormalizeQueryLanguageKey(lang);
