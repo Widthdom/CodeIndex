@@ -128,6 +128,40 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_Load_PreservesLexicalPathForAuthorizedOpen_Issue4829()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_loader_lexical_path");
+        try
+        {
+            var lexicalPath = Path.Combine(tempDir, "linked.cs");
+            var resolvedPath = Path.Combine(tempDir, "target.cs");
+            File.WriteAllText(resolvedPath, "class Target {}\n");
+            string? openedPath = null;
+            var loader = new FileContentLoader(
+                FileIndexer.DefaultMaxFileSizeBytes,
+                path =>
+                {
+                    openedPath = path;
+                    return BoundedFile.OpenReadForIndexContent(resolvedPath);
+                },
+                _ => resolvedPath);
+
+            var loaded = loader.Load(
+                lexicalPath,
+                "linked.cs",
+                "linked.cs",
+                CancellationToken.None);
+
+            Assert.Equal(lexicalPath, openedPath);
+            Assert.Equal("class Target {}\n", loaded.Content);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void FileContentLoader_Load_CarriesConflictMarkerLine()
     {
         var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes("a\r\n<<<<<<< HEAD\r\nb\r\n"));

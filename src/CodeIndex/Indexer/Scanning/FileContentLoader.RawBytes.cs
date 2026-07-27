@@ -28,12 +28,12 @@ internal sealed partial class FileContentLoader
         byte[] bytes;
         long sizeBytes;
         DateTime modifiedUtc;
-        var readPath = FileIndexer.ResolveFileReadPath(absolutePath);
+        var readPath = _resolveFileReadPath(absolutePath);
         var ioPath = LongPath.EnsureWindowsPrefix(readPath);
         for (var attempt = 0; ; attempt++)
         {
             var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
-            using (var stream = _openReadForIndexContent(readPath))
+            using (var stream = _openReadForIndexContent(absolutePath))
             {
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
@@ -63,13 +63,13 @@ internal sealed partial class FileContentLoader
         RawByteChunkPredicate chunkPredicate,
         CancellationToken cancellationToken)
     {
-        var readPath = FileIndexer.ResolveFileReadPath(absolutePath);
+        var readPath = _resolveFileReadPath(absolutePath);
         var ioPath = LongPath.EnsureWindowsPrefix(readPath);
         for (var attempt = 0; ; attempt++)
         {
             var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
             bool matched;
-            using (var stream = _openReadForIndexContent(readPath))
+            using (var stream = _openReadForIndexContent(absolutePath))
             {
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
