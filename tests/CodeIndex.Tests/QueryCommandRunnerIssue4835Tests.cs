@@ -121,6 +121,23 @@ public sealed class QueryCommandRunnerIssue4835Tests
             Assert.False(nextMetadata.GetProperty("has_more").GetBoolean());
             Assert.Equal(JsonValueKind.Null, nextMetadata.GetProperty("next_cursor").ValueKind);
             AssertResponseContextContainsNoRow(nextMetadata);
+
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    [.. baseArgs, "--json-envelope", "--summary-only", "--fields", fields],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, summaryExitCode);
+            Assert.Equal(string.Empty, summaryStderr);
+            using var summaryDocument = JsonDocument.Parse(summaryStdout);
+            var summaryMetadata = summaryDocument.RootElement.GetProperty("metadata");
+            Assert.Empty(summaryDocument.RootElement.GetProperty("results").EnumerateArray());
+            Assert.Equal(0, summaryMetadata.GetProperty("returned_count").GetInt32());
+            Assert.Equal(3, summaryMetadata.GetProperty("total_count").GetInt32());
+            Assert.False(summaryMetadata.GetProperty("has_more").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, summaryMetadata.GetProperty("next_cursor").ValueKind);
+            AssertResponseContextContainsNoRow(summaryMetadata);
         }
         finally
         {
@@ -178,6 +195,18 @@ public sealed class QueryCommandRunnerIssue4835Tests
             Assert.False(metadata.GetProperty("has_more").GetBoolean());
             Assert.Equal(JsonValueKind.Null, metadata.GetProperty("next_cursor").ValueKind);
             AssertResponseContextContainsNoRow(metadata);
+            if (command == "symbols")
+            {
+                var (countExitCode, countStdout, countStderr) = CaptureConsole(() =>
+                    ProgramRunner.Run([.. baseArgs, "--count", "--json"], _jsonOptions, "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, countExitCode);
+                Assert.Equal(string.Empty, countStderr);
+                using var countDocument = JsonDocument.Parse(countStdout);
+                Assert.Equal(
+                    countDocument.RootElement.GetProperty("exact_index_available").GetBoolean(),
+                    metadata.GetProperty("response_context").GetProperty("exact_index_available").GetBoolean());
+            }
         }
         finally
         {

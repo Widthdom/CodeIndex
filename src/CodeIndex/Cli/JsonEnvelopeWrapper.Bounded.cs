@@ -256,6 +256,8 @@ internal static partial class JsonEnvelopeWrapper
                 reportedTotalCount,
                 executionContext.ReportedTotalCountAuthoritative)
             : ResolveTotalCount(command, args, runInner, extraction, availableItems.Count, controls.Offset, streamTerminal);
+        if (count.Context is not null)
+            extraction = extraction with { Context = MergeResponseContexts(extraction.Context, count.Context) };
         var totalCount = Math.Max(count.TotalCount, controls.Offset + pageItems.Count);
         var totalAuthoritative = count.Authoritative;
         var completedSnapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
@@ -588,11 +590,11 @@ internal static partial class JsonEnvelopeWrapper
             return ExtractNestedCollection(hotspotsPayload, "hotspots");
         if (command == "symbols"
             && rawResults.FirstOrDefault() is JsonObject symbolsPayload
-            && symbolsPayload["symbols"] is JsonArray)
+            && (symbolsPayload["symbols"] is JsonArray || ReadOptionalBool(symbolsPayload, "summary_only")))
             return ExtractNestedCollection(symbolsPayload, "symbols");
         if (command == "files"
             && rawResults.FirstOrDefault() is JsonObject filesPayload
-            && filesPayload["files"] is JsonArray)
+            && (filesPayload["files"] is JsonArray || ReadOptionalBool(filesPayload, "summary_only")))
             return ExtractNestedCollection(filesPayload, "files");
         if (command == "languages" && rawResults.FirstOrDefault() is JsonObject languagesPayload)
             return ExtractNestedCollection(languagesPayload, "languages");
@@ -671,6 +673,14 @@ internal static partial class JsonEnvelopeWrapper
             }
         }
         return new ResponseExtraction(rows, command, context, null);
+    }
+
+    private static JsonObject MergeResponseContexts(JsonObject? existing, JsonObject additional)
+    {
+        var merged = existing is null ? new JsonObject() : (JsonObject)existing.DeepClone();
+        foreach (var property in additional)
+            merged[property.Key] = property.Value?.DeepClone();
+        return merged;
     }
 
     private static ResponseExtraction ExtractNestedCollection(JsonObject payload, string collectionName)
@@ -809,7 +819,7 @@ internal static partial class JsonEnvelopeWrapper
                   && !ReadOptionalBool(countPayload, "degraded")
                   && ReadOptionalBool(countPayload, "graph_table_available", defaultValue: true)
                   && ReadOptionalBool(countPayload, "hotspot_family_ready", defaultValue: true);
-            return new ResponseCount(total, authoritative);
+            return new ResponseCount(total, authoritative, ExtractCountResponseContext(command, countPayload));
         }
         catch
         {
@@ -833,6 +843,23 @@ internal static partial class JsonEnvelopeWrapper
 
     private static bool ReadOptionalBool(JsonObject obj, string propertyName, bool defaultValue = false)
         => TryReadBool(obj, propertyName, out var value) ? value : defaultValue;
+
+    private static JsonObject? ExtractCountResponseContext(string command, JsonObject countPayload)
+    {
+        if (command != "symbols"
+            || !countPayload.TryGetPropertyValue("exact_index_available", out var exactIndexAvailable))
+        {
+            return null;
+        }
+
+        var context = new JsonObject
+        {
+            ["exact_index_available"] = exactIndexAvailable?.DeepClone(),
+        };
+        if (countPayload.TryGetPropertyValue("degraded_reason", out var degradedReason))
+            context["degraded_reason"] = degradedReason?.DeepClone();
+        return context;
+    }
 
     private static string? ReadString(JsonObject? obj, string propertyName)
         => obj?[propertyName] is JsonValue value && value.TryGetValue<string>(out var text)
@@ -1345,7 +1372,10 @@ internal static partial class JsonEnvelopeWrapper
         JsonObject? Context,
         JsonObject? SourcePayload);
 
-    private readonly record struct ResponseCount(int TotalCount, bool Authoritative);
+    private readonly record struct ResponseCount(
+        int TotalCount,
+        bool Authoritative,
+        JsonObject? Context = null);
 
     private readonly record struct ResponseSnapshot(
         string GenerationFingerprint,
