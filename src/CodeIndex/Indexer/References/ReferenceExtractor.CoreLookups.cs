@@ -448,6 +448,7 @@ public static partial class ReferenceExtractor
                     ReferenceKind = "bcl_regex_without_timeout",
                     Line = reference.Line,
                     Column = reference.Column,
+                    SpanLength = reference.SpanLength,
                     Context = reference.Context,
                     ContainerKind = reference.ContainerKind,
                     ContainerName = reference.ContainerName,

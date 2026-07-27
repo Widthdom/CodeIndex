@@ -9,7 +9,7 @@ public partial class DbWriter
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 256);
         sql.Append(@"
                 INSERT INTO symbol_references (
-                    file_id, symbol_name, reference_kind, line, column_number,
+                    file_id, symbol_name, reference_kind, line, column_number, span_length,
                     context, reference_line_id, container_kind, container_name,
                     symbol_name_folded, container_name_folded, is_self_reference,
                     is_mutual_recursion, target_qualifier
@@ -20,7 +20,7 @@ public partial class DbWriter
         {
             if (row > 0)
                 sql.Append(", ");
-            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 14);
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 15);
         }
         return sql.ToString();
     }
@@ -33,6 +33,7 @@ public partial class DbWriter
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);

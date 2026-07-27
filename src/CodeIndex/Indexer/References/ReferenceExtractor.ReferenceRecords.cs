@@ -233,7 +233,8 @@ public static partial class ReferenceExtractor
             lineNumber,
             container,
             language,
-            targetQualifier);
+            targetQualifier,
+            match.Groups["name"].Length);
     }
 
     internal static void AddReference(
@@ -247,7 +248,8 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container,
         string? language = null,
-        string? targetQualifier = null)
+        string? targetQualifier = null,
+        int? sourceLength = null)
     {
         var column = nameIndex + 1;
         var dedupeKey = CreateReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container);
@@ -268,6 +270,7 @@ public static partial class ReferenceExtractor
             ReferenceKind = referenceKind,
             Line = lineNumber,
             Column = column,
+            SpanLength = Math.Max(1, sourceLength ?? name.Length),
             Context = context,
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,

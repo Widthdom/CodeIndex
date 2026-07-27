@@ -87,10 +87,17 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "java", content);
         var references = ReferenceExtractor.Extract(1, "java", content, symbols);
 
-        Assert.Contains(references, r =>
+        var intValueReference = Assert.Single(references.Where(r =>
             r.SymbolName == "intValue"
             && r.ReferenceKind == "call"
-            && r.ContainerName == "sum");
+            && r.ContainerName == "sum"));
+        var intValueLine = content
+            .Split('\n')
+            .Single(line => line.Contains("Integer::intValue", StringComparison.Ordinal));
+        Assert.Equal(
+            intValueLine.IndexOf("intValue", StringComparison.Ordinal) + 1,
+            intValueReference.Column);
+        Assert.Equal("intValue".Length, intValueReference.SpanLength);
         Assert.Contains(references, r =>
             r.SymbolName == "Integer"
             && r.ReferenceKind == "type_reference"
@@ -951,7 +958,17 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(symbols, s => s.Name == "render name" && s.Kind == "function");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "render name" && r.ReferenceKind == "call");
+        var renderReference = Assert.Single(references.Where(r =>
+            r.SymbolName == "render name"
+            && r.ReferenceKind == "call"));
+        var renderLine = content
+            .Split('\n')
+            .Single(line => line.Contains("`render name`", StringComparison.Ordinal)
+                && line.Contains("::", StringComparison.Ordinal));
+        Assert.Equal(
+            renderLine.IndexOf("`render name`", StringComparison.Ordinal) + 1,
+            renderReference.Column);
+        Assert.Equal("`render name`".Length, renderReference.SpanLength);
         Assert.DoesNotContain(references, r => r.SymbolName == "`render name`" && r.ReferenceKind == "call");
     }
 

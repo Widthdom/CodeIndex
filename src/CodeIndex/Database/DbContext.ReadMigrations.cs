@@ -157,6 +157,7 @@ public partial class DbContext : IDisposable
                 reference_kind  TEXT,
                 line            INTEGER,
                 column_number   INTEGER,
+                span_length     INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT,
@@ -166,6 +167,8 @@ public partial class DbContext : IDisposable
             )"));
         yield return ("EnsureColumn symbol_references.reference_line_id",
             () => EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL"));
+        yield return ("EnsureColumn symbol_references.span_length",
+            () => EnsureColumn("symbol_references", "span_length", "INTEGER"));
         yield return ("EnsureColumn symbol_references.is_self_reference",
             () => EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0"));
         yield return ("EnsureColumn symbol_references.is_mutual_recursion",

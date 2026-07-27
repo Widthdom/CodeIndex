@@ -1862,6 +1862,101 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Callees_PreservesFirstCallSiteSpanInFullAndCompactRows_Issue4841()
+    {
+        const string targetName = "Issue4841McpTarget";
+        const string callerName = "Issue4841McpCaller";
+        const string callLine = "    void Issue4841McpCaller() { var text = \"日本語\";\tIssue4841McpTarget(); Issue4841McpTarget(); }";
+        var source = string.Join('\n',
+            "class Issue4841McpProbe",
+            "{",
+            "    void Issue4841McpTarget() { }",
+            callLine,
+            "}",
+            "class Issue4841McpVeryLongParent { }",
+            "class Issue4841McpChild : Issue4841McpVeryLongParent",
+            "{",
+            "    Issue4841McpChild() : base() { }",
+            "}",
+            "");
+        var expectedColumn = callLine.IndexOf(targetName, StringComparison.Ordinal) + 1;
+        InsertIndexedFile("src/Issue4841McpProbe.cs", "csharp", source);
+
+        var fullRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4841,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "callees",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = callerName,
+                    ["lang"] = "csharp",
+                    ["exact"] = true,
+                },
+            },
+        };
+        var fullResponse = _server.HandleMessage(fullRequest)!;
+        var structured = fullResponse["result"]!["structuredContent"]!;
+        var fullRow = structured["results"]![0]!;
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(4, fullRow["firstLine"]!.GetValue<int>());
+        Assert.Equal(expectedColumn, fullRow["firstColumn"]!.GetValue<int>());
+        Assert.Equal(targetName.Length, fullRow["firstLength"]!.GetValue<int>());
+        Assert.Equal(2, fullRow["referenceCount"]!.GetValue<int>());
+
+        var compactRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4842,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "callees",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = callerName,
+                    ["lang"] = "csharp",
+                    ["exact"] = true,
+                    ["format"] = "compact",
+                },
+            },
+        };
+        var compactResponse = _server.HandleMessage(compactRequest)!;
+        var compactRow = compactResponse["result"]!["structuredContent"]!["results"]![0]!;
+
+        Assert.Equal(4, compactRow["line"]!.GetValue<int>());
+        Assert.Equal(expectedColumn, compactRow["column"]!.GetValue<int>());
+
+        var constructorChainRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4843,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "callees",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Issue4841McpChild",
+                    ["lang"] = "csharp",
+                    ["exact"] = true,
+                },
+            },
+        };
+        var constructorChainResponse = _server.HandleMessage(constructorChainRequest)!;
+        var constructorChainRow = constructorChainResponse["result"]!["structuredContent"]!["results"]!
+            .AsArray()
+            .Single(row => row!["calleeName"]!.GetValue<string>() == "Issue4841McpVeryLongParent")!;
+
+        Assert.Equal("Issue4841McpVeryLongParent", constructorChainRow["calleeName"]!.GetValue<string>());
+        Assert.Equal("base".Length, constructorChainRow["firstLength"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_References_ReturnsIndexedReference()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
