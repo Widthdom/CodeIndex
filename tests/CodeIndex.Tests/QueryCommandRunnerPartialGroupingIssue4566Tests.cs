@@ -161,6 +161,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(3, inspect.GetProperty("physical_definition_output_count").GetInt32());
             Assert.True(inspect.GetProperty("definitions_collapsed").GetBoolean());
             Assert.Equal(2, inspect.GetProperty("definitions").GetArrayLength());
+            Assert.True(inspect.TryGetProperty("graph_sections", out var groupedGraphSections));
+            Assert.True(groupedGraphSections.TryGetProperty("references", out _));
+            Assert.True(groupedGraphSections.TryGetProperty("callers", out _));
+            Assert.True(groupedGraphSections.TryGetProperty("callees", out _));
 
             var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
                 ["Widget", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "0", "--limit", "1"],

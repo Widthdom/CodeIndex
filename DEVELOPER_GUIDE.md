@@ -1104,6 +1104,18 @@ language across reference/caller/callee evidence. `graph_language_source`,
 `graph_language_confidence`, `graph_language_candidates`, and `graph_language_conflict`
 distinguish authoritative filter/definition decisions from consistent inference and keep
 mixed-language evidence unresolved.
+Path/line resolution must select `symbols.id` and enter the same candidate-bundle builder as
+name resolution; do not hand graph loaders only the display name. Each bounded references,
+callers, and callees section computes its own stable-order page and authoritative total.
+`graph_sections` reports `total`, `returned`, `offset`, and `truncated`, while CLI `inspect`
+and MCP `analyze_symbol` attach query-, effective-page-size-, and index-generation-bound
+cursors independently to truncated sections. Caller/callee ordering ends with every grouped
+identity field so offset pages cannot skip tied rows. Candidate selectors are part of cursor
+scope so paging one overload or partial-family representative cannot borrow graph rows from
+another candidate. Treat a path/line locator separately from graph path filters: the locator
+selects the persisted symbol, but its inbound references and callers may come from any indexed
+file permitted by explicit graph filters. Shared cursor parsing may retain inspect cursors, but
+every non-inspect command must reject that cursor family before execution.
 
 ### Reference taxonomy
 
@@ -4268,6 +4280,19 @@ reference/caller/callee query は `symbol_reference_candidates` または
 言語を推論します。`graph_language_source`、`graph_language_confidence`、
 `graph_language_candidates`、`graph_language_conflict` により、filter/definition による
 authoritative な判定と一貫した推論を区別し、複数言語の evidence は未確定のままにします。
+path/line resolution は `symbols.id` を select し、name resolution と同じ
+candidate-bundle builder に入れてください。graph loader に display name だけを渡しては
+なりません。上限付きの references、callers、callees section は、それぞれ安定順序の page と
+authoritative な総数を計算します。`graph_sections` は `total`、`returned`、`offset`、
+`truncated` を報告し、CLI `inspect` と MCP `analyze_symbol` は truncated な section ごとに
+query、effective page size、index generation に束縛した cursor を付けます。
+caller/callee の順序は grouped identity field のすべてを末尾の tie-breaker に使い、offset page が
+同順位 row を飛ばさないようにします。candidate selector も cursor scope に含め、1つの overload
+または partial-family representative の pagination が別 candidate の graph row を借用しないように
+してください。path/line locator と graph path filter は分離してください。locator は persisted
+symbol を選択しますが、その inbound references と callers は、明示された graph filter が許可する
+任意の indexed file から取得できます。共有 cursor parser が inspect cursor を保持しても、
+inspect 以外の各 command は実行前にその cursor family を拒否しなければなりません。
 
 ### 参照 taxonomy
 

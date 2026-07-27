@@ -2026,6 +2026,8 @@ public class SymbolAnalysisResult
     public List<ReferenceResult> References { get; set; } = [];
     public List<CallerResult> Callers { get; set; } = [];
     public List<CalleeResult> Callees { get; set; } = [];
+    [JsonPropertyName("graph_sections")]
+    public SymbolGraphSections GraphSections { get; set; } = new();
     [JsonPropertyName("candidate_count")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int CandidateCount { get; set; }
@@ -2104,7 +2106,36 @@ public class SymbolCandidateBundle
     public List<ReferenceResult> References { get; set; } = [];
     public List<CallerResult> Callers { get; set; } = [];
     public List<CalleeResult> Callees { get; set; } = [];
+    [JsonPropertyName("graph_sections")]
+    public SymbolGraphSections GraphSections { get; set; } = new();
 }
+
+/// <summary>
+/// Independent completeness metadata for the bounded graph sections in an inspect bundle.
+/// inspect bundle 内で個別に上限適用される graph section の完全性メタデータ。
+/// </summary>
+public class SymbolGraphSections
+{
+    public SymbolGraphSection References { get; set; } = new();
+    public SymbolGraphSection Callers { get; set; } = new();
+    public SymbolGraphSection Callees { get; set; } = new();
+}
+
+public class SymbolGraphSection
+{
+    public int Total { get; set; }
+    public int Returned { get; set; }
+    public int Offset { get; set; }
+    public bool Truncated { get; set; }
+    [JsonPropertyName("next_cursor")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? NextCursor { get; set; }
+}
+
+public sealed record SymbolGraphPageRequest(
+    string Section,
+    int Offset,
+    string? CandidateSelector);
 
 /// <summary>
 /// Structured symbol outline for a single file.

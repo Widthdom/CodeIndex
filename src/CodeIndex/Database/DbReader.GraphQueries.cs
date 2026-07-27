@@ -51,8 +51,25 @@ public partial class DbReader
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, bool excludeSelfReferences = false, int offset = 0)
         => GetCallersCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, excludeSelfReferences, offset, targetSymbolId: null);
 
-    private List<CallerResult> GetCallersForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
-        => GetCallersCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, excludeSelfReferences: false, offset: 0, definition.SymbolId);
+    private List<CallerResult> GetCallersForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, int offset = 0)
+        => GetCallersCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, excludeSelfReferences: false, offset, definition.SymbolId);
+
+    private int CountCallersForCandidate(DefinitionResult definition, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
+            return 0;
+
+        return CountCallersTotalCore(
+            definition.Name,
+            definition.Lang,
+            referenceKind: null,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact: true,
+            rawKinds: false,
+            symbolId).Count;
+    }
 
     private List<CallerResult> GetCallersCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, bool excludeSelfReferences, int offset, long? targetSymbolId)
     {
@@ -188,7 +205,7 @@ public partial class DbReader
                    MAX(r.is_mutual_recursion) AS is_mutual_recursion
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line LIMIT @limit OFFSET @offset";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line, first_column, r.lang, r.container_kind, r.container_name, r.symbol_name LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -370,6 +387,27 @@ public partial class DbReader
     }
 
     public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
+        => CountCallersTotalCore(
+            query,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            targetSymbolId: null);
+
+    private QueryCountResult CountCallersTotalCore(
+        string query,
+        string? lang,
+        string? referenceKind,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool exact,
+        bool rawKinds,
+        long? targetSymbolId)
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
@@ -392,6 +430,19 @@ public partial class DbReader
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+        {
+            groupedSql += _referenceColumns.Contains("resolution_state")
+                ? " AND r.resolution_state IN ('resolved', 'resolved_group')"
+                : " AND 1 = 0";
+            groupedSql += @"
+                AND EXISTS (
+                    SELECT 1
+                    FROM symbol_reference_candidates AS identity_candidate
+                    WHERE identity_candidate.reference_id = r.id
+                      AND identity_candidate.symbol_id = @targetSymbolId
+                )";
+        }
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
             && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -442,7 +493,11 @@ public partial class DbReader
                 ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
                 : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
-            groupedSql += " AND f.lang = @lang";
+        {
+            groupedSql += IncludeAmbiguousMSourceForIdentityTarget(lang, targetSymbolId)
+                ? " AND (f.lang = @lang OR f.lang = 'ambiguous_m')"
+                : " AND f.lang = @lang";
+        }
         groupedSql += BuildCSharpBareMemberGraphReferenceFilter(query, lang, exact, contextSql, "f", "r");
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
@@ -472,6 +527,8 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
+        if (targetSymbolId != null)
+            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);
@@ -484,8 +541,25 @@ public partial class DbReader
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, int offset = 0)
         => GetCalleesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, offset, sourceSymbolId: null);
 
-    private List<CalleeResult> GetCalleesForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
-        => GetCalleesCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, offset: 0, definition.SymbolId);
+    private List<CalleeResult> GetCalleesForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, int offset = 0)
+        => GetCalleesCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, offset, definition.SymbolId);
+
+    private int CountCalleesForCandidate(DefinitionResult definition, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (definition.SymbolId is not long symbolId || !_referenceColumns.Contains("source_symbol_id"))
+            return 0;
+
+        return CountCalleesTotalCore(
+            definition.Name,
+            definition.Lang,
+            referenceKind: null,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact: true,
+            rawKinds: false,
+            symbolId).Count;
+    }
 
     private List<CalleeResult> GetCalleesCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, int offset, long? sourceSymbolId)
     {
@@ -574,7 +648,7 @@ public partial class DbReader
                    SUM(r.weighted_score) AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line LIMIT @limit OFFSET @offset";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line, r.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         string calleesQueryParam;
@@ -747,6 +821,27 @@ public partial class DbReader
     }
 
     public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false)
+        => CountCalleesTotalCore(
+            query,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            sourceSymbolId: null);
+
+    private QueryCountResult CountCalleesTotalCore(
+        string query,
+        string? lang,
+        string? referenceKind,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool exact,
+        bool rawKinds,
+        long? sourceSymbolId)
     {
         lang = NormalizeQueryLanguage(lang);
         if (!_hasReferencesTable)
@@ -765,6 +860,8 @@ public partial class DbReader
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
+        if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
+            groupedSql += " AND r.source_symbol_id = @sourceSymbolId";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -841,6 +938,8 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        if (sourceSymbolId != null)
+            SqliteCommandPolicy.Add(cmd, "@sourceSymbolId", sourceSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);

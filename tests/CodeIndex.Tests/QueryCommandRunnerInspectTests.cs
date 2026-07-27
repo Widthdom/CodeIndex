@@ -133,6 +133,239 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_LocationKeepsCandidateIdentityAndPaginatesGraphSections_Issue4839()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_location_identity_4839");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Alpha.cs", "csharp", """
+                namespace InspectIdentity;
+                public sealed class Alpha
+                {
+                    public void RunSearch() { First(); Second(); }
+                    private void First() { }
+                    private void Second() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/AlphaCallers.cs", "csharp", """
+                namespace InspectIdentity;
+                public sealed class AlphaCallers
+                {
+                    public void CallerA(Alpha value) => value.RunSearch();
+                    public void CallerB(Alpha value) => value.RunSearch();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Beta.cs", "csharp", """
+                namespace InspectIdentity;
+                public sealed class Beta
+                {
+                    public void RunSearch() { Other(); }
+                    private void Other() { }
+                    public void CallerBetaA() => RunSearch();
+                    public void CallerBetaB() => RunSearch();
+                    public void CallerBetaC() => RunSearch();
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (nameExitCode, nameStdout, nameStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["RunSearch", "--db", dbPath, "--json", "--limit", "2", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var nameDocument = ParseJsonOutput(nameStdout);
+            var alphaNameBundle = GetInspectCandidateBundle(
+                nameDocument.RootElement,
+                "InspectIdentity.Alpha.RunSearch");
+            var betaNameBundle = GetInspectCandidateBundle(
+                nameDocument.RootElement,
+                "InspectIdentity.Beta.RunSearch");
+            var betaCallerCursor = betaNameBundle
+                .GetProperty("graph_sections")
+                .GetProperty("callers")
+                .GetProperty("next_cursor")
+                .GetString();
+
+            var locationArgs = new[]
+            {
+                "--path", "src/Alpha.cs",
+                "--line", "4",
+                "--db", dbPath,
+                "--json",
+                "--limit", "1",
+            };
+            var (locationExitCode, locationStdout, locationStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(locationArgs, _jsonOptions));
+            using var locationDocument = ParseJsonOutput(locationStdout);
+            var location = locationDocument.RootElement;
+            var locationBundle = Assert.Single(location.GetProperty("candidate_bundles").EnumerateArray());
+            var callerSection = location.GetProperty("graph_sections").GetProperty("callers");
+            var firstCaller = Assert.Single(location.GetProperty("callers").EnumerateArray());
+            var nextCursor = callerSection.GetProperty("next_cursor").GetString();
+            var calleeSection = location.GetProperty("graph_sections").GetProperty("callees");
+            var firstCallee = Assert.Single(location.GetProperty("callees").EnumerateArray());
+            var calleeCursor = calleeSection.GetProperty("next_cursor").GetString();
+
+            Assert.Equal(CommandExitCodes.Success, nameExitCode);
+            Assert.Equal(string.Empty, nameStderr);
+            Assert.Equal(CommandExitCodes.Success, locationExitCode);
+            Assert.Equal(string.Empty, locationStderr);
+            Assert.Equal(
+                alphaNameBundle.GetProperty("selector").GetProperty("symbol_id").GetInt64(),
+                locationBundle.GetProperty("selector").GetProperty("symbol_id").GetInt64());
+            Assert.True(locationBundle.GetProperty("identity_scoped").GetBoolean());
+            Assert.Equal("definition", location.GetProperty("graph_language_source").GetString());
+            Assert.Equal("authoritative", location.GetProperty("graph_language_confidence").GetString());
+            Assert.DoesNotContain(
+                locationBundle.GetProperty("callers").EnumerateArray(),
+                caller => caller.GetProperty("caller_name").GetString() == "CallerBeta");
+            Assert.Equal(2, callerSection.GetProperty("total").GetInt32());
+            Assert.Equal(1, callerSection.GetProperty("returned").GetInt32());
+            Assert.Equal(0, callerSection.GetProperty("offset").GetInt32());
+            Assert.Equal("src/AlphaCallers.cs", firstCaller.GetProperty("path").GetString());
+            Assert.True(callerSection.GetProperty("truncated").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(nextCursor));
+            Assert.False(string.IsNullOrWhiteSpace(betaCallerCursor));
+            Assert.False(string.IsNullOrWhiteSpace(calleeCursor));
+            Assert.Equal(2, location.GetProperty("graph_sections").GetProperty("references").GetProperty("total").GetInt32());
+            Assert.Equal(2, calleeSection.GetProperty("total").GetInt32());
+
+            var continuationArgs = locationArgs
+                .Concat(["--cursor", nextCursor!])
+                .ToArray();
+            var (continuationExitCode, continuationStdout, continuationStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(continuationArgs, _jsonOptions));
+            using var continuationDocument = ParseJsonOutput(continuationStdout);
+            var continuation = continuationDocument.RootElement;
+            var continuedCallerSection = continuation.GetProperty("graph_sections").GetProperty("callers");
+            var secondCaller = Assert.Single(continuation.GetProperty("callers").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, continuationExitCode);
+            Assert.Equal(string.Empty, continuationStderr);
+            Assert.NotEqual(
+                firstCaller.GetProperty("caller_name").GetString(),
+                secondCaller.GetProperty("caller_name").GetString());
+            Assert.Equal("src/AlphaCallers.cs", secondCaller.GetProperty("path").GetString());
+            Assert.Equal(2, continuedCallerSection.GetProperty("total").GetInt32());
+            Assert.Equal(1, continuedCallerSection.GetProperty("returned").GetInt32());
+            Assert.Equal(1, continuedCallerSection.GetProperty("offset").GetInt32());
+            Assert.False(continuedCallerSection.GetProperty("truncated").GetBoolean());
+            Assert.False(continuedCallerSection.TryGetProperty("next_cursor", out _));
+
+            var (calleeContinuationExitCode, calleeContinuationStdout, calleeContinuationStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    locationArgs.Concat(["--cursor", calleeCursor!]).ToArray(),
+                    _jsonOptions));
+            using var calleeContinuationDocument = ParseJsonOutput(calleeContinuationStdout);
+            var continuedCallee = Assert.Single(
+                calleeContinuationDocument.RootElement.GetProperty("callees").EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, calleeContinuationExitCode);
+            Assert.Equal(string.Empty, calleeContinuationStderr);
+            Assert.Equal(
+                ["First", "Second"],
+                new[]
+                {
+                    firstCallee.GetProperty("callee_name").GetString(),
+                    continuedCallee.GetProperty("callee_name").GetString(),
+                });
+
+            var (pageLimitMismatchExitCode, _, pageLimitMismatchStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    [
+                        "RunSearch",
+                        "--db", dbPath,
+                        "--json",
+                        "--limit", "1",
+                        "--lang", "csharp",
+                        "--exact-name",
+                        "--cursor", betaCallerCursor!,
+                    ],
+                    _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, pageLimitMismatchExitCode);
+            Assert.Contains("does not match this query or index generation", pageLimitMismatchStderr, StringComparison.Ordinal);
+
+            var (queryMismatchExitCode, _, queryMismatchStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    [
+                        "--path", "src/Beta.cs",
+                        "--line", "4",
+                        "--db", dbPath,
+                        "--json",
+                        "--limit", "1",
+                        "--cursor", nextCursor!,
+                    ],
+                    _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, queryMismatchExitCode);
+            Assert.Contains("does not match this query or index generation", queryMismatchStderr, StringComparison.Ordinal);
+
+            var (wrongCommandExitCode, wrongCommandStdout, wrongCommandStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunOutline(
+                    ["src/Alpha.cs", "--db", dbPath, "--cursor", nextCursor!],
+                    _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, wrongCommandExitCode);
+            Assert.Equal(string.Empty, wrongCommandStdout);
+            Assert.Contains("can only be used with the inspect command", wrongCommandStderr, StringComparison.Ordinal);
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    [
+                        "--path", "src/Alpha.cs",
+                        "--line", "4",
+                        "--db", dbPath,
+                        "--limit", "1",
+                    ],
+                    _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(string.Empty, humanStderr);
+            Assert.Contains(
+                "Callers completeness: returned 1 of 2 (offset 0, truncated: true)",
+                humanStdout,
+                StringComparison.Ordinal);
+            Assert.Contains("Callers next cursor: inspect-graph:v1:", humanStdout, StringComparison.Ordinal);
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/GenerationChange.cs",
+                "csharp",
+                "public sealed class GenerationChange { }\n");
+            var (generationMismatchExitCode, _, generationMismatchStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(continuationArgs, _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, generationMismatchExitCode);
+            Assert.Contains("does not match this query or index generation", generationMismatchStderr, StringComparison.Ordinal);
+
+            var malformedPayload = Convert.ToBase64String(
+                    System.Text.Encoding.UTF8.GetBytes(
+                        """{"section":1,"offset":0,"candidate":null,"query":"0123456789abcdef","generation":"0123456789abcdef"}"""))
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+            var (malformedExitCode, _, malformedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    locationArgs.Concat(["--cursor", $"inspect-graph:v1:{malformedPayload}"]).ToArray(),
+                    _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, malformedExitCode);
+            Assert.Contains("cursor", malformedStderr, StringComparison.Ordinal);
+
+            using var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var reader = new DbReader(queryDb);
+            var empty = reader.AnalyzeSymbol(
+                "MissingRunSearch",
+                limit: 1,
+                lang: "csharp",
+                exact: true);
+            Assert.Equal(0, empty.GraphSections.References.Total);
+            Assert.Equal(0, empty.GraphSections.Callers.Total);
+            Assert.Equal(0, empty.GraphSections.Callees.Total);
+            Assert.False(empty.GraphSections.References.Truncated);
+            Assert.False(empty.GraphSections.Callers.Truncated);
+            Assert.False(empty.GraphSections.Callees.Truncated);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ExactFilePathAndCoordinatesAreStrict_Issue4572()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_file_strict_issue4572");

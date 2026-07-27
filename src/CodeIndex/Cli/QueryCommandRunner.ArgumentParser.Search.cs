@@ -192,9 +192,16 @@ public static partial class QueryCommandRunner
                             outlineCursorOffset = parsedOutlineCursorOffset;
                         else if (TryParseDependencyCycleCursor(parsedCursorValue, out var parsedDependencyCycleCursor))
                             dependencyCycleCursor = parsedDependencyCycleCursor;
+                        else if (InspectGraphCursorCodec.TryParse(parsedCursorValue, out _))
+                        {
+                            // inspect validates query and index-generation binding after
+                            // resolving the effective path/name query inside RunInspect.
+                            // inspect は有効な path/name query を確定後、RunInspect 内で
+                            // query / index generation binding を検証する。
+                        }
                         else
                         {
-                            AddParseError("Error: --cursor must be a search, unused, outline, or dependency-cycle pagination cursor returned as `next_cursor`.");
+                            AddParseError("Error: --cursor must be a search, unused, outline, dependency-cycle, or inspect-graph pagination cursor returned as `next_cursor`.");
                             break;
                         }
                         rawCursorValue = parsedCursorValue;
