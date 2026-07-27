@@ -27,6 +27,9 @@ public class ReferenceRecord
     /// <summary>Column number (1-based) / 列番号（1始まり）</summary>
     public int Column { get; set; }
 
+    /// <summary>Physical source-token width in UTF-16 code units / 物理 source token の UTF-16 code unit 幅</summary>
+    public int SpanLength { get; set; }
+
     /// <summary>Trimmed source line for quick inspection / すばやい確認用のtrim済みソース行</summary>
     public string Context { get; set; } = string.Empty;
 

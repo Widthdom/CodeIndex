@@ -149,6 +149,7 @@ public partial class DbContext : IDisposable
         reference_kind  TEXT CHECK (reference_kind IN (" + referenceKindCheck + @")),
         line            INTEGER,
         column_number   INTEGER,
+        span_length     INTEGER,
         context         TEXT,
         reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
         container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN (" + symbolKindCheck + @")),
@@ -220,6 +221,7 @@ public partial class DbContext : IDisposable
             "symbol_references",
             "reference_line_id",
             rebuildsSymbolReferences ? "INTEGER" : "INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL");
+        EnsureColumn("symbol_references", "span_length", "INTEGER");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
         // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
         // legacy rows until a full reindex, in which case the reader falls back to the
@@ -486,6 +488,7 @@ public partial class DbContext : IDisposable
                 reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
+                span_length     INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
@@ -502,7 +505,7 @@ public partial class DbContext : IDisposable
                 resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )
             """;
-        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, span_length, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
 
         const string oldReferenceLines = "_reference_lines_nullable_file_id";
         const string oldSymbolReferences = "_symbol_references_nullable_file_id";
@@ -538,6 +541,7 @@ public partial class DbContext : IDisposable
                 reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
+                span_length     INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
@@ -554,7 +558,7 @@ public partial class DbContext : IDisposable
                 resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )
             """;
-        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, span_length, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
         const string oldSymbolReferences = "_symbol_references_reference_line_delete";
         var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
 
@@ -624,6 +628,7 @@ public partial class DbContext : IDisposable
                 reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
+                span_length     INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
@@ -640,7 +645,7 @@ public partial class DbContext : IDisposable
                 resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )
             """;
-        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, span_length, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
 
         const string oldReferenceLines = "_reference_lines_file_line_key";
         const string oldSymbolReferences = "_symbol_references_file_line_key";
@@ -734,6 +739,7 @@ public partial class DbContext : IDisposable
                 reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
+                span_length     INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
@@ -750,7 +756,7 @@ public partial class DbContext : IDisposable
                 resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )
             """;
-        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, span_length, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
 
         var rebuilt = false;
         RunWithForeignKeysDisabledForMigration("EnsureKindCheckConstraintsCurrent", () =>

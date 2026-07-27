@@ -1169,6 +1169,7 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value = reference.ReferenceKind;
                 cmd.Parameters[parameterIndex++].Value = reference.Line;
                 cmd.Parameters[parameterIndex++].Value = reference.Column;
+                cmd.Parameters[parameterIndex++].Value = Math.Max(1, reference.SpanLength > 0 ? reference.SpanLength : reference.SymbolName.Length);
                 cmd.Parameters[parameterIndex++].Value = DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;

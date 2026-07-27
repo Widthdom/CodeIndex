@@ -21,6 +21,11 @@ public partial class QueryCommandRunnerTests
             "    void Issue4841CliTarget() { }",
             callLine,
             "}",
+            "class Issue4841CliVeryLongParent { }",
+            "class Issue4841CliChild : Issue4841CliVeryLongParent",
+            "{",
+            "    Issue4841CliChild() : base() { }",
+            "}",
             "");
         var expectedColumn = callLine.IndexOf(targetName, StringComparison.Ordinal) + 1;
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callees_locations_issue4841");
@@ -87,6 +92,105 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(expectedColumn, preciseRegion.GetProperty("startColumn").GetInt32());
             Assert.Equal(expectedColumn + targetName.Length, preciseRegion.GetProperty("endColumn").GetInt32());
 
+            string[] constructorChainArgs = ["Issue4841CliChild", "--db", dbPath, "--lang", "csharp", "--exact"];
+            var (chainJsonExit, chainJsonStdout, chainJsonStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. constructorChainArgs, "--json"],
+                _jsonOptions));
+            var chainJsonRow = ParseJsonLines(chainJsonStdout)
+                .Select(document => document.RootElement)
+                .Single(row => row.GetProperty("callee_name").GetString() == "Issue4841CliVeryLongParent");
+            Assert.Equal(CommandExitCodes.Success, chainJsonExit);
+            Assert.Equal(string.Empty, chainJsonStderr);
+            Assert.Equal("Issue4841CliVeryLongParent", chainJsonRow.GetProperty("callee_name").GetString());
+            Assert.Equal("base".Length, chainJsonRow.GetProperty("first_length").GetInt32());
+
+            var (chainLspExit, chainLspStdout, chainLspStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. constructorChainArgs, "--format", "lsp"],
+                _jsonOptions));
+            using var chainLspDocument = ParseJsonOutput(chainLspStdout);
+            var chainRange = chainLspDocument.RootElement
+                .EnumerateArray()
+                .Select(location => location.GetProperty("range"))
+                .Single(range =>
+                    range.GetProperty("end").GetProperty("character").GetInt32()
+                    - range.GetProperty("start").GetProperty("character").GetInt32()
+                    == "base".Length);
+            Assert.Equal(CommandExitCodes.Success, chainLspExit);
+            Assert.Equal(string.Empty, chainLspStderr);
+            Assert.Equal(
+                chainRange.GetProperty("start").GetProperty("character").GetInt32() + "base".Length,
+                chainRange.GetProperty("end").GetProperty("character").GetInt32());
+
+            var (chainSarifExit, chainSarifStdout, chainSarifStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. constructorChainArgs, "--format", "sarif"],
+                _jsonOptions));
+            using var chainSarifDocument = ParseJsonOutput(chainSarifStdout);
+            var chainRegion = chainSarifDocument.RootElement
+                .GetProperty("runs")[0]
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(result => result
+                    .GetProperty("locations")[0]
+                    .GetProperty("physicalLocation")
+                    .GetProperty("region"))
+                .Single(region =>
+                    region.GetProperty("endColumn").GetInt32()
+                    - region.GetProperty("startColumn").GetInt32()
+                    == "base".Length);
+            Assert.Equal(CommandExitCodes.Success, chainSarifExit);
+            Assert.Equal(string.Empty, chainSarifStderr);
+            Assert.Equal(
+                chainRegion.GetProperty("startColumn").GetInt32() + "base".Length,
+                chainRegion.GetProperty("endColumn").GetInt32());
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE symbol_references
+                    SET span_length = NULL
+                    WHERE container_name = @caller
+                      AND symbol_name = @target;
+                    """;
+                command.Parameters.AddWithValue("@caller", callerName);
+                command.Parameters.AddWithValue("@target", targetName);
+                Assert.Equal(2, command.ExecuteNonQuery());
+            }
+
+            var (spanlessJsonExit, spanlessJsonStdout, spanlessJsonStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--json"],
+                _jsonOptions));
+            var spanlessJsonRow = Assert.Single(ParseJsonLines(spanlessJsonStdout)).RootElement;
+            Assert.Equal(CommandExitCodes.Success, spanlessJsonExit);
+            Assert.Equal(string.Empty, spanlessJsonStderr);
+            Assert.Equal(expectedColumn, spanlessJsonRow.GetProperty("first_column").GetInt32());
+            Assert.Equal(JsonValueKind.Null, spanlessJsonRow.GetProperty("first_length").ValueKind);
+
+            var (spanlessLspExit, spanlessLspStdout, spanlessLspStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "lsp"],
+                _jsonOptions));
+            using var spanlessLspDocument = ParseJsonOutput(spanlessLspStdout);
+            var spanlessRange = spanlessLspDocument.RootElement[0].GetProperty("range");
+            Assert.Equal(CommandExitCodes.Success, spanlessLspExit);
+            Assert.Equal(string.Empty, spanlessLspStderr);
+            Assert.Equal(expectedColumn - 1, spanlessRange.GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(expectedColumn - 1, spanlessRange.GetProperty("end").GetProperty("character").GetInt32());
+
+            var (spanlessSarifExit, spanlessSarifStdout, spanlessSarifStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                [.. baseArgs, "--format", "sarif"],
+                _jsonOptions));
+            using var spanlessSarifDocument = ParseJsonOutput(spanlessSarifStdout);
+            var spanlessRegion = spanlessSarifDocument.RootElement
+                .GetProperty("runs")[0]
+                .GetProperty("results")[0]
+                .GetProperty("locations")[0]
+                .GetProperty("physicalLocation")
+                .GetProperty("region");
+            Assert.Equal(CommandExitCodes.Success, spanlessSarifExit);
+            Assert.Equal(string.Empty, spanlessSarifStderr);
+            Assert.Equal(expectedColumn, spanlessRegion.GetProperty("startColumn").GetInt32());
+            Assert.False(spanlessRegion.TryGetProperty("endColumn", out _));
+
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var command = db.Connection.CreateCommand();
@@ -108,6 +212,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, legacyJsonExit);
             Assert.Equal(string.Empty, legacyJsonStderr);
             Assert.Equal(JsonValueKind.Null, legacyJsonRow.GetProperty("first_column").ValueKind);
+            Assert.Equal(JsonValueKind.Null, legacyJsonRow.GetProperty("first_length").ValueKind);
 
             var (legacyQuickfixExit, legacyQuickfixStdout, legacyQuickfixStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
                 [.. baseArgs, "--format", "qf"],

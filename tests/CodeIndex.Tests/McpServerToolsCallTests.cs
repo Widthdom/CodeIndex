@@ -1787,6 +1787,11 @@ public partial class McpServerTests
             "    void Issue4841McpTarget() { }",
             callLine,
             "}",
+            "class Issue4841McpVeryLongParent { }",
+            "class Issue4841McpChild : Issue4841McpVeryLongParent",
+            "{",
+            "    Issue4841McpChild() : base() { }",
+            "}",
             "");
         var expectedColumn = callLine.IndexOf(targetName, StringComparison.Ordinal) + 1;
         InsertIndexedFile("src/Issue4841McpProbe.cs", "csharp", source);
@@ -1839,6 +1844,30 @@ public partial class McpServerTests
 
         Assert.Equal(4, compactRow["line"]!.GetValue<int>());
         Assert.Equal(expectedColumn, compactRow["column"]!.GetValue<int>());
+
+        var constructorChainRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4843,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "callees",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Issue4841McpChild",
+                    ["lang"] = "csharp",
+                    ["exact"] = true,
+                },
+            },
+        };
+        var constructorChainResponse = _server.HandleMessage(constructorChainRequest)!;
+        var constructorChainRow = constructorChainResponse["result"]!["structuredContent"]!["results"]!
+            .AsArray()
+            .Single(row => row!["calleeName"]!.GetValue<string>() == "Issue4841McpVeryLongParent")!;
+
+        Assert.Equal("Issue4841McpVeryLongParent", constructorChainRow["calleeName"]!.GetValue<string>());
+        Assert.Equal("base".Length, constructorChainRow["firstLength"]!.GetValue<int>());
     }
 
     [Fact]

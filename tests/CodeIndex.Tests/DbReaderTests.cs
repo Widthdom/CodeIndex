@@ -2087,6 +2087,11 @@ public partial class DbReaderTests : IDisposable
             "    void Issue4841Target() { }",
             callLine,
             "}",
+            "class Issue4841VeryLongParent { }",
+            "class Issue4841Child : Issue4841VeryLongParent",
+            "{",
+            "    Issue4841Child() : base() { }",
+            "}",
             "");
         var expectedColumn = callLine.IndexOf(targetName, StringComparison.Ordinal) + 1;
         InsertIndexedFile("src/Issue4841Probe.cs", "csharp", source);
@@ -2097,6 +2102,33 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(expectedColumn, precise.FirstColumn);
         Assert.Equal(targetName.Length, precise.FirstLength);
         Assert.Equal(2, precise.ReferenceCount);
+
+        var constructorChain = Assert.Single(
+            _reader.GetCallees("Issue4841Child", lang: "csharp", exact: true),
+            row => row.CalleeName == "Issue4841VeryLongParent");
+        Assert.Equal("Issue4841VeryLongParent", constructorChain.CalleeName);
+        Assert.Equal(9, constructorChain.FirstLine);
+        Assert.Equal(24, constructorChain.FirstColumn);
+        Assert.Equal("base".Length, constructorChain.FirstLength);
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE symbol_references
+                SET span_length = NULL
+                WHERE container_name = @caller
+                  AND symbol_name = @target;
+                """;
+            command.Parameters.AddWithValue("@caller", callerName);
+            command.Parameters.AddWithValue("@target", targetName);
+            Assert.Equal(2, command.ExecuteNonQuery());
+        }
+
+        var spanless = Assert.Single(_reader.GetCallees(callerName, lang: "csharp", exact: true));
+
+        Assert.Equal(expectedColumn, spanless.FirstColumn);
+        Assert.Null(spanless.FirstLength);
+        Assert.Equal(2, spanless.ReferenceCount);
 
         using (var command = _db.Connection.CreateCommand())
         {
@@ -2115,7 +2147,7 @@ public partial class DbReaderTests : IDisposable
 
         Assert.Equal(4, legacy.FirstLine);
         Assert.Null(legacy.FirstColumn);
-        Assert.Equal(targetName.Length, legacy.FirstLength);
+        Assert.Null(legacy.FirstLength);
         Assert.Equal(2, legacy.ReferenceCount);
     }
 

@@ -171,7 +171,8 @@ internal static partial class CSharpReferenceExtractor
                 "call",
                 context,
                 lineNumber,
-                chainContainer);
+                chainContainer,
+                sourceLength: kindToken.Length);
         } while (chainMatches.MoveNext());
     }
 

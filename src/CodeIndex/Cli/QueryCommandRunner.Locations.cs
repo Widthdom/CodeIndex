@@ -92,14 +92,18 @@ public static partial class QueryCommandRunner
         => BuildLspLocation(result.Path, result.FirstLine, Math.Max(1, result.FirstColumn), result.FirstLine, Math.Max(1, result.FirstColumn) + Math.Max(1, result.CalleeName.Length));
 
     private static LspLocation ToLspLocation(CalleeResult result)
-        => result.FirstColumn.HasValue
-            ? BuildLspLocation(
-                result.Path,
-                result.FirstLine,
-                Math.Max(1, result.FirstColumn.Value),
-                result.FirstLine,
-                Math.Max(1, result.FirstColumn.Value) + Math.Max(1, result.FirstLength))
-            : BuildLspLocation(result.Path, result.FirstLine, 1, result.FirstLine, 1);
+    {
+        var column = Math.Max(1, result.FirstColumn ?? 1);
+        var endColumn = result.FirstLength.HasValue
+            ? column + Math.Max(1, result.FirstLength.Value)
+            : column;
+        return BuildLspLocation(
+            result.Path,
+            result.FirstLine,
+            column,
+            result.FirstLine,
+            endColumn);
+    }
 
     private static void WriteLspLocations(IEnumerable<LspLocation> locations, JsonSerializerOptions jsonOptions)
     {

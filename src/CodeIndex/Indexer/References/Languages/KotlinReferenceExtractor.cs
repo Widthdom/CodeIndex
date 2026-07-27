@@ -441,7 +441,8 @@ internal static partial class KotlinReferenceExtractor
                 "call",
                 context,
                 lineNumber,
-                ctorContainer);
+                ctorContainer,
+                sourceLength: kindToken.Length);
         }
         while (matches.MoveNext());
     }

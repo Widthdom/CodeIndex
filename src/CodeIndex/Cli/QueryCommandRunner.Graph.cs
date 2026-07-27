@@ -389,7 +389,9 @@ public static partial class QueryCommandRunner
                             r.Path,
                             r.FirstLine,
                             r.FirstColumn ?? 1,
-                            r.FirstColumn.HasValue ? r.FirstColumn.Value + Math.Max(1, r.FirstLength) : null,
+                            r.FirstColumn.HasValue && r.FirstLength.HasValue
+                                ? r.FirstColumn.Value + Math.Max(1, r.FirstLength.Value)
+                                : null,
                             $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}",
                             r.ReferenceKind)),
                         jsonOptions);

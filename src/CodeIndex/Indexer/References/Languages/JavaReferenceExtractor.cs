@@ -125,7 +125,8 @@ internal static partial class JavaReferenceExtractor
             "call",
             context,
             lineNumber,
-            ctorContainer);
+            ctorContainer,
+            sourceLength: kindToken.Length);
     }
 
     public static (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex, int CloseBraceIndex)?

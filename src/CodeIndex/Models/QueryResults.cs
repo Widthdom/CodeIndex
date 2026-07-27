@@ -739,7 +739,7 @@ public class CalleeResult
     // 代表 call-site の span を明示し、location consumer が表示文字列から列を
     // 復元しないようにする。legacy row の列は null のまま保持できる。
     public int? FirstColumn { get; set; }
-    public int FirstLength { get; set; }
+    public int? FirstLength { get; set; }
     public int ReferenceCount { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? BodyContent { get; set; }
