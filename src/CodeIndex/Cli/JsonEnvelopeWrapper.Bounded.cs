@@ -917,10 +917,14 @@ internal static partial class JsonEnvelopeWrapper
 
     private static bool HasExplicitBodyProjection(IReadOnlyList<string>? fields)
         => fields?.Any(field =>
-            string.Equals(field, "all", StringComparison.Ordinal)
-            || string.Equals(field, "body", StringComparison.Ordinal)
-            || string.Equals(field, "body_content", StringComparison.Ordinal)
-            || field.StartsWith("body_", StringComparison.Ordinal)) == true;
+        {
+            var separator = field.LastIndexOf('.');
+            var projectedField = separator >= 0 ? field[(separator + 1)..] : field;
+            return string.Equals(field, "all", StringComparison.Ordinal)
+                   || string.Equals(projectedField, "body", StringComparison.Ordinal)
+                   || string.Equals(projectedField, "body_content", StringComparison.Ordinal)
+                   || projectedField.StartsWith("body_", StringComparison.Ordinal);
+        }) == true;
 
     private static string? ValidateMapProjectionControls(string[] args, IReadOnlyList<string>? fields)
     {
@@ -1532,7 +1536,11 @@ internal static partial class JsonEnvelopeWrapper
         return execution is not null
                && string.Equals(execution.Command, "map", StringComparison.Ordinal)
                && GetBoundedMapCollection() is null
-               && execution.Fields is { Count: > 0 };
+               && execution.Fields is { Count: > 0 } fields
+               && !fields.Any(field =>
+                   string.Equals(field, "language_count", StringComparison.Ordinal)
+                   || string.Equals(field, "module_count", StringComparison.Ordinal)
+                   || string.Equals(field, "entrypoint_count", StringComparison.Ordinal));
     }
 
     internal static string? GetBoundedImpactCollection()

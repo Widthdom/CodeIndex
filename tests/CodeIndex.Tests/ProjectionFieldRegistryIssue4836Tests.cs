@@ -188,8 +188,15 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     [InlineData("status", "update_check")]
     [InlineData("references", "body_content")]
     [InlineData("callers", "aggregate_truncated")]
+    [InlineData("callers", "first_column")]
     [InlineData("callees", "body_content_recovery")]
     [InlineData("impact", "path_details")]
+    [InlineData("map", "language_count")]
+    [InlineData("map", "module_count")]
+    [InlineData("map", "entrypoint_count")]
+    [InlineData("map", "summary_only")]
+    [InlineData("map", "sections")]
+    [InlineData("map", "output_byte_limit")]
     [InlineData("map", "next_commands")]
     public void ExistingConditionalAndModeSpecificFields_RemainValid_Issue4836(
         string command,
@@ -203,6 +210,77 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
         Assert.Contains(
             discovery["valid_fields"]!.AsArray(),
             item => item!.GetValue<string>() == field);
+    }
+
+    [Theory]
+    [InlineData("definition", "container_qualified_name")]
+    [InlineData("definition", "family_key")]
+    [InlineData("definition", "is_metadata_target")]
+    [InlineData("definition", "metadata_target_source")]
+    [InlineData("definition", "same_line_signature_occurrence_index")]
+    [InlineData("definition", "reference_count")]
+    [InlineData("symbols", "container_qualified_name")]
+    [InlineData("symbols", "family_key")]
+    [InlineData("symbols", "is_metadata_target")]
+    [InlineData("symbols", "metadata_target_source")]
+    [InlineData("symbols", "same_line_signature_occurrence_index")]
+    [InlineData("callees", "first_column")]
+    [InlineData("callees", "has_self_reference")]
+    [InlineData("callees", "has_mutual_recursion")]
+    public void NonOutputFields_AreNotAdvertisedOrAccepted_Issue4836(
+        string command,
+        string field)
+    {
+        Assert.False(ProjectionFieldRegistry.TryValidate(command, [field], out var error));
+        Assert.NotNull(error);
+
+        var discovery = ProjectionFieldRegistry.CreateDiscoveryDocument(command);
+        Assert.DoesNotContain(
+            discovery["valid_fields"]!.AsArray(),
+            item => item!.GetValue<string>() == field);
+    }
+
+    [Fact]
+    public void CallGraphCompactDefaults_AreCommandSpecific_Issue4836()
+    {
+        Assert.Contains("column", ProjectionFieldRegistry.GetCompactFields("callers")!);
+        Assert.DoesNotContain("column", ProjectionFieldRegistry.GetCompactFields("callees")!);
+    }
+
+    [Fact]
+    public void MapCollectionCounts_ArePopulatedWhenProjected_Issue4836()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("projection_map_counts_4836");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Alpha.cs",
+                "csharp",
+                "public sealed class Alpha { public static void Main() { } }");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    [
+                        "map", "--db", dbPath, "--fields",
+                        "language_count,module_count,entrypoint_count", "--json",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var row = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
+            Assert.True(row.TryGetProperty("language_count", out _));
+            Assert.True(row.TryGetProperty("module_count", out _));
+            Assert.True(row.TryGetProperty("entrypoint_count", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Theory]

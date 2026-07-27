@@ -167,13 +167,11 @@ internal static class ProjectionFieldRegistry
             "definition",
             ["file", "line", "column"],
             builder => builder
-                .Fields(GetJsonFieldNames<SymbolResult>())
                 .Fields(
                     "disambiguator", "api_version", "path", "symbol_id", "lang", "kind", "sub_kind",
                     "name", "line", "start_line", "start_column", "end_line", "body_start_line",
-                    "body_end_line", "signature", "container_kind", "container_name",
-                    "container_qualified_name", "visibility", "family_key", "return_type",
-                    "is_metadata_target", "metadata_target_source", "same_line_signature_occurrence_index",
+                    "body_end_line", "signature", "container_kind", "container_name", "visibility",
+                    "return_type", "definition_sites", "exact_index_available", "degraded_reason",
                     "content_omitted", "content_omitted_reason", "body_content", "body_content_start_line",
                     "body_content_end_line", "body_requested_start_line", "body_requested_end_line",
                     "body_effective_start_line", "body_effective_end_line", "body_content_truncated",
@@ -236,22 +234,30 @@ internal static class ProjectionFieldRegistry
                 .Alias("file", "path"));
 
     private static ProjectionCommandFieldSchema CreateCallGraphSchema(string command)
-        => Create(
+    {
+        var isCallerCommand = string.Equals(command, "callers", StringComparison.Ordinal);
+        var resultFields = isCallerCommand
+            ? GetJsonFieldNames<CallerResult>()
+            : GetJsonFieldNames<CalleeResult>();
+        var compactFields = isCallerCommand
+            ? new[] { "file", "line", "column" }
+            : ["file", "line"];
+        return Create(
             command,
-            ["file", "line", "column"],
-            builder => builder
-                .Fields(GetJsonFieldNames<CallerResult>())
-                .Fields(GetJsonFieldNames<CalleeResult>())
-                .Fields(
-                    "api_version", "path", "lang", "caller_kind", "caller_name", "callee_name",
-                    "reference_kind", "reference_kinds", "has_mixed_reference_kinds",
-                    "reference_kind_counts", "reference_weight_score", "first_line",
-                    "first_column", "reference_count", "has_self_reference", "has_mutual_recursion",
+            compactFields,
+            builder =>
+            {
+                builder
+                    .Fields(resultFields)
+                    .Fields(
                     "reference_extraction_limits", "reference_graph_complete",
                     "reference_extraction_cap_hits")
-                .Alias("file", "path")
-                .Alias("line", "first_line")
-                .Alias("column", "first_column"));
+                    .Alias("file", "path")
+                    .Alias("line", "first_line");
+                if (isCallerCommand)
+                    builder.Alias("column", "first_column");
+            });
+    }
 
     private static ProjectionCommandFieldSchema CreateSymbolsSchema()
         => Create(
@@ -259,12 +265,6 @@ internal static class ProjectionFieldRegistry
             ["path", "line", "kind", "name"],
             builder => builder
                 .Fields(GetJsonFieldNames<SymbolResult>())
-                .Fields(
-                    "api_version", "path", "symbol_id", "lang", "kind", "sub_kind", "name", "line",
-                    "start_line", "start_column", "end_line", "body_start_line", "body_end_line",
-                    "signature", "container_kind", "container_name", "container_qualified_name",
-                    "visibility", "family_key", "return_type", "is_metadata_target",
-                    "metadata_target_source", "same_line_signature_occurrence_index")
                 .Alias("file", "path"));
 
     private static ProjectionCommandFieldSchema CreateFilesSchema()
@@ -291,7 +291,13 @@ internal static class ProjectionFieldRegistry
             "result_kind", "path", "lang", "depth", "reference_count", "reference_kind",
             "reference_kinds", "reference_kind_counts",
         };
-        var definitionFields = GetJsonFieldNames<SymbolResult>().ToArray();
+        var definitionFields = new[]
+        {
+            "api_version", "path", "symbol_id", "lang", "kind", "sub_kind", "name", "line",
+            "start_line", "start_column", "end_line", "body_start_line", "body_end_line",
+            "signature", "container_kind", "container_name", "visibility", "return_type",
+            "definition_sites",
+        };
         return Create(
             "impact",
             ["path", "caller_name", "callee_name", "depth", "first_line", "reference_count", "result_kind"],
@@ -319,11 +325,12 @@ internal static class ProjectionFieldRegistry
                     "indexed_at", "latest_modified", "workspace_indexed_at", "workspace_latest_modified",
                     "project_root", "git_head", "git_is_dirty", "indexed_head_commit", "indexed_head_sha",
                     "indexed_head_branch", "indexed_head_timestamp", "commits_ahead_of_indexed_head",
-                    "worktree_head_changed", "head_freshness", "graph_table_available",
-                    "generated_code_policy",
+                    "worktree_head_changed", "head_freshness", "language_count", "module_count",
+                    "entrypoint_count", "graph_table_available", "generated_code_policy",
                     "generated_file_count_excluded", "generated_file_count_excluded_authoritative",
-                    "generated_file_filter_available", "decomposition_plan", "compact",
-                    "compact_limit", "next_commands", "truncation")
+                    "generated_file_filter_available", "decomposition_plan", "summary_only", "sections",
+                    "section_properties", "depth", "output_byte_limit", "compact", "compact_limit",
+                    "next_commands", "truncation")
                 .Collection("languages", ["lang", "files", "lines", "symbols", "references"])
                 .Collection("modules", ["module", "files", "lines", "symbols", "references"])
                 .Collection(
