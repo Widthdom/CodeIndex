@@ -435,6 +435,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Nested generic attribute forms extend that shared fixture instead of running a second parser pass solely for deeper angle-bracket nesting.
 - No-argument parameter attributes on methods, delegates, and lambdas share one C# fixture because all three exercise the same section-local parenthesis-depth rule.
 - Argument-bearing parameter attributes share one method fixture for inline and line-broken declaration layouts.
+- C# parameter and argument-list modifier coverage keeps multiline declaration and call sites for `out` / `ref` / `in` / `params` / `this` / `scoped`, multiple modifier fragments on one continuation line, final `)`-closing fragments, nested lambda arguments, `out var`, following generic types, ref returns, and ref structs in one extractor fixture. The indexed reader fixture separately proves raw `type_reference` queries exclude modifiers while resolved following-type edges remain graph-queryable.
 - Direct and `global::` static type qualifiers share one C# fixture while retaining per-container reference assertions.
 - Static qualifiers in using statements and field access share one consumer fixture and extraction pass.
 - Namespace-qualified and Pascal-cased instance-member chains share one qualifier fixture with a rightmost static type reference, so positive and negative qualifier outcomes are checked after one parse.
@@ -1321,6 +1322,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - nested generic attribute 形式も同じ共有 fixture に含め、山括弧の深い入れ子だけのために2回目の parser pass を実行しません。
 - method、delegate、lambda の no-argument parameter attribute は、同じ section-local parenthesis-depth 規則を通るため1つの C# fixture を共有します。
 - 引数付き parameter attribute は、inline と改行された declaration layout で1つの method fixture を共有します。
+- C# の parameter / argument-list modifier coverage は、`out` / `ref` / `in` / `params` / `this` / `scoped`、1つの continuation line 上にある複数の modifier fragment、末尾が `)` で閉じる fragment、nested lambda argument、`out var`、後続の generic type、ref return、ref struct の multiline declaration / call site を1つの extractor fixture で共有します。indexed reader fixture では、modifier が raw `type_reference` query に出ず、解決済みの後続型 edge が graph query 可能なままであることを別途固定します。
 - direct と `global::` の static type qualifier は、container ごとの reference assertion を維持しながら1つの C# fixture を共有します。
 - using statement と field access の static qualifier は、1つの consumer fixture と抽出 pass を共有します。
 - namespace qualifier と PascalCase の instance-member chain は rightmost static type reference と1つの qualifier fixture を共有し、1回の parse 後に正例と call 除外を検証します。

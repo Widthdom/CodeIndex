@@ -402,6 +402,135 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void CSharpParameterAndArgumentModifiersStayOutOfTypeReferenceQueries_Issue4832()
+    {
+        const string path = "src/csharp_modifier_type_references.cs";
+        InsertIndexedFile(
+            path,
+            "csharp",
+            """
+            using System.Linq;
+
+            struct Payload {}
+            class Wrapper<T> {}
+
+            static class ModifierFixture
+            {
+                static void Params(params Wrapper<Payload>[] items) {}
+
+                static void Multi(
+                    out Payload first, out Wrapper<Payload> second)
+                {
+                    first = default;
+                    second = default;
+                }
+
+                static void Final(
+                    Payload first,
+                    out Wrapper<Payload> last)
+                {
+                    last = default;
+                }
+
+                static bool TryPayload(out Payload value)
+                {
+                    value = default;
+                    return true;
+                }
+
+                static void Consume(
+                    out Payload output,
+                    ref Wrapper<Payload> byRef,
+                    in Payload input,
+                    Payload tail)
+                {
+                    output = input;
+                }
+
+                static void Extend(
+                    this scoped ref Payload target,
+                    scoped in Payload input)
+                {
+                }
+
+                static void Run(Wrapper<Payload> byRef, Payload input)
+                {
+                    Consume(
+                        out Payload declared,
+                        ref byRef,
+                        in input,
+                        input);
+                    Consume(
+                        out var inferred,
+                        ref byRef,
+                        in input,
+                        input);
+                    Multi(
+                        out Payload first, out Wrapper<Payload> second);
+                    Final(
+                        input,
+                        out Wrapper<Payload> final);
+                    var inferredMatch = new[] { input }.Any(item => TryPayload(out var nested) && nested.Equals(item));
+                    var explicitMatch = new[] { input }.Any(item => TryPayload(out Payload nested) && nested.Equals(item));
+                }
+            }
+            """);
+
+        foreach (var modifier in new[] { "out", "ref", "in", "params", "this", "scoped" })
+        {
+            Assert.Empty(_reader.SearchReferences(
+                modifier,
+                lang: "csharp",
+                referenceKind: "type_reference",
+                exact: true,
+                pathPatterns: [path]));
+        }
+
+        var payloadReferences = _reader.SearchReferences(
+            "Payload",
+            lang: "csharp",
+            referenceKind: "type_reference",
+            exact: true,
+            pathPatterns: [path]);
+        Assert.Contains(payloadReferences, reference =>
+            reference.Context.Contains("out Payload output", StringComparison.Ordinal));
+        Assert.Contains(payloadReferences, reference =>
+            reference.Context.Contains("this scoped ref Payload target", StringComparison.Ordinal));
+        Assert.Contains(payloadReferences, reference =>
+            reference.Context.Contains("TryPayload(out Payload nested)", StringComparison.Ordinal));
+        Assert.All(payloadReferences, reference => Assert.Equal("resolved", reference.ResolutionState));
+
+        var wrapperReferences = _reader.SearchReferences(
+            "Wrapper",
+            lang: "csharp",
+            referenceKind: "type_reference",
+            exact: true,
+            pathPatterns: [path]);
+        Assert.Contains(wrapperReferences, reference =>
+            reference.Context.Contains("ref Wrapper<Payload> byRef", StringComparison.Ordinal));
+        Assert.Equal(2, wrapperReferences.Count(reference =>
+            reference.Context.Contains("out Payload first, out Wrapper<Payload> second", StringComparison.Ordinal)));
+        Assert.Contains(wrapperReferences, reference =>
+            reference.Context.Contains("out Wrapper<Payload> last)", StringComparison.Ordinal));
+        Assert.Contains(wrapperReferences, reference =>
+            reference.Context.Contains("out Wrapper<Payload> final)", StringComparison.Ordinal));
+        Assert.All(wrapperReferences, reference => Assert.Equal("resolved", reference.ResolutionState));
+
+        var callers = _reader.GetCallers(
+            "Payload",
+            lang: "csharp",
+            referenceKind: "type_reference",
+            exact: true,
+            pathPatterns: [path]);
+        Assert.NotEmpty(callers);
+        Assert.All(callers, caller =>
+        {
+            Assert.Equal("Payload", caller.CalleeName);
+            Assert.Equal("type_reference", caller.ReferenceKind);
+        });
+    }
+
+    [Fact]
     public void GetCallers_SolutionProjectReference_RequiresExplicitKind_Issue3662()
     {
         InsertManualReference(
