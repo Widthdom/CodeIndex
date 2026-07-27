@@ -165,9 +165,112 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "transform");
-        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "projector");
+        Assert.Contains(symbols, s =>
+            s.Kind == "lambda"
+            && s.Name == "transform"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Run"
+            && s.ContainerQualifiedName == "Worker.Run");
+        Assert.Contains(symbols, s =>
+            s.Kind == "lambda"
+            && s.Name == "projector"
+            && s.ContainerKind == "function"
+            && s.ContainerName == "Run"
+            && s.ContainerQualifiedName == "Worker.Run");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "transform" or "projector");
+    }
+
+    [Fact]
+    public void Extract_CSharp_CallableContainersPreserveNestedDeclarations_Issue4840()
+    {
+        const string content = """
+            public class Outer
+            {
+                public int ExpressionBody() => Source();
+
+                [Fact]
+                public void BlockTest()
+                {
+                    void Local()
+                    {
+                        void Nested() => Sink();
+                    }
+
+                    Func<int> blockLambda = () =>
+                    {
+                        return Source();
+                    };
+                }
+
+                public class Inner
+                {
+                    public void NestedTypeMethod()
+                    {
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var expressionBody = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "ExpressionBody"));
+        Assert.Equal("class", expressionBody.ContainerKind);
+        Assert.Equal("Outer", expressionBody.ContainerName);
+
+        var blockTest = Assert.Single(symbols.Where(s => s.Kind == "test.method" && s.Name == "BlockTest"));
+        Assert.Equal("class", blockTest.ContainerKind);
+        Assert.Equal("Outer", blockTest.ContainerName);
+
+        var local = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Local"));
+        Assert.Equal("test.method", local.ContainerKind);
+        Assert.Equal("BlockTest", local.ContainerName);
+        Assert.Equal("Outer.BlockTest", local.ContainerQualifiedName);
+
+        var nested = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Nested"));
+        Assert.Equal("function", nested.ContainerKind);
+        Assert.Equal("Local", nested.ContainerName);
+        Assert.Equal("Outer.BlockTest.Local", nested.ContainerQualifiedName);
+
+        var blockLambda = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "blockLambda"));
+        Assert.Equal("test.method", blockLambda.ContainerKind);
+        Assert.Equal("BlockTest", blockLambda.ContainerName);
+        Assert.Equal("Outer.BlockTest", blockLambda.ContainerQualifiedName);
+        Assert.Null(blockLambda.BodyStartLine);
+        Assert.Null(blockLambda.BodyEndLine);
+
+        var inner = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Inner"));
+        Assert.Equal("class", inner.ContainerKind);
+        Assert.Equal("Outer", inner.ContainerName);
+
+        var nestedTypeMethod = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "NestedTypeMethod"));
+        Assert.Equal("class", nestedTypeMethod.ContainerKind);
+        Assert.Equal("Inner", nestedTypeMethod.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharpCallableWithShortenedBodyRange_ContainsEarlierLineLocalFunction_Issue4840Review()
+    {
+        // When the closing-brace line also starts an outer sibling, the callable body range can
+        // end on the previous line. A local declared there is still inside the callable.
+        // 閉じ波括弧の行で外側の兄弟宣言も始まる場合、callable の本体範囲は前の行までに
+        // 短縮され得る。その前行のローカル関数は引き続き callable 内に属する。
+        const string content = """
+            public class Host
+            {
+                public void Run()
+                {
+                    void Local() {}
+                } public int Value { get; set; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var local = Assert.Single(symbols.Where(symbol =>
+            symbol.Kind == "function" && symbol.Name == "Local"));
+        Assert.Equal("function", local.ContainerKind);
+        Assert.Equal("Run", local.ContainerName);
+        Assert.Equal("Host.Run", local.ContainerQualifiedName);
     }
 
     [Fact]

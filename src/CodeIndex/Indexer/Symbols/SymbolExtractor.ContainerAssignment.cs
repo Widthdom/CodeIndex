@@ -89,7 +89,8 @@ public static partial class SymbolExtractor
             return;
         }
 
-        if (!ContainsContainerCandidates(symbols))
+        var includeCallableContainers = getCSharpLineStartStates != null;
+        if (!ContainsContainerCandidates(symbols, includeCallableContainers))
         {
             foreach (var symbol in symbols)
                 AssignTopLevelFamilyKey(symbol);
@@ -167,7 +168,7 @@ public static partial class SymbolExtractor
 
             symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, containerPath);
 
-            if (CanContainSymbols(symbol))
+            if (CanContainSymbols(symbol, includeCallableContainers))
                 stack.Push(symbol);
         }
     }
@@ -175,11 +176,13 @@ public static partial class SymbolExtractor
     private static void AssignTopLevelFamilyKey(SymbolRecord symbol)
         => symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, Array.Empty<SymbolRecord>());
 
-    private static bool ContainsContainerCandidates(IReadOnlyList<SymbolRecord> symbols)
+    private static bool ContainsContainerCandidates(
+        IReadOnlyList<SymbolRecord> symbols,
+        bool includeCallableContainers)
     {
         foreach (var symbol in symbols)
         {
-            if (CanContainSymbols(symbol))
+            if (CanContainSymbols(symbol, includeCallableContainers))
                 return true;
         }
 
@@ -357,8 +360,16 @@ public static partial class SymbolExtractor
         return true;
     }
 
-    private static bool CanContainSymbols(SymbolRecord symbol)
+    private static bool CanContainSymbols(SymbolRecord symbol, bool includeCallableContainers)
     {
+        if (includeCallableContainers
+            && CallableContainerSelection.IsCallableKind(symbol.Kind)
+            && symbol.BodyStartLine != null
+            && symbol.BodyEndLine != null)
+        {
+            return true;
+        }
+
         if (symbol.Kind == "function"
             && symbol.ContainerKind == "enum"
             && symbol.BodyStartLine != null
@@ -399,6 +410,16 @@ public static partial class SymbolExtractor
                 && container.Signature.Contains(candidate.Signature, StringComparison.Ordinal);
         }
 
+        if (TryContainsCSharpCallableEndLineSymbol(
+                container,
+                candidate,
+                rawLines,
+                getCSharpLineStartStates,
+                out var containsCallableEndLineSymbol))
+        {
+            return containsCallableEndLineSymbol;
+        }
+
         if (candidate.StartLine >= container.BodyStartLine
             && candidate.StartLine <= container.BodyEndLine
             && candidate.StartLine > container.StartLine)
@@ -407,6 +428,66 @@ public static partial class SymbolExtractor
         }
 
         return IsInsideCSharpClosingBraceLineContainer(container, candidate, rawLines, getCSharpLineStartStates);
+    }
+
+    private static bool TryContainsCSharpCallableEndLineSymbol(
+        SymbolRecord container,
+        SymbolRecord candidate,
+        string[]? rawLines,
+        Func<CSharpLexState[]>? getCSharpLineStartStates,
+        out bool contains)
+    {
+        contains = false;
+        if (rawLines == null
+            || getCSharpLineStartStates == null
+            || !CallableContainerSelection.IsCallableKind(container.Kind)
+            || container.BodyEndLine == null
+            || candidate.Signature == null
+            || candidate.StartLine != container.BodyEndLine.Value
+            || candidate.StartLine <= container.StartLine)
+        {
+            return false;
+        }
+
+        if (candidate.StartLine < container.EndLine)
+        {
+            contains = true;
+            return true;
+        }
+
+        var lineIndex = candidate.StartLine - 1;
+        if (lineIndex < 0 || lineIndex >= rawLines.Length)
+            return false;
+
+        var lineStartStates = getCSharpLineStartStates();
+        if (lineIndex >= lineStartStates.Length)
+            return false;
+
+        var candidateColumn = FindSignatureOccurrenceStartColumn(
+            rawLines[lineIndex],
+            candidate.Signature,
+            candidate.SameLineSignatureOccurrenceIndex ?? 0,
+            lineStartStates[lineIndex]);
+        if (candidateColumn < 0)
+            return false;
+
+        if (container.Signature?.Contains("=>", StringComparison.Ordinal) == true)
+        {
+            var sanitizedLine = LexCSharpLine(rawLines[lineIndex], lineStartStates[lineIndex]).SanitizedLine;
+            var terminatorColumn = sanitizedLine.IndexOf(';');
+            if (terminatorColumn < 0)
+                return false;
+
+            contains = candidateColumn < terminatorColumn;
+            return true;
+        }
+
+        var closingBraceColumn = FindCSharpClosingBraceColumnOnContainerEndLine(container, rawLines);
+        if (closingBraceColumn < 0)
+            return false;
+
+        contains = candidateColumn < closingBraceColumn;
+        return true;
     }
 
     private static bool TryContainsCSharpSameLineSymbolByRawLine(
