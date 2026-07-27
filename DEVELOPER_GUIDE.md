@@ -1518,6 +1518,13 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 
 ### Output format
 
+Bounded projection fields are defined only in `ProjectionFieldRegistry`.
+Runtime validation, `--fields list` discovery, compact defaults, alias
+resolution, and command help all consume that registry. Field names are
+case-sensitive; unknown values use the versioned `E010_USAGE_ERROR` command
+error when JSON is requested, and discovery runs before query or database
+access.
+
 | Output mode | Contract |
 |---|---|
 | Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `outline`, `suggestions`) default to **human-readable output**. |
@@ -4683,6 +4690,12 @@ VB.NET のコンテナ系パターンは `RegexOptions.IgnoreCase` と `VisualBa
 AI エージェント向け検索ルールのテンプレートについては、ユーザーガイドの[AI連携](USER_GUIDE.md#ai連携)セクションを参照してください。
 
 ### 出力形式
+
+bounded projection field は `ProjectionFieldRegistry` だけで定義します。
+実行時検証、`--fields list` による発見、compact 既定値、alias 解決、command
+help はすべてこのレジストリを参照します。field 名は大文字・小文字を区別し、未知の
+値で JSON が要求されている場合は versioned `E010_USAGE_ERROR` command error を
+返します。発見処理は query や database access より先に実行します。
 
 | output mode | 契約 |
 |---|---|
