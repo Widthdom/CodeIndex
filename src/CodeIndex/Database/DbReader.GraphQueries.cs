@@ -576,6 +576,9 @@ public partial class DbReader
         var calleeGroupKindSql = rawKinds
             ? GetRawReferenceKindSql("r.reference_kind")
             : GetLogicalReferenceKindSql("r.reference_kind");
+        var referenceSpanLengthSql = _referenceColumns.Contains("span_length")
+            ? "r.span_length"
+            : "NULL";
         var sql = $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -584,7 +587,9 @@ public partial class DbReader
                        {calleeGroupKindSql} AS count_reference_kind,
                        COUNT(*) AS reference_count,
                        {ReferenceWeightedScoreSql("r.reference_kind")} AS weighted_score,
-                       r.line
+                       r.line,
+                       r.column_number,
+                       {referenceSpanLengthSql} AS span_length
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
@@ -638,15 +643,30 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += @"
-                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, r.reference_kind
+        sql += $@"
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {referenceSpanLengthSql}, r.reference_kind
+            ),
+            ranked_call_sites AS (
+                SELECT logical_references.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY path, lang, container_kind, container_name, symbol_name, reference_kind
+                           ORDER BY CASE WHEN column_number IS NULL THEN 1 ELSE 0 END,
+                                    line,
+                                    column_number,
+                                    COALESCE(span_length, 0)
+                       ) AS location_rank
+                FROM logical_references
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
-                   reference_kind, MIN(line) AS first_line, SUM(r.reference_count) AS reference_count,
+                   reference_kind,
+                   MAX(CASE WHEN location_rank = 1 THEN line END) AS first_line,
+                   MAX(CASE WHEN location_rank = 1 THEN column_number END) AS first_column,
+                   MAX(CASE WHEN location_rank = 1 THEN span_length END) AS first_length,
+                   SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds,
                    GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score
-            FROM logical_references r
+            FROM ranked_call_sites r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
         sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line, r.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind LIMIT @limit OFFSET @offset";
 
@@ -693,10 +713,10 @@ public partial class DbReader
         while (reader.TrackedRead())
         {
             var primaryKind = reader.GetString(5);
-            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 8), out var kindsTruncated);
-            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 9), out var countsTruncated);
+            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 10), out var kindsTruncated);
+            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 11), out var countsTruncated);
             var kinds = ParseDistinctReferenceKinds(kindAggregate, primaryKind);
-            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(7));
+            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(9));
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
@@ -709,9 +729,11 @@ public partial class DbReader
                 HasMixedReferenceKinds = kinds.Count > 1,
                 ReferenceKindCounts = counts,
                 AggregateTruncated = kindsTruncated || countsTruncated,
-                ReferenceWeightScore = reader.GetDouble(10),
+                ReferenceWeightScore = reader.GetDouble(12),
                 FirstLine = reader.GetInt32(6),
-                ReferenceCount = reader.GetInt32(7),
+                FirstColumn = GetNullableInt32(reader, 7),
+                FirstLength = GetNullableInt32(reader, 8),
+                ReferenceCount = reader.GetInt32(9),
             });
         }
         return results;

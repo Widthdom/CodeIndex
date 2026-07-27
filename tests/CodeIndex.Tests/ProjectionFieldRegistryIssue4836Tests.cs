@@ -190,6 +190,8 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     [InlineData("callers", "aggregate_truncated")]
     [InlineData("callers", "first_column")]
     [InlineData("callees", "body_content_recovery")]
+    [InlineData("callees", "first_column")]
+    [InlineData("callees", "first_length")]
     [InlineData("impact", "path_details")]
     [InlineData("map", "language_count")]
     [InlineData("map", "module_count")]
@@ -224,7 +226,6 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     [InlineData("symbols", "is_metadata_target")]
     [InlineData("symbols", "metadata_target_source")]
     [InlineData("symbols", "same_line_signature_occurrence_index")]
-    [InlineData("callees", "first_column")]
     [InlineData("callees", "has_self_reference")]
     [InlineData("callees", "has_mutual_recursion")]
     public void NonOutputFields_AreNotAdvertisedOrAccepted_Issue4836(
@@ -241,10 +242,10 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     }
 
     [Fact]
-    public void CallGraphCompactDefaults_AreCommandSpecific_Issue4836()
+    public void CallGraphCompactDefaults_IncludeCallSiteColumns_Issue4836_Issue4841()
     {
         Assert.Contains("column", ProjectionFieldRegistry.GetCompactFields("callers")!);
-        Assert.DoesNotContain("column", ProjectionFieldRegistry.GetCompactFields("callees")!);
+        Assert.Contains("column", ProjectionFieldRegistry.GetCompactFields("callees")!);
     }
 
     [Fact]
