@@ -659,6 +659,37 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpMultilinePrimaryCtorAttribute_UsesDeclaredTypeContainer_Issue4840Review()
+    {
+        // A primary-constructor declaration can begin before its body range. Attribute calls on
+        // that declaration line still belong to the declared type, not the outer scope.
+        // primary constructor 宣言は本体範囲より前から始まり得る。宣言行の属性呼び出しも
+        // 外側スコープではなく、宣言された型に所属する。
+        const string content = """
+            [Attr(Helper.Get())] public record Child(
+                int Value)
+                : Parent(Value)
+            {
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("csharp", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "class" && symbol.Name == "Child");
+        AssertReferenceContainer("Attr", "class", "Child");
+        AssertReferenceContainer("Get", "class", "Child");
+        AssertReferenceContainer("Parent", "function", "Child");
+
+        void AssertReferenceContainer(string symbolName, string containerKind, string containerName)
+        {
+            var reference = Assert.Single(references.Where(r => r.SymbolName == symbolName));
+            Assert.Equal(containerKind, reference.ContainerKind);
+            Assert.Equal(containerName, reference.ContainerName);
+        }
+    }
+
+    [Fact]
     public void Extract_CsharpSameLineDefinitionCalls_KeepRecursiveAndDelegatedReferences()
     {
         // issue #252: same-line definition suppression must drop only the declarator token,

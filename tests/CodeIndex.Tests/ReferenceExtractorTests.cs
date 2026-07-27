@@ -2742,7 +2742,8 @@ public partial class ReferenceExtractorTests
         var sameRangeType = Container("same-range-type", "class", 110, 120);
         var sameRangeTest = Container("same-range-test", "test.method", 110, 120);
         var sameRangeResolver = new ReferenceExtractor.InnermostContainerResolver(
-            [sameRangeType, sameRangeTest]);
+            [sameRangeType, sameRangeTest],
+            preferCallable: true);
 
         Assert.Same(sameRangeTest, sameRangeResolver.Find(115));
     }
@@ -16368,9 +16369,33 @@ public partial class ReferenceExtractorTests
         }
     }
 
+    [Fact]
+    public void Extract_NonCSharpEqualSpanContainers_PreserveOriginalSelection_Issue4840Review()
+    {
+        // C# needs callable-first tie-breaking for overlapping line-only ranges, but applying that
+        // rule to compact JavaScript would assign every call on the line to the first method.
+        // C# 用の callable 優先規則をコンパクトな JavaScript に適用すると、同一行の全呼び出しが
+        // 最初のメソッドに誤帰属するため、非 C# では従来の安定順を維持する。
+        const string content = "class C { a(){ foo(); } b(){ bar(); } }\n";
+        var symbols = new List<SymbolRecord>
+        {
+            Container("C", "class", 1, 1),
+            Container("a", "function", 1, 1),
+            Container("b", "function", 1, 1),
+        };
+
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var bar = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "bar" && reference.ReferenceKind == "call"));
+        Assert.Equal("class", bar.ContainerKind);
+        Assert.Equal("C", bar.ContainerName);
+    }
+
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
         new()
         {
+            FileId = 1,
             Name = name,
             Kind = kind,
             StartLine = startLine,

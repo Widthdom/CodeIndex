@@ -218,7 +218,10 @@ public static partial class ReferenceExtractor
         var seen = CreateReferenceSeenSet(preparedInput.Lines.Length);
         var symbolsByLine = BuildFunctionalSymbolsByLine(request.Symbols, request.ReportDiagnostic);
         var containerResolver = new InnermostContainerResolver(
-            BuildReferenceContainerCandidates(request.Symbols, request.ReportDiagnostic));
+            BuildReferenceContainerCandidates(
+                request.Language,
+                request.Symbols,
+                request.ReportDiagnostic));
         var state = new FunctionalReferenceState();
 
         for (var index = 0; index < preparedInput.Lines.Length; index++)

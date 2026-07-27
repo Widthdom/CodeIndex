@@ -449,6 +449,12 @@ public static partial class SymbolExtractor
             return false;
         }
 
+        if (candidate.StartLine < container.EndLine)
+        {
+            contains = true;
+            return true;
+        }
+
         var lineIndex = candidate.StartLine - 1;
         if (lineIndex < 0 || lineIndex >= rawLines.Length)
             return false;

@@ -17,16 +17,21 @@ internal static class CallableContainerSelection
         SymbolRecord left,
         int leftOriginalIndex,
         SymbolRecord right,
-        int rightOriginalIndex)
+        int rightOriginalIndex,
+        bool preferCallable)
     {
         var compare = GetSpanLength(left).CompareTo(GetSpanLength(right));
         if (compare != 0)
             return compare;
 
-        compare = GetCallableRank(left.Kind).CompareTo(GetCallableRank(right.Kind));
-        return compare != 0
-            ? compare
-            : leftOriginalIndex.CompareTo(rightOriginalIndex);
+        if (preferCallable)
+        {
+            compare = GetCallableRank(left.Kind).CompareTo(GetCallableRank(right.Kind));
+            if (compare != 0)
+                return compare;
+        }
+
+        return leftOriginalIndex.CompareTo(rightOriginalIndex);
     }
 
     internal static int GetSpanLength(SymbolRecord symbol)

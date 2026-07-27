@@ -248,6 +248,32 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpCallableWithShortenedBodyRange_ContainsEarlierLineLocalFunction_Issue4840Review()
+    {
+        // When the closing-brace line also starts an outer sibling, the callable body range can
+        // end on the previous line. A local declared there is still inside the callable.
+        // 閉じ波括弧の行で外側の兄弟宣言も始まる場合、callable の本体範囲は前の行までに
+        // 短縮され得る。その前行のローカル関数は引き続き callable 内に属する。
+        const string content = """
+            public class Host
+            {
+                public void Run()
+                {
+                    void Local() {}
+                } public int Value { get; set; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var local = Assert.Single(symbols.Where(symbol =>
+            symbol.Kind == "function" && symbol.Name == "Local"));
+        Assert.Equal("function", local.ContainerKind);
+        Assert.Equal("Run", local.ContainerName);
+        Assert.Equal("Host.Run", local.ContainerQualifiedName);
+    }
+
+    [Fact]
     public void Extract_CSharp_DoesNotClassifyScopedMethodParametersAsProperties()
     {
         var content = """

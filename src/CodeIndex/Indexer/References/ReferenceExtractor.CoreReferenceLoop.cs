@@ -240,17 +240,17 @@ public static partial class ReferenceExtractor
             {
                 if (language == "csharp")
                 {
-                    var containerMatchesPrimaryCtor = false;
+                    SymbolRecord? primaryCtorOwner = null;
                     foreach (var (
                                  rangeStart,
                                  rangeStartColumn,
                                  rangeEnd,
                                  rangeEndColumn,
-                                 syntheticRecordCtor) in
+                                 syntheticRecordCtor,
+                                 owner) in
                              lookups.GetRecordPrimaryCtorRanges())
                     {
-                        containerMatchesPrimaryCtor |=
-                            ReferenceEquals(container, syntheticRecordCtor)
+                        if (ReferenceEquals(container, syntheticRecordCtor)
                             || (container?.Kind == "function"
                                 && container.FileId == syntheticRecordCtor.FileId
                                 && container.StartLine == syntheticRecordCtor.StartLine
@@ -260,25 +260,24 @@ public static partial class ReferenceExtractor
                                 && string.Equals(
                                     container.Name,
                                     syntheticRecordCtor.Name,
-                                    StringComparison.Ordinal));
+                                    StringComparison.Ordinal)))
+                        {
+                            primaryCtorOwner ??= owner;
+                        }
                         if (lineNumber < rangeStart || lineNumber > rangeEnd)
                             continue;
                         if (lineNumber == rangeStart
                             && column < rangeStartColumn)
                         {
-                            continue;
+                            return owner;
                         }
                         if (lineNumber == rangeEnd && column >= rangeEndColumn)
                             continue;
                         return syntheticRecordCtor;
                     }
 
-                    if (containerMatchesPrimaryCtor)
-                    {
-                        return FindInnermostClassLike(
-                            lookups.GetEnclosingTypeCandidates(),
-                            lineNumber);
-                    }
+                    if (primaryCtorOwner != null)
+                        return primaryCtorOwner;
                 }
 
                 if (javaSameLineCtor != null)

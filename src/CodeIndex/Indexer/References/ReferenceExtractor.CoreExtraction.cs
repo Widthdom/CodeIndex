@@ -115,10 +115,13 @@ public static partial class ReferenceExtractor
             ? BuildCobolCallableSymbols(symbols)
             : null;
         var containerCandidates = BuildReferenceContainerCandidates(
+            language,
             symbols,
             request.ReportDiagnostic);
         var containerResolver =
-            new InnermostContainerResolver(containerCandidates);
+            new InnermostContainerResolver(
+                containerCandidates,
+                preferCallable: language == "csharp");
         if (language == "solidity")
         {
             return ExtractSolidityReferences(

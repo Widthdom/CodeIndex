@@ -62,10 +62,14 @@ public static partial class ReferenceExtractor
         private int currentLine;
         private int? cachedLine;
         private SymbolRecord? cachedContainer;
+        private readonly bool preferCallable;
 
-        internal InnermostContainerResolver(IReadOnlyList<SymbolRecord> candidates)
+        internal InnermostContainerResolver(
+            IReadOnlyList<SymbolRecord> candidates,
+            bool preferCallable = false)
         {
             this.candidates = candidates;
+            this.preferCallable = preferCallable;
             if (candidates.Count == 0)
                 return;
 
@@ -106,7 +110,10 @@ public static partial class ReferenceExtractor
                    && candidatesByStart[nextCandidateIndex].Symbol.BodyStartLine!.Value <= lineNumber)
             {
                 var candidate = candidatesByStart[nextCandidateIndex];
-                (activeContainers ??= []).Add(new ActiveContainer(candidate.Symbol, candidate.OriginalIndex));
+                (activeContainers ??= []).Add(new ActiveContainer(
+                    candidate.Symbol,
+                    candidate.OriginalIndex,
+                    preferCallable));
                 nextCandidateIndex++;
             }
 
@@ -136,14 +143,18 @@ public static partial class ReferenceExtractor
             return left.OriginalIndex.CompareTo(right.OriginalIndex);
         }
 
-        private readonly record struct ActiveContainer(SymbolRecord Symbol, int OriginalIndex) : IComparable<ActiveContainer>
+        private readonly record struct ActiveContainer(
+            SymbolRecord Symbol,
+            int OriginalIndex,
+            bool PreferCallable) : IComparable<ActiveContainer>
         {
             public int CompareTo(ActiveContainer other)
                 => CallableContainerSelection.CompareInnermost(
                     Symbol,
                     OriginalIndex,
                     other.Symbol,
-                    other.OriginalIndex);
+                    other.OriginalIndex,
+                    PreferCallable);
         }
     }
 

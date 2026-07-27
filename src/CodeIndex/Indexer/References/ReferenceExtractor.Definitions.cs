@@ -301,6 +301,7 @@ public static partial class ReferenceExtractor
             : StringComparer.Ordinal;
 
     private static IReadOnlyList<SymbolRecord> BuildReferenceContainerCandidates(
+        string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
         => BuildBoundedContainerCandidates(
@@ -311,7 +312,8 @@ public static partial class ReferenceExtractor
                        || symbol.Kind == "object" || symbol.Kind == "property" || symbol.Kind == "heading" || symbol.Kind == "class_hook"),
             "reference_container_candidate_budget_exceeded",
             "Reference container lookup retained the highest-priority bounded candidate set and skipped additional candidates.",
-            reportDiagnostic);
+            reportDiagnostic,
+            preferCallable: language == "csharp");
 
     private static IReadOnlyList<SymbolRecord>? BuildCSharpXmlDocAttachmentScopeCandidates(
         string language,
@@ -444,7 +446,8 @@ public static partial class ReferenceExtractor
         Func<SymbolRecord, bool> predicate,
         string diagnosticKind,
         string diagnosticMessage,
-        Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
+        Action<ReferenceExtractionDiagnostic>? reportDiagnostic,
+        bool preferCallable = false)
     {
         var limit = GetSafetyLimits().MaxContainerCandidates;
         List<ReferenceContainerCandidateSortEntry>? candidates = null;
@@ -474,7 +477,8 @@ public static partial class ReferenceExtractor
         if (candidates is not { Count: > 0 })
             return Array.Empty<SymbolRecord>();
 
-        candidates.Sort(CompareReferenceContainerCandidateSortEntries);
+        candidates.Sort((left, right) =>
+            CompareReferenceContainerCandidateSortEntries(left, right, preferCallable));
 
         var sorted = new SymbolRecord[candidates.Count];
         for (var index = 0; index < candidates.Count; index++)
@@ -487,12 +491,14 @@ public static partial class ReferenceExtractor
 
     private static int CompareReferenceContainerCandidateSortEntries(
         ReferenceContainerCandidateSortEntry left,
-        ReferenceContainerCandidateSortEntry right)
+        ReferenceContainerCandidateSortEntry right,
+        bool preferCallable)
         => CallableContainerSelection.CompareInnermost(
             left.Symbol,
             left.OriginalIndex,
             right.Symbol,
-            right.OriginalIndex);
+            right.OriginalIndex,
+            preferCallable);
 
     private static int GetReferenceContainerCandidateSpanLength(SymbolRecord symbol)
         => CallableContainerSelection.GetSpanLength(symbol);
