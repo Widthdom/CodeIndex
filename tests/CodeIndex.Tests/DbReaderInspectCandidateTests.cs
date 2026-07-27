@@ -202,6 +202,56 @@ public partial class DbReaderTests
         AssertCallee(parentBundles, "src/B/packages.lock.json", "net8.0", definitionLine: 5, calleeLine: 9);
     }
 
+    [Fact]
+    public void AnalyzeSymbol_DependencyLockDoesNotResolveNpmDependenciesAcrossFiles_Issue4845()
+    {
+        InsertIndexedFile("src/npm-a/package-lock.json", "dependency_lock", """
+            {
+              "lockfileVersion": 3,
+              "packages": {
+                "node_modules/left-pad": {
+                  "version": "1.3.0",
+                  "dependencies": {
+                    "is-number": "7.0.0"
+                  }
+                }
+              }
+            }
+            """);
+        InsertIndexedFile("src/npm-b/package-lock.json", "dependency_lock", """
+            {
+              "lockfileVersion": 3,
+              "packages": {
+                "node_modules/is-number": {
+                  "version": "7.0.0"
+                },
+                "node_modules/right-pad": {
+                  "version": "1.0.1",
+                  "dependencies": {
+                    "is-number": "7.0.0"
+                  }
+                }
+              }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeSymbol(
+            "is-number",
+            limit: 10,
+            lang: "dependency_lock",
+            exact: true);
+        var bundle = Assert.Single(
+            Assert.IsType<List<CodeIndex.Database.SymbolCandidateBundle>>(
+                analysis.CandidateBundles));
+
+        Assert.Equal("src/npm-b/package-lock.json", bundle.Definition.Path);
+        var caller = Assert.Single(bundle.Callers);
+        Assert.Equal("src/npm-b/package-lock.json", caller.Path);
+        Assert.Equal("right-pad", caller.CallerName);
+        Assert.Equal(10, caller.FirstLine);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
     private static void AssertCallee(
         List<CodeIndex.Database.SymbolCandidateBundle> bundles,
         string path,

@@ -565,6 +565,7 @@ public partial class DbWriter
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier IS NULL
+          AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND source.container_qualified_name IS NOT NULL
           AND source.container_qualified_name <> ''
           AND s.container_qualified_name = source.container_qualified_name COLLATE NOCASE
@@ -616,6 +617,7 @@ public partial class DbWriter
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier IS NULL
+          AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND source.container_name IS NOT NULL
           AND source.container_name <> ''
           AND s.container_name = source.container_name COLLATE NOCASE
@@ -718,7 +720,8 @@ public partial class DbWriter
           AND NOT EXISTS (
               SELECT 1 FROM symbol_reference_candidates AS existing
               WHERE existing.reference_id = r.id
-          );
+          )
+          AND (source_file.lang <> 'dependency_lock' OR target.file_id = r.file_id);
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
         SELECT r.id, target.id, 5
