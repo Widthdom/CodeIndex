@@ -8000,7 +8000,7 @@ public partial class QueryCommandRunnerTests
             var draft = Assert.Single(root.GetProperty("drafts").EnumerateArray());
             var source = draft.GetProperty("source");
             var body = draft.GetProperty("body").GetString()!;
-            var replayCommand = ExtractIssueDraftReplayCommand(body);
+            var replayCommand = ExtractIssueDraftReplayCommand(body.ReplaceLineEndings("\r\n"));
             var replayWords = ParseReplayShellCommand(replayCommand);
 
             Assert.Equal(1, root.GetProperty("result_count").GetInt32());
@@ -13040,12 +13040,13 @@ jobs:
     {
         const string startMarker = "## Replay command\n```sh\n";
         const string endMarker = "\n```";
-        var start = body.IndexOf(startMarker, StringComparison.Ordinal);
+        var normalizedBody = body.ReplaceLineEndings("\n");
+        var start = normalizedBody.IndexOf(startMarker, StringComparison.Ordinal);
         Assert.True(start >= 0);
         start += startMarker.Length;
-        var end = body.IndexOf(endMarker, start, StringComparison.Ordinal);
+        var end = normalizedBody.IndexOf(endMarker, start, StringComparison.Ordinal);
         Assert.True(end > start);
-        return body[start..end];
+        return normalizedBody[start..end];
     }
 
     private static List<string> ParseReplayShellCommand(string command)
