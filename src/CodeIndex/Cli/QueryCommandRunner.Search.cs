@@ -725,6 +725,7 @@ public static partial class QueryCommandRunner
                 ? CountSearchMatches(reader, options, exactSearch)
                 : default;
             var displayRows = ReadSearchDisplayRows(reader, options, exactSearch);
+            var sarifSourceRows = displayRows;
             var selection = ApplySearchOutputSelection(displayRows, options);
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
@@ -745,7 +746,7 @@ public static partial class QueryCommandRunner
                     ? BuildAdHocSearchSarifRunProperties(
                         options,
                         selection,
-                        CountAdHocSearchSarifSourceResults(reader, options, exactSearch),
+                        CountAdHocSearchSarifSourceResults(reader, options, exactSearch, sarifSourceRows),
                         returnedResultCount: 0)
                     : null;
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions, emptySarifRunProperties))
@@ -866,7 +867,7 @@ public static partial class QueryCommandRunner
                     var runProperties = BuildAdHocSearchSarifRunProperties(
                         options,
                         selection,
-                        CountAdHocSearchSarifSourceResults(reader, options, exactSearch),
+                        CountAdHocSearchSarifSourceResults(reader, options, exactSearch, sarifSourceRows),
                         sarifItems.Count);
                     WriteSarif(sarifItems, jsonOptions, runProperties: runProperties);
                     return CommandExitCodes.Success;

@@ -1642,7 +1642,7 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 "public class DashFixture { // -TODO\n}");
             var (expandedExitCode, expandedStdout, expandedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["OccurrenceNeedle", "--db", dbPath, "--format", "sarif", "--exact-substring", "--limit", "2"],
+                ["OccurrenceNeedle", "--db", dbPath, "--format", "sarif", "--exact-substring", "--origin", "code", "--limit", "2"],
                 _jsonOptions));
             var (rawFtsExitCode, rawFtsStdout, rawFtsStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Authenticate OR OccurrenceNeedle", "--db", dbPath, "--format", "sarif", "--fts", "--limit", "1"],
@@ -1679,6 +1679,37 @@ public partial class QueryCommandRunnerTests
                 .GetString();
             Assert.Contains("search -- -TODO", dashReplayCommand, StringComparison.Ordinal);
 
+            for (var i = 0; i <= DbReader.MaxGuardedSearchCandidates; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/guard{i:D4}.cs",
+                    "csharp",
+                    $"public class GuardFixture{i:D4} {{ void Run() {{ GuardNeedle(); Continue(); }} }}");
+            }
+            var (guardedExitCode, guardedStdout, guardedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["GuardNeedle", "--db", dbPath, "--format", "sarif", "--exact-substring", "--reject-after", "NeverPresent", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.True(
+                guardedExitCode == CommandExitCodes.Success,
+                $"Expected guarded SARIF success, got {guardedExitCode}: {guardedStderr}");
+            Assert.Equal(string.Empty, guardedStderr);
+            using var guardedDocument = ParseJsonOutput(guardedStdout);
+            var guardedRun = guardedDocument.RootElement.GetProperty("runs")[0];
+            Assert.Single(guardedRun.GetProperty("results").EnumerateArray());
+            AssertAdHocSearchSarifCompletion(
+                guardedRun,
+                sourceResultCount: 1,
+                returnedResultCount: 1,
+                resultLimit: 1,
+                truncated: true,
+                sourceResultCountAuthoritative: false);
+            Assert.Contains(
+                "--reject-after NeverPresent",
+                guardedRun.GetProperty("properties").GetProperty("replay_command").GetString(),
+                StringComparison.Ordinal);
+
             var mergedDocumentJson = "{\"version\":\"2.1.0\",\"runs\":["
                 + completeRun.GetRawText()
                 + ","
@@ -1704,13 +1735,15 @@ public partial class QueryCommandRunnerTests
         int sourceResultCount,
         int returnedResultCount,
         int resultLimit,
-        bool truncated)
+        bool truncated,
+        bool sourceResultCountAuthoritative = true)
     {
         var omittedResultCount = sourceResultCount - returnedResultCount;
         var properties = run.GetProperty("properties");
         Assert.Equal("search", properties.GetProperty("format").GetString());
         Assert.Equal(1, properties.GetProperty("query_count").GetInt32());
         Assert.Equal(sourceResultCount, properties.GetProperty("source_result_count").GetInt32());
+        Assert.Equal(sourceResultCountAuthoritative, properties.GetProperty("source_result_count_authoritative").GetBoolean());
         Assert.Equal(returnedResultCount, properties.GetProperty("result_count").GetInt32());
         Assert.Equal(resultLimit, properties.GetProperty("limit_per_query").GetInt32());
         Assert.False(properties.GetProperty("cursoring_available").GetBoolean());
@@ -1724,6 +1757,7 @@ public partial class QueryCommandRunnerTests
         var query = Assert.Single(properties.GetProperty("queries").EnumerateArray());
         Assert.Equal("ad-hoc", query.GetProperty("name").GetString());
         Assert.Equal(sourceResultCount, query.GetProperty("source_result_count").GetInt32());
+        Assert.Equal(sourceResultCountAuthoritative, query.GetProperty("source_result_count_authoritative").GetBoolean());
         Assert.Equal(returnedResultCount, query.GetProperty("result_count").GetInt32());
         Assert.Equal(resultLimit, query.GetProperty("result_limit").GetInt32());
         Assert.Equal(truncated, query.GetProperty("truncated").GetBoolean());

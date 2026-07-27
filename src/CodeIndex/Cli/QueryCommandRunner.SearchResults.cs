@@ -503,29 +503,42 @@ public static partial class QueryCommandRunner
                 options.GuardScope,
                 options.TokenBoundary);
 
-    private static int CountAdHocSearchSarifSourceResults(
+    private static AdHocSearchSarifSourceResultCount CountAdHocSearchSarifSourceResults(
         DbReader reader,
         QueryCommandOptions options,
-        bool exact)
+        bool exact,
+        IReadOnlyList<SearchDisplayRow> boundedSourceRows)
     {
-        if (!exact)
-            return CountSearchMatches(reader, options, exact).Count;
+        if (options.GuardFilters.Count > 0)
+            return CountAdHocSearchSarifResultUnits(boundedSourceRows, options.Query!, exact, authoritative: false);
 
-        var rows = HasSearchOriginFilters(options)
-            ? ReadOriginFilteredSearchDisplayRows(reader, options, exact, int.MaxValue)
-            : BuildSearchDisplayRows(
-                ReadSearchResults(reader, options, exact, int.MaxValue),
-                options,
-                exact);
+        if (!exact)
+            return new AdHocSearchSarifSourceResultCount(CountSearchMatches(reader, options, exact).Count, Authoritative: true);
+
+        var rows = BuildSearchDisplayRows(
+            ReadSearchResults(reader, options, exact, int.MaxValue),
+            options,
+            exact);
+        return CountAdHocSearchSarifResultUnits(rows, options.Query!, exact, authoritative: true);
+    }
+
+    private static AdHocSearchSarifSourceResultCount CountAdHocSearchSarifResultUnits(
+        IReadOnlyList<SearchDisplayRow> rows,
+        string query,
+        bool exact,
+        bool authoritative)
+    {
         var count = 0L;
         foreach (var row in rows)
         {
-            count += ToSearchSarifItems(row, options.Query!, exact).LongCount();
+            count += ToSearchSarifItems(row, query, exact).LongCount();
             if (count >= int.MaxValue)
-                return int.MaxValue;
+                return new AdHocSearchSarifSourceResultCount(int.MaxValue, Authoritative: false);
         }
-        return (int)count;
+        return new AdHocSearchSarifSourceResultCount((int)count, authoritative);
     }
+
+    private sealed record AdHocSearchSarifSourceResultCount(int Count, bool Authoritative);
 
     private static void WriteGroupedSearchResultsHuman(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {

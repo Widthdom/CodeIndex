@@ -34,17 +34,18 @@ public static partial class QueryCommandRunner
     private static JsonObject BuildAdHocSearchSarifRunProperties(
         QueryCommandOptions options,
         SearchOutputSelection selection,
-        int sourceResultCount,
+        AdHocSearchSarifSourceResultCount sourceResultCount,
         int returnedResultCount)
     {
-        var omittedResultCount = Math.Max(0, sourceResultCount - returnedResultCount);
-        var truncated = selection.Truncated || omittedResultCount > 0;
+        var omittedResultCount = Math.Max(0, sourceResultCount.Count - returnedResultCount);
+        var truncated = selection.Truncated || omittedResultCount > 0 || !sourceResultCount.Authoritative;
         var replayCommand = BuildAdHocSearchReplayCommand(options, OutputFormatSarif);
         var querySummary = new JsonObject
         {
             ["name"] = "ad-hoc",
             ["query"] = options.Query,
-            ["source_result_count"] = sourceResultCount,
+            ["source_result_count"] = sourceResultCount.Count,
+            ["source_result_count_authoritative"] = sourceResultCount.Authoritative,
             ["result_count"] = returnedResultCount,
             ["result_limit"] = options.Limit,
             ["truncated"] = truncated,
@@ -62,7 +63,8 @@ public static partial class QueryCommandRunner
         {
             ["format"] = "search",
             ["query_count"] = 1,
-            ["source_result_count"] = sourceResultCount,
+            ["source_result_count"] = sourceResultCount.Count,
+            ["source_result_count_authoritative"] = sourceResultCount.Authoritative,
             ["result_count"] = returnedResultCount,
             ["limit_per_query"] = options.Limit,
             ["queries"] = new JsonArray(querySummary),
