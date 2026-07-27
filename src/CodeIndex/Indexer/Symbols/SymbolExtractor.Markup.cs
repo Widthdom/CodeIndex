@@ -541,7 +541,7 @@ public static partial class SymbolExtractor
                 : match.Groups["single"].Success
                     ? match.Groups["single"]
                     : match.Groups["bare"];
-            var identity = MarkdownAnchorIdentity.Normalize(valueGroup.Value);
+            var identity = MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(valueGroup.Value);
             if (identity.Length == 0)
                 continue;
 

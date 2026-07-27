@@ -516,22 +516,25 @@ internal static class MarkupSchemaReferenceExtractor
         long fileId,
         SymbolRecord? container)
     {
-        var identity = MarkdownAnchorIdentity.Normalize(anchor);
-        if (identity.Length == 0)
+        var explicitAnchorIdentity = MarkdownAnchorIdentity.DecodeExplicitAnchorFragment(anchor);
+        var headingIdentity = MarkdownAnchorIdentity.NormalizeHeadingFragment(anchor);
+        if (explicitAnchorIdentity.Length == 0)
             return;
 
         ReferenceExtractor.AddReference(
             references,
             seen,
             fileId,
-            identity,
+            explicitAnchorIdentity,
             targetIndex,
             "reference",
             context,
             lineNumber,
             container,
             "markdown",
-            targetQualifier);
+            targetQualifier,
+            sourceLength: anchor.Length,
+            identitySymbolNameFolded: headingIdentity);
     }
 
     private static IReadOnlyDictionary<string, string> BuildMarkdownReferenceTargets(string[] lines)
@@ -661,7 +664,7 @@ internal static class MarkupSchemaReferenceExtractor
             return;
 
         if (referenceKind == "reference")
-            target = MarkdownAnchorIdentity.Normalize(target);
+            target = MarkdownAnchorIdentity.NormalizeHeadingFragment(target);
 
         AddHtmlReference(references, seen, fileId, target, targetIndex, referenceKind, context, lineNumber, container);
     }

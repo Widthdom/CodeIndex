@@ -321,7 +321,7 @@ public partial class DbReader
                     var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(queryValue) : default;
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
                     var markdownAnchorClause = _symbolColumns.Contains("name_folded")
-                        ? $"(f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded = @query{idx}MarkdownAnchor)"
+                        ? $"(f.lang = 'markdown' AND ((s.kind = 'heading' AND s.name_folded = @query{idx}MarkdownHeading) OR (s.kind = 'anchor' AND s.name_folded = @query{idx}MarkdownExplicitAnchor COLLATE BINARY)))"
                         : "0";
                     var qualifiedSymbolClause = SqlNameResolver.HasQualifier(queryValue)
                         ? BuildQualifiedSymbolMatchSql($"query{idx}", _foldReady)
@@ -350,7 +350,7 @@ public partial class DbReader
                         ? BuildQualifiedSymbolMatchSql($"query{idx}", _foldReady)
                         : null;
                     var markdownAnchorLikeClause = _symbolColumns.Contains("name_folded")
-                        ? $" OR (f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded LIKE @query{idx}MarkdownAnchorLike ESCAPE '\\')"
+                        ? $" OR (f.lang = 'markdown' AND ((s.kind = 'heading' AND s.name_folded LIKE @query{idx}MarkdownHeadingLike ESCAPE '\\') OR (s.kind = 'anchor' AND instr(s.name_folded, @query{idx}MarkdownExplicitAnchor) > 0)))"
                         : string.Empty;
                     return $"(s.name LIKE @query{idx} ESCAPE '\\'{markdownAnchorLikeClause} OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }));
@@ -388,9 +388,10 @@ public partial class DbReader
                 SqliteCommandPolicy.Add(cmd, $"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
                 if (_symbolColumns.Contains("name_folded"))
                 {
-                    var markdownAnchorIdentity = MarkdownAnchorIdentity.Normalize(value);
-                    SqliteCommandPolicy.Add(cmd, $"@query{i}MarkdownAnchor", markdownAnchorIdentity);
-                    SqliteCommandPolicy.Add(cmd, $"@query{i}MarkdownAnchorLike", $"%{EscapeLikeQuery(markdownAnchorIdentity)}%");
+                    var markdownHeadingIdentity = MarkdownAnchorIdentity.NormalizeHeadingFragment(value);
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}MarkdownHeading", markdownHeadingIdentity);
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}MarkdownHeadingLike", $"%{EscapeLikeQuery(markdownHeadingIdentity)}%");
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}MarkdownExplicitAnchor", MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(value));
                 }
                 if (SqlNameResolver.HasQualifier(value))
                     AddQualifiedSymbolQueryParameters(cmd, $"query{i}", value);
@@ -614,7 +615,7 @@ public partial class DbReader
                     var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(queryValue) : default;
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
                     var markdownAnchorClause = _symbolColumns.Contains("name_folded")
-                        ? $"(f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded = @query{idx}MarkdownAnchor)"
+                        ? $"(f.lang = 'markdown' AND ((s.kind = 'heading' AND s.name_folded = @query{idx}MarkdownHeading) OR (s.kind = 'anchor' AND s.name_folded = @query{idx}MarkdownExplicitAnchor COLLATE BINARY)))"
                         : "0";
                     var qualifiedSymbolClause = SqlNameResolver.HasQualifier(queryValue)
                         ? BuildQualifiedSymbolMatchSql($"query{idx}", _foldReady)
@@ -643,7 +644,7 @@ public partial class DbReader
                         ? BuildQualifiedSymbolMatchSql($"query{idx}", _foldReady)
                         : null;
                     var markdownAnchorLikeClause = _symbolColumns.Contains("name_folded")
-                        ? $" OR (f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded LIKE @query{idx}MarkdownAnchorLike ESCAPE '\\')"
+                        ? $" OR (f.lang = 'markdown' AND ((s.kind = 'heading' AND s.name_folded LIKE @query{idx}MarkdownHeadingLike ESCAPE '\\') OR (s.kind = 'anchor' AND instr(s.name_folded, @query{idx}MarkdownExplicitAnchor) > 0)))"
                         : string.Empty;
                     return $"(s.name LIKE @query{idx} ESCAPE '\\'{markdownAnchorLikeClause} OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }));
@@ -701,9 +702,10 @@ public partial class DbReader
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
                 if (_symbolColumns.Contains("name_folded"))
                 {
-                    var markdownAnchorIdentity = MarkdownAnchorIdentity.Normalize(effectiveQueries[idx]);
-                    SqliteCommandPolicy.Add(cmd, $"@query{idx}MarkdownAnchor", markdownAnchorIdentity);
-                    SqliteCommandPolicy.Add(cmd, $"@query{idx}MarkdownAnchorLike", $"%{EscapeLikeQuery(markdownAnchorIdentity)}%");
+                    var markdownHeadingIdentity = MarkdownAnchorIdentity.NormalizeHeadingFragment(effectiveQueries[idx]);
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}MarkdownHeading", markdownHeadingIdentity);
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}MarkdownHeadingLike", $"%{EscapeLikeQuery(markdownHeadingIdentity)}%");
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}MarkdownExplicitAnchor", MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(effectiveQueries[idx]));
                 }
                 if (SqlNameResolver.HasQualifier(effectiveQueries[idx]))
                     AddQualifiedSymbolQueryParameters(cmd, $"query{idx}", effectiveQueries[idx]);

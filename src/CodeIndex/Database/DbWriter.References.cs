@@ -418,8 +418,10 @@ public partial class DbWriter
         JOIN files AS source_file ON source_file.id = r.file_id
         JOIN symbols AS target
           ON target.file_id = source_file.id
-         AND target.name_folded = r.symbol_name_folded
-         AND target.kind IN ('heading', 'anchor')
+         AND (
+             (target.kind = 'heading' AND target.name_folded = r.symbol_name_folded)
+             OR (target.kind = 'anchor' AND target.name_folded = r.symbol_name COLLATE BINARY)
+         )
         WHERE source_file.lang = 'markdown'
           AND r.reference_kind = 'reference'
           AND r.target_qualifier IS NULL;
@@ -434,8 +436,10 @@ public partial class DbWriter
              markdown_resolve_path(source_file.path, r.target_qualifier)
         JOIN symbols AS target
           ON target.file_id = target_file.id
-         AND target.name_folded = r.symbol_name_folded
-         AND target.kind IN ('heading', 'anchor')
+         AND (
+             (target.kind = 'heading' AND target.name_folded = r.symbol_name_folded)
+             OR (target.kind = 'anchor' AND target.name_folded = r.symbol_name COLLATE BINARY)
+         )
         WHERE source_file.lang = 'markdown'
           AND r.reference_kind = 'reference'
           AND r.target_qualifier IS NOT NULL;
@@ -471,6 +475,7 @@ public partial class DbWriter
                AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
+          AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND source_file.lang <> 'markdown'
           AND r.target_qualifier IS NOT NULL
@@ -595,6 +600,7 @@ public partial class DbWriter
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND source_file.lang <> 'markdown'
           AND r.target_qualifier IS NULL
+          AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND source.container_qualified_name IS NOT NULL
           AND source.container_qualified_name <> ''
           AND s.container_qualified_name = source.container_qualified_name COLLATE NOCASE
@@ -648,6 +654,7 @@ public partial class DbWriter
           AND {CSharpTypeReferenceCandidatePredicateSql}
           AND source_file.lang <> 'markdown'
           AND r.target_qualifier IS NULL
+          AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND source.container_name IS NOT NULL
           AND source.container_name <> ''
           AND s.container_name = source.container_name COLLATE NOCASE
@@ -750,7 +757,8 @@ public partial class DbWriter
           AND NOT EXISTS (
               SELECT 1 FROM symbol_reference_candidates AS existing
               WHERE existing.reference_id = r.id
-          );
+          )
+          AND (source_file.lang <> 'dependency_lock' OR target.file_id = r.file_id);
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
         SELECT r.id, target.id, 5

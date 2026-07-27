@@ -1116,13 +1116,15 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.ReferenceKind == "reference"
-            && reference.SymbolName == "deep-details");
+            && reference.SymbolName == "Deep-Details"
+            && reference.IdentitySymbolNameFolded == "deep-details");
         Assert.Contains(references, reference =>
             reference.ReferenceKind == "import"
             && reference.SymbolName == "USER_GUIDE.md#Error-Codes");
         Assert.Contains(references, reference =>
             reference.ReferenceKind == "reference"
-            && reference.SymbolName == "error-codes"
+            && reference.SymbolName == "Error-Codes"
+            && reference.IdentitySymbolNameFolded == "error-codes"
             && reference.TargetQualifier == "USER_GUIDE.md");
     }
 

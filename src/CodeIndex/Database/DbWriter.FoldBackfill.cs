@@ -128,7 +128,7 @@ public partial class DbWriter
             @"
                 SELECT r.symbol_name, r.symbol_name_folded,
                        r.container_name, r.container_name_folded,
-                       f.lang
+                       f.lang, r.reference_kind
                 FROM symbol_references r
                 JOIN files f ON f.id = r.file_id
                 WHERE r.symbol_name IS NOT NULL OR r.container_name IS NOT NULL",
@@ -140,9 +140,10 @@ public partial class DbWriter
             {
                 if (!reader.IsDBNull(0))
                 {
-                    var expected = DbReader.FoldNameForLanguage(
+                    var expected = FoldPersistedReferenceName(
                         reader.GetString(0),
-                        reader.IsDBNull(4) ? null : reader.GetString(4));
+                        reader.IsDBNull(4) ? null : reader.GetString(4),
+                        reader.GetString(5));
                     var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
                     if (!string.Equals(actual, expected, StringComparison.Ordinal))
                         return false;
@@ -494,7 +495,7 @@ public partial class DbWriter
                 }
                 else
                 {
-                    identities.Add(symbolId, MarkdownAnchorIdentity.Normalize(name));
+                    identities.Add(symbolId, MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(name));
                 }
             }
         }
@@ -523,13 +524,21 @@ public partial class DbWriter
         return DbReader.FoldNameForLanguage(name, lang);
     }
 
+    private static string FoldPersistedReferenceName(string name, string? lang, string referenceKind)
+    {
+        if (lang == "markdown" && referenceKind == "reference")
+            return MarkdownAnchorIdentity.NormalizeHeadingFragment(name);
+
+        return DbReader.FoldNameForLanguage(name, lang);
+    }
+
     private int BackfillReferenceFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
-        var rows = new List<(long Id, string? SymbolName, string? ContainerName, string? Lang)>();
+        var rows = new List<(long Id, string? SymbolName, string? ContainerName, string? Lang, string ReferenceKind)>();
         var selectSql = rewriteAll
             ? """
-              SELECT r.id, r.symbol_name, r.container_name, f.lang
+              SELECT r.id, r.symbol_name, r.container_name, f.lang, r.reference_kind
               FROM symbol_references r
               JOIN files f ON f.id = r.file_id
               WHERE r.id > @lastReferenceId
@@ -537,7 +546,7 @@ public partial class DbWriter
               ORDER BY r.id
               """
             : """
-              SELECT r.id, r.symbol_name, r.container_name, f.lang
+              SELECT r.id, r.symbol_name, r.container_name, f.lang, r.reference_kind
               FROM symbol_references r
               JOIN files f ON f.id = r.file_id
               WHERE (r.symbol_name IS NOT NULL AND r.symbol_name_folded IS NULL)
@@ -560,7 +569,8 @@ public partial class DbWriter
                     reader.GetInt64(0),
                     reader.IsDBNull(1) ? null : reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3)));
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.GetString(4)));
             }
         }
         finally
@@ -592,7 +602,7 @@ public partial class DbWriter
                 cancellationToken.ThrowIfCancellationRequested();
                 pSymbolNameFolded.Value = row.SymbolName == null
                     ? DBNull.Value
-                    : DbReader.FoldNameForLanguage(row.SymbolName, row.Lang);
+                    : FoldPersistedReferenceName(row.SymbolName, row.Lang, row.ReferenceKind);
                 pContainerNameFolded.Value = row.ContainerName == null
                     ? DBNull.Value
                     : DbReader.FoldNameForLanguage(row.ContainerName, row.Lang);

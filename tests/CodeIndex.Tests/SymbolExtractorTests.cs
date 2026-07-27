@@ -5936,18 +5936,37 @@ public partial class SymbolExtractorTests
 
             <a data-id="not-an-anchor"></a>
             <a id="custom.anchor"></a>
+            <a id="api.v2"></a>
+            <a id="apiv2"></a>
+            <a id="CaseID"></a>
+
+            ## [Linked API](https://example.test) &amp; `SDK` <span>Guide</span>
+
+            [Setext API](https://example.test) &amp; <em>SDK</em>
+            ---
             """;
 
         var symbols = SymbolExtractor.Extract(1, "markdown", content);
         var headings = symbols.Where(symbol => symbol.Kind == "heading").ToList();
-        var anchor = Assert.Single(symbols, symbol => symbol.Kind == "anchor");
+        var anchors = symbols.Where(symbol => symbol.Kind == "anchor").ToList();
 
         Assert.Equal(
-            ["error-codes", "error-codes-1", "c-日本語-api", "𠮷野-api"],
+            [
+                "error-codes",
+                "error-codes-1",
+                "c-日本語-api",
+                "𠮷野-api",
+                "linked-api-sdk-guide",
+                "setext-api-sdk",
+            ],
             headings.Select(symbol => symbol.IdentityNameFolded).ToArray());
-        Assert.Equal("custom.anchor", anchor.Name);
-        Assert.Equal("customanchor", anchor.IdentityNameFolded);
-        Assert.Equal("𠮷野 API", anchor.ContainerName);
+        Assert.Equal(
+            ["custom.anchor", "api.v2", "apiv2", "CaseID"],
+            anchors.Select(anchor => anchor.Name).ToArray());
+        Assert.Equal(
+            ["custom.anchor", "api.v2", "apiv2", "CaseID"],
+            anchors.Select(anchor => anchor.IdentityNameFolded).ToArray());
+        Assert.All(anchors, anchor => Assert.Equal("𠮷野 API", anchor.ContainerName));
     }
 
     [Fact]
@@ -12649,6 +12668,8 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.DockerfileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.MakefileContractVersion, SymbolExtractor.GetContractVersion("makefile"));
         Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
+        Assert.Equal(SymbolExtractor.DependencyLockContractVersion, SymbolExtractor.GetContractVersion("dependency_lock"));
+        Assert.True(SymbolExtractor.DependencyLockContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);

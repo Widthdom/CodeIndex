@@ -19,6 +19,7 @@ public static partial class SymbolExtractor
     public const int RepositoryMetadataContractVersion = 2;
     public const int ApplicationManifestContractVersion = 3;
     public const int MarkdownContractVersion = 3;
+    public const int DependencyLockContractVersion = 3;
 
     private static readonly string[] ExplicitReferenceGraphContractLanguages =
         ["crystal", "groovy", "tcl", "prolog", "ambiguous_pl"];
@@ -70,7 +71,8 @@ public static partial class SymbolExtractor
             "config" or "dockerignore" or "editorconfig" or "gitattributes" or "gitignore" or "jsonl" or "toml" => RepositoryMetadataContractVersion,
             "app_manifest" => ApplicationManifestContractVersion,
             "markdown" => MarkdownContractVersion,
-            "cmake" or "dependency_lock" or "dependency_manifest" or "graphql" or "html" or "json" or "justfile" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
+            "dependency_lock" => DependencyLockContractVersion,
+            "cmake" or "dependency_manifest" or "graphql" or "html" or "json" or "justfile" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
     }

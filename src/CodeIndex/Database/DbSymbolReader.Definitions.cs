@@ -329,10 +329,10 @@ public partial class DbReader
                 ? BuildQualifiedSymbolMatchSql("query", _foldReady)
                 : null;
             var markdownAnchorExactClause = _symbolColumns.Contains("name_folded")
-                ? "(f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded = @queryMarkdownAnchor)"
+                ? "(f.lang = 'markdown' AND ((s.kind = 'heading' AND s.name_folded = @queryMarkdownHeading) OR (s.kind = 'anchor' AND s.name_folded = @queryMarkdownExplicitAnchor COLLATE BINARY)))"
                 : "0";
             var markdownAnchorLikeClause = _symbolColumns.Contains("name_folded")
-                ? " OR (f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded LIKE @queryMarkdownAnchorLike ESCAPE '\\')"
+                ? " OR (f.lang = 'markdown' AND ((s.kind = 'heading' AND s.name_folded LIKE @queryMarkdownHeadingLike ESCAPE '\\') OR (s.kind = 'anchor' AND instr(s.name_folded, @queryMarkdownExplicitAnchor) > 0)))"
                 : string.Empty;
             sql += exact
                 ? rustQualifiedParts.QualifiedPath != null
@@ -387,9 +387,10 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(normalizedQuery))}%");
             if (_symbolColumns.Contains("name_folded"))
             {
-                var markdownAnchorIdentity = MarkdownAnchorIdentity.Normalize(normalizedQuery);
-                SqliteCommandPolicy.Add(cmd, "@queryMarkdownAnchor", markdownAnchorIdentity);
-                SqliteCommandPolicy.Add(cmd, "@queryMarkdownAnchorLike", $"%{EscapeLikeQuery(markdownAnchorIdentity)}%");
+                var markdownHeadingIdentity = MarkdownAnchorIdentity.NormalizeHeadingFragment(normalizedQuery);
+                SqliteCommandPolicy.Add(cmd, "@queryMarkdownHeading", markdownHeadingIdentity);
+                SqliteCommandPolicy.Add(cmd, "@queryMarkdownHeadingLike", $"%{EscapeLikeQuery(markdownHeadingIdentity)}%");
+                SqliteCommandPolicy.Add(cmd, "@queryMarkdownExplicitAnchor", MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(normalizedQuery));
             }
             if (SqlNameResolver.HasQualifier(normalizedQuery))
                 AddQualifiedSymbolQueryParameters(cmd, "query", normalizedQuery);

@@ -5482,6 +5482,29 @@ public class DatabaseTests : IDisposable
         Assert.Null(id);
     }
 
+    [Fact]
+    public void GetUnchangedFileId_InvalidatesPriorDependencyLockContract_Issue4845()
+    {
+        const string language = "dependency_lock";
+        const int previousContractVersion = 2;
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "packages.lock.json",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+
+        Assert.True(SymbolExtractor.GetContractVersion(language) > previousContractVersion);
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
     [Theory]
     [InlineData("crystal", 2)]
     [InlineData("groovy", 2)]

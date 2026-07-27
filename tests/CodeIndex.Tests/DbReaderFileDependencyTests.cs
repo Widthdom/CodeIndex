@@ -126,6 +126,14 @@ public partial class DbReaderTests
             # Error codes
 
             <a id="custom-anchor"></a>
+            <a id="api.v2"></a>
+            <a id="apiv2"></a>
+            <a id="CaseID"></a>
+
+            ## [Linked API](https://example.test) &amp; `SDK` <span>Guide</span>
+
+            [Setext API](https://example.test) &amp; <em>SDK</em>
+            ---
             """);
         InsertIndexedFile(
             "docs/issue4846/unrelated.md",
@@ -144,6 +152,12 @@ public partial class DbReaderTests
             [local](#local-target)
             [cross](target.md#error-codes)
             [explicit](target.md#custom-anchor)
+            [punctuated](target.md#api.v2)
+            [plain](target.md#apiv2)
+            [case-sensitive](target.md#Case%49D)
+            [wrong-case](target.md#caseid)
+            [inline-heading](target.md#linked-api-sdk-guide)
+            [setext-heading](target.md#setext-api-sdk)
             [broken](target.md#missing-heading)
 
             ## Local target
@@ -179,6 +193,16 @@ public partial class DbReaderTests
                 lang: "markdown",
                 pathPatterns: ["docs/issue4846/target.md"]));
         Assert.True(_writer.AllFoldedColumnValuesMatchCurrentFold());
+        Assert.Single(_reader.GetDefinitions(
+            "linked-api-sdk-guide",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
+        Assert.Single(_reader.GetDefinitions(
+            "setext-api-sdk",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
 
         using (var crossDocumentShape = _db.Connection.CreateCommand())
         {
@@ -201,14 +225,26 @@ public partial class DbReaderTests
                 Convert.ToString(crossDocumentShape.ExecuteScalar()));
         }
 
-        foreach (var resolvedName in new[] { "local-target", "error-codes", "custom-anchor" })
+        var markdownReferences = _reader.SearchReferences(
+            limit: 20,
+            lang: "markdown",
+            referenceKind: "reference",
+            pathPatterns: ["docs/issue4846/source.md"]);
+        foreach (var resolvedName in new[]
+                 {
+                     "local-target",
+                     "error-codes",
+                     "custom-anchor",
+                     "api.v2",
+                     "apiv2",
+                     "CaseID",
+                     "linked-api-sdk-guide",
+                     "setext-api-sdk",
+                 })
         {
-            var reference = Assert.Single(_reader.SearchReferences(
-                resolvedName,
-                lang: "markdown",
-                referenceKind: "reference",
-                pathPatterns: ["docs/issue4846/source.md"],
-                exact: true));
+            var reference = Assert.Single(
+                markdownReferences,
+                candidate => candidate.SymbolName == resolvedName);
             Assert.True(
                 reference.ResolutionState == "resolved",
                 $"Expected Markdown reference '{resolvedName}' to resolve, but its state was '{reference.ResolutionState}' with {reference.ResolutionCandidateCount} candidates.");
@@ -216,15 +252,15 @@ public partial class DbReaderTests
             Assert.Equal(1, reference.ResolutionCandidateCount);
         }
 
-        var brokenReference = Assert.Single(_reader.SearchReferences(
-            "missing-heading",
-            lang: "markdown",
-            referenceKind: "reference",
-            pathPatterns: ["docs/issue4846/source.md"],
-            exact: true));
-        Assert.Equal("unresolved", brokenReference.ResolutionState);
-        Assert.Null(brokenReference.TargetSymbolId);
-        Assert.Equal(0, brokenReference.ResolutionCandidateCount);
+        foreach (var unresolvedName in new[] { "caseid", "missing-heading" })
+        {
+            var unresolvedReference = Assert.Single(
+                markdownReferences,
+                candidate => candidate.SymbolName == unresolvedName);
+            Assert.Equal("unresolved", unresolvedReference.ResolutionState);
+            Assert.Null(unresolvedReference.TargetSymbolId);
+            Assert.Equal(0, unresolvedReference.ResolutionCandidateCount);
+        }
 
         var dependencies = _reader.GetFileDependencies(limit: 20, lang: "markdown");
         Assert.Contains(dependencies, dependency =>
