@@ -757,7 +757,10 @@ public class ExportImportCommandRunnerTests
             Directory.CreateDirectory(outputDirectory);
 
             var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
-                ExportImportCommandRunner.RunExport([outputDirectory, "--db", dbPath], new JsonSerializerOptions(), "test"));
+                ExportImportCommandRunner.RunExport(
+                    [outputDirectory, "--db", dbPath, "--overwrite"],
+                    new JsonSerializerOptions(),
+                    "test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
@@ -842,6 +845,122 @@ public class ExportImportCommandRunnerTests
         finally
         {
             Directory.SetCurrentDirectory(originalDirectory);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_DefaultRefusesExistingDestination_Issue4827()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_archive_existing_destination");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            File.WriteAllText(archivePath, "existing archive");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([archivePath, "--db", dbPath, "--json"], jsonOptions, "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("write_archive", document.RootElement.GetProperty("phase").GetString());
+            Assert.Equal("export_archive_exists", document.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains("--overwrite", document.RootElement.GetProperty("hint").GetString());
+            Assert.Equal("existing archive", File.ReadAllText(archivePath));
+            Assert.Empty(Directory.GetFiles(projectRoot, ".cdidx-*.tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_OverwriteReturnsVerifiablePrivateArtifactMetadata_Issue4827()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_archive_artifact_metadata");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "public class App { public void Run() { } }");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            File.WriteAllText(archivePath, "replace me");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    [archivePath, "--db", dbPath, "--overwrite", "--json"],
+                    jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var resultDocument = JsonDocument.Parse(stdout);
+            var result = resultDocument.RootElement;
+            Assert.Equal(new FileInfo(archivePath).Length, result.GetProperty("archive_size_bytes").GetInt64());
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archivePath))).ToLowerInvariant(),
+                result.GetProperty("archive_sha256").GetString());
+
+            using var archive = ZipFile.OpenRead(archivePath);
+            using var manifestStream = archive.GetEntry("manifest.json")!.Open();
+            using var manifestDocument = JsonDocument.Parse(manifestStream);
+            Assert.Equal(
+                manifestDocument.RootElement.GetRawText(),
+                result.GetProperty("manifest").GetRawText());
+            Assert.True(result.GetProperty("manifest").GetProperty("file_count").GetInt64() > 0);
+            Assert.Equal(
+                result.GetProperty("manifest").GetProperty("scope").GetRawText(),
+                result.GetProperty("scope").GetRawText());
+
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateFileMode,
+                    File.GetUnixFileMode(archivePath) & DataDirectorySecurity.PermissionBits);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_DefaultRefusesDanglingSymlinkDestination_Issue4827()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("export_archive_symlink_destination");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var missingTargetPath = Path.Combine(projectRoot, "missing-target.cdidx.zip");
+            File.CreateSymbolicLink(archivePath, missingTargetPath);
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([archivePath, "--db", dbPath, "--json"], jsonOptions, "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("export_archive_exists", document.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal(missingTargetPath, new FileInfo(archivePath).LinkTarget);
+            Assert.False(File.Exists(missingTargetPath));
+            Assert.Empty(Directory.GetFiles(projectRoot, ".cdidx-*.tmp"));
+        }
+        finally
+        {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -1523,6 +1642,112 @@ public class ExportImportCommandRunnerTests
 
             Assert.Equal("existing archive", File.ReadAllText(outputPath));
             Assert.Single(Directory.GetFiles(workDir));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void WriteExportArchiveFile_FailureLeavesNoArtifactOrTemporaryFile_Issue4827()
+    {
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_export_failed_cleanup");
+        try
+        {
+            var outputPath = Path.Combine(workDir, "codeindex.cdidx.zip");
+            var missingSnapshotPath = Path.Combine(workDir, "missing.db");
+            var manifest = new ExportImportCommandRunner.ExportManifest(
+                "1",
+                "test",
+                0,
+                null,
+                null,
+                new string('0', 64));
+
+            Assert.Throws<FileNotFoundException>(() =>
+                ExportImportCommandRunner.WriteExportArchiveFile(
+                    outputPath,
+                    missingSnapshotPath,
+                    manifest,
+                    new JsonSerializerOptions(),
+                    CancellationToken.None,
+                    overwrite: false));
+
+            Assert.False(File.Exists(outputPath));
+            Assert.Empty(Directory.GetFiles(workDir));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void WriteExportArchiveFile_CanSkipArtifactMetadataForHumanOutput_Issue4827()
+    {
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_export_without_attestation");
+        try
+        {
+            var snapshotPath = TestProjectHelper.CreateProjectDb(workDir);
+            SqliteConnection.ClearAllPools();
+            var outputPath = Path.Combine(workDir, "codeindex.cdidx.zip");
+            var manifest = new ExportImportCommandRunner.ExportManifest(
+                "1",
+                "test",
+                0,
+                null,
+                null,
+                new string('0', 64));
+
+            var artifact = ExportImportCommandRunner.WriteExportArchiveFile(
+                outputPath,
+                snapshotPath,
+                manifest,
+                new JsonSerializerOptions(),
+                CancellationToken.None,
+                overwrite: false,
+                includeArtifactMetadata: false);
+
+            Assert.Null(artifact);
+            Assert.True(File.Exists(outputPath));
+            Assert.Empty(Directory.GetFiles(workDir, ".cdidx-*.tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void WriteExportArchiveFile_ConcurrentDestinationCreationPreservesWinner_Issue4827()
+    {
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_export_concurrent_destination");
+        try
+        {
+            var snapshotPath = TestProjectHelper.CreateProjectDb(workDir);
+            SqliteConnection.ClearAllPools();
+            var outputPath = Path.Combine(workDir, "codeindex.cdidx.zip");
+            var manifest = new ExportImportCommandRunner.ExportManifest(
+                "1",
+                "test",
+                0,
+                null,
+                null,
+                new string('0', 64));
+
+            Assert.Throws<AtomicFileWriter.DestinationAlreadyExistsException>(() =>
+                ExportImportCommandRunner.WriteExportArchiveFile(
+                    outputPath,
+                    snapshotPath,
+                    manifest,
+                    new JsonSerializerOptions(),
+                    CancellationToken.None,
+                    overwrite: false,
+                    beforePublishForTesting: () => File.WriteAllText(outputPath, "concurrent winner")));
+
+            Assert.Equal("concurrent winner", File.ReadAllText(outputPath));
+            Assert.Empty(Directory.GetFiles(workDir, ".cdidx-*.tmp"));
         }
         finally
         {
