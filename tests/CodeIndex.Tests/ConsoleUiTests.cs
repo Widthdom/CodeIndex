@@ -1488,7 +1488,7 @@ public class ConsoleUiTests
 
         var expected = new SortedSet<string>(StringComparer.Ordinal)
         {
-            "db", "json", "pretty", "quiet", "silent", "no-progress", "output", "redact-paths", "log-lines", "no-log", "include-args",
+            "db", "json", "pretty", "quiet", "silent", "no-progress", "output", "overwrite", "redact-paths", "log-lines", "no-log", "include-args",
         };
         Assert.Equal(expected, flagSets.Bash);
         Assert.Equal(expected, flagSets.Zsh);

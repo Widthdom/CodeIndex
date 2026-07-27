@@ -136,7 +136,7 @@ public static partial class ConsoleUi
         Console.WriteLine("  db schema                  Dump SQLite schema entries and PRAGMA user_version");
         Console.WriteLine("  db prune --dry-run|--apply Count or delete orphaned DB rows");
         Console.WriteLine("  diff <db1> <db2>           Compare two index databases; exit 0 identical, 1 drift, 2 schema mismatch, 3 unreadable");
-        Console.WriteLine("  report --output <bundle.tgz> Build a redacted crash-repro tarball (.tgz/.tar.gz); --json reports stdout metadata");
+        Console.WriteLine("  report --output <bundle.tgz> Build a redacted crash-repro tarball without replacing existing output; use --overwrite to opt in");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD origin/severity, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
         Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");

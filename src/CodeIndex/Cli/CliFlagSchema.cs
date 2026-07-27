@@ -340,7 +340,7 @@ internal static class CliFlagSchema
             new() { Name = "--description", ValuePlaceholder = "<text>", Description = "Suggestions add: local suggestion description", PrimaryCommands = Set("suggestions") },
             new() { Name = "--title", ValuePlaceholder = "<title>", Description = "Suggestions add: optional issue-draft title source", PrimaryCommands = Set("suggestions") },
             new() { Name = "--evidence-path", ValuePlaceholder = "<path>", Description = "Suggestions add: repository-relative evidence path; repeat for multiple paths", PrimaryCommands = Set("suggestions") },
-            new() { Name = "--overwrite", Description = "Portable archive or suggestions export: atomically replace an existing output file", PrimaryCommands = Set("export", "suggestions") },
+            new() { Name = "--overwrite", Description = "Portable archive, report bundle, or suggestions export: atomically replace an existing output file", PrimaryCommands = Set("export", "report", "suggestions") },
             new() { Name = "--body", Description = "Include definition body snippets in JSON-capable result rows", PrimaryCommands = Set(BodyCommands) },
             new() { Name = "--body-start", ValuePlaceholder = "<line>", Description = "Inspect: start definition body slice at this 1-based source line", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--body-lines", ValuePlaceholder = "<n>", Description = "Inspect: return at most this many definition body lines", PrimaryCommands = Set(InspectFieldCommands) },

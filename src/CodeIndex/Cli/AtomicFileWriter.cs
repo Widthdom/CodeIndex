@@ -100,6 +100,90 @@ internal static class AtomicFileWriter
         Action<string> validateBeforePublish)
         => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite, validateBeforePublish);
 
+    internal static void WritePreservingExistingOnFailure(
+        string path,
+        Action<Stream> writeContents,
+        WriteProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(writeContents);
+
+        var tempPath = BuildTempPath(path);
+        var ioTempPath = LongPath.EnsureWindowsPrefix(tempPath);
+        var backupPath = BuildTempPath(path);
+        var ioBackupPath = LongPath.EnsureWindowsPrefix(backupPath);
+        var applyFileMode = ResolveProfileModeCallback(profile);
+        var tempPublished = false;
+
+        try
+        {
+            using (var stream = CreateTempFile(ioTempPath, profile))
+            {
+                applyFileMode?.Invoke(ioTempPath);
+                writeContents(stream);
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(path)))
+            {
+                try
+                {
+                    MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
+                    tempPublished = true;
+                    FlushParentDirectoryAfterCreate(path);
+                    return;
+                }
+                catch (IOException) when (File.Exists(LongPath.EnsureWindowsPrefix(path)))
+                {
+                    // A destination appeared after the existence check. Explicit overwrite
+                    // still replaces it, while retaining rollback evidence.
+                    // existence check 後に destination が作成された場合も、明示的な
+                    // overwrite として rollback 用 evidence を保持して置換する。
+                }
+            }
+
+            File.Replace(
+                ioTempPath,
+                LongPath.EnsureWindowsPrefix(path),
+                ioBackupPath,
+                ignoreMetadataErrors: true);
+            tempPublished = true;
+
+            try
+            {
+                FlushParentDirectoryAfterReplace(path);
+                DeleteFileIfExists(backupPath);
+            }
+            catch (Exception publishException) when (IsRecoverableFileMutationException(publishException))
+            {
+                try
+                {
+                    File.Replace(
+                        ioBackupPath,
+                        LongPath.EnsureWindowsPrefix(path),
+                        destinationBackupFileName: null,
+                        ignoreMetadataErrors: true);
+                    FlushParentDirectoryAfterReplace(path);
+                }
+                catch (Exception rollbackException) when (IsRecoverableFileMutationException(rollbackException))
+                {
+                    throw new IOException(
+                        $"Atomic report replacement failed and the previous destination could not be restored durably at {ConsoleUi.FormatBoundedValue(path)}.",
+                        new AggregateException(publishException, rollbackException));
+                }
+
+                throw new IOException(
+                    $"Atomic report replacement failed; the previous destination was restored at {ConsoleUi.FormatBoundedValue(path)}.",
+                    publishException);
+            }
+        }
+        catch
+        {
+            if (!tempPublished)
+                TryDeleteFile(ioTempPath);
+            throw;
+        }
+    }
+
     private static void WriteCore(
         string path,
         Action<Stream> writeContents,
