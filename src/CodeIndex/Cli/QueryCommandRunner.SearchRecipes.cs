@@ -1206,7 +1206,8 @@ public static partial class QueryCommandRunner
                         preflight.OpenIssueCount,
                         options.DuplicateConfidence,
                         options.DuplicateThreshold),
-                    drafts),
+                    drafts,
+                    BuildSearchIssueDraftSelectionAccounting(recipe.Name, queryResults)),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
             return WriteJsonObjectWithOptionalByteLimit(
                 json,
@@ -1409,7 +1410,8 @@ public static partial class QueryCommandRunner
                         preflight.OpenIssueCount,
                         options.DuplicateConfidence,
                         options.DuplicateThreshold),
-                    drafts),
+                    drafts,
+                    BuildSearchIssueDraftSelectionAccounting(null, [queryResult])),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
             return WriteJsonObjectWithOptionalByteLimit(
                 json,
@@ -1417,6 +1419,28 @@ public static partial class QueryCommandRunner
                 "issue-draft",
                 "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
         });
+    }
+
+    private static List<SearchIssueDraftSelectionAccountingJsonResult>? BuildSearchIssueDraftSelectionAccounting(
+        string? recipeName,
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults)
+    {
+        var accounting = queryResults
+            .Where(query => query.Selectors.Count > 0)
+            .Select(query => new SearchIssueDraftSelectionAccountingJsonResult(
+                recipeName,
+                recipeName is null ? null : query.Name,
+                query.Query,
+                query.SourceTotal,
+                query.SourceTotalAuthoritative,
+                query.SourceTotalLowerBound,
+                query.SelectedTotal,
+                query.Returned,
+                query.SelectorOmittedCount,
+                query.LimitOmittedCount,
+                query.Selectors))
+            .ToList();
+        return accounting.Count == 0 ? null : accounting;
     }
 
     private static int GetAdHocIssueDraftResultLimit(QueryCommandOptions options)

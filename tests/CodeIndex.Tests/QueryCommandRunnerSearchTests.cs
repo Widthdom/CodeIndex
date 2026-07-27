@@ -7367,7 +7367,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             for (var fileIndex = 0; fileIndex < 6; fileIndex++)
             {
-                var path = $"src/selection-{fileIndex}.cs";
+                var path = $"src/selection-{fileIndex}-{new string('x', 80)}.cs";
                 TestProjectHelper.InsertIndexedFile(dbPath, path, "csharp", "Console.WriteLine(ex.Message);\n");
                 ReplaceIndexedChunks(
                     dbPath,
@@ -7495,6 +7495,66 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(121, envelopeTerminal.GetProperty("selector_omitted_count").GetInt32());
             Assert.Equal(0, envelopeTerminal.GetProperty("limit_omitted_count").GetInt32());
 
+            var (byteCompactExitCode, byteCompactStdout, byteCompactStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    [
+                        "search",
+                        "Console.WriteLine",
+                        "--db", dbPath,
+                        "--exact-substring",
+                        "--format", "compact",
+                        "--sample", "20",
+                        "--limit", "20",
+                        "--max-json-bytes", "3000",
+                    ],
+                    _jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, byteCompactExitCode);
+            Assert.Equal(string.Empty, byteCompactStderr);
+            using var byteCompactDocument = ParseJsonOutput(byteCompactStdout);
+            var byteCompactRoot = byteCompactDocument.RootElement;
+            var byteCompactReturned = byteCompactRoot.GetProperty("results").GetArrayLength();
+            Assert.InRange(byteCompactReturned, 1, 19);
+            Assert.Equal(20, byteCompactRoot.GetProperty("selected_total").GetInt32());
+            Assert.Equal(byteCompactReturned, byteCompactRoot.GetProperty("returned").GetInt32());
+            Assert.Equal(0, byteCompactRoot.GetProperty("limit_omitted_count").GetInt32());
+            Assert.Equal(
+                20 - byteCompactReturned,
+                byteCompactRoot.GetProperty("metadata").GetProperty("byte_limit_omitted_count").GetInt32());
+
+            var (byteEnvelopeExitCode, byteEnvelopeStdout, byteEnvelopeStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    [
+                        "search",
+                        "Console.WriteLine",
+                        "--db", dbPath,
+                        "--exact-substring",
+                        "--json=array",
+                        "--json-envelope",
+                        "--fields", "path",
+                        "--sample", "20",
+                        "--limit", "20",
+                        "--max-json-bytes", "2500",
+                    ],
+                    _jsonOptions,
+                    "test"));
+
+            Assert.Equal(CommandExitCodes.Success, byteEnvelopeExitCode);
+            Assert.Equal(string.Empty, byteEnvelopeStderr);
+            using var byteEnvelopeDocument = ParseJsonOutput(byteEnvelopeStdout);
+            var byteEnvelopeRoot = byteEnvelopeDocument.RootElement;
+            var byteEnvelopeReturned = byteEnvelopeRoot.GetProperty("results").GetArrayLength();
+            Assert.InRange(byteEnvelopeReturned, 1, 19);
+            var byteEnvelopeMetadata = byteEnvelopeRoot.GetProperty("metadata");
+            var byteEnvelopeTerminal = byteEnvelopeMetadata.GetProperty("stream_terminal");
+            Assert.Equal(20, byteEnvelopeTerminal.GetProperty("selected_total").GetInt32());
+            Assert.Equal(byteEnvelopeReturned, byteEnvelopeTerminal.GetProperty("returned").GetInt32());
+            Assert.Equal(0, byteEnvelopeTerminal.GetProperty("limit_omitted_count").GetInt32());
+            Assert.Equal(
+                20 - byteEnvelopeReturned,
+                byteEnvelopeMetadata.GetProperty("byte_limit_omitted_count").GetInt32());
+
             var (combinedExitCode, combinedStdout, combinedStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunSearch(
                     [
@@ -7550,6 +7610,56 @@ public partial class QueryCommandRunnerTests
             var emptySelector = Assert.Single(emptyQuery.GetProperty("selectors").EnumerateArray());
             Assert.True(emptySelector.GetProperty("applied").GetBoolean());
             Assert.Equal(0, emptySelector.GetProperty("omitted_count").GetInt32());
+
+            var (emptyDraftExitCode, emptyDraftStdout, emptyDraftStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(
+                    [
+                        "Issue4843DefinitelyMissing",
+                        "--db", dbPath,
+                        "--exact-substring",
+                        "--format", "issue-drafts",
+                        "--sample", "5",
+                        "--path", "missing/**",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, emptyDraftExitCode);
+            Assert.Equal(string.Empty, emptyDraftStderr);
+            using var emptyDraftDocument = ParseJsonOutput(emptyDraftStdout);
+            Assert.Empty(emptyDraftDocument.RootElement.GetProperty("drafts").EnumerateArray());
+            var emptyDraftAccounting = Assert.Single(
+                emptyDraftDocument.RootElement.GetProperty("selection_accounting").EnumerateArray());
+            Assert.Equal(0, emptyDraftAccounting.GetProperty("source_total").GetInt32());
+            Assert.Equal(0, emptyDraftAccounting.GetProperty("selected_total").GetInt32());
+            Assert.Equal(0, emptyDraftAccounting.GetProperty("returned").GetInt32());
+            Assert.Equal(0, emptyDraftAccounting.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(0, emptyDraftAccounting.GetProperty("limit_omitted_count").GetInt32());
+            Assert.Single(emptyDraftAccounting.GetProperty("selectors").EnumerateArray());
+
+            var (emptyRecipeDraftExitCode, emptyRecipeDraftStdout, emptyRecipeDraftStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(
+                    [
+                        "--recipe", "risky-code/raw-diagnostic-echo",
+                        "--db", dbPath,
+                        "--format", "issue-drafts",
+                        "--sample", "5",
+                        "--path", "missing/**",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, emptyRecipeDraftExitCode);
+            Assert.Equal(string.Empty, emptyRecipeDraftStderr);
+            using var emptyRecipeDraftDocument = ParseJsonOutput(emptyRecipeDraftStdout);
+            Assert.Empty(emptyRecipeDraftDocument.RootElement.GetProperty("drafts").EnumerateArray());
+            var emptyRecipeDraftAccounting = Assert.Single(
+                emptyRecipeDraftDocument.RootElement.GetProperty("selection_accounting").EnumerateArray());
+            Assert.Equal("risky-code", emptyRecipeDraftAccounting.GetProperty("recipe").GetString());
+            Assert.Equal(
+                "raw-diagnostic-echo",
+                emptyRecipeDraftAccounting.GetProperty("query_name").GetString());
+            Assert.Equal(0, emptyRecipeDraftAccounting.GetProperty("source_total").GetInt32());
+            Assert.Equal(0, emptyRecipeDraftAccounting.GetProperty("selected_total").GetInt32());
+            Assert.Equal(0, emptyRecipeDraftAccounting.GetProperty("returned").GetInt32());
 
             var (contextExitCode, contextStdout, contextStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunSearch(
@@ -7626,6 +7736,59 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(
                 guardedRecipeQuery.GetProperty("source_total").GetInt32(),
                 guardedRecipeQuery.GetProperty("source_total_lower_bound").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeIssueDraftSelectionAccountingSurvivesExhaustedTotalLimit_Issue4843()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_draft_selection_total_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/selection.cs",
+                "csharp",
+                "JsonDocument.Parse(payload);\nConsole.WriteLine(ex.Message);\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(
+                    [
+                        "--recipe", "risky-code",
+                        "--include-query", "unbounded-json-parse",
+                        "--include-query", "raw-diagnostic-echo",
+                        "--db", dbPath,
+                        "--format", "issue-drafts",
+                        "--first-per-file",
+                        "--limit", "5",
+                        "--total-limit", "1",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Single(document.RootElement.GetProperty("drafts").EnumerateArray());
+            var accounting = document.RootElement
+                .GetProperty("selection_accounting")
+                .EnumerateArray()
+                .ToArray();
+            Assert.Equal(2, accounting.Length);
+            var exhausted = Assert.Single(accounting.Where(item =>
+                item.GetProperty("query_name").GetString() == "raw-diagnostic-echo"));
+            Assert.Equal(1, exhausted.GetProperty("source_total").GetInt32());
+            Assert.Equal(1, exhausted.GetProperty("selected_total").GetInt32());
+            Assert.Equal(0, exhausted.GetProperty("returned").GetInt32());
+            Assert.Equal(0, exhausted.GetProperty("selector_omitted_count").GetInt32());
+            Assert.Equal(1, exhausted.GetProperty("limit_omitted_count").GetInt32());
+            var selector = Assert.Single(exhausted.GetProperty("selectors").EnumerateArray());
+            Assert.Equal("first_per_file", selector.GetProperty("mode").GetString());
+            Assert.True(selector.GetProperty("applied").GetBoolean());
         }
         finally
         {

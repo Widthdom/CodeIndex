@@ -4605,7 +4605,29 @@ internal sealed record SearchIssueDraftExportJsonResult(
     SearchRecipeQueryFreshnessJsonResult? QueryFreshness,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftPreflightSummaryJsonResult DuplicatePreflight,
-    [property: JsonPropertyName("drafts")] List<SearchIssueDraftJsonResult> Drafts);
+    [property: JsonPropertyName("drafts")] List<SearchIssueDraftJsonResult> Drafts,
+    [property: JsonPropertyName("selection_accounting")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<SearchIssueDraftSelectionAccountingJsonResult>? SelectionAccounting);
+
+internal sealed record SearchIssueDraftSelectionAccountingJsonResult(
+    [property: JsonPropertyName("recipe")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Recipe,
+    [property: JsonPropertyName("query_name")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? QueryName,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("source_total")] int SourceTotal,
+    [property: JsonPropertyName("source_total_authoritative")] bool SourceTotalAuthoritative,
+    [property: JsonPropertyName("source_total_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SourceTotalLowerBound,
+    [property: JsonPropertyName("selected_total")] int SelectedTotal,
+    [property: JsonPropertyName("returned")] int Returned,
+    [property: JsonPropertyName("selector_omitted_count")] int SelectorOmittedCount,
+    [property: JsonPropertyName("limit_omitted_count")] int LimitOmittedCount,
+    [property: JsonPropertyName("selectors")] List<SearchRowSelectorJsonResult> Selectors);
 
 internal sealed record SearchIssueDraftJsonResult(
     [property: JsonPropertyName("draft_id")] string DraftId,

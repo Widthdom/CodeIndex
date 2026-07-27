@@ -336,6 +336,10 @@ internal static partial class JsonEnvelopeWrapper
             var results = new JsonArray();
             for (var i = 0; i < count; i++)
                 results.Add(pageItems[i]?.DeepClone());
+            var adjustedStreamTerminal = AdjustSearchSelectionAccountingForBoundedRows(
+                command,
+                streamTerminal,
+                count);
             var envelope = BuildEnvelope(
                 command,
                 queryNormalized,
@@ -346,7 +350,7 @@ internal static partial class JsonEnvelopeWrapper
                 results,
                 exitCode,
                 error: commandError is null ? null : (JsonObject)commandError.DeepClone(),
-                streamTerminal: streamTerminal,
+                streamTerminal: adjustedStreamTerminal,
                 streamControlRecords: streamControlRecords);
             var metadata = (JsonObject)envelope["metadata"]!;
             metadata["result_stable_at"] = snapshot.ResultStableAt;
@@ -415,6 +419,7 @@ internal static partial class JsonEnvelopeWrapper
                 && extraction.SourcePayload is not null)
             {
                 return BuildBackwardCompatibleCompactEnvelope(
+                    command,
                     extraction.SourcePayload,
                     envelope,
                     results,
@@ -441,7 +446,7 @@ internal static partial class JsonEnvelopeWrapper
 
         var requestedCount = pageItems.Count;
         var candidate = BuildCandidate(requestedCount);
-        var candidateJson = candidate.ToJsonString(jsonOptions);
+        var candidateJson = SerializeBoundedEnvelope(candidate, jsonOptions);
         if (!controls.MaxJsonBytes.HasValue || JsonFitsResponseBudget(candidateJson, controls.MaxJsonBytes.Value))
         {
             emittedJson = candidateJson;
@@ -457,7 +462,7 @@ internal static partial class JsonEnvelopeWrapper
         {
             var mid = low + ((high - low) / 2);
             var current = BuildCandidate(mid);
-            var currentJson = current.ToJsonString(jsonOptions);
+            var currentJson = SerializeBoundedEnvelope(current, jsonOptions);
             if (JsonFitsResponseBudget(currentJson, controls.MaxJsonBytes.Value))
             {
                 best = current;
@@ -475,6 +480,21 @@ internal static partial class JsonEnvelopeWrapper
             return null;
         emittedJson = bestJson!;
         return best;
+    }
+
+    private static string SerializeBoundedEnvelope(JsonNode node, JsonSerializerOptions jsonOptions)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+        {
+            Encoder = jsonOptions.Encoder,
+            Indented = jsonOptions.WriteIndented,
+        }))
+        {
+            node.WriteTo(writer);
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     private static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
@@ -537,6 +557,7 @@ internal static partial class JsonEnvelopeWrapper
     }
 
     private static JsonObject BuildBackwardCompatibleCompactEnvelope(
+        string command,
         JsonObject sourcePayload,
         JsonObject envelope,
         JsonArray results,
@@ -551,7 +572,10 @@ internal static partial class JsonEnvelopeWrapper
         ResponseSnapshot snapshot,
         string? primaryCollection)
     {
-        var compatible = (JsonObject)sourcePayload.DeepClone();
+        var compatible = AdjustSearchSelectionAccountingForBoundedRows(
+            command,
+            sourcePayload,
+            returnedCount) ?? (JsonObject)sourcePayload.DeepClone();
         var collectionName = primaryCollection ?? "results";
         compatible[collectionName] = results.DeepClone();
         compatible["metadata"] = envelope["metadata"]!.DeepClone();
@@ -585,6 +609,25 @@ internal static partial class JsonEnvelopeWrapper
         if (compatible["query_context"] is JsonObject queryContext)
             queryContext["limit"] = controls.PageLimit;
         return compatible;
+    }
+
+    private static JsonObject? AdjustSearchSelectionAccountingForBoundedRows(
+        string command,
+        JsonObject? payload,
+        int returnedCount)
+    {
+        if (payload is null
+            || !string.Equals(command, "search", StringComparison.Ordinal)
+            || payload["selectors"] is not JsonArray
+            || !payload.ContainsKey("returned"))
+        {
+            return payload;
+        }
+
+        var adjusted = (JsonObject)payload.DeepClone();
+        adjusted["returned"] = JsonNode.Parse(
+            Math.Max(0, returnedCount).ToString(CultureInfo.InvariantCulture));
+        return adjusted;
     }
 
     private static JsonObject BuildBackwardCompatibleMapCompactEnvelope(

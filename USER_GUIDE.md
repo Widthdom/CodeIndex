@@ -1393,6 +1393,12 @@ and compact query objects, plain compact roots, run summaries, issue-draft
 `limit_omitted_count`. Their
 `selectors` array records each applied selector in execution order, including
 per-stage input/output/omission counts and the sample size, mode, and seed.
+Issue-draft roots also expose per-query `selection_accounting`, so selector
+accounting remains available when no draft is emitted or a cross-query total
+limit leaves a selected query with zero returned rows. For byte-bounded compact
+and array envelopes, `returned` reflects the rows that fit the final envelope;
+logical `limit_omitted_count` remains unchanged, while
+`metadata.byte_limit_omitted_count` reports rows removed by the hard byte cap.
 `source_total_authoritative` says whether the bounded fetch observed the whole
 source population; guard filters, origin/facet post-filters, bounded candidate
 windows, and recipe file-reject post-filters conservatively produce
@@ -4535,6 +4541,11 @@ array envelope の `metadata.stream_terminal` と同様に、`source_total`、`s
 `returned`、`selector_omitted_count`、`limit_omitted_count` を分けて返します。
 `selectors` array は適用順の各 selector について、
 各段階の入力件数、出力件数、省略件数、および sample の size / mode / seed を記録します。
+issue-draft の root も query ごとの `selection_accounting` を公開するため、draft が 0 件の場合や
+query 全体の total limit により選択済み query の返却 row が 0 件になった場合も selector accounting
+を保持します。byte 上限付き compact / array envelope の `returned` は最終 envelope に収まった
+row 数を表します。論理的な `limit_omitted_count` は変更せず、hard byte cap で除外した row 数は
+`metadata.byte_limit_omitted_count` で別に報告します。
 bounded fetch が source population 全体を観測できたかは `source_total_authoritative` で示し、
 guard filter、origin / facet の後段 filter、bounded candidate window、recipe の file-reject
 後段 filter がある場合は保守的に `source_total_authoritative=false` と
