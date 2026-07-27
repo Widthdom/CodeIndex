@@ -2086,6 +2086,119 @@ public static partial class SymbolExtractor
         return expressionBraceDepth.HasValue;
     }
 
+    private static bool IsCSharpStaticLambdaHeaderCandidate(string matchLine, int nameIndex)
+    {
+        var boundedNameIndex = Math.Min(Math.Max(0, nameIndex), matchLine.Length);
+        var searchIndex = 0;
+        while (searchIndex < matchLine.Length)
+        {
+            var arrowIndex = matchLine.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0)
+                return false;
+
+            if (TryGetCSharpStaticLambdaHeaderRange(
+                    matchLine,
+                    arrowIndex,
+                    out var headerStart,
+                    out var headerEnd)
+                && boundedNameIndex >= headerStart
+                && boundedNameIndex < headerEnd)
+            {
+                return true;
+            }
+
+            searchIndex = arrowIndex + 2;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetCSharpStaticLambdaHeaderRange(
+        string matchLine,
+        int arrowIndex,
+        out int headerStart,
+        out int headerEnd)
+    {
+        headerStart = -1;
+        headerEnd = -1;
+
+        var cursor = arrowIndex - 1;
+        SkipCSharpWhitespaceBackward(matchLine, ref cursor);
+        if (cursor < 0)
+            return false;
+
+        int parameterStart;
+        if (matchLine[cursor] == ')')
+        {
+            var depth = 1;
+            cursor--;
+            while (cursor >= 0 && depth > 0)
+            {
+                if (matchLine[cursor] == ')')
+                    depth++;
+                else if (matchLine[cursor] == '(')
+                    depth--;
+
+                cursor--;
+            }
+
+            if (depth != 0)
+                return false;
+
+            parameterStart = cursor + 1;
+        }
+        else
+        {
+            var parameterEnd = cursor + 1;
+            while (cursor >= 0 && IsCSharpLambdaIdentifierCharacter(matchLine[cursor]))
+                cursor--;
+
+            parameterStart = cursor + 1;
+            if (parameterStart == parameterEnd)
+                return false;
+        }
+
+        cursor = parameterStart - 1;
+        SkipCSharpWhitespaceBackward(matchLine, ref cursor);
+
+        var hasStaticModifier = false;
+        var modifierStart = parameterStart;
+        for (var modifierCount = 0; modifierCount < 2 && cursor >= 0; modifierCount++)
+        {
+            var tokenEnd = cursor + 1;
+            while (cursor >= 0 && IsCSharpLambdaIdentifierCharacter(matchLine[cursor]))
+                cursor--;
+
+            var tokenStart = cursor + 1;
+            var token = matchLine.AsSpan(tokenStart, tokenEnd - tokenStart);
+            if (!token.SequenceEqual("static".AsSpan())
+                && !token.SequenceEqual("async".AsSpan()))
+            {
+                break;
+            }
+
+            hasStaticModifier |= token.SequenceEqual("static".AsSpan());
+            modifierStart = tokenStart;
+            SkipCSharpWhitespaceBackward(matchLine, ref cursor);
+        }
+
+        if (!hasStaticModifier)
+            return false;
+
+        headerStart = modifierStart;
+        headerEnd = arrowIndex + 2;
+        return true;
+    }
+
+    private static void SkipCSharpWhitespaceBackward(string text, ref int cursor)
+    {
+        while (cursor >= 0 && char.IsWhiteSpace(text[cursor]))
+            cursor--;
+    }
+
+    private static bool IsCSharpLambdaIdentifierCharacter(char ch) =>
+        char.IsLetterOrDigit(ch) || ch is '_' or '@';
+
     private static bool IsCSharpMultilineExpressionBodiedMember(string[] lines, int startLineIndex, int startColumn)
     {
         var lexState = new CSharpLexState();

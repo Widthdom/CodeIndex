@@ -443,6 +443,28 @@ public static partial class SymbolExtractor
                         }
 
                         if (lang == "csharp"
+                            && (pattern.Kind is "function" or "property")
+                            && match.Groups["name"].Success
+                            && IsCSharpStaticLambdaHeaderCandidate(
+                                patternMatchLine,
+                                lineOffset + match.Groups["name"].Index))
+                        {
+                            // Multi-line call arguments are composed into the same candidate
+                            // string as the following lambda. A declaration-shaped regex can then
+                            // reinterpret the state argument as a return type and `static` (or a
+                            // parameter) as a member name. Reject only names that occupy a
+                            // confirmed static-lambda header; real static members and local
+                            // functions remain eligible. Closes #4830; regression of #4453.
+                            // 複数行の呼び出し引数と後続 lambda は同じ候補文字列に結合されるため、
+                            // 宣言形 regex が state 引数を戻り値型、`static`（または parameter）を
+                            // member 名として再解釈し得る。確認済み static-lambda header 内の名前
+                            // だけを除外し、本物の static member / local function は維持する。
+                            // Closes #4830; regression of #4453.
+                            lineOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            continue;
+                        }
+
+                        if (lang == "csharp"
                             && pattern.Kind == "function"
                             && HasCSharpTokenBeforeIndex(matchLine, "when", absoluteStartColumn + match.Groups["name"].Index))
                         {
