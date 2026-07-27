@@ -243,17 +243,22 @@ public partial class DbReader
         var contextSql = ReferenceContextSql("r");
         var hasResolvedReferenceTargets = _referenceIdentityContractCurrent;
         var resolutionStateSql = hasResolvedReferenceTargets ? "r.resolution_state" : "NULL";
-        var identityScopeConditionSql = "src.lang = 'csharp' AND r.reference_kind NOT IN ('attribute', 'annotation')";
+        var identityScopeConditionSql = """
+            (
+                (src.lang = 'csharp' AND r.reference_kind NOT IN ('attribute', 'annotation'))
+                OR (src.lang = 'dependency_lock' AND r.reference_kind = 'dependency')
+            )
+            """;
         var referenceIdSql = $"CASE WHEN {identityScopeConditionSql} THEN r.id ELSE 0 END";
         var scopedResolutionStateSql = $"CASE WHEN {identityScopeConditionSql} THEN {resolutionStateSql} ELSE NULL END";
         var identityScopedSql = $"CASE WHEN {identityScopeConditionSql} THEN 1 ELSE 0 END";
-        var csharpNameEdgePredicate = hasResolvedReferenceTargets
-            ? "(snc.source_lang != 'csharp' OR snc.identity_scoped = 0)"
-            : "1 = 1";
+        var identityNameEdgePredicate = hasResolvedReferenceTargets
+            ? "snc.identity_scoped = 0"
+            : "snc.source_lang <> 'dependency_lock'";
         var resolvedIdentityLimitSql = lang == "csharp"
             ? " LIMIT @sourceCandidateLimit"
             : string.Empty;
-        var resolvedCSharpEdgesSql = hasResolvedReferenceTargets
+        var resolvedIdentityEdgesSql = hasResolvedReferenceTargets
             ? @"
                 SELECT resolved.source_path,
                        resolved.target_path,
@@ -272,8 +277,7 @@ public partial class DbReader
                     JOIN target_files scoped_target
                       ON scoped_target.target_path = target_file.path
                      AND scoped_target.target_lang = target_file.lang
-                    WHERE lrp.source_lang = 'csharp'
-                      AND lrp.identity_scoped = 1
+                    WHERE lrp.identity_scoped = 1
                       AND lrp.resolution_state IN ('resolved', 'resolved_group')
                       AND lrp.source_path != target_file.path"
             : string.Empty;
@@ -281,13 +285,13 @@ public partial class DbReader
         {
             AppendDependencySymbolFilter(
                 cmd,
-                ref resolvedCSharpEdgesSql,
+                ref resolvedIdentityEdgesSql,
                 "lrp.symbol_name",
                 dependencySymbols,
                 dependencySymbolFamilies,
                 suppressDependencyNoise,
                 "resolvedDependency");
-            resolvedCSharpEdgesSql += @"
+            resolvedIdentityEdgesSql += @"
                      ORDER BY lrp.source_path, lrp.symbol_name, lrp.reference_id" + resolvedIdentityLimitSql + @"
                 ) resolved
                 GROUP BY resolved.source_path, resolved.target_path, resolved.symbol_name
@@ -676,7 +680,7 @@ public partial class DbReader
                 GROUP BY tf.target_lang, tf.symbol_name, tf.symbol_segment_count
             ),
             edges AS (
-                " + resolvedCSharpEdgesSql + @"
+                " + resolvedIdentityEdgesSql + @"
                 SELECT snc.source_path,
                        tf.target_path,
                        tf.symbol_name,
@@ -693,7 +697,7 @@ public partial class DbReader
                  AND ta.symbol_name = snc.symbol_name
                  AND ta.symbol_segment_count = snc.symbol_segment_count
                 WHERE snc.source_path != tf.target_path
-                  AND " + csharpNameEdgePredicate + @"
+                  AND " + identityNameEdgePredicate + @"
                   -- All metadata references ([Foo] / @Foo) and their synthetic C#
                   -- suffix aliases must only match class-like target kinds; otherwise
                   -- a metadata reference would spuriously depend on any file that

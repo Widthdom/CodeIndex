@@ -12620,6 +12620,8 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.DockerfileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.MakefileContractVersion, SymbolExtractor.GetContractVersion("makefile"));
         Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
+        Assert.Equal(SymbolExtractor.DependencyLockContractVersion, SymbolExtractor.GetContractVersion("dependency_lock"));
+        Assert.True(SymbolExtractor.DependencyLockContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);
