@@ -2086,6 +2086,408 @@ public static partial class SymbolExtractor
         return expressionBraceDepth.HasValue;
     }
 
+    private static bool IsCSharpStaticLambdaHeaderCandidate(
+        string matchLine,
+        int nameIndex,
+        string? enclosingTypeName)
+    {
+        var boundedNameIndex = Math.Min(Math.Max(0, nameIndex), matchLine.Length);
+        var searchIndex = 0;
+        while (searchIndex < matchLine.Length)
+        {
+            var arrowIndex = matchLine.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0)
+                return false;
+
+            if (TryGetCSharpStaticLambdaHeaderRange(
+                    matchLine,
+                    arrowIndex,
+                    enclosingTypeName,
+                    out var headerStart,
+                    out var headerEnd)
+                && boundedNameIndex >= headerStart
+                && boundedNameIndex < headerEnd)
+            {
+                return true;
+            }
+
+            searchIndex = arrowIndex + 2;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetCSharpStaticLambdaHeaderRange(
+        string matchLine,
+        int arrowIndex,
+        string? enclosingTypeName,
+        out int headerStart,
+        out int headerEnd)
+    {
+        headerStart = -1;
+        headerEnd = -1;
+
+        var cursor = arrowIndex - 1;
+        SkipCSharpWhitespaceBackward(matchLine, ref cursor);
+        if (cursor < 0)
+            return false;
+
+        int parameterStart;
+        var hasParenthesizedParameters = matchLine[cursor] == ')';
+        if (hasParenthesizedParameters)
+        {
+            var depth = 1;
+            cursor--;
+            while (cursor >= 0 && depth > 0)
+            {
+                if (matchLine[cursor] == ')')
+                    depth++;
+                else if (matchLine[cursor] == '(')
+                    depth--;
+
+                cursor--;
+            }
+
+            if (depth != 0)
+                return false;
+
+            parameterStart = cursor + 1;
+        }
+        else
+        {
+            var parameterEnd = cursor + 1;
+            if (!TryReadCSharpLambdaIdentifierBackward(
+                    matchLine,
+                    ref cursor,
+                    out parameterStart,
+                    out var identifierEnd)
+                || identifierEnd != parameterEnd)
+            {
+                return false;
+            }
+        }
+
+        cursor = parameterStart - 1;
+        SkipCSharpWhitespaceBackward(matchLine, ref cursor);
+
+        if (TryReadCSharpStaticLambdaModifiersBackward(
+                matchLine,
+                cursor,
+                out var modifierStart))
+        {
+            headerStart = modifierStart;
+            headerEnd = arrowIndex + 2;
+            return true;
+        }
+
+        if (!hasParenthesizedParameters
+            || !TryFindCSharpExplicitReturnStaticLambdaModifier(
+                matchLine,
+                parameterStart,
+                enclosingTypeName,
+                out modifierStart))
+        {
+            return false;
+        }
+
+        headerStart = modifierStart;
+        headerEnd = arrowIndex + 2;
+        return true;
+    }
+
+    private static bool TryReadCSharpStaticLambdaModifiersBackward(
+        string text,
+        int cursor,
+        out int modifierStart)
+    {
+        var hasStaticModifier = false;
+        modifierStart = -1;
+        for (var modifierCount = 0; modifierCount < 2 && cursor >= 0; modifierCount++)
+        {
+            if (!TryReadCSharpLambdaIdentifierBackward(
+                    text,
+                    ref cursor,
+                    out var tokenStart,
+                    out var tokenEnd))
+            {
+                break;
+            }
+
+            var token = text.AsSpan(tokenStart, tokenEnd - tokenStart);
+            if (!token.SequenceEqual("static".AsSpan())
+                && !token.SequenceEqual("async".AsSpan()))
+            {
+                break;
+            }
+
+            hasStaticModifier |= token.SequenceEqual("static".AsSpan());
+            modifierStart = tokenStart;
+            SkipCSharpWhitespaceBackward(text, ref cursor);
+        }
+
+        return hasStaticModifier;
+    }
+
+    private static bool TryFindCSharpExplicitReturnStaticLambdaModifier(
+        string text,
+        int parameterStart,
+        string? enclosingTypeName,
+        out int modifierStart)
+    {
+        modifierStart = -1;
+        var searchBefore = parameterStart;
+        while (searchBefore > 0)
+        {
+            var staticIndex = text.LastIndexOf(
+                "static",
+                searchBefore - 1,
+                StringComparison.Ordinal);
+            if (staticIndex < 0)
+                return false;
+
+            searchBefore = staticIndex;
+            if (!IsCSharpStandaloneKeywordAt(text, staticIndex, "static"))
+                continue;
+
+            var returnTypeStart = SkipWhitespace(text, staticIndex + "static".Length);
+            if (IsCSharpStandaloneKeywordAt(text, returnTypeStart, "async"))
+                returnTypeStart = SkipWhitespace(text, returnTypeStart + "async".Length);
+
+            var candidateModifierStart = staticIndex;
+            var precedingCursor = staticIndex - 1;
+            SkipCSharpWhitespaceBackward(text, ref precedingCursor);
+            if (TryReadCSharpLambdaIdentifierBackward(
+                    text,
+                    ref precedingCursor,
+                    out var precedingTokenStart,
+                    out var precedingTokenEnd)
+                && text.AsSpan(precedingTokenStart, precedingTokenEnd - precedingTokenStart)
+                    .SequenceEqual("async".AsSpan()))
+            {
+                candidateModifierStart = precedingTokenStart;
+            }
+
+            if (IsCSharpRealStaticDeclarationHeader(
+                    text,
+                    staticIndex,
+                    parameterStart,
+                    enclosingTypeName))
+            {
+                continue;
+            }
+
+            if (!IsCSharpExplicitLambdaReturnType(
+                    text,
+                    returnTypeStart,
+                    parameterStart))
+            {
+                continue;
+            }
+
+            modifierStart = candidateModifierStart;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpRealStaticDeclarationHeader(
+        string text,
+        int staticIndex,
+        int parameterStart,
+        string? enclosingTypeName)
+    {
+        var headerEnd = Math.Min(text.Length, parameterStart + 1);
+        if (staticIndex < 0 || staticIndex >= headerEnd)
+            return false;
+
+        var header = text[staticIndex..headerEnd];
+        if (CSharpMethodHeaderPrefixRegex.IsMatch(header))
+            return true;
+
+        var precedingCursor = staticIndex - 1;
+        SkipCSharpWhitespaceBackward(text, ref precedingCursor);
+
+        // A static constructor has no return type, so its lexical prefix is otherwise
+        // indistinguishable from a zero-parameter explicit-return lambda. Preserve the
+        // constructor only at a declaration boundary; lambdas follow `=`, `,`, `(`, or
+        // another expression token. Generic methods and explicit-interface implementations
+        // are recognized by CSharpMethodHeaderPrefixRegex above.
+        // static constructor は戻り値型を持たないため、字句上は parameter 0 個の明示的
+        // 戻り値型 lambda と区別できない。宣言境界にある constructor だけを維持し、
+        // `=`、`,`、`(`、その他の式 token に続く lambda は維持しない。generic method と
+        // 明示的 interface 実装は上の CSharpMethodHeaderPrefixRegex で識別する。
+        if (precedingCursor >= 0 && text[precedingCursor] is not ('{' or '}' or ';'))
+            return false;
+
+        var constructorMatch = CSharpStaticConstructorHeaderPrefixRegex.Match(header);
+        if (!constructorMatch.Success || string.IsNullOrWhiteSpace(enclosingTypeName))
+            return false;
+
+        var constructorName = constructorMatch.Groups["name"].ValueSpan.Trim();
+        if (constructorName.Length > 0 && constructorName[0] == '@')
+            constructorName = constructorName[1..];
+
+        return constructorName.SequenceEqual(enclosingTypeName.AsSpan());
+    }
+
+    private static string? FindCSharpEnclosingTypeName(
+        IReadOnlyList<SymbolRecord> symbols,
+        int line)
+    {
+        for (var index = symbols.Count - 1; index >= 0; index--)
+        {
+            var candidate = symbols[index];
+            if (candidate.Kind is not ("class" or "struct")
+                || candidate.BodyStartLine is null
+                || candidate.BodyEndLine is null
+                || candidate.BodyStartLine > line
+                || candidate.BodyEndLine < line)
+            {
+                continue;
+            }
+
+            return candidate.Name;
+        }
+
+        return null;
+    }
+
+    private static bool IsCSharpExplicitLambdaReturnType(
+        string text,
+        int start,
+        int end)
+    {
+        while (start < end && char.IsWhiteSpace(text[start]))
+            start++;
+        while (end > start && char.IsWhiteSpace(text[end - 1]))
+            end--;
+
+        if (IsCSharpStandaloneKeywordAt(text, start, "scoped"))
+        {
+            start = SkipWhitespace(text, start + "scoped".Length);
+        }
+        if (IsCSharpStandaloneKeywordAt(text, start, "ref"))
+        {
+            start = SkipWhitespace(text, start + "ref".Length);
+            if (IsCSharpStandaloneKeywordAt(text, start, "readonly"))
+                start = SkipWhitespace(text, start + "readonly".Length);
+        }
+
+        if (start >= end)
+            return false;
+
+        var returnType = text[start..end];
+        return CSharpExplicitLambdaReturnTypeRegex.IsMatch(returnType);
+    }
+
+    private static bool IsCSharpStandaloneKeywordAt(
+        string text,
+        int start,
+        string keyword)
+    {
+        if (start < 0 || start + keyword.Length > text.Length)
+            return false;
+        if (!text.AsSpan(start, keyword.Length).SequenceEqual(keyword.AsSpan()))
+            return false;
+
+        var before = start - 1;
+        var after = start + keyword.Length;
+        return (before < 0
+                || text[before] != '@'
+                    && !IsCSharpLambdaIdentifierPart(text[before]))
+            && (after >= text.Length || !IsCSharpLambdaIdentifierPart(text[after]));
+    }
+
+    private static bool TryReadCSharpLambdaIdentifierBackward(
+        string text,
+        ref int cursor,
+        out int tokenStart,
+        out int tokenEnd)
+    {
+        tokenEnd = cursor + 1;
+        while (cursor >= 0)
+        {
+            if (TrySkipCSharpUnicodeEscapeBackward(text, ref cursor))
+                continue;
+
+            var decodeStatus = Rune.DecodeLastFromUtf16(
+                text.AsSpan(0, cursor + 1),
+                out var rune,
+                out var charsConsumed);
+            if (decodeStatus != System.Buffers.OperationStatus.Done
+                || !IsCSharpLambdaIdentifierPart(rune))
+            {
+                break;
+            }
+
+            cursor -= charsConsumed;
+        }
+
+        if (cursor >= 0 && text[cursor] == '@')
+            cursor--;
+
+        tokenStart = cursor + 1;
+        return tokenStart < tokenEnd;
+    }
+
+    private static bool TrySkipCSharpUnicodeEscapeBackward(
+        string text,
+        ref int cursor)
+    {
+        if (TrySkipCSharpUnicodeEscapeBackward(text, ref cursor, 'U', 8))
+            return true;
+
+        return TrySkipCSharpUnicodeEscapeBackward(text, ref cursor, 'u', 4);
+    }
+
+    private static bool TrySkipCSharpUnicodeEscapeBackward(
+        string text,
+        ref int cursor,
+        char prefix,
+        int digitCount)
+    {
+        var slashIndex = cursor - digitCount - 1;
+        if (slashIndex < 0
+            || text[slashIndex] != '\\'
+            || text[slashIndex + 1] != prefix)
+        {
+            return false;
+        }
+
+        for (var i = slashIndex + 2; i <= cursor; i++)
+        {
+            if (!Uri.IsHexDigit(text[i]))
+                return false;
+        }
+
+        cursor = slashIndex - 1;
+        return true;
+    }
+
+    private static void SkipCSharpWhitespaceBackward(string text, ref int cursor)
+    {
+        while (cursor >= 0 && char.IsWhiteSpace(text[cursor]))
+            cursor--;
+    }
+
+    private static bool IsCSharpLambdaIdentifierPart(char ch) =>
+        char.IsSurrogate(ch) || IsCSharpLambdaIdentifierPart(new Rune(ch));
+
+    private static bool IsCSharpLambdaIdentifierPart(Rune rune) =>
+        Rune.GetUnicodeCategory(rune) is
+            System.Globalization.UnicodeCategory.UppercaseLetter or
+            System.Globalization.UnicodeCategory.LowercaseLetter or
+            System.Globalization.UnicodeCategory.TitlecaseLetter or
+            System.Globalization.UnicodeCategory.ModifierLetter or
+            System.Globalization.UnicodeCategory.OtherLetter or
+            System.Globalization.UnicodeCategory.LetterNumber or
+            System.Globalization.UnicodeCategory.NonSpacingMark or
+            System.Globalization.UnicodeCategory.SpacingCombiningMark or
+            System.Globalization.UnicodeCategory.DecimalDigitNumber or
+            System.Globalization.UnicodeCategory.ConnectorPunctuation or
+            System.Globalization.UnicodeCategory.Format;
+
     private static bool IsCSharpMultilineExpressionBodiedMember(string[] lines, int startLineIndex, int startColumn)
     {
         var lexState = new CSharpLexState();

@@ -427,6 +427,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - C# reflection-name extraction coverage keeps literal, constant-concatenation, dynamic, comment, and string-decoy cases in one source fixture so those parser boundaries share one symbol/reference pass.
 - C# BOM extraction keeps a simple leading-BOM import fixture plus one mixed-newline fixture that simultaneously covers leading and mid-file BOM handling across CRLF, bare CR, and LF boundaries; do not repeat separate extraction passes for newline subsets already present in the mixed fixture.
 - C# lambda-capture coverage keeps positive enclosing-local capture, parameter shadowing, and same-named-method isolation in one source fixture; a single capture assertion proves the negative regions did not leak.
+- C# static-lambda declaration regression coverage keeps stateful, typed/untyped, explicit-return, both async-modifier orders, Unicode/escaped-identifier, multiline, nested, and argument-position forms in one extractor pass. Preserve real static members/local functions, including generic, constructor, explicit-interface, and verbatim-type-name forms, and an assigned-lambda range/container assertion in that fixture, plus one CLI `symbols` corpus fixture for phantom-name checks (#4830).
 - Escaped-brace coverage for regular and verbatim interpolated C# strings shares one extraction fixture because both variants assert the same phantom-call exclusion.
 - Direct and nested interpolations inside C# raw strings share one source fixture and one extraction pass while retaining distinct container assertions.
 - C# nested-interpolation regression coverage keeps raw SQL, a completion template containing another interpolated string, following expression-bodied properties, same-line siblings, and enclosing-class range assertions in one fixture and extraction pass. A reader integration fixture reuses that lexical context around a nullable-generic `out`-parameter method and verifies its definition, outline, resolved reference, caller, and callee surfaces together.
@@ -434,6 +435,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Nested generic attribute forms extend that shared fixture instead of running a second parser pass solely for deeper angle-bracket nesting.
 - No-argument parameter attributes on methods, delegates, and lambdas share one C# fixture because all three exercise the same section-local parenthesis-depth rule.
 - Argument-bearing parameter attributes share one method fixture for inline and line-broken declaration layouts.
+- C# parameter and argument-list modifier coverage keeps multiline declaration and call sites for `out` / `ref` / `in` / `params` / `this` / `scoped`, multiple modifier fragments on one continuation line, final `)`-closing fragments, nested lambda arguments, `out var`, following generic types, ref returns, and ref structs in one extractor fixture. The indexed reader fixture separately proves raw `type_reference` queries exclude modifiers while resolved following-type edges remain graph-queryable.
 - Direct and `global::` static type qualifiers share one C# fixture while retaining per-container reference assertions.
 - Static qualifiers in using statements and field access share one consumer fixture and extraction pass.
 - Namespace-qualified and Pascal-cased instance-member chains share one qualifier fixture with a rightmost static type reference, so positive and negative qualifier outcomes are checked after one parse.
@@ -1312,6 +1314,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - C# reflection-name 抽出 coverage は、literal、定数連結、dynamic、comment、string decoy を1つの source fixture にまとめ、これらの parser boundary で1回の symbol/reference pass を共有します。
 - C# BOM 抽出は、単純な先頭 BOM import fixture と、CRLF・bare CR・LF 境界で先頭/mid-file BOM を同時に扱う1つの混在改行 fixture を維持します。混在 fixture に含まれる改行 subset ごとに抽出 pass を重複させないでください。
 - C# lambda capture coverage は、外側 local の正例、parameter shadowing、同名 method 間の分離を1つの source fixture にまとめます。capture が1件だけである assertion により、negative region からの漏れも同時に検証します。
+- C# static lambda の宣言回帰 coverage は、stateful、型あり/型なし、明示的戻り値型、両方の async modifier 順、Unicode/escape 識別子、複数行、入れ子、引数位置の各形式を1回の extractor pass にまとめます。同じ fixture で generic、constructor、明示的 interface、verbatim 型名を含む本物の static member / local function と、代入済み lambda の range / container assertion を維持し、phantom 名の確認には CLI `symbols` corpus fixture を1つ追加します（#4830）。
 - C# interpolated string の escaped-brace coverage は、通常形式と逐語形式で同じ phantom call 除外を検証するため、1回の抽出 fixture を共有します。
 - C# raw string 内の direct interpolation と nested interpolation は1つの source fixture と抽出 pass を共有し、container assertion は個別に維持します。
 - C# nested interpolation の regression coverage は、raw SQL、別の interpolated string を含む completion template、後続の expression-bodied property、same-line sibling、enclosing class range の assertion を1つの fixture と抽出 pass にまとめます。reader integration fixture では、その lexical context の後に nullable generic の `out` parameter method を置き、definition、outline、resolved reference、caller、callee の各 surface をまとめて検証します。
@@ -1319,6 +1322,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - nested generic attribute 形式も同じ共有 fixture に含め、山括弧の深い入れ子だけのために2回目の parser pass を実行しません。
 - method、delegate、lambda の no-argument parameter attribute は、同じ section-local parenthesis-depth 規則を通るため1つの C# fixture を共有します。
 - 引数付き parameter attribute は、inline と改行された declaration layout で1つの method fixture を共有します。
+- C# の parameter / argument-list modifier coverage は、`out` / `ref` / `in` / `params` / `this` / `scoped`、1つの continuation line 上にある複数の modifier fragment、末尾が `)` で閉じる fragment、nested lambda argument、`out var`、後続の generic type、ref return、ref struct の multiline declaration / call site を1つの extractor fixture で共有します。indexed reader fixture では、modifier が raw `type_reference` query に出ず、解決済みの後続型 edge が graph query 可能なままであることを別途固定します。
 - direct と `global::` の static type qualifier は、container ごとの reference assertion を維持しながら1つの C# fixture を共有します。
 - using statement と field access の static qualifier は、1つの consumer fixture と抽出 pass を共有します。
 - namespace qualifier と PascalCase の instance-member chain は rightmost static type reference と1つの qualifier fixture を共有し、1回の parse 後に正例と call 除外を検証します。
