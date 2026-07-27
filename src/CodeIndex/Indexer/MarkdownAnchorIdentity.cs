@@ -22,6 +22,7 @@ internal static class MarkdownAnchorIdentity
         if (anchor.Length == 0)
             return string.Empty;
 
+        anchor = WebUtility.HtmlDecode(anchor);
         try
         {
             anchor = Uri.UnescapeDataString(anchor);
@@ -79,75 +80,146 @@ internal static class MarkdownAnchorIdentity
 
     private static string FlattenHeadingInlineMarkup(string value)
     {
-        var decoded = WebUtility.HtmlDecode(value);
-        var builder = new StringBuilder(decoded.Length);
-        for (var index = 0; index < decoded.Length;)
+        var builder = new StringBuilder(value.Length);
+        AppendHeadingInlineText(value, builder);
+        return WebUtility.HtmlDecode(builder.ToString());
+    }
+
+    private static void AppendHeadingInlineText(string value, StringBuilder builder)
+    {
+        for (var index = 0; index < value.Length;)
         {
-            if (decoded[index] == '\\' && index + 1 < decoded.Length)
+            if (value[index] == '\\' && index + 1 < value.Length)
             {
-                builder.Append(decoded[index + 1]);
+                builder.Append(value[index + 1]);
                 index += 2;
                 continue;
             }
 
-            if (decoded[index] == '<' && TryFindHtmlTagEnd(decoded, index, out var tagEnd))
+            if (value[index] == '<' && TryFindHtmlTagEnd(value, index, out var tagEnd))
             {
                 index = tagEnd + 1;
                 continue;
             }
 
-            if (decoded[index] == '`')
+            if (value[index] == '`')
             {
                 var delimiterLength = 1;
-                while (index + delimiterLength < decoded.Length
-                       && decoded[index + delimiterLength] == '`')
+                while (index + delimiterLength < value.Length
+                       && value[index + delimiterLength] == '`')
                 {
                     delimiterLength++;
                 }
 
-                var closing = decoded.IndexOf(
+                var closing = value.IndexOf(
                     new string('`', delimiterLength),
                     index + delimiterLength,
                     StringComparison.Ordinal);
                 if (closing >= 0)
                 {
-                    builder.Append(decoded, index + delimiterLength, closing - index - delimiterLength);
+                    builder.Append(value, index + delimiterLength, closing - index - delimiterLength);
                     index = closing + delimiterLength;
                     continue;
                 }
             }
 
-            var labelStart = decoded[index] == '!'
-                && index + 1 < decoded.Length
-                && decoded[index + 1] == '['
+            if (value[index] == '_'
+                && TryFindClosingEmphasisDelimiter(value, index, out var emphasisEnd, out var emphasisLength))
+            {
+                AppendHeadingInlineText(
+                    value[(index + emphasisLength)..emphasisEnd],
+                    builder);
+                index = emphasisEnd + emphasisLength;
+                continue;
+            }
+
+            var labelStart = value[index] == '!'
+                && index + 1 < value.Length
+                && value[index + 1] == '['
                     ? index + 1
                     : index;
-            if (decoded[labelStart] == '['
-                && TryFindClosingDelimiter(decoded, labelStart, '[', ']', out var labelEnd))
+            if (value[labelStart] == '['
+                && TryFindClosingDelimiter(value, labelStart, '[', ']', out var labelEnd))
             {
-                builder.Append(FlattenHeadingInlineMarkup(decoded[(labelStart + 1)..labelEnd]));
+                AppendHeadingInlineText(value[(labelStart + 1)..labelEnd], builder);
                 index = labelEnd + 1;
-                if (index < decoded.Length
-                    && decoded[index] == '('
-                    && TryFindClosingDelimiter(decoded, index, '(', ')', out var destinationEnd))
+                if (index < value.Length
+                    && value[index] == '('
+                    && TryFindClosingDelimiter(value, index, '(', ')', out var destinationEnd))
                 {
                     index = destinationEnd + 1;
                 }
-                else if (index < decoded.Length
-                         && decoded[index] == '['
-                         && TryFindClosingDelimiter(decoded, index, '[', ']', out var referenceEnd))
+                else if (index < value.Length
+                         && value[index] == '['
+                         && TryFindClosingDelimiter(value, index, '[', ']', out var referenceEnd))
                 {
                     index = referenceEnd + 1;
                 }
                 continue;
             }
 
-            builder.Append(decoded[index]);
+            builder.Append(value[index]);
             index++;
         }
-
-        return builder.ToString();
     }
+
+    private static bool TryFindClosingEmphasisDelimiter(
+        string value,
+        int openingIndex,
+        out int closingIndex,
+        out int delimiterLength)
+    {
+        delimiterLength = 1;
+        while (openingIndex + delimiterLength < value.Length
+               && value[openingIndex + delimiterLength] == '_')
+        {
+            delimiterLength++;
+        }
+
+        closingIndex = -1;
+        var contentStart = openingIndex + delimiterLength;
+        if (contentStart >= value.Length
+            || char.IsWhiteSpace(value[contentStart])
+            || IsIntrawordUnderscore(value, openingIndex))
+        {
+            return false;
+        }
+
+        for (var index = contentStart; index < value.Length;)
+        {
+            if (value[index] != '_')
+            {
+                index++;
+                continue;
+            }
+
+            var runLength = 1;
+            while (index + runLength < value.Length
+                   && value[index + runLength] == '_')
+            {
+                runLength++;
+            }
+
+            if (runLength == delimiterLength
+                && index > contentStart
+                && !char.IsWhiteSpace(value[index - 1])
+                && !IsIntrawordUnderscore(value, index))
+            {
+                closingIndex = index;
+                return true;
+            }
+
+            index += runLength;
+        }
+
+        return false;
+    }
+
+    private static bool IsIntrawordUnderscore(string value, int index) =>
+        index > 0
+        && index + 1 < value.Length
+        && char.IsLetterOrDigit(value[index - 1])
+        && char.IsLetterOrDigit(value[index + 1]);
 
     private static bool TryFindClosingDelimiter(
         string value,
@@ -183,6 +255,9 @@ internal static class MarkdownAnchorIdentity
     private static bool TryFindHtmlTagEnd(string value, int openingIndex, out int tagEnd)
     {
         tagEnd = -1;
+        if (IsMarkdownAutolink(value, openingIndex))
+            return false;
+
         var index = openingIndex + 1;
         if (index >= value.Length)
             return false;
@@ -240,5 +315,21 @@ internal static class MarkdownAnchorIdentity
         }
 
         return false;
+    }
+
+    private static bool IsMarkdownAutolink(string value, int openingIndex)
+    {
+        var closing = value.IndexOf('>', openingIndex + 1);
+        if (closing < 0)
+            return false;
+
+        var target = value.AsSpan(openingIndex + 1, closing - openingIndex - 1);
+        if (target.IsEmpty || target.IndexOfAny(" \t\r\n") >= 0)
+            return false;
+
+        return target.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+               || target.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+               || target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
+               || target.IndexOf('@') > 0;
     }
 }

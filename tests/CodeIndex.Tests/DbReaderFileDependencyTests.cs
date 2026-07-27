@@ -129,10 +129,16 @@ public partial class DbReaderTests
             <a id="api.v2"></a>
             <a id="apiv2"></a>
             <a id="CaseID"></a>
+            <a id="A&amp;B"></a>
 
             ## [Linked API](https://example.test) &amp; `SDK` <span>Guide</span>
 
             [Setext API](https://example.test) &amp; <em>SDK</em>
+            ---
+
+            ## _Emphasized_ API
+
+            &lt;SDK&gt; _Guide_
             ---
             """);
         InsertIndexedFile(
@@ -156,8 +162,11 @@ public partial class DbReaderTests
             [plain](target.md#apiv2)
             [case-sensitive](target.md#Case%49D)
             [wrong-case](target.md#caseid)
+            [entity](target.md#A&amp;B)
             [inline-heading](target.md#linked-api-sdk-guide)
             [setext-heading](target.md#setext-api-sdk)
+            [emphasis-heading](target.md#emphasized-api)
+            [entity-heading](target.md#sdk-guide)
             [broken](target.md#missing-heading)
 
             ## Local target
@@ -203,6 +212,16 @@ public partial class DbReaderTests
             lang: "markdown",
             pathPatterns: ["docs/issue4846/target.md"],
             exact: true));
+        Assert.Single(_reader.GetDefinitions(
+            "emphasized-api",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
+        Assert.Single(_reader.GetDefinitions(
+            "sdk-guide",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
 
         using (var crossDocumentShape = _db.Connection.CreateCommand())
         {
@@ -238,8 +257,11 @@ public partial class DbReaderTests
                      "api.v2",
                      "apiv2",
                      "CaseID",
+                     "A&B",
                      "linked-api-sdk-guide",
                      "setext-api-sdk",
+                     "emphasized-api",
+                     "sdk-guide",
                  })
         {
             var reference = Assert.Single(

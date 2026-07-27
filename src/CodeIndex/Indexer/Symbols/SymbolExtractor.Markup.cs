@@ -385,6 +385,7 @@ public static partial class SymbolExtractor
         var fenceChar = '\0';
         var fenceLength = 0;
         var fenceSymbolIndex = -1;
+        var inHtmlComment = false;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -436,6 +437,7 @@ public static partial class SymbolExtractor
                 lines[i],
                 i + 1,
                 headingStack,
+                ref inHtmlComment,
                 ref symbols);
 
             if (i + 1 < lines.Length
@@ -529,32 +531,179 @@ public static partial class SymbolExtractor
         string line,
         int lineNumber,
         Stack<(int Level, int SymbolIndex)>? headingStack,
+        ref bool inHtmlComment,
         ref List<SymbolRecord>? symbols)
     {
-        if (!line.Contains("<a", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        foreach (Match match in Regex.EnumerateMatches(MarkdownExplicitAnchorRegex, line))
+        for (var index = 0; index < line.Length;)
         {
-            var valueGroup = match.Groups["double"].Success
-                ? match.Groups["double"]
-                : match.Groups["single"].Success
-                    ? match.Groups["single"]
-                    : match.Groups["bare"];
-            var identity = MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(valueGroup.Value);
-            if (identity.Length == 0)
+            if (inHtmlComment)
+            {
+                var commentEnd = line.IndexOf("-->", index, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return;
+                inHtmlComment = false;
+                index = commentEnd + 3;
+                continue;
+            }
+
+            if (line.AsSpan(index).StartsWith("<!--", StringComparison.Ordinal))
+            {
+                inHtmlComment = true;
+                index += 4;
+                continue;
+            }
+
+            if (line[index] == '`')
+            {
+                var delimiterLength = 1;
+                while (index + delimiterLength < line.Length
+                       && line[index + delimiterLength] == '`')
+                {
+                    delimiterLength++;
+                }
+
+                var closing = line.IndexOf(
+                    new string('`', delimiterLength),
+                    index + delimiterLength,
+                    StringComparison.Ordinal);
+                index = closing >= 0
+                    ? closing + delimiterLength
+                    : index + delimiterLength;
+                continue;
+            }
+
+            if (!IsMarkdownAnchorTagStart(line, index)
+                || !TryFindMarkdownTagEnd(line, index, out var tagEnd))
+            {
+                index++;
+                continue;
+            }
+
+            AddMarkdownExplicitAnchorTagSymbols(
+                fileId,
+                line,
+                lineNumber,
+                index,
+                tagEnd,
+                headingStack,
+                ref symbols);
+            index = tagEnd + 1;
+        }
+    }
+
+    private static bool IsMarkdownAnchorTagStart(string line, int index) =>
+        line[index] == '<'
+        && index + 2 < line.Length
+        && line[index + 1] is 'a' or 'A'
+        && (char.IsWhiteSpace(line[index + 2]) || line[index + 2] is '>' or '/');
+
+    private static bool TryFindMarkdownTagEnd(string line, int tagStart, out int tagEnd)
+    {
+        var quote = '\0';
+        for (var index = tagStart + 2; index < line.Length; index++)
+        {
+            var current = line[index];
+            if (quote != '\0')
+            {
+                if (current == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (current is '"' or '\'')
+            {
+                quote = current;
+                continue;
+            }
+
+            if (current == '>')
+            {
+                tagEnd = index;
+                return true;
+            }
+        }
+
+        tagEnd = -1;
+        return false;
+    }
+
+    private static void AddMarkdownExplicitAnchorTagSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        int tagStart,
+        int tagEnd,
+        Stack<(int Level, int SymbolIndex)>? headingStack,
+        ref List<SymbolRecord>? symbols)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        var index = tagStart + 2;
+        while (index < tagEnd)
+        {
+            while (index < tagEnd && (char.IsWhiteSpace(line[index]) || line[index] == '/'))
+                index++;
+            if (index >= tagEnd)
+                break;
+
+            var nameStart = index;
+            while (index < tagEnd && IsHtmlAttrNameChar(line[index]))
+                index++;
+            if (index == nameStart)
+            {
+                index++;
+                continue;
+            }
+
+            var attributeName = line.AsSpan(nameStart, index - nameStart);
+            while (index < tagEnd && char.IsWhiteSpace(line[index]))
+                index++;
+            if (index >= tagEnd || line[index] != '=')
+                continue;
+
+            index++;
+            while (index < tagEnd && char.IsWhiteSpace(line[index]))
+                index++;
+            if (index >= tagEnd)
+                break;
+
+            var quote = line[index] is '"' or '\'' ? line[index++] : '\0';
+            var valueStart = index;
+            if (quote == '\0')
+            {
+                while (index < tagEnd && !char.IsWhiteSpace(line[index]) && line[index] != '>')
+                    index++;
+            }
+            else
+            {
+                while (index < tagEnd && line[index] != quote)
+                    index++;
+            }
+
+            var valueEnd = index;
+            if (quote != '\0' && index < tagEnd)
+                index++;
+
+            if (!attributeName.Equals("id", StringComparison.OrdinalIgnoreCase)
+                && !attributeName.Equals("name", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var identity = MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(
+                line[valueStart..valueEnd]);
+            if (identity.Length == 0 || !identities.Add(identity))
                 continue;
 
             var symbol = new SymbolRecord
             {
                 FileId = fileId,
                 Kind = "anchor",
-                Name = valueGroup.Value,
+                Name = identity,
                 IdentityNameFolded = identity,
                 Line = lineNumber,
                 StartLine = lineNumber,
                 EndLine = lineNumber,
-                Signature = match.Value.Trim(),
+                Signature = line[tagStart..(tagEnd + 1)].Trim(),
             };
             if (headingStack is { Count: > 0 } && symbols != null)
             {
@@ -2584,10 +2733,6 @@ public static partial class SymbolExtractor
         }
         return lo + 1;
     }
-
-    private static readonly Regex MarkdownExplicitAnchorRegex = new(
-        @"<a\b[^>]*\s(?:id|name)\s*=\s*(?:""(?<double>[^""]+)""|'(?<single>[^']+)'|(?<bare>[^\s>]+))[^>]*>",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly string[] HtmlRawTextElementNames = ["script", "style", "textarea", "title"];
 

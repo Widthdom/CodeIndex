@@ -62,13 +62,15 @@ public partial class DbContext : IDisposable
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const int HdlGraphContractVersion = 1;
     public const string HdlGraphContractVersionMetaKey = "hdl_graph_contract_version";
-    // Version 4 (#4845) invalidates dependency-lock candidates written before resolution
-    // became file-local. Version 3 (#4825) previously invalidated C# type-reference
-    // candidates written before type-like kind and compatible generic-arity constraints.
-    // バージョン 4 (#4845) では、解決を file 内に限定する前に書かれた dependency-lock
-    // candidate を無効化する。バージョン 3 (#4825) では、それ以前に C# 型参照の
-    // type-like kind / 互換 generic arity 制約より前に書かれた candidate を無効化した。
-    public const int ReferenceIdentityContractVersion = 4;
+    // Version 5 (#4846) invalidates name-only Markdown candidates written before
+    // fragment resolution became document/path-scoped. Version 4 (#4845) previously
+    // invalidated dependency-lock candidates written before resolution became file-local,
+    // and version 3 (#4825) constrained C# type-reference candidates by kind and arity.
+    // バージョン 5 (#4846) では、Markdown fragment の解決を document/path 内に限定する
+    // 前に書かれた name-only candidate を無効化する。バージョン 4 (#4845) では、それ以前の
+    // dependency-lock candidate を file 内に限定し、バージョン 3 (#4825) では C# 型参照を
+    // kind と arity で制約した。
+    public const int ReferenceIdentityContractVersion = 5;
     public const string ReferenceIdentityContractVersionMetaKey = "reference_identity_contract_version";
     public static string GetDynamicReferenceGraphContractVersionMetaKey(string lang) =>
         $"dynamic_reference_graph_contract_version_{lang}";

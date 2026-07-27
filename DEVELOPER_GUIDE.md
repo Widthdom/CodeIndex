@@ -638,7 +638,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 |---|---|---|
 | `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
 | `add` | Dockerfile `ADD` destination paths | Dependency/file-flow search symbol |
-| `anchor` | Explicit Markdown HTML anchors, preserving exact ID case and punctuation | Definition target for path-scoped Markdown fragment references |
+| `anchor` | Explicit Markdown HTML anchors, preserving exact ID case and punctuation after HTML entity decoding | Definition target for path-scoped Markdown fragment references |
 | `annotation` | Annotation declarations or annotation-like language constructs | Metadata/search symbol |
 | `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
 | `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
@@ -3785,7 +3785,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 |---|---|---|
 | `accessor` | owning property から別 symbol として抽出される accessor declaration | Search/filter symbol |
 | `add` | Dockerfile `ADD` の destination path | dependency / file-flow search symbol |
-| `anchor` | ID の大文字小文字と句読点を正確に保持する Markdown 内の明示的な HTML anchor | path に限定した Markdown fragment reference の定義対象 |
+| `anchor` | HTML entity の decode 後も ID の大文字小文字と句読点を正確に保持する Markdown 内の明示的な HTML anchor | path に限定した Markdown fragment reference の定義対象 |
 | `annotation` | annotation declaration または annotation-like な言語構文 | Metadata/search symbol |
 | `async_function` | JavaScript / TypeScript の async function declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `async_generator` | JavaScript / TypeScript の async generator declaration | Callable definition。reference row 経由で callers/callees に参加 |

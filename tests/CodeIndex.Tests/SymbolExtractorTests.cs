@@ -5939,10 +5939,24 @@ public partial class SymbolExtractorTests
             <a id="api.v2"></a>
             <a id="apiv2"></a>
             <a id="CaseID"></a>
+            `<a id="fake-code"></a>`
+            <!-- <a id="fake-comment"></a> -->
+            <!--
+            <a id="fake-multiline-comment"></a>
+            -->
+            <a id="first" name="legacy"></a>
+            <a id="A&amp;B"></a>
 
             ## [Linked API](https://example.test) &amp; `SDK` <span>Guide</span>
 
             [Setext API](https://example.test) &amp; <em>SDK</em>
+            ---
+
+            ## _Emphasized_ API
+
+            ## foo_bar
+
+            &lt;SDK&gt; _Guide_
             ---
             """;
 
@@ -5958,13 +5972,16 @@ public partial class SymbolExtractorTests
                 "𠮷野-api",
                 "linked-api-sdk-guide",
                 "setext-api-sdk",
+                "emphasized-api",
+                "foo_bar",
+                "sdk-guide",
             ],
             headings.Select(symbol => symbol.IdentityNameFolded).ToArray());
         Assert.Equal(
-            ["custom.anchor", "api.v2", "apiv2", "CaseID"],
+            ["custom.anchor", "api.v2", "apiv2", "CaseID", "first", "legacy", "A&B"],
             anchors.Select(anchor => anchor.Name).ToArray());
         Assert.Equal(
-            ["custom.anchor", "api.v2", "apiv2", "CaseID"],
+            ["custom.anchor", "api.v2", "apiv2", "CaseID", "first", "legacy", "A&B"],
             anchors.Select(anchor => anchor.IdentityNameFolded).ToArray());
         Assert.All(anchors, anchor => Assert.Equal("𠮷野 API", anchor.ContainerName));
     }

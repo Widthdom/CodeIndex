@@ -1108,7 +1108,8 @@ public partial class ReferenceExtractorTests
         const string content = """
             # Deep Details
 
-            See [local](#Deep-Details) and [guide](USER_GUIDE.md#Error-Codes).
+            See [local](#Deep-Details), [guide](USER_GUIDE.md#Error-Codes),
+            and [entity](#A&amp;B).
             """;
 
         var symbols = SymbolExtractor.Extract(1, "markdown", content);
@@ -1126,6 +1127,10 @@ public partial class ReferenceExtractorTests
             && reference.SymbolName == "Error-Codes"
             && reference.IdentitySymbolNameFolded == "error-codes"
             && reference.TargetQualifier == "USER_GUIDE.md");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "A&B"
+            && reference.IdentitySymbolNameFolded == "ab");
     }
 
     [Fact]

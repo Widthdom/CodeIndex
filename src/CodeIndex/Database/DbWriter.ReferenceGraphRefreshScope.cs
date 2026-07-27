@@ -247,6 +247,22 @@ public partial class DbWriter
               source_file.lang = dirty_name.lang
               OR (source_file.lang = 'ambiguous_m' AND dirty_name.lang IN ('matlab', 'objc'))
           );
+
+        -- Explicit Markdown anchor identities preserve case and punctuation, while the
+        -- indexed reference fold also carries the equivalent heading slug. Use that slug
+        -- for the indexed seek, then require the exact raw identity.
+        -- Markdown の明示 anchor は大文字小文字と句読点を保持するため、heading slug を
+        -- index seek に使った後で raw identity の完全一致を要求する。
+        INSERT OR IGNORE INTO temp.{ReferenceGraphDirtyReferencesTable}(reference_id)
+        SELECT r.id
+        FROM temp.{ReferenceGraphDirtyNamesTable} AS dirty_name
+        CROSS JOIN symbol_references AS r INDEXED BY idx_symbol_refs_symbol_name_folded
+        JOIN files AS source_file ON source_file.id = r.file_id
+        WHERE dirty_name.lang = 'markdown'
+          AND source_file.lang = 'markdown'
+          AND r.reference_kind = 'reference'
+          AND r.symbol_name_folded = markdown_normalize_fragment(dirty_name.name_folded)
+          AND r.symbol_name = dirty_name.name_folded COLLATE BINARY;
         """;
 
     private const string MaterializeReferenceGraphLookupNamesSql = $"""
