@@ -324,6 +324,47 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public async Task InitializedNotification_LateRootsRefreshRetainsStdioResourcesAfterBoundedDrain_Issue4848()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion())
+        {
+            InFlightDrainGracePeriod = TimeSpan.Zero,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        var inputPayload = Encoding.UTF8.GetBytes(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"roots":{}}}}"""
+            + "\n"
+            + """{"jsonrpc":"2.0","method":"notifications/initialized"}"""
+            + "\n");
+        var allowEof = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var input = new GatedEofReadStream(inputPayload, allowEof.Task);
+        var output = new BlockingSecondWriteStream();
+        var transport = new StdioMcpTransport(input, output, bufferSize: 1024 * 1024);
+
+        try
+        {
+            var runTask = server.RunAsync(transport, CancellationToken.None);
+            await output.SecondWriteStarted.WaitAsync(TestDeterminism.DefaultTimeout);
+            allowEof.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+
+            await transport.DisposeAsync();
+            Assert.False(output.IsDisposed);
+        }
+        finally
+        {
+            allowEof.TrySetResult();
+            output.ReleaseSecondWrite();
+            await transport.DisposeAsync();
+        }
+
+        await TestDeterminism.WaitUntilAsync(
+            () => output.IsDisposed,
+            "stdio output disposal after the late roots refresh released its writer",
+            TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
     public void Initialize_CapturesClientCapabilitiesAndRootsForSessionStatus()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"codex","version":"5.0"},"capabilities":{"experimental":{"progress":true}},"rootUri":"file:///workspace","roots":[{"uri":"file:///workspace/src"}]}}""")!;
@@ -1580,6 +1621,54 @@ public partial class McpServerTests
         {
             lock (_transcriptGate)
                 _transcript.Add(entry);
+        }
+    }
+
+    private sealed class GatedEofReadStream(byte[] payload, Task allowEof) : MemoryStream(payload)
+    {
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            var bytesRead = await base.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (bytesRead != 0)
+                return bytesRead;
+
+            await allowEof.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+    }
+
+    private sealed class BlockingSecondWriteStream : MemoryStream
+    {
+        private readonly TaskCompletionSource _secondWriteStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseSecondWrite =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _writeCount;
+
+        internal Task SecondWriteStarted => _secondWriteStarted.Task;
+        internal bool IsDisposed { get; private set; }
+
+        internal void ReleaseSecondWrite() => _releaseSecondWrite.TrySetResult();
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _writeCount) == 2)
+            {
+                _secondWriteStarted.TrySetResult();
+                await _releaseSecondWrite.Task.ConfigureAwait(false);
+            }
+
+            await base.WriteAsync(buffer, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
         }
     }
 }
