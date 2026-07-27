@@ -584,6 +584,112 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCallableContainment_PrefersInnermostCallableRanges_Issue4840()
+    {
+        const string content = """
+            public class Host
+            {
+                [Fact]
+                public void BlockTest()
+                {
+                    TestCall();
+
+                    void Local()
+                    {
+                        LocalCall();
+
+                        void Nested()
+                        {
+                            NestedCall();
+                        }
+                    }
+
+                    Func<int> blockLambda = () =>
+                    {
+                        LambdaCall();
+                        return 1;
+                    };
+                }
+
+                public int ExpressionBody() => ExpressionCall();
+
+                public class Inner
+                {
+                    public void NestedTypeMethod()
+                    {
+                        NestedTypeCall();
+                    }
+                }
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("csharp", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Local"
+            && symbol.ContainerKind == "test.method"
+            && symbol.ContainerName == "BlockTest");
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Nested"
+            && symbol.ContainerKind == "function"
+            && symbol.ContainerName == "Local");
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "lambda"
+            && symbol.Name == "blockLambda"
+            && symbol.ContainerKind == "test.method"
+            && symbol.ContainerName == "BlockTest");
+
+        AssertReferenceContainer("TestCall", "test.method", "BlockTest");
+        AssertReferenceContainer("LocalCall", "function", "Local");
+        AssertReferenceContainer("NestedCall", "function", "Nested");
+        AssertReferenceContainer("LambdaCall", "test.method", "BlockTest");
+        AssertReferenceContainer("ExpressionCall", "function", "ExpressionBody");
+        AssertReferenceContainer("NestedTypeCall", "function", "NestedTypeMethod");
+
+        void AssertReferenceContainer(string symbolName, string containerKind, string containerName)
+        {
+            var reference = Assert.Single(references.Where(r =>
+                r.SymbolName == symbolName
+                && r.ReferenceKind == "call"));
+            Assert.Equal(containerKind, reference.ContainerKind);
+            Assert.Equal(containerName, reference.ContainerName);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharpMultilinePrimaryCtorAttribute_UsesDeclaredTypeContainer_Issue4840Review()
+    {
+        // A primary-constructor declaration can begin before its body range. Attribute calls on
+        // that declaration line still belong to the declared type, not the outer scope.
+        // primary constructor 宣言は本体範囲より前から始まり得る。宣言行の属性呼び出しも
+        // 外側スコープではなく、宣言された型に所属する。
+        const string content = """
+            [Attr(Helper.Get())] public record Child(
+                int Value)
+                : Parent(Value)
+            {
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("csharp", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "class" && symbol.Name == "Child");
+        AssertReferenceContainer("Attr", "class", "Child");
+        AssertReferenceContainer("Get", "class", "Child");
+        AssertReferenceContainer("Parent", "function", "Child");
+
+        void AssertReferenceContainer(string symbolName, string containerKind, string containerName)
+        {
+            var reference = Assert.Single(references.Where(r => r.SymbolName == symbolName));
+            Assert.Equal(containerKind, reference.ContainerKind);
+            Assert.Equal(containerName, reference.ContainerName);
+        }
+    }
+
+    [Fact]
     public void Extract_CsharpSameLineDefinitionCalls_KeepRecursiveAndDelegatedReferences()
     {
         // issue #252: same-line definition suppression must drop only the declarator token,
@@ -6299,6 +6405,31 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, r =>
             (r.SymbolName == "Attr" || r.SymbolName == "Get")
             && r.ContainerKind == "function" && r.ContainerName == "Child");
+    }
+
+    [Fact]
+    public void Extract_CSharpPrimaryCtor_SameLineExplicitCtorCallStaysOnExplicitCtor_Issue4840Review()
+    {
+        // A real constructor after the primary-constructor header can share the type's name and
+        // physical line. It must not be mistaken for the synthetic primary constructor when
+        // resolving calls after the header-closing brace.
+        // primary constructor のヘッダー後にある実コンストラクタは型名と物理行を共有し得る。
+        // ヘッダー終端より後の呼び出しでは、合成 primary constructor と誤認してはならない。
+        const string content = """
+            public class Parent(int value);
+            public record Child(int Value) : Parent(Value) { public Child() : this(0) { BodyCall(); } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
+        Assert.Equal("function", parentRef.ContainerKind);
+        Assert.Equal("Child", parentRef.ContainerName);
+
+        var bodyCallRef = Assert.Single(references, r => r.SymbolName == "BodyCall");
+        Assert.Equal("function", bodyCallRef.ContainerKind);
+        Assert.Equal("Child", bodyCallRef.ContainerName);
     }
 
     [Fact]

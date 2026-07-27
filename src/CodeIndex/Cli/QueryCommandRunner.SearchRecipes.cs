@@ -940,6 +940,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
+        if (options.IncludeGenerated)
+            args.Add("--include-generated");
         if (options.Since.HasValue)
             AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
@@ -1317,23 +1319,26 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var results = reader.Search(
-                options.Query!,
-                options.Limit,
-                options.Lang,
-                options.RawFts,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
-                !options.NoDedup,
-                options.Since,
+            var resultLimit = GetAdHocIssueDraftResultLimit(options);
+            var sourceTotalCountAuthoritative = options.GuardFilters.Count == 0;
+            var sourceFetchLimit = sourceTotalCountAuthoritative
+                ? int.MaxValue
+                : GetSearchRecipeFetchLimit(options, resultLimit);
+            var results = ReadSearchResults(
+                reader,
+                options,
                 exact,
-                options.Prefix,
-                !options.NoVisibilityRank,
-                guardFilters: options.GuardFilters,
-                guardWindow: options.GuardWindow,
-                guardScope: options.GuardScope);
-            var rows = BuildSearchDisplayRows(results, options, exact);
+                sourceFetchLimit,
+                guardRequestedLimit: resultLimit);
+            var sourceRows = BuildSearchDisplayRows(results, options, exact);
+            var outputSelection = ApplySearchOutputSelection(
+                sourceRows,
+                options,
+                resultLimit,
+                sourceTotalCountAuthoritative);
+            var rows = outputSelection.Rows;
+            var omittedCount = Math.Max(0, outputSelection.OriginalCount - rows.Count);
+            var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             var queryResult = new SearchRecipeQueryResultJsonResult(
                 "ad-hoc",
                 options.Query!,
@@ -1356,27 +1361,35 @@ public static partial class QueryCommandRunner
                 null,
                 rows.Count,
                 rows.Count,
-                rows.Count,
-                0,
-                null,
-                null,
-                options.Limit,
-                0,
+                outputSelection.OriginalCount,
+                omittedCount,
+                selectionReason,
+                selectionReason != null ? outputSelection.SelectionOmittedCount : null,
+                resultLimit,
+                omittedCount,
                 BuildSearchRecipeTopFiles(rows),
-                false,
+                outputSelection.Truncated || !sourceTotalCountAuthoritative,
                 null,
                 rows.Select(row => row.Compact).ToList(),
-                rows.Count,
-                true,
-                null,
-                rows.Count,
-                rows.Count,
-                0,
-                0,
-                []);
+                outputSelection.SourceTotal,
+                outputSelection.SourceTotalAuthoritative,
+                outputSelection.SourceTotalAuthoritative ? null : outputSelection.SourceTotal,
+                outputSelection.SelectedTotal,
+                outputSelection.Returned,
+                outputSelection.SelectorOmittedCount,
+                outputSelection.LimitOmittedCount,
+                outputSelection.Selectors);
             var drafts = rows.Count == 0
                 ? []
-                : new List<SearchIssueDraftJsonResult> { ToAdHocSearchIssueDraft(options, queryResult, preflight) };
+                : new List<SearchIssueDraftJsonResult>
+                {
+                    ToAdHocSearchIssueDraft(
+                        options,
+                        queryResult,
+                        preflight,
+                        sourceTotalCountAuthoritative,
+                        sourceTotalCountAuthoritative ? null : sourceFetchLimit)
+                };
 
             var json = JsonSerializer.Serialize(
                 new SearchIssueDraftExportJsonResult(
@@ -1404,6 +1417,11 @@ public static partial class QueryCommandRunner
                 "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
         });
     }
+
+    private static int GetAdHocIssueDraftResultLimit(QueryCommandOptions options)
+        => options.TotalLimit.HasValue
+            ? Math.Min(options.Limit, options.TotalLimit.Value)
+            : options.Limit;
 
     private static List<SearchRecipeQueryResultJsonResult> CollectSearchRecipeQueryResults(
         DbReader reader,
@@ -2419,7 +2437,9 @@ public static partial class QueryCommandRunner
     private static SearchIssueDraftJsonResult ToAdHocSearchIssueDraft(
         QueryCommandOptions options,
         SearchRecipeQueryResultJsonResult queryResult,
-        IssueDuplicatePreflight preflight)
+        IssueDuplicatePreflight preflight,
+        bool sourceTotalCountAuthoritative,
+        int? sourceFetchLimit)
     {
         var labels = BuildAdHocIssueDraftLabels(options);
         var title = BuildAdHocSearchIssueDraftTitle(options);
@@ -2433,7 +2453,14 @@ public static partial class QueryCommandRunner
         var missingLabels = BuildMissingIssueDraftLabels(labels, preflight);
         var labelWarning = BuildIssueDraftLabelWarning(missingLabels, preflight);
         var duplicateProbeTriage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, 0);
-        var duplicateProbeBody = BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths, evidence, duplicateProbeTriage, options);
+        var duplicateProbeBody = BuildAdHocSearchIssueDraftBody(
+            queryResult,
+            evidencePaths,
+            evidence,
+            duplicateProbeTriage,
+            options,
+            sourceTotalCountAuthoritative,
+            sourceFetchLimit);
         var duplicateMatches = preflight.FindMatches(
             title,
             labels,
@@ -2450,7 +2477,14 @@ public static partial class QueryCommandRunner
             evidencePaths,
             evidence,
             triage,
-            BuildAdHocSearchIssueDraftBody(queryResult, evidencePaths, evidence, triage, options),
+            BuildAdHocSearchIssueDraftBody(
+                queryResult,
+                evidencePaths,
+                evidence,
+                triage,
+                options,
+                sourceTotalCountAuthoritative,
+                sourceFetchLimit),
             new SearchIssueDraftSourceJsonResult(
                 null,
                 null,
@@ -2462,8 +2496,8 @@ public static partial class QueryCommandRunner
                 queryResult.Count,
                 queryResult.ResultLimit,
                 queryResult.OmittedCount,
-                null,
-                null,
+                queryResult.SelectionReason,
+                queryResult.SelectionOmittedCount,
                 queryResult.MinimumOmittedResultCount,
                 queryResult.Truncated,
                 queryResult.NextCursor,
@@ -2474,7 +2508,16 @@ public static partial class QueryCommandRunner
                 queryResult.Returned,
                 queryResult.SelectorOmittedCount,
                 queryResult.LimitOmittedCount,
-                queryResult.Selectors),
+                queryResult.Selectors,
+                sourceTotalCountAuthoritative ? queryResult.MinimumMatchedCount : null,
+                queryResult.Count,
+                options.Limit,
+                options.TotalLimit,
+                options.FirstPerFile,
+                options.SampleSize,
+                queryResult.MinimumMatchedCount,
+                sourceTotalCountAuthoritative,
+                sourceFetchLimit),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
                 preflight.Checked,
                 duplicateMatches.Count,
@@ -2802,6 +2845,10 @@ public static partial class QueryCommandRunner
 
         if (options.DbPathExplicit)
             AddReplayValueOption(args, "--db", options.DbPath);
+        if (options.SourceOnly)
+            args.Add("--source-only");
+        else if (options.AuditScopeExplicit)
+            AddReplayValueOption(args, "--audit-scope", options.AuditScope);
         if (!string.IsNullOrWhiteSpace(options.Lang))
             AddReplayValueOption(args, "--lang", options.Lang);
         foreach (var pathPattern in options.PathPatterns)
@@ -2810,6 +2857,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
+        if (options.IncludeGenerated)
+            args.Add("--include-generated");
         if (options.Since.HasValue)
             AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
@@ -2829,9 +2878,25 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
         if (options.GuardFilters.Count > 0 && options.GuardScope != SearchGuardScope.Window)
             AddReplayValueOption(args, "--guard-scope", FormatSearchGuardScope(options.GuardScope));
+        if (options.ExcludeComments)
+            args.Add("--exclude-comments");
+        if (options.ExcludeStrings)
+            args.Add("--exclude-strings");
+        if (options.ExcludeFixtures)
+            args.Add("--exclude-fixtures");
+        foreach (var origin in options.MatchOrigins)
+            AddReplayValueOption(args, "--origin", origin);
+        foreach (var origin in options.ExcludeOrigins)
+            AddReplayValueOption(args, "--exclude-origin", origin);
+        foreach (var kind in options.ResultKinds)
+            AddReplayValueOption(args, "--result-kind", kind);
+        if (options.TotalLimit.HasValue)
+            AddReplayValueOption(args, "--total-limit", options.TotalLimit.Value.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
         AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
+        if (options.MaxJsonBytes.HasValue)
+            AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
         if (!string.IsNullOrWhiteSpace(options.OpenIssuesPath))
             AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
         if (!string.IsNullOrWhiteSpace(options.OpenIssuesRepository))
@@ -3092,7 +3157,9 @@ public static partial class QueryCommandRunner
         IReadOnlyList<string> evidencePaths,
         IReadOnlyList<SearchIssueDraftEvidenceJsonResult> evidence,
         IssueDraftTriageMetadataJsonResult triage,
-        QueryCommandOptions options)
+        QueryCommandOptions options,
+        bool sourceTotalCountAuthoritative,
+        int? sourceFetchLimit)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Summary");
@@ -3129,12 +3196,30 @@ public static partial class QueryCommandRunner
         sb.AppendLine("## Search metadata");
         sb.AppendLine("- draft_id: `search/ad-hoc`");
         sb.AppendLine($"- result_count: `{queryResult.Count}`");
+        sb.AppendLine($"- source_total_count: `{(sourceTotalCountAuthoritative ? queryResult.MinimumMatchedCount.ToString(CultureInfo.InvariantCulture) : "unknown")}`");
+        sb.AppendLine($"- source_minimum_count: `{queryResult.MinimumMatchedCount}`");
+        sb.AppendLine($"- source_total_count_authoritative: `{sourceTotalCountAuthoritative.ToString().ToLowerInvariant()}`");
+        if (sourceFetchLimit.HasValue)
+            sb.AppendLine($"- source_fetch_limit: `{sourceFetchLimit.Value.ToString(CultureInfo.InvariantCulture)}`");
+        sb.AppendLine($"- returned_count: `{queryResult.Count}`");
+        sb.AppendLine($"- limit_per_query: `{options.Limit}`");
+        sb.AppendLine($"- total_limit: `{FormatNullableIssueDraftSelectionValue(options.TotalLimit)}`");
+        sb.AppendLine($"- first_per_file: `{options.FirstPerFile.ToString().ToLowerInvariant()}`");
+        sb.AppendLine($"- sample: `{FormatNullableIssueDraftSelectionValue(options.SampleSize)}`");
         sb.AppendLine($"- result_limit: `{queryResult.ResultLimit}`");
         sb.AppendLine($"- omitted_count: `{queryResult.OmittedCount}`");
+        if (!string.IsNullOrWhiteSpace(queryResult.SelectionReason))
+        {
+            sb.AppendLine($"- selection_reason: `{queryResult.SelectionReason}`");
+            sb.AppendLine($"- selection_omitted_count: `{queryResult.SelectionOmittedCount.GetValueOrDefault()}`");
+        }
         sb.AppendLine($"- minimum_omitted_result_count: `{queryResult.MinimumOmittedResultCount}`");
         sb.AppendLine($"- exact_substring: `{queryResult.ExactSubstring.ToString().ToLowerInvariant()}`");
         return sb.ToString().TrimEnd();
     }
+
+    private static string FormatNullableIssueDraftSelectionValue(int? value)
+        => value?.ToString(CultureInfo.InvariantCulture) ?? "null";
 
     private static string BuildAdHocSearchIssueDraftReplayCommand(QueryCommandOptions options)
     {
@@ -3142,6 +3227,7 @@ public static partial class QueryCommandRunner
         {
             "cdidx",
             "search",
+            "--query",
             options.Query!,
             "--format",
             OutputFormatIssueDrafts,
@@ -3151,6 +3237,8 @@ public static partial class QueryCommandRunner
 
         if (options.DbPathExplicit)
             AddReplayValueOption(args, "--db", options.DbPath);
+        if (options.SourceOnly)
+            args.Add("--source-only");
         if (!string.IsNullOrWhiteSpace(options.Lang))
             AddReplayValueOption(args, "--lang", options.Lang);
         foreach (var pathPattern in options.PathPatterns)
@@ -3159,25 +3247,50 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
+        if (options.IncludeGenerated)
+            args.Add("--include-generated");
         if (options.Since.HasValue)
             AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
             args.Add("--no-dedup");
         if (options.NoVisibilityRank)
             args.Add("--no-visibility-rank");
+        if (options.RawFts)
+            args.Add("--fts");
         if (options.Exact)
             args.Add("--exact");
         if (options.ExactSubstring)
             args.Add("--exact-substring");
+        if (options.TokenBoundary)
+            args.Add("--token-boundary");
+        if (options.Prefix)
+            args.Add("--prefix");
         foreach (var guardFilter in options.GuardFilters)
             AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
         if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
             AddReplayValueOption(args, "--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
         if (options.GuardFilters.Count > 0 && options.GuardScope != SearchGuardScope.Window)
             AddReplayValueOption(args, "--guard-scope", FormatSearchGuardScope(options.GuardScope));
+        if (options.ExcludeComments)
+            args.Add("--exclude-comments");
+        if (options.ExcludeStrings)
+            args.Add("--exclude-strings");
+        if (options.ExcludeFixtures)
+            args.Add("--exclude-fixtures");
+        foreach (var origin in options.MatchOrigins)
+            AddReplayValueOption(args, "--origin", origin);
+        foreach (var origin in options.ExcludeOrigins)
+            AddReplayValueOption(args, "--exclude-origin", origin);
+        foreach (var kind in options.ResultKinds)
+            AddReplayValueOption(args, "--result-kind", kind);
+        if (options.TotalLimit.HasValue)
+            AddReplayValueOption(args, "--total-limit", options.TotalLimit.Value.ToString(CultureInfo.InvariantCulture));
+        AddSearchRecipeRowSelectionReplayOptions(args, options);
         AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
         AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
+        if (options.MaxJsonBytes.HasValue)
+            AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
         if (!string.IsNullOrWhiteSpace(options.OpenIssuesPath))
             AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
         if (!string.IsNullOrWhiteSpace(options.OpenIssuesRepository))

@@ -104,6 +104,8 @@ The default NDJSON output of `search`, `symbols`, and `files` always ends with a
 
 Recipe/audit compact pagination returns an opaque `next_cursor`. Replay it unchanged with the same child query and filters as `--cursor <next_cursor>`; a search-score cursor can begin with `-`, and that leading minus is part of the cursor value.
 
+Ad-hoc `search --format issue-drafts` computes `source_total_count`, `returned_count`, `omitted_count`, and `truncated` from the complete filtered population before applying `--first-per-file`, deterministic `--sample`, and the effective `--limit` / `--total-limit`. Guarded searches retain their candidate safety cap instead of attempting an unbounded count; they omit `source_total_count` and expose `source_minimum_count`, `source_total_count_authoritative: false`, and `source_fetch_limit`. Source metadata also records selector values, and the shell-safe replay command preserves every result-changing selector so rerunning it reproduces the same selected evidence.
+
 When the byte cap omits rows, these commands return partial-result exit code `11`; pass `--allow-partial` to opt into exit code `0` while retaining the same terminal metadata. Ordinary `--limit` truncation remains a successful, explicitly described stream. Array and compact outputs keep their documented whole-response behavior; check `cdidx <command> --help` before relying on partial output.
 
 High-volume `definition`, `find`, `status`, `hotspots`, `references`, `callers`, `callees`, `impact`, and `map` responses also support an opt-in bounded envelope through `--fields`, `--cursor`, compact output where advertised, and a total `--max-json-bytes` budget. Its metadata reports returned/total/omitted counts and an opaque `next_cursor`; replay that cursor with the same query, filters, and sort arguments. The response also exposes its 10,000-row safety window and reports when that window is exhausted instead of emitting an unusable cursor. Existing compact location responses retain their top-level keys and lightweight `file` / `line` rows while adding the shared metadata; `refs` / `stats` aliases and matching read-only `batch` children use the same envelope and hard cap. `hotspots` and `impact` page their active primary collection, while dotted projections such as `callers.path,callers.depth` select nested rows and report that collection's total. `map --sections` selects whole response sections; a bounded projection such as `--fields top_files.path` instead pages that section's rows and avoids building unrelated ranked sections. For `definition --body`, `body`, `body_content`, and `all` retain the explicit body; projections that exclude it avoid materializing body text.
@@ -137,6 +139,8 @@ membership checks reuse file-local lookup sets instead of rescanning every
 extracted symbol for each call site.
 C# declaration-container resolution and GitHub Actions job ownership likewise
 use name-indexed candidates instead of a full container scan per reference.
+For C#, symbol and reference ownership prefers the narrowest active callable,
+including test methods and nested local functions, before the enclosing type.
 Dense Python import, GitHub Actions dependency, JSON path, and Fortran procedure
 lists are scanned in place instead of allocating temporary split arrays.
 Python PEP 695 aliases and `TypeAlias` / `NewType` declarations are persisted as
@@ -515,6 +519,8 @@ JSON 形式では `--max-json-bytes` を文書全体の UTF-8 byte cap として
 
 recipe / audit の compact pagination は opaque な `next_cursor` を返します。同じ child query と filter を指定し、値を変更せず `--cursor <next_cursor>` として再利用してください。search-score cursor は `-` で始まる場合があり、その先頭のマイナス記号も cursor 値の一部です。
 
+ad-hoc の `search --format issue-drafts` は、filter 済み母集団全体から `source_total_count`、`returned_count`、`omitted_count`、`truncated` を算出してから、`--first-per-file`、決定的な `--sample`、有効な `--limit` / `--total-limit` を適用します。guard 付き検索は非上限 count を試みず candidate safety cap を維持し、`source_total_count` を省略して `source_minimum_count`、`source_total_count_authoritative: false`、`source_fetch_limit` を公開します。source metadata は selector 値も保持し、shell-safe な replay command は結果を変えるすべての selector を維持するため、再実行時に同じ evidence 集合を再現できます。
+
 byte cap により行を省略した場合、これらのコマンドは partial-result 終了コード `11` を返します。同じ終端 metadata を維持したまま終了コード `0` を明示的に許容するには `--allow-partial` を指定します。通常の `--limit` による切り詰めは、理由が明示された成功 stream のままです。array / compact 出力は文書化済みの whole-response 挙動を維持します。部分出力へ依存する前に `cdidx <command> --help` を確認してください。
 
 高ボリュームな `definition`、`find`、`status`、`hotspots`、`references`、`callers`、`callees`、`impact`、`map` の応答は、`--fields`、`--cursor`、対応 command の compact 出力、応答全体に対する `--max-json-bytes` により opt-in の bounded envelope も利用できます。metadata は返却 / 総 / 省略件数と opaque な `next_cursor` を返します。次ページでは同じ query、filter、sort 引数とともにその cursor を再利用してください。応答は 10,000 row の safety window も公開し、上限到達時には利用不能な cursor を返さず、window の消費完了を報告します。既存の compact location 応答はトップレベル key と軽量な `file` / `line` row を維持したまま共通 metadata を追加し、`refs` / `stats` alias と対応する read-only `batch` 子 command にも同じ envelope と hard cap を適用します。`hotspots` と `impact` は active な主要 collection をページングし、`callers.path,callers.depth` のような dotted projection は nested row とその collection の総件数を返します。`map --sections` は section 全体を選びますが、`--fields top_files.path` のような bounded projection はその section の row をページングし、無関係な ranking section を構築しません。`definition --body` では `body`、`body_content`、`all` が明示的な body を保持し、body を除外する projection では本文を取得しません。
@@ -546,6 +552,8 @@ reference extraction でも、C# property と Python import / class の反復 me
 call site ごとに全 extracted symbol を再走査せず、file-local な lookup set を再利用します。
 C# declaration-container 解決と GitHub Actions の job ownership も同様に、reference ごとの
 全 container 走査ではなく name-indexed candidate を使います。
+C# の symbol / reference ownership は、enclosing type より先に、test method や nested local
+function を含む最も狭い active callable を選びます。
 密な Python import、GitHub Actions dependency、JSON path、Fortran procedure list は、
 一時的な split array を作らず入力上で直接走査します。
 Python の PEP 695 alias と `TypeAlias` / `NewType` declaration は `typealias`、
