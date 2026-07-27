@@ -173,7 +173,7 @@ public static partial class QueryCommandRunner
                     inspectLimit,
                     options.Lang,
                     options.IncludeBody,
-                    options.PathPatterns,
+                    pathPatterns: null,
                     options.ExcludePaths,
                     options.ExcludeTests,
                     options.MaxLineWidth,

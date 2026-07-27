@@ -30,13 +30,16 @@ public static partial class QueryCommandRunner
     private static bool TryWriteParseError(QueryCommandOptions options, string commandName, JsonSerializerOptions? jsonOptions)
     {
         var dbPathError = BuildExplicitDbPathParseError(options);
-        if (options.ParseError == null && dbPathError == null)
+        var inspectCursorScopeError = BuildInspectCursorScopeParseError(options, commandName);
+        if (options.ParseError == null && dbPathError == null && inspectCursorScopeError == null)
             return false;
 
-        var primaryError = options.ParseError ?? dbPathError!;
+        var primaryError = options.ParseError ?? dbPathError ?? inspectCursorScopeError!;
         var primaryHint = primaryError == dbPathError && options.ParseError == null
             ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
-            : "fix the invalid or missing option value, then rerun with the command shape below.";
+            : primaryError == inspectCursorScopeError && options.ParseError == null && dbPathError == null
+                ? "Pass this cursor back to the unchanged `cdidx inspect` query that returned it."
+                : "fix the invalid or missing option value, then rerun with the command shape below.";
         WriteParseError(primaryError, primaryHint, commandName, options, jsonOptions);
         if (options.ParseError != null && dbPathError != null)
             WriteParseError(
@@ -46,6 +49,18 @@ public static partial class QueryCommandRunner
                 options,
                 jsonOptions);
         return true;
+    }
+
+    private static string? BuildInspectCursorScopeParseError(QueryCommandOptions options, string commandName)
+    {
+        if (string.Equals(commandName, "inspect", StringComparison.Ordinal)
+            || options.CursorValue == null
+            || !InspectGraphCursorCodec.TryParse(options.CursorValue, out _))
+        {
+            return null;
+        }
+
+        return "Error: inspect graph pagination cursors can only be used with the inspect command.";
     }
 
     private static bool TryWriteNonPositiveCoordinateJsonError(

@@ -1112,7 +1112,10 @@ and MCP `analyze_symbol` attach query-, effective-page-size-, and index-generati
 cursors independently to truncated sections. Caller/callee ordering ends with every grouped
 identity field so offset pages cannot skip tied rows. Candidate selectors are part of cursor
 scope so paging one overload or partial-family representative cannot borrow graph rows from
-another candidate.
+another candidate. Treat a path/line locator separately from graph path filters: the locator
+selects the persisted symbol, but its inbound references and callers may come from any indexed
+file permitted by explicit graph filters. Shared cursor parsing may retain inspect cursors, but
+every non-inspect command must reject that cursor family before execution.
 
 ### Reference taxonomy
 
@@ -4279,7 +4282,10 @@ query、effective page size、index generation に束縛した cursor を付け�
 caller/callee の順序は grouped identity field のすべてを末尾の tie-breaker に使い、offset page が
 同順位 row を飛ばさないようにします。candidate selector も cursor scope に含め、1つの overload
 または partial-family representative の pagination が別 candidate の graph row を借用しないように
-してください。
+してください。path/line locator と graph path filter は分離してください。locator は persisted
+symbol を選択しますが、その inbound references と callers は、明示された graph filter が許可する
+任意の indexed file から取得できます。共有 cursor parser が inspect cursor を保持しても、
+inspect 以外の各 command は実行前にその cursor family を拒否しなければなりません。
 
 ### 参照 taxonomy
 

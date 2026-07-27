@@ -146,8 +146,14 @@ public partial class QueryCommandRunnerTests
                     public void RunSearch() { First(); Second(); }
                     private void First() { }
                     private void Second() { }
-                    public void CallerA() => RunSearch();
-                    public void CallerB() => RunSearch();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/AlphaCallers.cs", "csharp", """
+                namespace InspectIdentity;
+                public sealed class AlphaCallers
+                {
+                    public void CallerA(Alpha value) => value.RunSearch();
+                    public void CallerB(Alpha value) => value.RunSearch();
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Beta.cs", "csharp", """
@@ -215,6 +221,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, callerSection.GetProperty("total").GetInt32());
             Assert.Equal(1, callerSection.GetProperty("returned").GetInt32());
             Assert.Equal(0, callerSection.GetProperty("offset").GetInt32());
+            Assert.Equal("src/AlphaCallers.cs", firstCaller.GetProperty("path").GetString());
             Assert.True(callerSection.GetProperty("truncated").GetBoolean());
             Assert.False(string.IsNullOrWhiteSpace(nextCursor));
             Assert.False(string.IsNullOrWhiteSpace(betaCallerCursor));
@@ -237,6 +244,7 @@ public partial class QueryCommandRunnerTests
             Assert.NotEqual(
                 firstCaller.GetProperty("caller_name").GetString(),
                 secondCaller.GetProperty("caller_name").GetString());
+            Assert.Equal("src/AlphaCallers.cs", secondCaller.GetProperty("path").GetString());
             Assert.Equal(2, continuedCallerSection.GetProperty("total").GetInt32());
             Assert.Equal(1, continuedCallerSection.GetProperty("returned").GetInt32());
             Assert.Equal(1, continuedCallerSection.GetProperty("offset").GetInt32());
@@ -289,15 +297,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, queryMismatchExitCode);
             Assert.Contains("does not match this query or index generation", queryMismatchStderr, StringComparison.Ordinal);
 
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/GenerationChange.cs",
-                "csharp",
-                "public sealed class GenerationChange { }\n");
-            var (generationMismatchExitCode, _, generationMismatchStderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunInspect(continuationArgs, _jsonOptions));
-            Assert.Equal(CommandExitCodes.UsageError, generationMismatchExitCode);
-            Assert.Contains("does not match this query or index generation", generationMismatchStderr, StringComparison.Ordinal);
+            var (wrongCommandExitCode, wrongCommandStdout, wrongCommandStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunOutline(
+                    ["src/Alpha.cs", "--db", dbPath, "--cursor", nextCursor!],
+                    _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, wrongCommandExitCode);
+            Assert.Equal(string.Empty, wrongCommandStdout);
+            Assert.Contains("can only be used with the inspect command", wrongCommandStderr, StringComparison.Ordinal);
 
             var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunInspect(
@@ -315,6 +321,16 @@ public partial class QueryCommandRunnerTests
                 humanStdout,
                 StringComparison.Ordinal);
             Assert.Contains("Callers next cursor: inspect-graph:v1:", humanStdout, StringComparison.Ordinal);
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/GenerationChange.cs",
+                "csharp",
+                "public sealed class GenerationChange { }\n");
+            var (generationMismatchExitCode, _, generationMismatchStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(continuationArgs, _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, generationMismatchExitCode);
+            Assert.Contains("does not match this query or index generation", generationMismatchStderr, StringComparison.Ordinal);
 
             var malformedPayload = Convert.ToBase64String(
                     System.Text.Encoding.UTF8.GetBytes(

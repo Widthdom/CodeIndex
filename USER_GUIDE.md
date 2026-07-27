@@ -386,7 +386,10 @@ keep the same `--limit` / `--top` value when continuing. Name and path/line
 inspection both preserve the selected persisted symbol ID, so location lookup
 returns the same candidate-scoped graph evidence as the corresponding name
 bundle instead of re-resolving a display name. MCP `analyze_symbol` exposes the
-same section envelopes and accepts their cursors.
+same section envelopes and accepts their cursors. In path/line mode, `--path`
+locates the definition but does not restrict inbound references or callers to
+that file. Inspect graph cursors are accepted only by `inspect`; passing one to
+another command is a usage error.
 For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--outline-only` is shorthand for
@@ -3517,7 +3520,10 @@ cursor は query、effective page size、index generation に束縛されるた�
 同じ `--limit` / `--top` 値を維持してください。名前指定と path/line 指定の
 どちらも選択された永続 symbol ID を維持するため、location lookup は display name を
 再解決せず、対応する name bundle と同じ candidate-scoped graph evidence を返します。
-MCP `analyze_symbol` も同じ section envelope を公開し、その cursor を受け付けます。
+path/line mode の `--path` は定義の位置を特定しますが、inbound references や callers を
+そのファイルだけに制限しません。MCP `analyze_symbol` も同じ section envelope を公開し、
+その cursor を受け付けます。inspect graph cursor は `inspect` だけが受理し、別 command に
+渡すと usage error になります。
 `inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
 top-level group を選択します。`--outline-only` は
