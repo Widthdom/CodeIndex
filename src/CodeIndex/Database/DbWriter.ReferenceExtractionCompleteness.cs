@@ -19,4 +19,16 @@ public partial class DbWriter
             _conn,
             hasIssuesTable: issuesStateAvailable,
             _activeTransaction);
+
+    internal IReadOnlyList<string> GetPersistedIndexOmissionReasons()
+        => DbReader.ReadPersistedIndexOmissionReasons(
+            _conn,
+            // A writer always operates on the initialized current schema. Omission evidence
+            // remains relevant even when the workspace-wide IssuesReadyFlag is unset.
+            hasIssuesTable: true,
+            symbolsOnlyGraphOmitted: string.Equals(
+                GetMetaString(DbContext.SymbolsOnlyGraphOmittedMetaKey),
+                "true",
+                StringComparison.OrdinalIgnoreCase),
+            _activeTransaction);
 }

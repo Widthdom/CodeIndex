@@ -170,7 +170,9 @@ public partial class McpServer
         }
         AddMcpIndexDiagnostics(structured, details.Failures, details.Diagnostics);
         using var signalReader = new DbReader(details.Writer.Connection);
-        AddReferenceGraphCompletenessSignal(structured, signalReader);
+        var persistedReadiness = signalReader.GetPersistedIndexGenerationReadiness();
+        AddIndexGenerationReadinessSignal(structured, persistedReadiness);
+        AddReferenceGraphCompletenessSignal(structured, persistedReadiness);
         if (!details.SqlGraphContractReady)
         {
             var sqlGraphContractSignal = signalReader.GetSqlGraphContractSignal();
@@ -186,7 +188,9 @@ public partial class McpServer
 
         return CreateToolResult(
             id,
-            details.Errors == 0 && !details.FoldReady
+            details.Errors == 0 && !persistedReadiness.IndexComplete
+                ? $"Indexing finished with persisted omissions: {string.Join(", ", persistedReadiness.IndexIncompleteReasons)}."
+                : details.Errors == 0 && !details.FoldReady
                 ? details.FoldReadyReason switch
                 {
                     "stale_fold_key_version" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry an older fold-key version. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",

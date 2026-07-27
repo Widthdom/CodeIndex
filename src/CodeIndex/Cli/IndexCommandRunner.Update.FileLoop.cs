@@ -472,6 +472,7 @@ public static partial class IndexCommandRunner
                         absPath,
                         dbPath,
                         statReusableLanguage,
+                        options.MaxFileSizeBytes ?? FileIndexer.DefaultMaxFileSizeBytes,
                         options.MaxSymbolsPerFile,
                         options.MaxReferencesPerFile,
                         generatedExtractionSuppressed,

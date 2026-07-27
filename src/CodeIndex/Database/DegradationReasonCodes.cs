@@ -25,6 +25,7 @@ public static class DegradationReasonCodes
     public const string GraphDataNotCurrent = "graph_data_current=false";
     public const string IndexIncomplete = "index_complete=false";
     public const string ReferenceGraphIncomplete = "reference_graph_complete=false";
+    public const string SymbolsOnlyGraphOmitted = "symbols_only_graph_omitted";
     public const string ReferenceExtractionCapStateUnavailable = "reference_extraction_cap_state_unavailable";
     public const string DynamicReferenceGraphContractStale = "dynamic_reference_graph_contract_stale";
     public const string IssuesTableMissing = "issues_table_available=false";
@@ -55,6 +56,7 @@ public static class DegradationReasonCodes
         GraphDataNotCurrent,
         IndexIncomplete,
         ReferenceGraphIncomplete,
+        SymbolsOnlyGraphOmitted,
         ReferenceExtractionCapStateUnavailable,
         DynamicReferenceGraphContractStale,
         IssuesTableMissing,
@@ -182,14 +184,19 @@ public static class DegradationReasonCodes
                 "Run `cdidx status --json` to inspect the incomplete files and stable reasons before changing index scope."),
             IndexIncomplete => new(
                 code,
-                "One or more files failed while other file transactions were committed successfully.",
-                "Run `cdidx status --json`, fix `last_failed_or_partial_index_run.file_errors`, then rerun the same index command; a rebuild is not required.",
-                "Use `cdidx index <projectPath> --allow-partial` only when automation deliberately accepts an incomplete generation."),
+                "Required input or extraction work was omitted or failed, so persisted rows cover only a partial index generation.",
+                "Run `cdidx status --json`, address `index_incomplete_reasons`, then rerun the same index command; a rebuild is normally not required.",
+                "Use `cdidx status --json` and inspect `last_failed_or_partial_index_run.file_errors` for extractor failures or the stable omission reasons for capped and symbols-only runs."),
             ReferenceGraphIncomplete => new(
                 code,
                 "Reference extraction hit one or more hard safety caps, so missing callers, callees, dependencies, or impact edges are not authoritative absences.",
                 "Inspect `reference_extraction_cap_hits.files`, reduce or exclude the generated/pathological source, then rerun `cdidx index <projectPath>`.",
                 "Run `cdidx status --json` and use `reference_extraction_limits` and `reference_graph_incomplete_reasons` to identify the active cap before changing repository scope."),
+            SymbolsOnlyGraphOmitted => new(
+                code,
+                "The last symbols-only generation intentionally omitted reference-graph rows.",
+                "Run `cdidx index <projectPath>` without `--symbols-only` to generate the reference graph.",
+                "Run `cdidx index <projectPath> --rebuild` without `--symbols-only` when a full rebuild is required."),
             ReferenceExtractionCapStateUnavailable => new(
                 code,
                 "Reference-extraction cap state is unavailable for this legacy or stale issue generation, so graph completeness cannot be established.",

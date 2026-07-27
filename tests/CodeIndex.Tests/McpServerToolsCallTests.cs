@@ -8702,9 +8702,37 @@ public partial class McpServerTests
             var response = CallIndex(server, fixtureDir, args => args["maxReferencesPerFile"] = 2);
 
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.True(structured["graph_table_available"]!.GetValue<bool>());
+            Assert.False(structured["graph_data_current"]!.GetValue<bool>());
+            Assert.False(structured["index_complete"]!.GetValue<bool>());
+            Assert.False(structured["reference_graph_complete"]!.GetValue<bool>());
+            Assert.Contains(
+                "reference_count_exceeded",
+                structured["index_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>()));
+            Assert.Contains(
+                "reference_count_exceeded",
+                structured["reference_graph_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>()));
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var status = reader.GetStatus();
+            Assert.Equal(status.GraphTableAvailable, structured["graph_table_available"]!.GetValue<bool>());
+            Assert.Equal(status.GraphDataCurrent, structured["graph_data_current"]!.GetValue<bool>());
+            Assert.Equal(status.IndexComplete, structured["index_complete"]!.GetValue<bool>());
+            Assert.Equal(status.ReferenceGraphComplete, structured["reference_graph_complete"]!.GetValue<bool>());
+            Assert.Equal(
+                status.IndexIncompleteReasons ?? [],
+                structured["index_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>())
+                    .ToArray());
+            Assert.Equal(
+                status.ReferenceGraphIncompleteReasons ?? [],
+                structured["reference_graph_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>())
+                    .ToArray());
             var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
             Assert.Equal("DenseReferences.cs", issue.Path);
             Assert.Equal(0, issue.Line);
@@ -8722,6 +8750,60 @@ public partial class McpServerTests
             Assert.True(row.GetInt64(0) > 0);
             Assert.True(row.GetInt64(1) > 0);
             Assert.Equal(0, row.GetInt64(2));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_FileSizePolicyTransitionsReprocessUnchangedFile_Issue4826()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_file_size_transition_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath(
+            "cdidx_mcp_index_file_size_transition");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "large.py"),
+                "print('start')\n" + new string('a', 256));
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var initial = CallIndex(server, fixtureDir);
+            var capped = CallIndex(
+                server,
+                fixtureDir,
+                args => args["maxFileBytes"] = JsonNode.Parse("128"));
+            var recovered = CallIndex(server, fixtureDir);
+
+            Assert.False(
+                initial["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initial.ToJsonString());
+            Assert.False(
+                capped["result"]?["isError"]?.GetValue<bool>() ?? false,
+                capped.ToJsonString());
+            Assert.False(
+                recovered["result"]?["isError"]?.GetValue<bool>() ?? false,
+                recovered.ToJsonString());
+            Assert.True(
+                initial["result"]!["structuredContent"]!["index_complete"]!
+                    .GetValue<bool>());
+            var cappedStructured = capped["result"]!["structuredContent"]!;
+            Assert.False(cappedStructured["index_complete"]!.GetValue<bool>());
+            Assert.Contains(
+                "file_too_large",
+                cappedStructured["index_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>()));
+            var recoveredStructured = recovered["result"]!["structuredContent"]!;
+            Assert.True(recoveredStructured["index_complete"]!.GetValue<bool>());
+            Assert.True(
+                recoveredStructured["reference_graph_complete"]!.GetValue<bool>());
+            Assert.Null(recoveredStructured["index_incomplete_reasons"]);
         }
         finally
         {
@@ -10019,13 +10101,26 @@ public partial class McpServerTests
             Assert.False(refreshResponse["result"]?["isError"]?.GetValue<bool>() ?? false, refreshResponse.ToJsonString());
             var refreshStructured = refreshResponse["result"]!["structuredContent"]!;
             Assert.Equal(0, refreshStructured["summary"]!["errors"]!.GetValue<int>());
+            Assert.False(refreshStructured["index_complete"]!.GetValue<bool>());
+            Assert.Contains(
+                "file_too_large",
+                refreshStructured["index_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>()));
+            Assert.False(refreshStructured["reference_graph_complete"]!.GetValue<bool>());
+            Assert.Contains(
+                "file_too_large",
+                refreshStructured["reference_graph_incomplete_reasons"]!.AsArray()
+                    .Select(reason => reason!.GetValue<string>()));
             Assert.Equal(["IParseable.cs", "Money.cs"], loadedPaths.Order(StringComparer.Ordinal));
             Assert.Equal(0L, CountImplicitReferences());
             using var refreshDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(false, new DbWriter(refreshDb).GetCSharpStaticInterfaceSourceEvidence());
             var refreshStatus = new DbReader(refreshDb.Connection).GetStatus();
-            Assert.True(refreshStatus.IndexComplete);
-            Assert.True(refreshStatus.GraphDataCurrent);
+            Assert.False(refreshStatus.IndexComplete);
+            Assert.Contains("file_too_large", refreshStatus.IndexIncompleteReasons ?? []);
+            Assert.False(refreshStatus.ReferenceGraphComplete);
+            Assert.Contains("file_too_large", refreshStatus.ReferenceGraphIncompleteReasons ?? []);
+            Assert.False(refreshStatus.GraphDataCurrent);
 
             void WriteInterface(bool hasStaticContract)
             {

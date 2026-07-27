@@ -140,13 +140,19 @@ public partial class DbReader : IDisposable
     internal T RunInReadSnapshot<T>(Func<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
+        return RunInReadSnapshot(_ => action());
+    }
+
+    internal T RunInReadSnapshot<T>(Func<SqliteTransaction, T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
         using var cancellationRegistration = RegisterSqliteInterruptForCancellation();
         try
         {
             _cancellation.ThrowIfCancellationRequested();
 
             using var transaction = _conn.BeginTransaction(deferred: true);
-            var result = action();
+            var result = action(transaction);
             _cancellation.ThrowIfCancellationRequested();
             transaction.Commit();
             return result;
