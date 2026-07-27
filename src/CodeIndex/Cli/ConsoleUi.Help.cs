@@ -473,9 +473,17 @@ public static partial class ConsoleUi
             foreach (var flag in helpFlags)
             {
                 var names = flag.ShortName is null ? flag.Name : $"{flag.Name}, {flag.ShortName}";
-                var token = flag.ValuePlaceholder is null ? names : $"{names} {flag.ValuePlaceholder}";
+                var projectionFields = string.Equals(flag.Name, "--fields", StringComparison.Ordinal)
+                                       && ProjectionFieldRegistry.SupportsCommand(schemaCommand);
+                var valuePlaceholder = projectionFields
+                    ? ProjectionFieldRegistry.GetHelpValuePlaceholder(schemaCommand)
+                    : flag.ValuePlaceholder;
+                var description = projectionFields
+                    ? ProjectionFieldRegistry.GetHelpDescription(schemaCommand)
+                    : flag.Description;
+                var token = valuePlaceholder is null ? names : $"{names} {valuePlaceholder}";
                 Console.WriteLine($"  {token}");
-                Console.WriteLine($"      {flag.Description}");
+                Console.WriteLine($"      {description}");
             }
         }
         var notes = GetCommandUsageNotes(command);

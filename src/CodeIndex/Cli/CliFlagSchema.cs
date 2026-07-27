@@ -141,10 +141,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
     private static readonly string[] BoundedProjectionCommands =
-    [
-        "search", "definition", "find", "status", "hotspots", "references", "callers", "callees",
-        "symbols", "files", "languages", "impact", "map",
-    ];
+        ProjectionFieldRegistry.SupportedCommands.ToArray();
     private static readonly string[] CursorCommands = ["search", "outline", "unused", "deps", "inspect", .. BoundedProjectionCommands];
     private static readonly string[] AllResultCommands = ["goto", "find", "unused"];
 
