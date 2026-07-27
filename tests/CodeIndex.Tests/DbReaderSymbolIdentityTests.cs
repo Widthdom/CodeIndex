@@ -5,8 +5,11 @@ namespace CodeIndex.Tests;
 
 public partial class DbReaderTests
 {
-    [Fact]
-    public void SymbolIdentity_LegacySchemaColumnsWithoutReadyMarkerKeepNameFallbackUntilRefresh()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("2")]
+    public void SymbolIdentity_MissingOrPriorReadyMarkerKeepsNameFallbackUntilRefresh(
+        string? persistedContractVersion)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_identity_legacy_marker");
         try
@@ -30,7 +33,9 @@ public partial class DbReaderTests
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var writer = new DbWriter(db.Connection);
             writer.MarkGraphReady();
-            writer.SetMeta(DbContext.ReferenceIdentityContractVersionMetaKey, null);
+            writer.SetMeta(
+                DbContext.ReferenceIdentityContractVersionMetaKey,
+                persistedContractVersion);
             using (var clearIdentity = db.Connection.CreateCommand())
             {
                 clearIdentity.CommandText = """

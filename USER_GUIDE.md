@@ -450,6 +450,7 @@ job:
 
 ```bash
 cdidx export codeindex.cdidx.zip
+cdidx export codeindex.cdidx.zip --overwrite --json
 cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
 cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
@@ -465,6 +466,14 @@ snapshot contains only the retained files and their dependent chunks, symbols,
 references, and diagnostics, and is vacuumed before packaging. JSON output and
 `manifest.json` include the requested scope, resolved project paths, and source
 and exported file counts. An export without scope flags remains a full archive.
+Portable export refuses an existing destination by default; pass `--overwrite`
+only when replacing it is intentional. The archive is built in an owner-only
+sibling temporary file and atomically published, and POSIX archives are verified
+as mode `0600`. Successful JSON keeps the existing fields and additionally
+returns `archive_size_bytes`, the final archive's `archive_sha256`, and the
+complete immutable `manifest` object. That manifest carries the database hash,
+row counts, schema contract stamps, readiness state, unknown-extension summary,
+and export scope needed to evaluate the artifact before import.
 
 The archive path is intended for trusted CodeIndex databases. Import validates
 that the embedded SQLite file is a CodeIndex DB before replacing the destination
@@ -3548,6 +3557,7 @@ legacy database も query でき、generated-code policy は `unavailable` と�
 
 ```bash
 cdidx export codeindex.cdidx.zip
+cdidx export codeindex.cdidx.zip --overwrite --json
 cdidx export app.cdidx.zip --project App --lang csharp --exclude-tests
 cdidx export shared.cdidx.zip --path 'src/shared/*' --exclude-path 'src/shared/generated/*'
 cdidx import codeindex.cdidx.zip
@@ -3562,6 +3572,13 @@ archive export では `--lang`、繰り返し指定できる `--path` / `--exclu
 chunk、symbol、reference、diagnostic だけを保持し、packaging 前に vacuum します。
 JSON output と `manifest.json` には指定 scope、解決済み project path、元と出力後の
 file count が含まれます。scope flag を指定しなければ従来どおり full archive です。
+portable export は既存 destination を既定で拒否します。意図して置き換える場合だけ
+`--overwrite` を指定してください。archive は owner-only の sibling temporary file に
+構築して atomic に publish し、POSIX では mode `0600` であることも検証します。
+成功時の JSON は既存 field を維持したまま、`archive_size_bytes`、最終 archive の
+`archive_sha256`、完全で immutable な `manifest` object を追加で返します。この manifest
+には import 前に artifact を評価するための database hash、row count、schema contract
+stamp、readiness state、unknown-extension summary、export scope が含まれます。
 
 archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
 SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。

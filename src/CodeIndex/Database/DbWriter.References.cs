@@ -107,8 +107,269 @@ public partial class DbWriter
             name_folded TEXT NOT NULL,
             family_key  TEXT NOT NULL,
             PRIMARY KEY(lang, name_folded)
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_type_direct_bases (
+            derived_qualified_name TEXT NOT NULL,
+            base_qualified_name    TEXT NOT NULL,
+            PRIMARY KEY(derived_qualified_name, base_qualified_name)
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_type_inheritance (
+            derived_qualified_name TEXT NOT NULL,
+            base_qualified_name    TEXT NOT NULL,
+            distance               INTEGER NOT NULL,
+            PRIMARY KEY(derived_qualified_name, base_qualified_name)
         ) WITHOUT ROWID
         """;
+
+    private const string CSharpTypeReferenceCandidatePredicateSql = """
+        (
+            source_file.lang <> 'csharp'
+            OR r.reference_kind <> 'type_reference'
+            OR CASE
+                WHEN s.kind NOT IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate') THEN 0
+                WHEN s.name <> r.symbol_name COLLATE BINARY THEN 0
+                WHEN csharp_reference_type_arity(
+                         COALESCE(
+                             r.context,
+                             (SELECT reference_line.context
+                              FROM reference_lines AS reference_line
+                              WHERE reference_line.id = r.reference_line_id)),
+                         r.symbol_name,
+                         r.column_number) IS NULL THEN 1
+                WHEN csharp_definition_type_arity(s.signature, s.name, s.kind)
+                     = csharp_reference_type_arity(
+                         COALESCE(
+                             r.context,
+                             (SELECT reference_line.context
+                              FROM reference_lines AS reference_line
+                              WHERE reference_line.id = r.reference_line_id)),
+                         r.symbol_name,
+                         r.column_number) THEN 1
+                ELSE 0
+            END = 1
+        )
+        """;
+
+    private static string BuildCSharpPropertyReceiverNormalizationSql(string scopePredicate) =>
+        $"""
+        DELETE FROM temp.csharp_type_direct_bases;
+        DELETE FROM temp.csharp_type_inheritance;
+
+        INSERT OR IGNORE INTO temp.csharp_type_direct_bases(
+            derived_qualified_name,
+            base_qualified_name)
+        SELECT
+            CASE
+                WHEN COALESCE(derived.container_qualified_name, '') = ''
+                    THEN derived.name
+                WHEN derived.container_qualified_name = derived.name COLLATE BINARY
+                     OR substr(
+                            derived.container_qualified_name,
+                            -length(derived.name) - 1
+                        ) = ('.' || derived.name) COLLATE BINARY
+                    THEN derived.container_qualified_name
+                ELSE derived.container_qualified_name || '.' || derived.name
+            END,
+            CASE
+                WHEN COALESCE(base_type.container_qualified_name, '') = ''
+                    THEN base_type.name
+                WHEN base_type.container_qualified_name = base_type.name COLLATE BINARY
+                     OR substr(
+                            base_type.container_qualified_name,
+                            -length(base_type.name) - 1
+                        ) = ('.' || base_type.name) COLLATE BINARY
+                    THEN base_type.container_qualified_name
+                ELSE base_type.container_qualified_name || '.' || base_type.name
+            END
+        FROM symbols AS derived
+        JOIN files AS derived_file ON derived_file.id = derived.file_id
+        JOIN json_each(
+            csharp_base_identifiers_json(derived.signature)
+        ) AS base_reference
+        JOIN symbols AS base_type INDEXED BY idx_symbols_name_folded
+          ON base_type.name_folded =
+             csharp_base_name_folded(base_reference.value)
+         AND base_type.name =
+             csharp_base_name(base_reference.value) COLLATE BINARY
+        JOIN files AS base_file ON base_file.id = base_type.file_id
+        WHERE derived_file.lang = 'csharp'
+          AND base_file.lang = 'csharp'
+          AND derived.kind IN ('class', 'record')
+          AND base_type.kind IN ('class', 'record')
+          AND csharp_base_reference_matches(
+                  base_reference.value,
+                  base_type.name,
+                  CASE
+                      WHEN COALESCE(base_type.container_qualified_name, '') = ''
+                          THEN base_type.name
+                      WHEN base_type.container_qualified_name =
+                               base_type.name COLLATE BINARY
+                           OR substr(
+                                  base_type.container_qualified_name,
+                                  -length(base_type.name) - 1
+                              ) = ('.' || base_type.name) COLLATE BINARY
+                          THEN base_type.container_qualified_name
+                      ELSE base_type.container_qualified_name || '.' || base_type.name
+                  END,
+                  CASE
+                      WHEN COALESCE(derived.container_qualified_name, '') = ''
+                          THEN derived.name
+                      WHEN derived.container_qualified_name =
+                               derived.name COLLATE BINARY
+                           OR substr(
+                                  derived.container_qualified_name,
+                                  -length(derived.name) - 1
+                              ) = ('.' || derived.name) COLLATE BINARY
+                          THEN derived.container_qualified_name
+                      ELSE derived.container_qualified_name || '.' || derived.name
+                  END) = 1;
+
+        INSERT OR IGNORE INTO temp.csharp_type_inheritance(
+            derived_qualified_name,
+            base_qualified_name,
+            distance)
+        WITH RECURSIVE inheritance(
+            derived_qualified_name,
+            base_qualified_name,
+            distance,
+            path) AS (
+            SELECT direct.derived_qualified_name,
+                   direct.base_qualified_name,
+                   1,
+                   char(31) || direct.derived_qualified_name ||
+                       char(31) || direct.base_qualified_name || char(31)
+            FROM temp.csharp_type_direct_bases AS direct
+            UNION ALL
+            SELECT inheritance.derived_qualified_name,
+                   direct.base_qualified_name,
+                   inheritance.distance + 1,
+                   inheritance.path || direct.base_qualified_name || char(31)
+            FROM inheritance
+            JOIN temp.csharp_type_direct_bases AS direct
+              ON direct.derived_qualified_name =
+                 inheritance.base_qualified_name COLLATE BINARY
+            WHERE inheritance.distance < 32
+              AND instr(
+                      inheritance.path,
+                      char(31) || direct.base_qualified_name || char(31)
+                  ) = 0
+        )
+        SELECT derived_qualified_name,
+               base_qualified_name,
+               MIN(distance)
+        FROM inheritance
+        GROUP BY derived_qualified_name, base_qualified_name;
+
+        UPDATE symbol_references AS r
+        SET reference_kind = 'type_reference',
+            target_qualifier = NULL
+        WHERE {scopePredicate}
+          AND r.reference_kind = 'reference'
+          AND r.target_qualifier LIKE char(31) || 'property_receiver:%'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM symbols AS source
+              JOIN files AS source_file ON source_file.id = source.file_id
+              JOIN symbols AS target
+                ON target.name_folded = r.symbol_name_folded
+               AND target.name = r.symbol_name COLLATE BINARY
+              JOIN files AS target_file ON target_file.id = target.file_id
+              WHERE source.id = r.source_symbol_id
+                AND source_file.lang = 'csharp'
+                AND target_file.lang = 'csharp'
+                AND target.kind = 'property'
+                AND target.container_qualified_name IN (
+                    SELECT source.container_qualified_name
+                    UNION
+                    SELECT inheritance.base_qualified_name
+                    FROM temp.csharp_type_inheritance AS inheritance
+                    WHERE inheritance.derived_qualified_name =
+                          source.container_qualified_name COLLATE BINARY
+                )
+                AND r.target_qualifier =
+                    char(31) || 'property_receiver:' ||
+                        target.container_qualified_name COLLATE BINARY
+          );
+
+        UPDATE symbol_references AS r
+        SET reference_kind = 'reference',
+            target_qualifier = char(31) || 'property_receiver:' || (
+                SELECT target.container_qualified_name
+                FROM symbols AS source
+                JOIN files AS source_file ON source_file.id = source.file_id
+                JOIN symbols AS target
+                  ON target.name_folded = r.symbol_name_folded
+                 AND target.name = r.symbol_name COLLATE BINARY
+                JOIN files AS target_file ON target_file.id = target.file_id
+                WHERE source.id = r.source_symbol_id
+                  AND source_file.lang = 'csharp'
+                  AND target_file.lang = 'csharp'
+                  AND target.kind = 'property'
+                  AND target.container_qualified_name IN (
+                      SELECT source.container_qualified_name
+                      UNION
+                      SELECT inheritance.base_qualified_name
+                      FROM temp.csharp_type_inheritance AS inheritance
+                      WHERE inheritance.derived_qualified_name =
+                            source.container_qualified_name COLLATE BINARY
+                  )
+                ORDER BY CASE
+                             WHEN target.container_qualified_name =
+                                  source.container_qualified_name COLLATE BINARY
+                                 THEN 0
+                             ELSE COALESCE((
+                                 SELECT inheritance.distance
+                                 FROM temp.csharp_type_inheritance AS inheritance
+                                 WHERE inheritance.derived_qualified_name =
+                                       source.container_qualified_name COLLATE BINARY
+                                   AND inheritance.base_qualified_name =
+                                       target.container_qualified_name COLLATE BINARY
+                             ), 33)
+                         END,
+                         target.id
+                LIMIT 1
+            )
+        WHERE {scopePredicate}
+          AND r.reference_kind = 'type_reference'
+          AND r.target_qualifier IS NULL
+          AND csharp_reference_is_member_receiver(
+                  COALESCE(
+                      r.context,
+                      (
+                          SELECT reference_line.context
+                          FROM reference_lines AS reference_line
+                          WHERE reference_line.id = r.reference_line_id
+                      )
+                  ),
+                  r.symbol_name,
+                  r.column_number) = 1
+          AND EXISTS (
+              SELECT 1
+              FROM symbols AS source
+              JOIN files AS source_file ON source_file.id = source.file_id
+              JOIN symbols AS target
+                ON target.name_folded = r.symbol_name_folded
+               AND target.name = r.symbol_name COLLATE BINARY
+              JOIN files AS target_file ON target_file.id = target.file_id
+              WHERE source.id = r.source_symbol_id
+                AND source_file.lang = 'csharp'
+                AND target_file.lang = 'csharp'
+                AND target.kind = 'property'
+                AND target.container_qualified_name IN (
+                    SELECT source.container_qualified_name
+                    UNION
+                    SELECT inheritance.base_qualified_name
+                    FROM temp.csharp_type_inheritance AS inheritance
+                    WHERE inheritance.derived_qualified_name =
+                          source.container_qualified_name COLLATE BINARY
+                )
+          );
+        """;
+
+    private static string NormalizeCSharpPropertyReceiverReferencesFullSql =>
+        BuildCSharpPropertyReceiverNormalizationSql("1 = 1");
 
     private const string RefreshReferenceUniqueFamiliesSql = """
         DELETE FROM temp.reference_unique_symbol_families;
@@ -148,8 +409,23 @@ public partial class DbWriter
                               COALESCE(s.name, '')) = 1;
         """;
 
-    private const string RefreshReferenceCandidatesSql = """
+    private static string RefreshReferenceCandidatesSql => $"""
         DELETE FROM symbol_reference_candidates;
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, s.id, 0
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS s ON s.name_folded = r.symbol_name_folded
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE source_file.lang = 'csharp'
+          AND target_file.lang = 'csharp'
+          AND r.reference_kind = 'reference'
+          AND s.name = r.symbol_name COLLATE BINARY
+          AND r.target_qualifier =
+              char(31) || 'property_receiver:' || s.container_qualified_name
+                  COLLATE BINARY
+          AND s.kind = 'property';
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
         SELECT r.id, s.id, 0
@@ -167,6 +443,7 @@ public partial class DbWriter
                AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
+          AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier IS NOT NULL
           AND r.target_qualifier NOT LIKE char(31) || 'receiver:%'
           AND (
@@ -218,6 +495,7 @@ public partial class DbWriter
         JOIN files AS target_file ON target_file.id = s.file_id
         WHERE source_file.lang = 'csharp'
           AND target_file.lang = 'csharp'
+          AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier LIKE char(31) || 'receiver:%'
           AND source.signature IS NOT NULL
           AND source.signature <> ''
@@ -253,6 +531,7 @@ public partial class DbWriter
                AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
+          AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier IS NULL
           AND s.file_id = r.file_id
           AND source.container_name IS NOT NULL
@@ -283,6 +562,7 @@ public partial class DbWriter
                AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
+          AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier IS NULL
           AND source.container_qualified_name IS NOT NULL
           AND source.container_qualified_name <> ''
@@ -308,6 +588,7 @@ public partial class DbWriter
                AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
+          AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier IS NULL
           AND s.file_id = r.file_id
           AND NOT EXISTS (
@@ -332,10 +613,65 @@ public partial class DbWriter
                AND (source_file.lang <> 'ambiguous_m' OR source_file.id = target_file.id))
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
+          AND {CSharpTypeReferenceCandidatePredicateSql}
           AND r.target_qualifier IS NULL
           AND source.container_name IS NOT NULL
           AND source.container_name <> ''
           AND s.container_name = source.container_name COLLATE NOCASE
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, unique_target.symbol_id, 5
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN (
+            SELECT MIN(type_symbol.id) AS symbol_id,
+                   type_symbol.name_folded,
+                   type_symbol.name,
+                   csharp_definition_type_arity(
+                       type_symbol.signature,
+                       type_symbol.name,
+                       type_symbol.kind) AS type_arity
+            FROM symbols AS type_symbol
+            JOIN files AS target_file ON target_file.id = type_symbol.file_id
+            WHERE target_file.lang = 'csharp'
+              AND type_symbol.name_folded IS NOT NULL
+              AND type_symbol.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
+            GROUP BY type_symbol.name_folded, type_symbol.name, type_arity
+            HAVING type_arity IS NOT NULL
+               AND COUNT(DISTINCT target_file.path || char(31) ||
+                                  COALESCE(
+                                      type_symbol.container_qualified_name,
+                                      type_symbol.container_name,
+                                      '') || char(31) ||
+                                  COALESCE(type_symbol.name, '')) = 1
+        ) AS unique_target ON unique_target.name_folded = r.symbol_name_folded
+                          AND unique_target.name = r.symbol_name COLLATE BINARY
+        WHERE source_file.lang = 'csharp'
+          AND r.target_qualifier IS NULL
+          AND r.reference_kind = 'type_reference'
+          AND (
+              csharp_reference_type_arity(
+                  COALESCE(
+                      r.context,
+                      (SELECT reference_line.context
+                       FROM reference_lines AS reference_line
+                       WHERE reference_line.id = r.reference_line_id)),
+                  r.symbol_name,
+                  r.column_number) IS NULL
+              OR unique_target.type_arity
+                 = csharp_reference_type_arity(
+                     COALESCE(
+                         r.context,
+                         (SELECT reference_line.context
+                          FROM reference_lines AS reference_line
+                          WHERE reference_line.id = r.reference_line_id)),
+                     r.symbol_name,
+                     r.column_number)
+          )
           AND NOT EXISTS (
               SELECT 1 FROM symbol_reference_candidates AS existing
               WHERE existing.reference_id = r.id
@@ -399,7 +735,7 @@ public partial class DbWriter
              COALESCE(target.name, '') = unique_family.family_key
         WHERE source_file.lang = 'csharp'
           AND r.target_qualifier IS NULL
-          AND r.reference_kind <> 'instantiate'
+          AND r.reference_kind NOT IN ('instantiate', 'type_reference')
           AND NOT EXISTS (
               SELECT 1 FROM symbol_reference_candidates AS existing
               WHERE existing.reference_id = r.id
@@ -530,6 +866,7 @@ public partial class DbWriter
         command.CommandText =
             CreateReferenceUniqueFamiliesSql + ";\n" +
             RefreshReferenceSourceSymbolsFullSql + ";\n" +
+            NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
             RefreshReferenceUniqueFamiliesSql + "\n" +
             RefreshReferenceCandidatesSql + "\n" +
             RefreshReferenceResolutionFullSql + "\n" +
@@ -1165,10 +1502,12 @@ public partial class DbWriter
             {
                 refreshIdentitySql = HasPersistedReferenceResolutionState(cancellationToken)
                     ? RefreshReferenceSourceSymbolsDifferentialSql + ";\n" +
+                      NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                       RefreshReferenceUniqueFamiliesSql + "\n" +
                       RefreshReferenceCandidatesSql + "\n" +
                       RefreshReferenceResolutionDifferentialSql + "\n"
                     : RefreshReferenceSourceSymbolsFullSql + ";\n" +
+                      NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                       RefreshReferenceUniqueFamiliesSql + "\n" +
                       RefreshReferenceCandidatesSql + "\n" +
                       RefreshReferenceResolutionFullSql + "\n";
@@ -1177,6 +1516,7 @@ public partial class DbWriter
             {
                 DeleteRemovedReferenceCandidates(cancellationToken);
                 refreshIdentitySql = RefreshScopedReferenceSourceSymbolsSql + "\n" +
+                                     NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n" +
                                      RefreshScopedReferenceUniqueFamiliesSql + "\n" +
                                      RefreshScopedReferenceCandidatesSql + "\n" +
                                      RefreshScopedReferenceResolutionSql + "\n" +
