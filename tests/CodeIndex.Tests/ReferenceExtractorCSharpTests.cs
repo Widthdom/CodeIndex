@@ -7477,6 +7477,7 @@ public partial class ReferenceExtractorTests
         const string content = """
             extern alias Alias;
             using System;
+            using System.Collections.Generic;
 
             public sealed class ProbeAttribute : Attribute
             {
@@ -7500,15 +7501,23 @@ public partial class ReferenceExtractorTests
                 private static object InvokeAdapter(bool overwrite, Type payload) => new();
                 private static void InvokeOut(out ExpressionPayload payload) => payload = new();
                 private static void Outer(object inner) {}
+                private static void Consume(Func<ExpressionPayload, ExpressionPayload> transform) {}
+                private static void ConsumeQuery(object query, object other) {}
 
                 [Probe(typeof(ExpressionPayload), overwrite: true)]
-                public void Run(bool condition, object value)
+                public void Run(bool condition, object value, IEnumerable<ExpressionPayload> source)
                 {
                     Invoke(1, overwrite: true, payload: typeof(ExpressionPayload));
                     Invoke(payload: typeof(ExpressionPayload), positional: 2, overwrite: false);
                     _ = new ConstructorTarget(overwrite: true, payload: typeof(ExpressionPayload));
                     Outer(inner: InvokeAdapter(overwrite: true, payload: typeof(ExpressionPayload)));
                     InvokeOut(payload: out ExpressionPayload declaredPayload);
+                    Consume(transform: (ExpressionPayload item) => item);
+                    Consume(transform: delegate(ExpressionPayload item) { return item; });
+                    ConsumeQuery(query: from ExpressionPayload item in source select item, other: value);
+                    ConsumeQuery(
+                        query: from ExpressionPayload item in source select item,
+                        other: value);
                     Invoke(
                         positional: 3,
                         payload: typeof(ExpressionPayload),
@@ -7544,7 +7553,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
         var colonLabels = new HashSet<string>(
-            ["overwrite", "payload", "positional", "inner", "Value"],
+            ["overwrite", "payload", "positional", "inner", "transform", "query", "other", "Value"],
             StringComparer.Ordinal);
 
         Assert.DoesNotContain(
@@ -7554,7 +7563,22 @@ public partial class ReferenceExtractorTests
         Assert.True(
             references.Count(reference =>
                 reference.SymbolName == "ExpressionPayload"
-                && reference.ReferenceKind == "type_reference") >= 10);
+                && reference.ReferenceKind == "type_reference") >= 17);
+        var namedValueTypeLines = content
+            .Split('\n')
+            .Select((line, index) => (Line: line, Number: index + 1))
+            .Where(item => item.Line.Contains("transform:", StringComparison.Ordinal)
+                           || item.Line.Contains("query: from", StringComparison.Ordinal))
+            .Select(item => item.Number)
+            .ToArray();
+        Assert.Equal(4, namedValueTypeLines.Length);
+        Assert.All(
+            namedValueTypeLines,
+            expectedLine => Assert.Contains(
+                references,
+                reference => reference.SymbolName == "ExpressionPayload"
+                    && reference.ReferenceKind == "type_reference"
+                    && reference.Line == expectedLine));
         Assert.Contains(
             references,
             reference => reference.SymbolName == "ConstructorTarget"

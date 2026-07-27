@@ -18,6 +18,22 @@ public static partial class ReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? ignoredSegments = null)
     {
+        if (language == "csharp"
+            && TryGetCSharpLeadingColonLabelValueStart(line, out var namedArgumentValueStart))
+        {
+            EmitCSharpNamedArgumentValueTypeReferences(
+                line,
+                namedArgumentValueStart,
+                lineStartOffset: 0,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn,
+                ignoredSegments);
+        }
+
         if (TryFindCallableParameterList(line, language, out var callableNameStart, out var paramStart, out var paramEnd))
         {
             if (TryGetCallableReturnTypeSpan(line, callableNameStart, language, out var typeStart, out var typeLength))
@@ -308,7 +324,8 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        IReadOnlySet<string>? ignoredSegments = null)
+        IReadOnlySet<string>? ignoredSegments = null,
+        int lineStartOffset = 0)
     {
         if (paramEnd <= paramStart)
             return;
@@ -317,10 +334,27 @@ public static partial class ReferenceExtractor
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterList))
         {
             var fragment = parameterList.Slice(segmentStart, segmentLength).ToString();
+            if (language == "csharp"
+                && TryGetCSharpLeadingColonLabelValueStart(fragment, out var namedArgumentValueStart))
+            {
+                EmitCSharpNamedArgumentValueTypeReferences(
+                    fragment,
+                    namedArgumentValueStart,
+                    lineStartOffset + paramStart + segmentStart,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn,
+                    ignoredSegments);
+                continue;
+            }
+
             if (!TryGetParameterTypeRelativeSpan(fragment, language, out var typeRelativeStart, out var typeRelativeLength))
                 continue;
 
-            int absoluteStart = paramStart + segmentStart + typeRelativeStart;
+            int absoluteStart = lineStartOffset + paramStart + segmentStart + typeRelativeStart;
             AddTypeExpressionSegmentsForLanguage(
                 language,
                 references,
@@ -625,25 +659,13 @@ public static partial class ReferenceExtractor
         typeStart = -1;
         typeLength = 0;
 
-        int candidateOffset = 0;
-        bool hasLeadingCSharpColonLabel = language == "csharp"
-            && TryGetCSharpLeadingColonLabelValueStart(parameterFragment, out candidateOffset);
-        var candidateSource = candidateOffset == 0
-            ? parameterFragment
-            : parameterFragment.Substring(candidateOffset);
-
-        int end = FindTopLevelAssignmentIndex(candidateSource);
+        int end = FindTopLevelAssignmentIndex(parameterFragment);
         if (end < 0)
-            end = candidateSource.Length;
-        var candidate = candidateSource.Substring(0, end);
+            end = parameterFragment.Length;
+        var candidate = parameterFragment.Substring(0, end);
         var tokens = GetTopLevelTokenSpans(candidate);
         if (tokens.Count < 2)
             return false;
-        if (hasLeadingCSharpColonLabel
-            && !candidate.AsSpan(tokens[0].Start, tokens[0].Length).Equals("out", StringComparison.Ordinal))
-        {
-            return false;
-        }
 
         int first = 0;
         while (first < tokens.Count)
@@ -661,8 +683,7 @@ public static partial class ReferenceExtractor
         if (first >= tokens.Count - 1)
             return false;
 
-        int relativeTypeStart = tokens[first].Start;
-        typeStart = candidateOffset + relativeTypeStart;
+        typeStart = tokens[first].Start;
         int lastTypeToken = tokens.Count - 2;
         while (lastTypeToken >= first)
         {
@@ -678,7 +699,7 @@ public static partial class ReferenceExtractor
 
         if (lastTypeToken < first)
             return false;
-        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - relativeTypeStart;
+        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
         return true;
     }
 
@@ -780,6 +801,165 @@ public static partial class ReferenceExtractor
         while (index < text.Length && char.IsWhiteSpace(text[index]))
             index++;
         valueStart = index;
+        return true;
+    }
+
+    private static void EmitCSharpNamedArgumentValueTypeReferences(
+        string text,
+        int valueStart,
+        int lineStartOffset,
+        List<ReferenceRecord> references,
+        ReferenceDedupeSet seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments)
+    {
+        if (valueStart >= text.Length)
+            return;
+
+        var value = text.Substring(valueStart);
+        var valueTokens = GetTopLevelTokenSpans(value);
+        if (valueTokens.Count >= 2
+            && value.AsSpan(valueTokens[0].Start, valueTokens[0].Length).Equals("out", StringComparison.Ordinal)
+            && TryGetParameterTypeRelativeSpan(value, "csharp", out var outTypeStart, out var outTypeLength))
+        {
+            AddTypeExpressionSegmentsForLanguage(
+                "csharp",
+                references,
+                seen,
+                fileId,
+                value.Substring(outTypeStart, outTypeLength),
+                lineStartOffset + valueStart + outTypeStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(lineStartOffset + valueStart + outTypeStart),
+                ignoredSegments);
+        }
+
+        if (TryGetCSharpNamedArgumentAnonymousFunctionParameterList(value, out var paramStart, out var paramEnd))
+        {
+            EmitParameterTypeReferences(
+                "csharp",
+                value,
+                paramStart,
+                paramEnd,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn,
+                ignoredSegments,
+                lineStartOffset + valueStart);
+        }
+
+        if (TryGetCSharpNamedArgumentQueryTypeSpan(value, out var queryTypeStart, out var queryTypeLength))
+        {
+            AddTypeExpressionSegmentsForLanguage(
+                "csharp",
+                references,
+                seen,
+                fileId,
+                value.Substring(queryTypeStart, queryTypeLength),
+                lineStartOffset + valueStart + queryTypeStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(lineStartOffset + valueStart + queryTypeStart),
+                ignoredSegments);
+        }
+    }
+
+    private static bool TryGetCSharpNamedArgumentAnonymousFunctionParameterList(
+        string value,
+        out int paramStart,
+        out int paramEnd)
+    {
+        paramStart = -1;
+        paramEnd = -1;
+
+        int cursor = 0;
+        while (TrySkipCSharpKeyword(value, ref cursor, "static")
+               || TrySkipCSharpKeyword(value, ref cursor, "async"))
+        {
+        }
+
+        if (TrySkipCSharpKeyword(value, ref cursor, "delegate"))
+        {
+            if (cursor >= value.Length || value[cursor] != '(')
+                return false;
+        }
+        else if (cursor >= value.Length || value[cursor] != '(')
+        {
+            return false;
+        }
+
+        int closeParen = FindMatchingChar(value, cursor, '(', ')');
+        if (closeParen < 0)
+            return false;
+
+        int continuation = closeParen + 1;
+        while (continuation < value.Length && char.IsWhiteSpace(value[continuation]))
+            continuation++;
+        if (continuation + 1 >= value.Length
+            || value[continuation] != '='
+            || value[continuation + 1] != '>')
+        {
+            var delegateStart = 0;
+            while (delegateStart < value.Length && char.IsWhiteSpace(value[delegateStart]))
+                delegateStart++;
+            while (TrySkipCSharpKeyword(value, ref delegateStart, "static")
+                   || TrySkipCSharpKeyword(value, ref delegateStart, "async"))
+            {
+            }
+            if (!value.AsSpan(delegateStart).StartsWith("delegate", StringComparison.Ordinal))
+                return false;
+        }
+
+        paramStart = cursor + 1;
+        paramEnd = closeParen;
+        return true;
+    }
+
+    private static bool TryGetCSharpNamedArgumentQueryTypeSpan(
+        string value,
+        out int typeStart,
+        out int typeLength)
+    {
+        typeStart = -1;
+        typeLength = 0;
+
+        var tokens = GetTopLevelTokenSpans(value);
+        if (tokens.Count < 4
+            || !value.AsSpan(tokens[0].Start, tokens[0].Length).Equals("from", StringComparison.Ordinal)
+            || !IsSimpleDeclarationIdentifier(
+                "csharp",
+                value.Substring(tokens[2].Start, tokens[2].Length))
+            || !value.AsSpan(tokens[3].Start, tokens[3].Length).Equals("in", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        typeStart = tokens[1].Start;
+        typeLength = tokens[1].Length;
+        return !value.AsSpan(typeStart, typeLength).Equals("var", StringComparison.Ordinal);
+    }
+
+    private static bool TrySkipCSharpKeyword(string text, ref int index, string keyword)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        if (!text.AsSpan(index).StartsWith(keyword, StringComparison.Ordinal))
+            return false;
+
+        int end = index + keyword.Length;
+        if (end < text.Length && IsCSharpIdentifierPart(text[end]))
+            return false;
+
+        index = end;
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
         return true;
     }
 

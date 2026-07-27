@@ -44,12 +44,14 @@ public partial class QueryCommandRunnerTests
                 "src/Consumer.cs",
                 """
                 using System;
+                using System.Collections.Generic;
+                using System.Linq;
 
                 namespace Fixture;
 
                 public sealed class Consumer
                 {
-                    public void Run(bool condition)
+                    public void Run(bool condition, IEnumerable<ExpressionPayload> source)
                     {
                         Sink(1, overwrite: true, payload: typeof(ExpressionPayload));
                         Sink(
@@ -57,6 +59,12 @@ public partial class QueryCommandRunnerTests
                             payload: typeof(ExpressionPayload),
                             overwrite: condition ? true : false);
                         SinkOut(payload: out ExpressionPayload declaredPayload);
+                        _ = source.Select(selector: (ExpressionPayload item) => item);
+                        _ = source.Select(selector: delegate(ExpressionPayload item) { return item; });
+                        SinkQuery(query: from ExpressionPayload item in source select item, other: condition);
+                        SinkQuery(
+                            query: from ExpressionPayload item in source select item,
+                            other: condition);
                         if (declaredPayload is PatternHolder
                             {
                                 Value: ExpressionPayload propertyPayload,
@@ -73,6 +81,10 @@ public partial class QueryCommandRunnerTests
                     private static void SinkOut(out ExpressionPayload payload)
                     {
                         payload = new();
+                    }
+
+                    private static void SinkQuery(object query, object other)
+                    {
                     }
                 }
                 """);
@@ -157,14 +169,14 @@ public partial class QueryCommandRunnerTests
                       AND reference.symbol_name = 'ExpressionPayload'
                       AND reference.reference_kind = 'type_reference'
                     """;
-                Assert.Equal(5L, (long)command.ExecuteScalar()!);
+                Assert.Equal(10L, (long)command.ExecuteScalar()!);
 
                 command.CommandText = """
                     SELECT COUNT(*)
                     FROM symbol_references AS reference
                     JOIN files AS source_file ON source_file.id = reference.file_id
                     WHERE source_file.path = 'src/Consumer.cs'
-                      AND reference.symbol_name IN ('payload', 'Value')
+                      AND reference.symbol_name IN ('payload', 'selector', 'query', 'other', 'Value')
                       AND reference.reference_kind = 'type_reference'
                     """;
                 Assert.Equal(0L, (long)command.ExecuteScalar()!);
