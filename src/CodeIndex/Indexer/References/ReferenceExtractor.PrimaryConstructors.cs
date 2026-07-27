@@ -118,7 +118,7 @@ public static partial class ReferenceExtractor
     /// 宣言ヘッダーの範囲（end line は終端 `;` / `{` のカラムまで）だけ合成 ctor に差し替えることで、
     /// 同一行 braced body の呼び出しや後続メソッドは本来の container に残る。
     /// </summary>
-    private static List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> BuildCSharpPrimaryCtorContainers(
+    private static List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container, SymbolRecord Owner)> BuildCSharpPrimaryCtorContainers(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines)
@@ -126,7 +126,7 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return [];
 
-        var ranges = new List<(int, int, int, int, SymbolRecord)>(4);
+        var ranges = new List<(int, int, int, int, SymbolRecord, SymbolRecord)>(4);
         foreach (var symbol in symbols)
         {
             // SymbolExtractor stores C# records as Kind=class and C# 12 structs as Kind=struct.
@@ -180,7 +180,7 @@ public static partial class ReferenceExtractor
                 Visibility = symbol.Visibility,
             };
 
-            ranges.Add((symbol.StartLine, startColumn, headerEndLine, headerEndColumn, synthetic));
+            ranges.Add((symbol.StartLine, startColumn, headerEndLine, headerEndColumn, synthetic, symbol));
         }
 
         return ranges;
