@@ -1074,7 +1074,7 @@ public partial class DbReader
                                      && HasTable("symbol_reference_candidates");
         var targetSymbolIdSql = hasIdentityTargetScope
             ? @"CASE
-                    WHEN r.resolution_state IN ('resolved', 'resolved_group')
+                    WHEN r.resolution_state = 'resolved'
                          AND EXISTS (
                              SELECT 1
                              FROM symbol_reference_candidates projected_identity_candidate
@@ -1082,7 +1082,7 @@ public partial class DbReader
                                AND projected_identity_candidate.symbol_id = @targetSymbolId
                          )
                     THEN @targetSymbolId
-                    ELSE r.target_symbol_id
+                    ELSE NULL
                 END"
             : _referenceColumns.Contains("target_symbol_id") ? "r.target_symbol_id" : "NULL";
 
@@ -1117,11 +1117,13 @@ public partial class DbReader
               AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
                 : @"
               AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
-        // Resolved rows must match the requested canonical target. Unresolved/ambiguous rows
-        // retain the historical name-based conservative traversal, but their null target IDs
-        // keep them out of canonical cycle detection.
-        // resolved 行は要求された正規 target と一致させる。unresolved/ambiguous 行は従来の
-        // 名前ベース保守的 traversal に残すが、null target ID により正規 cycle 判定から除外する。
+        // Resolved rows must match the requested canonical target. Resolution groups can match
+        // a candidate for conservative traversal, but only uniquely resolved rows project that
+        // candidate as an actual cycle edge. Unresolved/ambiguous rows retain the historical
+        // name-based traversal and likewise keep null target IDs.
+        // resolved 行は要求された正規 target と一致させる。resolution group は保守的 traversal
+        // の候補にはできるが、一意に resolved した行だけが実際の cycle edge として候補 ID を
+        // 公開する。unresolved/ambiguous 行も従来の名前ベース探索に残し、target ID は null にする。
         var targetCondition = hasIdentityTargetScope
             ? @"
               AND (

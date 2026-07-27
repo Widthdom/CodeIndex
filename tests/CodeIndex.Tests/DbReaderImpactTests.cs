@@ -263,6 +263,60 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void AnalyzeImpact_ResolvedGroupOverloadChainDoesNotReportSingletonCycle_Issue4847()
+    {
+        // A resolved_group candidate is a possible overload target, not proof of an edge to
+        // every candidate. Revisiting the caller overload must therefore stay out of the
+        // canonical cycle graph while conservative traversal remains available.
+        // resolved_group の候補は overload の可能性であり、全候補への実辺を証明しない。
+        // caller overload への再到達は保守的に探索しても、正規 cycle graph には入れない。
+        InsertIndexedFile("src/ImpactOverloadChain.cs", "csharp",
+            """
+            public static class ImpactOverloadChain
+            {
+                public static void Leaf() { }
+
+                public static void Run()
+                {
+                    Leaf();
+                }
+
+                public static void Run(int value)
+                {
+                    Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact(
+            "ImpactOverloadChain.Leaf",
+            maxDepth: 4,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/ImpactOverloadChain.cs"],
+            withPaths: true);
+
+        Assert.False(analysis.Truncated);
+        Assert.False(analysis.CycleDetected);
+        Assert.Null(analysis.Cycles);
+        Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
+        Assert.Equal(2, analysis.Callers.Count);
+
+        var overloadCaller = Assert.Single(analysis.Callers.Where(caller => caller.Depth == 2));
+        Assert.Equal("Run", overloadCaller.CallerName);
+        Assert.Equal("Run", overloadCaller.CalleeName);
+        Assert.NotNull(overloadCaller.CallerSymbolId);
+        Assert.Null(overloadCaller.CalleeSymbolId);
+        Assert.Equal([new List<string> { "Leaf", "Run", "Run" }], overloadCaller.Paths);
+        Assert.Equal(
+            3,
+            Assert.Single(overloadCaller.PathDetails!)
+                .Select(node => node.SymbolId)
+                .Distinct()
+                .Count());
+    }
+
+    [Fact]
     public void AnalyzeImpact_UnresolvedUpstreamCallerRemainsVisibleButCannotCreateCanonicalCycle_Issue4847()
     {
         InsertIndexedFile("src/ImpactUnresolvedHop.cs", "csharp",
