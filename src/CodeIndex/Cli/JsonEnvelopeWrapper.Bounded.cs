@@ -23,11 +23,8 @@ internal static partial class JsonEnvelopeWrapper
     private const string ResponseCursorPrefix = "response:v2:";
     private static readonly AsyncLocal<BoundedExecutionContext?> BoundedExecution = new();
 
-    private static readonly HashSet<string> BoundedResponseCommands = new(StringComparer.Ordinal)
-    {
-        "search", "definition", "find", "status", "hotspots", "references", "callers", "callees",
-        "symbols", "files", "languages", "impact", "map",
-    };
+    private static readonly HashSet<string> BoundedResponseCommands =
+        ProjectionFieldRegistry.SupportedCommands.ToHashSet(StringComparer.Ordinal);
 
     private static readonly HashSet<string> AutoWrapByteBudgetCommands = new(StringComparer.Ordinal)
     {
@@ -55,23 +52,6 @@ internal static partial class JsonEnvelopeWrapper
     {
         "search", "definition", "find", "hotspots", "references", "callers", "callees",
         "symbols", "files", "languages", "impact",
-    };
-
-    private static readonly Dictionary<string, string[]> CompactFieldsByCommand = new(StringComparer.Ordinal)
-    {
-        ["search"] = ["file", "line"],
-        ["definition"] = ["file", "line", "column"],
-        ["find"] = ["file", "line", "column"],
-        ["references"] = ["file", "line", "column"],
-        ["callers"] = ["file", "line", "column"],
-        ["callees"] = ["file", "line", "column"],
-        ["hotspots"] = ["name", "kind", "path", "line", "reference_count", "reference_score", "ranking_score"],
-        ["impact"] = ["path", "caller_name", "callee_name", "depth", "first_line", "reference_count", "result_kind"],
-        ["symbols"] = ["path", "line", "kind", "name"],
-        ["files"] = ["path", "lang", "lines"],
-        ["languages"] = ["lang", "extensions", "symbol_extraction", "reference_extraction", "graph_queries"],
-        ["status"] = ["api_version", "files", "chunks", "symbols", "references", "indexed_at", "git_head", "git_is_dirty", "head_freshness", "version", "graph_table_available", "hotspot_family_ready", "summary"],
-        ["map"] = ["api_version", "file_count", "total_lines", "total_symbols", "total_references", "indexed_at", "git_head", "git_is_dirty", "head_freshness", "graph_table_available", "sections"],
     };
 
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
@@ -149,6 +129,22 @@ internal static partial class JsonEnvelopeWrapper
     {
         if (!TryParseBoundedResponseControls(command, args, out var controls, out var controlError))
             return WriteBoundedResponseUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.");
+        if (ProjectionFieldRegistry.IsDiscoveryRequest(controls.Fields))
+        {
+            Console.WriteLine(ProjectionFieldRegistry.CreateDiscoveryDocument(command).ToJsonString(jsonOptions));
+            return CommandExitCodes.Success;
+        }
+        if (!ProjectionFieldRegistry.TryValidate(command, controls.Fields, out var fieldError))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                fieldError!.Message,
+                CommandExitCodes.UsageError,
+                fieldError.Hint,
+                errorCode: CommandErrorCodes.UsageError,
+                category: "usage");
+        }
         if (HasArgument(args, "--count"))
             return WriteBoundedResponseUsageError("Bounded response controls cannot be combined with --count.", "Run --count --json separately for a count-only response, or remove --count to page projected rows.");
         if (command == "map" && ValidateMapProjectionControls(args, controls.Fields) is { } mapProjectionError)
@@ -248,7 +244,11 @@ internal static partial class JsonEnvelopeWrapper
         var availableItems = extraction.Items;
         var pageItems = availableItems
             .Take(controls.PageLimit)
-            .Select(item => ProjectResponseItem(item, controls.EffectiveFields(command, extraction.PrimaryCollection)))
+            .Select(item => ProjectResponseItem(
+                item,
+                controls.EffectiveFields(command, extraction.PrimaryCollection),
+                command,
+                extraction.PrimaryCollection))
             .ToList();
 
         var count = executionContext?.ReportedTotalCount is { } reportedTotalCount
@@ -678,7 +678,11 @@ internal static partial class JsonEnvelopeWrapper
         return names.FirstOrDefault(name => payload[name] is JsonArray);
     }
 
-    private static JsonNode? ProjectResponseItem(JsonNode? item, IReadOnlyList<string>? fields)
+    private static JsonNode? ProjectResponseItem(
+        JsonNode? item,
+        IReadOnlyList<string>? fields,
+        string command,
+        string? primaryCollection)
     {
         if (item is not JsonObject obj || fields is null || fields.Count == 0 || fields.Contains("all", StringComparer.Ordinal))
             return item?.DeepClone();
@@ -687,15 +691,16 @@ internal static partial class JsonEnvelopeWrapper
         {
             if (obj.TryGetPropertyValue(field, out var value))
                 projected[field] = value?.DeepClone();
+            else if (ProjectionFieldRegistry.TryResolveAlias(command, primaryCollection, field, out var sourceField)
+                     && obj.TryGetPropertyValue(sourceField, out var aliasValue))
+                projected[string.Equals(field, "body", StringComparison.Ordinal) ? sourceField : field] =
+                    aliasValue?.DeepClone();
             else if (string.Equals(field, "path", StringComparison.Ordinal)
                      && obj.TryGetPropertyValue("file", out var file))
                 projected[field] = file?.DeepClone();
             else if (string.Equals(field, "file", StringComparison.Ordinal)
                      && obj.TryGetPropertyValue("path", out var path))
                 projected[field] = path?.DeepClone();
-            else if (string.Equals(field, "body", StringComparison.Ordinal)
-                     && obj.TryGetPropertyValue("body_content", out var bodyContent))
-                projected["body_content"] = bodyContent?.DeepClone();
         }
         return projected;
     }
@@ -1290,7 +1295,7 @@ internal static partial class JsonEnvelopeWrapper
             var preserveFullDiscoveryRows = command is "search" or "languages";
             var selected = Fields
                            ?? ((!preserveFullDiscoveryRows || Compact)
-                               && CompactFieldsByCommand.TryGetValue(command, out var defaults)
+                               && ProjectionFieldRegistry.GetCompactFields(command) is { } defaults
                                ? defaults
                                : null);
             if (selected is null || primaryCollection is null)

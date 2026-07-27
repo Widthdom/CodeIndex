@@ -372,6 +372,15 @@ command and filters. A cursor is bound to that selection and index generation,
 so changed inputs or a refreshed index require restarting the pagination.
 When a bounded `find --all` scan exits partially, its terminal record includes
 `next_cursor`; replaying it resumes after the last scanned line.
+The bounded-response commands `search`, `definition`, `find`, `status`,
+`hotspots`, `references`, `callers`, `callees`, `symbols`, `files`,
+`languages`, `impact`, and `map` validate `--fields` values case-sensitively
+against one command-specific registry. Unknown names return a typed
+`E010_USAGE_ERROR` instead of successful empty objects. Run
+`cdidx <command> --fields list` before a query to obtain the machine-readable
+catalog, including `all`, collection-qualified fields, aliases and their
+targets, and explicit deprecation metadata. The catalog does not require a
+query or index access.
 For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `--compact`. It implies JSON output, caps list sections to 5 items by default
 (or the explicit `--limit` / `--top` value), and adds `compact`,
@@ -3485,6 +3494,14 @@ cursor はその選択条件と index generation に束縛されるため、入�
 更新後は pagination を最初からやり直す必要があります。上限に達した
 `find --all` scan が partial exit した場合、terminal record の `next_cursor` を
 再利用すると最後に scan した line の次から継続します。
+bounded-response command の `search`、`definition`、`find`、`status`、
+`hotspots`、`references`、`callers`、`callees`、`symbols`、`files`、
+`languages`、`impact`、`map` は、command ごとの単一レジストリに対して
+`--fields` の値を大文字・小文字を区別して検証します。未知の名前では空 object の
+まま成功せず、型付き `E010_USAGE_ERROR` を返します。query の実行前に
+`cdidx <command> --fields list` を実行すると、`all`、collection 修飾 field、
+alias とその参照先、明示的な deprecation metadata を含む機械可読 catalog を取得
+できます。この catalog の取得には query も index access も不要です。
 AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outline` は
 `--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
 既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、
