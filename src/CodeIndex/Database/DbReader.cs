@@ -246,10 +246,12 @@ public partial class DbReader : IDisposable
         END";
     private const string EventReferenceKindsSql = "('subscribe', 'unsubscribe', 'razor_event_binding')";
     private const string ImpactAnchorReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding', 'capture')";
-    // Default callers/callees expose only executable edges. Broader dependency kinds remain
-    // available to impact/hotspot queries and through an explicit reference-kind filter.
-    // 既定の callers/callees は実行可能な edge だけを公開する。より広い依存 kind は
-    // impact/hotspot query と明示的な reference-kind filter から引き続き利用できる。
+    // Default callers/callees expose executable edges plus dependency-lock ownership edges.
+    // Broader dependency kinds remain available to impact/hotspot queries and through an
+    // explicit reference-kind filter.
+    // 既定の callers/callees は実行可能な edge と dependency-lock の所有関係 edge を公開する。
+    // より広い依存 kind は impact/hotspot query と明示的な reference-kind filter から
+    // 引き続き利用できる。
     private const string CallableReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')";
     // Reference kinds that participate in dependency-oriented graph traversal and hotspot ranking.
     // Default callers/callees use the narrower CallableReferenceKindsSql allowlist above. Metadata
@@ -353,9 +355,15 @@ public partial class DbReader : IDisposable
     // filter semantics と output projection を分離する。canonical `subscribe` filter は raw event
     // variant 全体を選び、明示された raw variant はその kind だけを選ぶ。公開 label を
     // canonical / raw のどちらにするかは呼び出し側で別途決める。
-    private static string GetCallableReferenceKindPredicateSql(string referenceKindSql, string? referenceKind)
+    private static string GetCallableReferenceKindPredicateSql(
+        string referenceKindSql,
+        string? referenceKind,
+        string? sourceLanguageSql = null)
         => referenceKind switch
         {
+            null when sourceLanguageSql is not null =>
+                $"({referenceKindSql} IN {CallableReferenceKindsSql} OR " +
+                $"({sourceLanguageSql} = 'dependency_lock' AND {referenceKindSql} = 'dependency'))",
             null => $"{referenceKindSql} IN {CallableReferenceKindsSql}",
             "subscribe" => $"{referenceKindSql} IN {EventReferenceKindsSql}",
             _ => $"{referenceKindSql} = @referenceKind",

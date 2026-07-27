@@ -106,7 +106,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
                 WHERE " + callerContainerPredicate + @"
-                  AND " + GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind) + @"
+                  AND " + GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang") + @"
                   AND " + supportedLangPredicate;
         if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
         {
@@ -294,7 +294,7 @@ public partial class DbReader
             WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
             && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -429,7 +429,7 @@ public partial class DbReader
                 WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}";
         if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
         {
             groupedSql += _referenceColumns.Contains("resolution_state")
@@ -593,7 +593,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
-                  AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}
+                  AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
         if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
             sql += " AND r.source_symbol_id = @sourceSymbolId";
@@ -758,7 +758,7 @@ public partial class DbReader
             WHERE r.container_name IS NOT NULL";
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -881,7 +881,7 @@ public partial class DbReader
                 WHERE r.container_name IS NOT NULL";
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}";
         if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
             groupedSql += " AND r.source_symbol_id = @sourceSymbolId";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
