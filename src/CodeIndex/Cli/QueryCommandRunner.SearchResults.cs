@@ -503,6 +503,30 @@ public static partial class QueryCommandRunner
                 options.GuardScope,
                 options.TokenBoundary);
 
+    private static int CountAdHocSearchSarifSourceResults(
+        DbReader reader,
+        QueryCommandOptions options,
+        bool exact)
+    {
+        if (!exact)
+            return CountSearchMatches(reader, options, exact).Count;
+
+        var rows = HasSearchOriginFilters(options)
+            ? ReadOriginFilteredSearchDisplayRows(reader, options, exact, int.MaxValue)
+            : BuildSearchDisplayRows(
+                ReadSearchResults(reader, options, exact, int.MaxValue),
+                options,
+                exact);
+        var count = 0L;
+        foreach (var row in rows)
+        {
+            count += ToSearchSarifItems(row, options.Query!, exact).LongCount();
+            if (count >= int.MaxValue)
+                return int.MaxValue;
+        }
+        return (int)count;
+    }
+
     private static void WriteGroupedSearchResultsHuman(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {
         foreach (var group in BuildSearchFileGroups(rows, options))

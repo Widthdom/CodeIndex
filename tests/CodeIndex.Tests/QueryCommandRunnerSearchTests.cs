@@ -1631,6 +1631,54 @@ public partial class QueryCommandRunnerTests
                 resultLimit: 1,
                 truncated: false);
 
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/repeat.cs",
+                "csharp",
+                "public class RepeatFixture { void Run() { OccurrenceNeedle(); OccurrenceNeedle(); OccurrenceNeedle(); OccurrenceNeedle(); } }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/dash.cs",
+                "csharp",
+                "public class DashFixture { // -TODO\n}");
+            var (expandedExitCode, expandedStdout, expandedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["OccurrenceNeedle", "--db", dbPath, "--format", "sarif", "--exact-substring", "--limit", "2"],
+                _jsonOptions));
+            var (rawFtsExitCode, rawFtsStdout, rawFtsStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate OR OccurrenceNeedle", "--db", dbPath, "--format", "sarif", "--fts", "--limit", "1"],
+                _jsonOptions));
+            var (dashExitCode, dashStdout, dashStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--", "-TODO", "--db", dbPath, "--format", "sarif", "--exact-substring", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, expandedExitCode);
+            Assert.Equal(CommandExitCodes.Success, rawFtsExitCode);
+            Assert.Equal(CommandExitCodes.Success, dashExitCode);
+            Assert.Equal(string.Empty, expandedStderr);
+            Assert.Equal(string.Empty, rawFtsStderr);
+            Assert.Equal(string.Empty, dashStderr);
+            using var expandedDocument = ParseJsonOutput(expandedStdout);
+            using var rawFtsDocument = ParseJsonOutput(rawFtsStdout);
+            using var dashDocument = ParseJsonOutput(dashStdout);
+            var expandedRun = expandedDocument.RootElement.GetProperty("runs")[0];
+            AssertAdHocSearchSarifCompletion(
+                expandedRun,
+                sourceResultCount: 4,
+                returnedResultCount: 2,
+                resultLimit: 2,
+                truncated: true);
+            var rawFtsReplayCommand = rawFtsDocument.RootElement.GetProperty("runs")[0]
+                .GetProperty("properties")
+                .GetProperty("replay_command")
+                .GetString();
+            Assert.Contains("--fts", rawFtsReplayCommand, StringComparison.Ordinal);
+            Assert.DoesNotContain("--raw-fts", rawFtsReplayCommand, StringComparison.Ordinal);
+            var dashReplayCommand = dashDocument.RootElement.GetProperty("runs")[0]
+                .GetProperty("properties")
+                .GetProperty("replay_command")
+                .GetString();
+            Assert.Contains("search -- -TODO", dashReplayCommand, StringComparison.Ordinal);
+
             var mergedDocumentJson = "{\"version\":\"2.1.0\",\"runs\":["
                 + completeRun.GetRawText()
                 + ","

@@ -3057,12 +3057,12 @@ public static partial class QueryCommandRunner
         {
             "cdidx",
             "search",
-            options.Query!,
-            "--format",
-            outputFormat,
-            "--limit",
-            options.Limit.ToString(CultureInfo.InvariantCulture),
         };
+        if (options.Query!.StartsWith('-'))
+            args.Add("--");
+        args.Add(options.Query);
+        AddReplayValueOption(args, "--format", outputFormat);
+        AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
 
         if (options.DbPathExplicit)
             AddReplayValueOption(args, "--db", options.DbPath);
@@ -3103,7 +3103,7 @@ public static partial class QueryCommandRunner
         if (options.ExactSubstring)
             args.Add("--exact-substring");
         if (options.RawFts)
-            args.Add("--raw-fts");
+            args.Add("--fts");
         if (options.Prefix)
             args.Add("--prefix");
         if (options.TokenBoundary)

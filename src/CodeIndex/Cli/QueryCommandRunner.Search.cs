@@ -745,7 +745,7 @@ public static partial class QueryCommandRunner
                     ? BuildAdHocSearchSarifRunProperties(
                         options,
                         selection,
-                        CountSearchMatches(reader, options, exactSearch).Count,
+                        CountAdHocSearchSarifSourceResults(reader, options, exactSearch),
                         returnedResultCount: 0)
                     : null;
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions, emptySarifRunProperties))
@@ -866,7 +866,7 @@ public static partial class QueryCommandRunner
                     var runProperties = BuildAdHocSearchSarifRunProperties(
                         options,
                         selection,
-                        CountSearchMatches(reader, options, exactSearch).Count,
+                        CountAdHocSearchSarifSourceResults(reader, options, exactSearch),
                         sarifItems.Count);
                     WriteSarif(sarifItems, jsonOptions, runProperties: runProperties);
                     return CommandExitCodes.Success;
