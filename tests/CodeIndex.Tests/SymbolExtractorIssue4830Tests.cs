@@ -54,6 +54,8 @@ public partial class SymbolExtractorTests
                             await Task.Yield();
                             return asyncExplicitValue;
                         });
+                    Func<LambdaResult> explicitCustomZero =
+                        static LambdaResult () => new();
                     var combiningIdentifier = Apply(
                         static café => café + 1);
                     var escapedIdentifier = Apply(
@@ -69,12 +71,44 @@ public partial class SymbolExtractorTests
                         + asyncThenStatic(1).Result
                         + explicitReturn(1)
                         + explicitAsyncReturn(1).Result
+                        + explicitCustomZero().Value
                         + combiningIdentifier(1)
                         + escapedIdentifier(1)
                         + nested(1));
                 }
 
+                static StaticLambdaSamples() => RealStaticMember(0);
+
+                private static T RealStaticGeneric<T>(T value) => value;
+
+                static int IStaticContract<StaticLambdaSamples>.Transform(int value) => value;
+
+                private @static RealVerbatimTypeMember(int value) => new();
+
+                private static @static RealStaticVerbatimTypeMember(int value) => new();
+
+                private static int RealStaticGenericOwner(int value)
+                {
+                    static T RealStaticGenericLocal<T>(T item) => item;
+                    return RealStaticGenericLocal(value);
+                }
+
                 private static Func<T, TResult> Apply<T, TResult>(Func<T, TResult> callback) => callback;
+            }
+
+            public class @static
+            {
+            }
+
+            public sealed class LambdaResult
+            {
+                public int Value { get; }
+            }
+
+            public interface IStaticContract<TSelf>
+                where TSelf : IStaticContract<TSelf>
+            {
+                static abstract int Transform(int value);
             }
             """;
 
@@ -91,6 +125,7 @@ public partial class SymbolExtractorTests
             "secondAsyncValue",
             "int",
             "Task",
+            "LambdaResult",
             "explicitValue",
             "asyncExplicitValue",
             "café",
@@ -106,6 +141,16 @@ public partial class SymbolExtractorTests
                 && forbiddenNames.Contains(symbol.Name));
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealStaticMember");
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealStaticLocal");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "StaticLambdaSamples");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealStaticGeneric");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealStaticGenericLocal");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function"
+                && symbol.Name == "Transform"
+                && symbol.ContainerName == "StaticLambdaSamples");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealVerbatimTypeMember");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealStaticVerbatimTypeMember");
 
         var lambda = Assert.Single(symbols.Where(symbol => symbol.Kind == "lambda" && symbol.Name == "ExistingLambda"));
         Assert.Equal("StaticLambdaSamples", lambda.ContainerName);

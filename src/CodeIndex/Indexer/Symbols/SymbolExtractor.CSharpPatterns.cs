@@ -85,8 +85,8 @@ public static partial class SymbolExtractor
     private static readonly Regex CSharpExplicitLambdaReturnTypeRegex = new(
         $@"^(?:{CSharpTypePattern})$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex CSharpTypeFollowedByDeclaratorRegex = new(
-        $@"^(?:{CSharpTypePattern})\s+(?<declarator>{CSharpIdentifierPattern})$",
+    private static readonly Regex CSharpStaticConstructorHeaderPrefixRegex = new(
+        $@"^(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>{CSharpIdentifierPattern})\s*\(\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool IsCSharpConstOrStaticReadonlyField(string signature)

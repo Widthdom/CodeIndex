@@ -2086,7 +2086,10 @@ public static partial class SymbolExtractor
         return expressionBraceDepth.HasValue;
     }
 
-    private static bool IsCSharpStaticLambdaHeaderCandidate(string matchLine, int nameIndex)
+    private static bool IsCSharpStaticLambdaHeaderCandidate(
+        string matchLine,
+        int nameIndex,
+        string? enclosingTypeName)
     {
         var boundedNameIndex = Math.Min(Math.Max(0, nameIndex), matchLine.Length);
         var searchIndex = 0;
@@ -2099,6 +2102,7 @@ public static partial class SymbolExtractor
             if (TryGetCSharpStaticLambdaHeaderRange(
                     matchLine,
                     arrowIndex,
+                    enclosingTypeName,
                     out var headerStart,
                     out var headerEnd)
                 && boundedNameIndex >= headerStart
@@ -2116,6 +2120,7 @@ public static partial class SymbolExtractor
     private static bool TryGetCSharpStaticLambdaHeaderRange(
         string matchLine,
         int arrowIndex,
+        string? enclosingTypeName,
         out int headerStart,
         out int headerEnd)
     {
@@ -2179,6 +2184,7 @@ public static partial class SymbolExtractor
             || !TryFindCSharpExplicitReturnStaticLambdaModifier(
                 matchLine,
                 parameterStart,
+                enclosingTypeName,
                 out modifierStart))
         {
             return false;
@@ -2225,6 +2231,7 @@ public static partial class SymbolExtractor
     private static bool TryFindCSharpExplicitReturnStaticLambdaModifier(
         string text,
         int parameterStart,
+        string? enclosingTypeName,
         out int modifierStart)
     {
         modifierStart = -1;
@@ -2260,6 +2267,15 @@ public static partial class SymbolExtractor
                 candidateModifierStart = precedingTokenStart;
             }
 
+            if (IsCSharpRealStaticDeclarationHeader(
+                    text,
+                    staticIndex,
+                    parameterStart,
+                    enclosingTypeName))
+            {
+                continue;
+            }
+
             if (!IsCSharpExplicitLambdaReturnType(
                     text,
                     returnTypeStart,
@@ -2273,6 +2289,68 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool IsCSharpRealStaticDeclarationHeader(
+        string text,
+        int staticIndex,
+        int parameterStart,
+        string? enclosingTypeName)
+    {
+        var headerEnd = Math.Min(text.Length, parameterStart + 1);
+        if (staticIndex < 0 || staticIndex >= headerEnd)
+            return false;
+
+        var header = text[staticIndex..headerEnd];
+        if (CSharpMethodHeaderPrefixRegex.IsMatch(header))
+            return true;
+
+        var precedingCursor = staticIndex - 1;
+        SkipCSharpWhitespaceBackward(text, ref precedingCursor);
+
+        // A static constructor has no return type, so its lexical prefix is otherwise
+        // indistinguishable from a zero-parameter explicit-return lambda. Preserve the
+        // constructor only at a declaration boundary; lambdas follow `=`, `,`, `(`, or
+        // another expression token. Generic methods and explicit-interface implementations
+        // are recognized by CSharpMethodHeaderPrefixRegex above.
+        // static constructor は戻り値型を持たないため、字句上は parameter 0 個の明示的
+        // 戻り値型 lambda と区別できない。宣言境界にある constructor だけを維持し、
+        // `=`、`,`、`(`、その他の式 token に続く lambda は維持しない。generic method と
+        // 明示的 interface 実装は上の CSharpMethodHeaderPrefixRegex で識別する。
+        if (precedingCursor >= 0 && text[precedingCursor] is not ('{' or '}' or ';'))
+            return false;
+
+        var constructorMatch = CSharpStaticConstructorHeaderPrefixRegex.Match(header);
+        if (!constructorMatch.Success || string.IsNullOrWhiteSpace(enclosingTypeName))
+            return false;
+
+        var constructorName = constructorMatch.Groups["name"].ValueSpan.Trim();
+        if (constructorName.Length > 0 && constructorName[0] == '@')
+            constructorName = constructorName[1..];
+
+        return constructorName.SequenceEqual(enclosingTypeName.AsSpan());
+    }
+
+    private static string? FindCSharpEnclosingTypeName(
+        IReadOnlyList<SymbolRecord> symbols,
+        int line)
+    {
+        for (var index = symbols.Count - 1; index >= 0; index--)
+        {
+            var candidate = symbols[index];
+            if (candidate.Kind is not ("class" or "struct")
+                || candidate.BodyStartLine is null
+                || candidate.BodyEndLine is null
+                || candidate.BodyStartLine > line
+                || candidate.BodyEndLine < line)
+            {
+                continue;
+            }
+
+            return candidate.Name;
+        }
+
+        return null;
     }
 
     private static bool IsCSharpExplicitLambdaReturnType(
@@ -2300,25 +2378,7 @@ public static partial class SymbolExtractor
             return false;
 
         var returnType = text[start..end];
-        if (!CSharpExplicitLambdaReturnTypeRegex.IsMatch(returnType))
-            return false;
-
-        var declaratorMatch = CSharpTypeFollowedByDeclaratorRegex.Match(returnType);
-        if (!declaratorMatch.Success)
-            return true;
-
-        var declaratorIndex = declaratorMatch.Groups["declarator"].Index;
-        var previousIndex = declaratorIndex - 1;
-        while (previousIndex >= 0 && char.IsWhiteSpace(returnType[previousIndex]))
-            previousIndex--;
-
-        // Whitespace around `.` / `::` is legal inside a qualified type and does not
-        // introduce a local-function name. Any other trailing identifier after a complete
-        // type is a declarator, so the arrow belongs to a real expression-bodied method.
-        // qualified type 内の `.` / `::` 周辺空白は合法で、local-function 名ではない。
-        // それ以外で完全な type に続く末尾 identifier は declarator なので、本物の
-        // expression-bodied method として維持する。
-        return previousIndex >= 0 && returnType[previousIndex] is '.' or ':';
+        return CSharpExplicitLambdaReturnTypeRegex.IsMatch(returnType);
     }
 
     private static bool IsCSharpStandaloneKeywordAt(
@@ -2333,7 +2393,9 @@ public static partial class SymbolExtractor
 
         var before = start - 1;
         var after = start + keyword.Length;
-        return (before < 0 || !IsCSharpLambdaIdentifierPart(text[before]))
+        return (before < 0
+                || text[before] != '@'
+                    && !IsCSharpLambdaIdentifierPart(text[before]))
             && (after >= text.Length || !IsCSharpLambdaIdentifierPart(text[after]));
     }
 

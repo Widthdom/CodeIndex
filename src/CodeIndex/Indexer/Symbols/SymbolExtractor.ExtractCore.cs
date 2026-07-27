@@ -447,7 +447,8 @@ public static partial class SymbolExtractor
                             && match.Groups["name"].Success
                             && IsCSharpStaticLambdaHeaderCandidate(
                                 patternMatchLine,
-                                lineOffset + match.Groups["name"].Index))
+                                lineOffset + match.Groups["name"].Index,
+                                FindCSharpEnclosingTypeName(symbols, i + 1)))
                         {
                             // Multi-line call arguments are composed into the same candidate
                             // string as the following lambda. A declaration-shaped regex can then
