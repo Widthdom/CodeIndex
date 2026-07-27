@@ -25,7 +25,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("unused", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("unused")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "unused"))
+        if (TryWriteParseError(options, "unused", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "unused", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;

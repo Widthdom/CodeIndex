@@ -32,7 +32,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
-        if (TryWriteParseError(options, "symbols"))
+        if (TryWriteParseError(options, "symbols", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteBlankQueryError(options, "symbols"))
             return CommandExitCodes.UsageError;
@@ -419,7 +419,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteDiscoveryOutputControlUsageError("files", options))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "files"))
+        if (TryWriteParseError(options, "files", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedExtraPositionals("files", options))
             return CommandExitCodes.UsageError;

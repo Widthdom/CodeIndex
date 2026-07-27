@@ -26,7 +26,7 @@ public static partial class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
         if (TryWriteUnsupportedOptionError("impact", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("impact"), options.Query))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "impact"))
+        if (TryWriteParseError(options, "impact", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "impact"))
             return CommandExitCodes.UsageError;
@@ -466,7 +466,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("deps", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("deps")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "deps"))
+        if (TryWriteParseError(options, "deps", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("deps", options))
             return CommandExitCodes.UsageError;

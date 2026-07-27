@@ -1671,8 +1671,18 @@ public partial class DbReader : IDisposable
         var normalized = NormalizeQueryLanguageKey(lang);
         return QueryLanguageAliases.TryGetValue(normalized, out var canonical)
             ? canonical
-            : normalized;
+            : normalized.Length == 0
+                ? normalized
+                : lang.Trim();
     }
+
+    internal static IReadOnlyDictionary<string, string> GetQueryLanguageAliases(string? workspaceRoot)
+        => string.IsNullOrWhiteSpace(workspaceRoot)
+            ? QueryLanguageAliases
+            : BuildQueryLanguageAliases(workspaceRoot);
+
+    internal static string NormalizeQueryLanguageLookupKey(string lang)
+        => NormalizeQueryLanguageKey(lang);
 
     internal static string FoldNameForLanguage(string value, string? lang) =>
         string.Equals(NormalizeQueryLanguage(lang), "nim", StringComparison.Ordinal)
@@ -1699,12 +1709,17 @@ public partial class DbReader : IDisposable
     internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
         => langs.Any(IsSqlLanguage);
 
-    private static IReadOnlyDictionary<string, string> BuildQueryLanguageAliases()
+    private static IReadOnlyDictionary<string, string> BuildQueryLanguageAliases(string? workspaceRoot = null)
     {
-        var languageExtensions = FileIndexer.GetLanguageExtensions();
+        var languageExtensions = workspaceRoot == null
+            ? FileIndexer.GetLanguageExtensions()
+            : FileIndexer.GetLanguageExtensions(workspaceRoot);
         var aliases = new Dictionary<string, string>(languageExtensions.Count * 2 + 32, StringComparer.OrdinalIgnoreCase);
 
-        foreach (var lang in FileIndexer.GetDetectedLanguageNames())
+        var detectedLanguages = workspaceRoot == null
+            ? FileIndexer.GetDetectedLanguageNames()
+            : FileIndexer.GetDetectedLanguageNames(workspaceRoot);
+        foreach (var lang in detectedLanguages)
             AddQueryLanguageAlias(aliases, lang, lang);
         foreach (var (pattern, lang) in languageExtensions)
             AddQueryLanguageAlias(aliases, pattern, lang);

@@ -5830,7 +5830,7 @@ public partial class QueryCommandRunnerTests
 
             var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Heading", "--db", readOnlyUri, "--exact", "--lang", "text", "--json"],
+                ["Heading", "--db", readOnlyUri, "--exact", "--lang", "text", "--allow-unknown-lang", "--json"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);

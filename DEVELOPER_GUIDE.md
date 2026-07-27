@@ -3093,6 +3093,14 @@ Downstream users can add lightweight language support without rebuilding
   the extracted JSON to a fixture. The source and expectation files are capped
   at 4 MiB each.
 
+Query-side `--lang` resolution uses this same workspace-aware extension and
+extractor registry rather than a separate built-in list. Registered language
+IDs, aliases, and extension-like spellings resolve to the registry's canonical
+ID. Unknown values fail with `E010_USAGE_ERROR` and bounded edit-distance
+suggestions; `--allow-unknown-lang` is the explicit escape hatch for an
+unregistered plugin ID and preserves its trimmed spelling through the database
+filter.
+
 Minimal examples:
 
 ```yaml
@@ -5692,6 +5700,13 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
   source と expectation file はそれぞれ 4 MiB に制限されます。
+
+query 側の `--lang` 解決は、別の組み込み一覧ではなく、この workspace-aware な
+extension / extractor registry を共有します。登録済み language ID、alias、拡張子形式の
+表記は registry の canonical ID に解決されます。未知の値は上限付き edit-distance 候補を
+伴う `E010_USAGE_ERROR` になり、未登録 plugin ID には明示的な escape hatch
+`--allow-unknown-lang` を使います。この場合、前後空白を除いた表記を database filter まで
+保持します。
 
 最小例:
 

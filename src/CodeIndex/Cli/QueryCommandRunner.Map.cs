@@ -24,7 +24,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("map", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("map")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "map"))
+        if (TryWriteParseError(options, "map", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("map", options, RepoMapOutputFormats, "Use `--format json`, `--format compact`, or `--format issue-drafts` for map output; use `cdidx files --count` when you need only a file count."))
             return CommandExitCodes.UsageError;

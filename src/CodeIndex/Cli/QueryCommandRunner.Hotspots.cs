@@ -31,7 +31,7 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("hotspots")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "hotspots"))
+        if (TryWriteParseError(options, "hotspots", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "hotspots", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;

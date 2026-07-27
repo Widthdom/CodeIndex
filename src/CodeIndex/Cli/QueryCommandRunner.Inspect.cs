@@ -23,7 +23,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteNonPositiveCoordinateJsonError(options, jsonOptions, "--line", "--start", "--start-line", "--end", "--end-line"))
             return CommandExitCodes.InvalidArgument;
-        if (TryWriteParseError(options, "inspect"))
+        if (TryWriteParseError(options, "inspect", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("inspect", options, InspectOutputFormats, "Use `--format json` or `--format compact` for inspect bundles; count output is not meaningful for one inspect bundle."))
             return CommandExitCodes.UsageError;
