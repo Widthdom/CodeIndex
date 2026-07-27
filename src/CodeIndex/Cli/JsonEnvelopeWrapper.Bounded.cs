@@ -586,9 +586,13 @@ internal static partial class JsonEnvelopeWrapper
         }
         if (command == "hotspots" && rawResults.FirstOrDefault() is JsonObject hotspotsPayload)
             return ExtractNestedCollection(hotspotsPayload, "hotspots");
-        if (command == "symbols" && rawResults.FirstOrDefault() is JsonObject symbolsPayload)
+        if (command == "symbols"
+            && rawResults.FirstOrDefault() is JsonObject symbolsPayload
+            && symbolsPayload["symbols"] is JsonArray)
             return ExtractNestedCollection(symbolsPayload, "symbols");
-        if (command == "files" && rawResults.FirstOrDefault() is JsonObject filesPayload)
+        if (command == "files"
+            && rawResults.FirstOrDefault() is JsonObject filesPayload
+            && filesPayload["files"] is JsonArray)
             return ExtractNestedCollection(filesPayload, "files");
         if (command == "languages" && rawResults.FirstOrDefault() is JsonObject languagesPayload)
             return ExtractNestedCollection(languagesPayload, "languages");
@@ -622,6 +626,8 @@ internal static partial class JsonEnvelopeWrapper
                     mapPayload);
             }
         }
+        if (command is "symbols" or "files")
+            return ExtractDiscoveryRows(command, rawResults);
         if (rawResults.Count == 1 && rawResults[0] is JsonArray arrayPayload)
         {
             return new ResponseExtraction(
@@ -639,6 +645,32 @@ internal static partial class JsonEnvelopeWrapper
             rows.Add(result?.DeepClone());
         }
         return new ResponseExtraction(rows, null, null, null);
+    }
+
+    private static ResponseExtraction ExtractDiscoveryRows(string command, JsonArray rawResults)
+    {
+        var rows = new JsonArray();
+        JsonObject? context = null;
+        foreach (var result in rawResults)
+        {
+            if (result is JsonObject obj && IsJsonStreamTerminal(obj))
+                continue;
+            rows.Add(result?.DeepClone());
+            if (command != "symbols" || result is not JsonObject row)
+                continue;
+
+            if (row.TryGetPropertyValue("exact_index_available", out var exactIndexAvailable))
+            {
+                context ??= new JsonObject();
+                context["exact_index_available"] = exactIndexAvailable?.DeepClone();
+            }
+            if (row.TryGetPropertyValue("degraded_reason", out var degradedReason))
+            {
+                context ??= new JsonObject();
+                context["degraded_reason"] = degradedReason?.DeepClone();
+            }
+        }
+        return new ResponseExtraction(rows, command, context, null);
     }
 
     private static ResponseExtraction ExtractNestedCollection(JsonObject payload, string collectionName)
