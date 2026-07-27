@@ -121,8 +121,10 @@ internal static class Issue4831CSharpFixture
         #else
             public void FallbackMethod(
         #endif
-                int value)
+                int value,
+                out int result)
             {
+                result = value;
             }
 
         #region Handlers (
@@ -132,6 +134,24 @@ internal static class Issue4831CSharpFixture
         #endregion
 
             public void AfterRegion()
+            {
+            }
+        }
+
+        public sealed class DisabledBranchScanner
+        {
+        #if true
+        #else
+            Broken(
+        #endif
+            public void AfterInactiveElse()
+            {
+            }
+
+        #if false
+            Broken(
+        #endif
+            public void AfterConditionalWithoutElse()
             {
             }
         }
@@ -228,5 +248,15 @@ public partial class SymbolExtractorTests
         Assert.Contains(
             symbols,
             symbol => symbol.Kind == "function" && symbol.Name == "AfterRegion");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function" && symbol.Name == "AfterInactiveElse");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function"
+                && symbol.Name == "AfterConditionalWithoutElse");
+        Assert.DoesNotContain(
+            symbols,
+            symbol => symbol.Kind == "function" && symbol.Name == "out");
     }
 }

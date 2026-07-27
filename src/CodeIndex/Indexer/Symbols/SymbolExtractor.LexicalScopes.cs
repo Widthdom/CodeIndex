@@ -273,7 +273,8 @@ public static partial class SymbolExtractor
     {
         None,
         If,
-        Alternative,
+        ElseIf,
+        Else,
         EndIf,
         Other,
     }
@@ -284,6 +285,18 @@ public static partial class SymbolExtractor
         bool[] ParenContributions,
         (int ParenDepth, bool RestoresBaseline)[] BraceBaselines,
         string StatementText);
+
+    private sealed class CSharpConditionalBranchFrame
+    {
+        public CSharpConditionalBranchFrame(CSharpDeclarationDelimiterState startState)
+        {
+            StartState = startState;
+        }
+
+        public CSharpDeclarationDelimiterState StartState { get; }
+        public List<CSharpDeclarationDelimiterState> BranchEndStates { get; } = [];
+        public bool HasElse { get; set; }
+    }
 
     private static CSharpDeclarationStartScope BuildCSharpDeclarationStartScope(
         string[] structuralLines,
@@ -297,7 +310,7 @@ public static partial class SymbolExtractor
         var statementBuffer = new StringBuilder(256);
         var braceBaselines = new Stack<(int ParenDepth, bool RestoresBaseline)>();
         var parenContributions = new Stack<bool>();
-        var conditionalBranchStates = new Stack<CSharpDeclarationDelimiterState>();
+        var conditionalBranchFrames = new Stack<CSharpConditionalBranchFrame>();
         var parenDepth = 0;
         var parenBaseline = 0;
 
@@ -317,31 +330,66 @@ public static partial class SymbolExtractor
                 switch (directiveKind)
                 {
                     case CSharpPreprocessorDirectiveKind.If:
-                        conditionalBranchStates.Push(new CSharpDeclarationDelimiterState(
-                            parenDepth,
-                            parenBaseline,
-                            parenContributions.ToArray(),
-                            braceBaselines.ToArray(),
-                            statementBuffer.ToString()));
-                        break;
-                    case CSharpPreprocessorDirectiveKind.Alternative:
-                        if (conditionalBranchStates.TryPeek(out var branchStart))
-                        {
-                            parenDepth = branchStart.ParenDepth;
-                            parenBaseline = branchStart.ParenBaseline;
-                            RestoreCSharpDeclarationDelimiterStack(
+                        conditionalBranchFrames.Push(new CSharpConditionalBranchFrame(
+                            CaptureCSharpDeclarationDelimiterState(
+                                parenDepth,
+                                parenBaseline,
                                 parenContributions,
-                                branchStart.ParenContributions);
-                            RestoreCSharpDeclarationDelimiterStack(
                                 braceBaselines,
-                                branchStart.BraceBaselines);
-                            statementBuffer.Clear();
-                            statementBuffer.Append(branchStart.StatementText);
+                                statementBuffer)));
+                        break;
+                    case CSharpPreprocessorDirectiveKind.ElseIf:
+                    case CSharpPreprocessorDirectiveKind.Else:
+                        if (conditionalBranchFrames.TryPeek(out var branchFrame))
+                        {
+                            branchFrame.BranchEndStates.Add(
+                                CaptureCSharpDeclarationDelimiterState(
+                                    parenDepth,
+                                    parenBaseline,
+                                    parenContributions,
+                                    braceBaselines,
+                                    statementBuffer));
+                            if (directiveKind == CSharpPreprocessorDirectiveKind.Else)
+                                branchFrame.HasElse = true;
+                            RestoreCSharpDeclarationDelimiterState(
+                                branchFrame.StartState,
+                                ref parenDepth,
+                                ref parenBaseline,
+                                parenContributions,
+                                braceBaselines,
+                                statementBuffer);
                         }
                         break;
                     case CSharpPreprocessorDirectiveKind.EndIf:
-                        if (conditionalBranchStates.Count > 0)
-                            conditionalBranchStates.Pop();
+                        if (conditionalBranchFrames.TryPop(out var completedFrame))
+                        {
+                            completedFrame.BranchEndStates.Add(
+                                CaptureCSharpDeclarationDelimiterState(
+                                    parenDepth,
+                                    parenBaseline,
+                                    parenContributions,
+                                    braceBaselines,
+                                    statementBuffer));
+                            if (!completedFrame.HasElse)
+                            {
+                                // With no `#else`, none of the conditional branches may be
+                                // active, so the entry state is also a possible branch end.
+                                // `#else` が無い場合は全 conditional branch が非採用になり得る
+                                // ため、entry state も branch end 候補に含める。
+                                completedFrame.BranchEndStates.Add(completedFrame.StartState);
+                            }
+
+                            var mergedState = MergeCSharpDeclarationDelimiterStates(
+                                completedFrame.BranchEndStates,
+                                completedFrame.StartState);
+                            RestoreCSharpDeclarationDelimiterState(
+                                mergedState,
+                                ref parenDepth,
+                                ref parenBaseline,
+                                parenContributions,
+                                braceBaselines,
+                                statementBuffer);
+                        }
                         break;
                 }
 
@@ -460,10 +508,102 @@ public static partial class SymbolExtractor
         return directive switch
         {
             "if" => CSharpPreprocessorDirectiveKind.If,
-            "elif" or "else" => CSharpPreprocessorDirectiveKind.Alternative,
+            "elif" => CSharpPreprocessorDirectiveKind.ElseIf,
+            "else" => CSharpPreprocessorDirectiveKind.Else,
             "endif" => CSharpPreprocessorDirectiveKind.EndIf,
             _ => CSharpPreprocessorDirectiveKind.Other,
         };
+    }
+
+    private static CSharpDeclarationDelimiterState CaptureCSharpDeclarationDelimiterState(
+        int parenDepth,
+        int parenBaseline,
+        Stack<bool> parenContributions,
+        Stack<(int ParenDepth, bool RestoresBaseline)> braceBaselines,
+        StringBuilder statementBuffer) =>
+        new(
+            parenDepth,
+            parenBaseline,
+            parenContributions.ToArray(),
+            braceBaselines.ToArray(),
+            statementBuffer.ToString());
+
+    private static CSharpDeclarationDelimiterState MergeCSharpDeclarationDelimiterStates(
+        IReadOnlyList<CSharpDeclarationDelimiterState> states,
+        CSharpDeclarationDelimiterState fallback)
+    {
+        if (states.Count == 0)
+            return fallback;
+
+        var parenContributions = GetCommonCSharpDeclarationStackBottom(
+            states.Select(state => state.ParenContributions).ToArray());
+        var braceBaselines = GetCommonCSharpDeclarationStackBottom(
+            states.Select(state => state.BraceBaselines).ToArray());
+        var parenDepth = parenContributions.Count(contributes => contributes);
+        var parenBaseline = states.All(state => state.ParenBaseline == states[0].ParenBaseline)
+            ? Math.Min(states[0].ParenBaseline, parenDepth)
+            : Math.Min(fallback.ParenBaseline, parenDepth);
+        var statementText = states.All(
+            state => string.Equals(
+                state.StatementText,
+                states[0].StatementText,
+                StringComparison.Ordinal))
+            ? states[0].StatementText
+            : states.All(state => IsCSharpAnonymousCallableBlock(state.StatementText))
+                ? "=>"
+                : fallback.StatementText;
+
+        return new CSharpDeclarationDelimiterState(
+            parenDepth,
+            parenBaseline,
+            parenContributions,
+            braceBaselines,
+            statementText);
+    }
+
+    private static T[] GetCommonCSharpDeclarationStackBottom<T>(T[][] topFirstStacks)
+    {
+        if (topFirstStacks.Length == 0)
+            return [];
+
+        var first = topFirstStacks[0];
+        var commonCount = 0;
+        var maxCommonCount = topFirstStacks.Min(stack => stack.Length);
+        while (commonCount < maxCommonCount)
+        {
+            var firstItem = first[first.Length - commonCount - 1];
+            if (topFirstStacks.Skip(1).Any(
+                    stack => !EqualityComparer<T>.Default.Equals(
+                        firstItem,
+                        stack[stack.Length - commonCount - 1])))
+            {
+                break;
+            }
+
+            commonCount++;
+        }
+
+        return commonCount == 0 ? [] : first[^commonCount..];
+    }
+
+    private static void RestoreCSharpDeclarationDelimiterState(
+        CSharpDeclarationDelimiterState state,
+        ref int parenDepth,
+        ref int parenBaseline,
+        Stack<bool> parenContributions,
+        Stack<(int ParenDepth, bool RestoresBaseline)> braceBaselines,
+        StringBuilder statementBuffer)
+    {
+        parenDepth = state.ParenDepth;
+        parenBaseline = state.ParenBaseline;
+        RestoreCSharpDeclarationDelimiterStack(
+            parenContributions,
+            state.ParenContributions);
+        RestoreCSharpDeclarationDelimiterStack(
+            braceBaselines,
+            state.BraceBaselines);
+        statementBuffer.Clear();
+        statementBuffer.Append(state.StatementText);
     }
 
     private static void RestoreCSharpDeclarationDelimiterStack<T>(
@@ -498,7 +638,12 @@ public static partial class SymbolExtractor
 
     private static bool IsCSharpAnonymousCallableBlock(StringBuilder statementBuffer)
     {
-        var text = statementBuffer.ToString().TrimEnd();
+        return IsCSharpAnonymousCallableBlock(statementBuffer.ToString());
+    }
+
+    private static bool IsCSharpAnonymousCallableBlock(string statementText)
+    {
+        var text = statementText.TrimEnd();
         if (text.EndsWith("=>", StringComparison.Ordinal))
             return true;
 
