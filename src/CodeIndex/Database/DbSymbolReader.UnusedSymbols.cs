@@ -41,6 +41,8 @@ public partial class DbReader
         var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_peer_type");
         var ownTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_own_type", "partial_own_ancestor");
         var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_peer_type", "partial_peer_ancestor");
+        var peerTypeStartLineSql = GetSymbolColumnSql("start_line", "partial_peer_type.line", "partial_peer_type");
+        var peerTypeEndLineSql = GetSymbolColumnSql("end_line", peerTypeStartLineSql, "partial_peer_type");
 
         return $@"
               AND NOT (
@@ -75,7 +77,14 @@ public partial class DbReader
                             OR {containerQualifiedNameSql} = {peerQualifiedNameSql}
                         )
                         AND {ownTypeShapeSql} = {peerTypeShapeSql}
-                        AND csharp_identifier_occurrence_count(partial_peer_chunk.content, {symbolAlias}.name) > 0
+                        AND partial_peer_chunk.end_line >= {peerTypeStartLineSql}
+                        AND partial_peer_chunk.start_line <= {peerTypeEndLineSql}
+                        AND csharp_identifier_occurrence_count_in_line_range(
+                                partial_peer_chunk.content,
+                                partial_peer_chunk.start_line,
+                                {peerTypeStartLineSql},
+                                {peerTypeEndLineSql},
+                                {symbolAlias}.name) > 0
                       LIMIT 1
                   )
               )";
@@ -736,6 +745,8 @@ public partial class DbReader
         var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("peer_type");
         var ownTypeShapeSql = BuildCSharpPartialTypeShapeSql("own_type", "own_ancestor");
         var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("peer_type", "peer_ancestor");
+        var peerTypeStartLineSql = GetSymbolColumnSql("start_line", "peer_type.line", "peer_type");
+        var peerTypeEndLineSql = GetSymbolColumnSql("end_line", peerTypeStartLineSql, "peer_type");
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"
@@ -764,7 +775,14 @@ public partial class DbReader
                   OR @containerQualifiedName = {peerQualifiedNameSql}
               )
               AND {ownTypeShapeSql} = {peerTypeShapeSql}
-              AND csharp_identifier_occurrence_count(peer_chunk.content, @symbolName) > 0
+              AND peer_chunk.end_line >= {peerTypeStartLineSql}
+              AND peer_chunk.start_line <= {peerTypeEndLineSql}
+              AND csharp_identifier_occurrence_count_in_line_range(
+                      peer_chunk.content,
+                      peer_chunk.start_line,
+                      {peerTypeStartLineSql},
+                      {peerTypeEndLineSql},
+                      @symbolName) > 0
             LIMIT 1";
         SqliteCommandPolicy.Add(cmd, "@fileId", candidate.FileId);
         SqliteCommandPolicy.Add(cmd, "@containerKind", candidate.ContainerKind);

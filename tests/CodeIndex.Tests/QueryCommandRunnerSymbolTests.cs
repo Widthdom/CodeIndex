@@ -2355,6 +2355,7 @@ public partial class QueryCommandRunnerTests
                         private bool ActuallyUnused;
                         private bool OnlyUsedByOtherFamily;
                         private bool OnlyUsedByOtherGenericArity;
+                        private bool OnlyUsedOutsidePartialRange;
 
                         [System.Text.Json.Serialization.JsonPropertyName("connectionString")]
                         public string ConnectionString { get; set; } = "";
@@ -2376,6 +2377,13 @@ public partial class QueryCommandRunnerTests
                     {
                         public bool HasExplicitOptions() => endLineExplicit || outputFormatExplicit;
                     }
+                }
+
+                public sealed class Noise
+                {
+                    private bool OnlyUsedOutsidePartialRange;
+
+                    public bool ReadOutsidePartialRange() => OnlyUsedOutsidePartialRange;
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -2421,6 +2429,7 @@ public partial class QueryCommandRunnerTests
                         'ActuallyUnused',
                         'OnlyUsedByOtherFamily',
                         'OnlyUsedByOtherGenericArity',
+                        'OnlyUsedOutsidePartialRange',
                         'ConnectionString'
                     )
                     """;
@@ -2465,6 +2474,10 @@ public partial class QueryCommandRunnerTests
                 jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "OnlyUsedByOtherGenericArity")
                     .GetProperty("unused_bucket").GetString());
             Assert.Equal(
+                "likely_unused_private",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "OnlyUsedOutsidePartialRange")
+                    .GetProperty("unused_bucket").GetString());
+            Assert.Equal(
                 "reflection_or_config_suspect",
                 jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "ConnectionString")
                     .GetProperty("unused_bucket").GetString());
@@ -2477,6 +2490,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, compactExitCode);
             Assert.Equal(string.Empty, compactStderr);
             Assert.True(compactDocument.RootElement.GetProperty("compact").GetBoolean());
+            Assert.Equal(
+                4,
+                compactDocument.RootElement.GetProperty("returned_bucket_counts")
+                    .GetProperty("likely_unused_private").GetInt32());
             Assert.DoesNotContain("_hasIssueMetadataColumns", compactStdout, StringComparison.Ordinal);
             Assert.DoesNotContain("endLineExplicit", compactStdout, StringComparison.Ordinal);
             Assert.DoesNotContain("outputFormatExplicit", compactStdout, StringComparison.Ordinal);
@@ -2502,6 +2519,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("ActuallyUnused", likelyUnusedNames);
             Assert.Contains("OnlyUsedByOtherFamily", likelyUnusedNames);
             Assert.Contains("OnlyUsedByOtherGenericArity", likelyUnusedNames);
+            Assert.Contains("OnlyUsedOutsidePartialRange", likelyUnusedNames);
             Assert.Contains("ConnectionString", contractSuspectNames);
             Assert.DoesNotContain("_hasIssueMetadataColumns", likelyUnusedNames);
             Assert.DoesNotContain("endLineExplicit", likelyUnusedNames);
@@ -2520,6 +2538,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("ActuallyUnused", actionableNames);
             Assert.Contains("OnlyUsedByOtherFamily", actionableNames);
             Assert.Contains("OnlyUsedByOtherGenericArity", actionableNames);
+            Assert.Contains("OnlyUsedOutsidePartialRange", actionableNames);
             Assert.DoesNotContain("ConnectionString", actionableNames);
             Assert.DoesNotContain("_hasIssueMetadataColumns", actionableNames);
             Assert.DoesNotContain("endLineExplicit", actionableNames);
