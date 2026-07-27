@@ -6377,6 +6377,31 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpPrimaryCtor_SameLineExplicitCtorCallStaysOnExplicitCtor_Issue4840Review()
+    {
+        // A real constructor after the primary-constructor header can share the type's name and
+        // physical line. It must not be mistaken for the synthetic primary constructor when
+        // resolving calls after the header-closing brace.
+        // primary constructor のヘッダー後にある実コンストラクタは型名と物理行を共有し得る。
+        // ヘッダー終端より後の呼び出しでは、合成 primary constructor と誤認してはならない。
+        const string content = """
+            public class Parent(int value);
+            public record Child(int Value) : Parent(Value) { public Child() : this(0) { BodyCall(); } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
+        Assert.Equal("function", parentRef.ContainerKind);
+        Assert.Equal("Child", parentRef.ContainerName);
+
+        var bodyCallRef = Assert.Single(references, r => r.SymbolName == "BodyCall");
+        Assert.Equal("function", bodyCallRef.ContainerKind);
+        Assert.Equal("Child", bodyCallRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpAttribute_ClassifiedAsAttribute()
     {
         // issue #293: `[Obsolete("msg")]` must produce an `attribute` reference, not a phantom `call`.

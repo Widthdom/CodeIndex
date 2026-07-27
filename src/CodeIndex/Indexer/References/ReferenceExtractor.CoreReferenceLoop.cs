@@ -254,6 +254,9 @@ public static partial class ReferenceExtractor
                             || (container?.Kind == "function"
                                 && container.FileId == syntheticRecordCtor.FileId
                                 && container.StartLine == syntheticRecordCtor.StartLine
+                                && (container.StartLine < rangeEnd
+                                    || (container.StartColumn is int containerStartColumn
+                                        && containerStartColumn < rangeEndColumn))
                                 && string.Equals(
                                     container.Name,
                                     syntheticRecordCtor.Name,
