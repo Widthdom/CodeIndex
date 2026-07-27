@@ -10,6 +10,7 @@ public static partial class IndexCommandRunner
 {
     internal const int DryRunFileSampleLimit = 100;
     internal const int DryRunLanguageDetectionLimit = 100;
+    internal const int DryRunWarningSampleLimit = 100;
     internal const int DryRunErrorSampleLimit = 100;
     internal const int DefaultDryRunPathLimit = 100_000;
     internal const int MaxDryRunPathLimit = 1_000_000;
@@ -43,6 +44,8 @@ public static partial class IndexCommandRunner
         bool authoritativeFullScan;
         var errorSamples = new List<CliJsonMessage>();
         var errorCount = 0;
+        var warningSamples = new List<CliJsonMessage>();
+        var warningCount = 0;
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         DryRunScanMetadata dryScanMetadata;
         var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options.SymbolKindFilter);
@@ -104,7 +107,16 @@ public static partial class IndexCommandRunner
                         continue;
                 }
 
-                RecordDryRunError(scanError.Path, scanError.Message);
+                if (scanError.Severity == FileIndexer.ScanIssueSeverity.Warning)
+                {
+                    warningCount++;
+                    if (warningSamples.Count < DryRunWarningSampleLimit)
+                        warningSamples.Add(new CliJsonMessage(scanError.Path, scanError.Message));
+                }
+                else
+                {
+                    RecordDryRunError(scanError.Path, scanError.Message);
+                }
                 if (!options.Json)
                     ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
             }
@@ -300,6 +312,10 @@ public static partial class IndexCommandRunner
                 LanguageDetections = languageDetectionSamples.Count > 0 ? languageDetectionSamples : null,
                 LanguageDetectionsTruncated = languageDetectionTotal > languageDetectionSamples.Count,
                 LanguageDetectionLimit = DryRunLanguageDetectionLimit,
+                WarningsTotal = warningCount,
+                Warnings = warningSamples.Count > 0 ? warningSamples : null,
+                WarningsTruncated = warningCount > warningSamples.Count,
+                WarningLimit = DryRunWarningSampleLimit,
                 ErrorsTotal = errorCount,
                 Errors = errorSamples.Count > 0 ? errorSamples : null,
                 ErrorsTruncated = errorCount > errorSamples.Count,

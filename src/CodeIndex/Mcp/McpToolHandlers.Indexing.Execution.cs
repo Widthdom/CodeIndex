@@ -355,7 +355,8 @@ public partial class McpServer
             target = target with
             {
                 GeneratedExtractionSuppressed = hasGeneratedCodeExtractionSuppressionPatterns
-                    && indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)
+                    && indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+                ResolveSymlinkTargets = indexer.ResolvesSymlinkTargets
             };
             fileTargets[i] = target;
             if (language == "csharp")

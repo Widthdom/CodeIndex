@@ -840,6 +840,122 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRunAndFullScan_FollowSymlinksAllAgreeForExternalFileLink_Issue4829()
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        try
+        {
+            var targetPath = Path.Combine(outsideRoot, "Outside.cs");
+            var linkPath = Path.Combine(projectRoot, "OutsideLink.cs");
+            File.WriteAllText(targetPath, "public class Outside4829 { }\n");
+            try
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var (dryRunExitCode, dryRunJson) = RunAndCaptureJson([
+                projectRoot,
+                "--follow-symlinks",
+                "all",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExitCode);
+            Assert.Equal(1, dryRunJson.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, dryRunJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, dryRunJson.GetProperty("warnings_total").GetInt32());
+            Assert.Equal(0, dryRunJson.GetProperty("errors_total").GetInt32());
+            Assert.Equal(1, dryRunJson.GetProperty("languages").GetProperty("csharp").GetInt32());
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([
+                projectRoot,
+                "--follow-symlinks",
+                "all",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal("success", indexJson.GetProperty("status").GetString());
+            Assert.Equal(1, indexJson.GetProperty("summary").GetProperty("files_total").GetInt32());
+            Assert.Equal(0, indexJson.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Contains(
+                "OutsideLink.cs",
+                ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRunAndFullScan_ClassifyDanglingSymlinkAsWarning_Issue4829()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(
+                    Path.Combine(projectRoot, "Dangling.cs"),
+                    Path.Combine(projectRoot, "Missing.cs"));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var (dryRunExitCode, dryRunJson) = RunAndCaptureJson([
+                projectRoot,
+                "--follow-symlinks",
+                "all",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExitCode);
+            Assert.Equal(0, dryRunJson.GetProperty("errors_total").GetInt32());
+            Assert.Equal(1, dryRunJson.GetProperty("warnings_total").GetInt32());
+            Assert.Contains(
+                "dangling symlink",
+                Assert.Single(dryRunJson.GetProperty("warnings").EnumerateArray())
+                    .GetProperty("message")
+                    .GetString(),
+                StringComparison.OrdinalIgnoreCase);
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([
+                projectRoot,
+                "--follow-symlinks",
+                "all",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(0, indexJson.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, indexJson.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Contains(
+                "dangling symlink",
+                Assert.Single(indexJson.GetProperty("warnings").EnumerateArray())
+                    .GetProperty("message")
+                    .GetString(),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_AllowsDeletedIndexedProjectPath_4471()
     {
         var projectRoot = CreateTempProject();
