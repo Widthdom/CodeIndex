@@ -7963,7 +7963,8 @@ public partial class QueryCommandRunnerTests
                     dbPath,
                     $"src/replay's/match{i:D3}.cs",
                     "csharp",
-                    $"public sealed class Issue4838Needle{i:D3} {{ }}\n");
+                    $"public sealed class Issue4838Needle{i:D3} {{ }}\n",
+                    isGenerated: true);
             }
 
             var args = new[]
@@ -7975,6 +7976,7 @@ public partial class QueryCommandRunnerTests
                 "--path", "src/replay's/**",
                 "--exclude-path", "src/replay's/ignored/**",
                 "--exclude-tests",
+                "--include-generated",
                 "--no-dedup",
                 "--no-visibility-rank",
                 "--first-per-file",
@@ -8022,6 +8024,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("search", replayWords[1]);
             Assert.Contains("--query", replayWords);
             Assert.Contains("--total-limit", replayWords);
+            Assert.Contains("--include-generated", replayWords);
             Assert.Contains("--first-per-file", replayWords);
             Assert.Contains("--sample", replayWords);
             Assert.Contains("src/replay's/**", replayWords);

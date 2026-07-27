@@ -940,6 +940,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
+        if (options.IncludeGenerated)
+            args.Add("--include-generated");
         if (options.Since.HasValue)
             AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
@@ -2727,6 +2729,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
+        if (options.IncludeGenerated)
+            args.Add("--include-generated");
         if (options.Since.HasValue)
             AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
@@ -3109,6 +3113,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--exclude-path", excludePath);
         if (options.ExcludeTests)
             args.Add("--exclude-tests");
+        if (options.IncludeGenerated)
+            args.Add("--include-generated");
         if (options.Since.HasValue)
             AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         if (options.NoDedup)
