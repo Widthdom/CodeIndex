@@ -625,6 +625,9 @@ public static partial class ReferenceExtractor
         typeStart = -1;
         typeLength = 0;
 
+        if (language == "csharp" && StartsWithCSharpNamedArgumentLabel(parameterFragment))
+            return false;
+
         int end = FindTopLevelAssignmentIndex(parameterFragment);
         if (end < 0)
             end = parameterFragment.Length;
@@ -677,6 +680,13 @@ public static partial class ReferenceExtractor
         if (IsDefinitelyNotTypeDeclarationLine(line, language))
             return false;
 
+        if (language == "csharp"
+            && line.AsSpan().TrimEnd().EndsWith(",")
+            && StartsWithCSharpNamedArgumentLabel(line))
+        {
+            return false;
+        }
+
         int firstParen = FindFirstTopLevelChar(line, '(');
         int firstTerminator = FindFirstTopLevelChar(line, ';');
         int firstBrace = FindFirstTopLevelChar(line, '{');
@@ -721,6 +731,32 @@ public static partial class ReferenceExtractor
         int lastTypeToken = tokens.Count - 2;
         typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
         return true;
+    }
+
+    private static bool StartsWithCSharpNamedArgumentLabel(string text)
+    {
+        int index = 0;
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        if (index >= text.Length || !IsCSharpIdentifierStart(text[index]))
+            return false;
+
+        if (text[index] == '@')
+        {
+            index++;
+            if (index >= text.Length || (text[index] != '_' && !char.IsLetter(text[index])))
+                return false;
+        }
+
+        index++;
+        while (index < text.Length && IsCSharpIdentifierPart(text[index]))
+            index++;
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+
+        return index < text.Length
+            && text[index] == ':'
+            && (index + 1 >= text.Length || text[index + 1] != ':');
     }
 
     private static bool IsDefinitelyNotTypeDeclarationLine(string line, string language)

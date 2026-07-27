@@ -7466,6 +7466,95 @@ public partial class ReferenceExtractorTests
             && (column is null || reference.Column == column.Value);
     }
 
+    [Fact]
+    public void Extract_CsharpNamedArgumentLabels_DoNotBecomeTypeReferences_Issue4833()
+    {
+        // Named-argument labels are parameter selectors, not type positions. Keep the
+        // expressions after each label visible to their dedicated reference scanners,
+        // including attributes, constructors, nested calls, and multiline argument lists.
+        // named argument label は parameter selector であり、型位置ではない。attribute、
+        // constructor、nested call、multiline 引数でも label 後の式は各参照 scanner に残す。
+        const string content = """
+            extern alias Alias;
+            using System;
+
+            public sealed class ProbeAttribute : Attribute
+            {
+                public ProbeAttribute(Type payload, bool overwrite = false) {}
+            }
+
+            public sealed class ExpressionPayload {}
+            public sealed class ConstructorTarget
+            {
+                public ConstructorTarget(bool overwrite, Type payload) {}
+            }
+
+            public sealed class Demo
+            {
+                private static void Invoke(int positional, bool overwrite, Type payload) {}
+                private static object InvokeAdapter(bool overwrite, Type payload) => new();
+                private static void Outer(object inner) {}
+
+                [Probe(typeof(ExpressionPayload), overwrite: true)]
+                public void Run(bool condition, object value)
+                {
+                    Invoke(1, overwrite: true, payload: typeof(ExpressionPayload));
+                    Invoke(payload: typeof(ExpressionPayload), positional: 2, overwrite: false);
+                    _ = new ConstructorTarget(overwrite: true, payload: typeof(ExpressionPayload));
+                    Outer(inner: InvokeAdapter(overwrite: true, payload: typeof(ExpressionPayload)));
+                    Invoke(
+                        positional: 3,
+                        payload: typeof(ExpressionPayload),
+                        overwrite: condition ? true : false);
+
+                retry:
+                    if (value is ExpressionPayload matched)
+                        goto done;
+                    switch (value)
+                    {
+                        case ExpressionPayload casePayload:
+                            goto done;
+                    }
+
+                    ExpressionPayload? nullablePayload = null;
+                    Alias::ExpressionPayload aliasQualified = default!;
+                    if (condition)
+                        goto retry;
+
+                done:
+                    _ = nullablePayload;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var namedArgumentLabels = new HashSet<string>(
+            ["overwrite", "payload", "positional", "inner"],
+            StringComparer.Ordinal);
+
+        Assert.DoesNotContain(
+            references,
+            reference => reference.ReferenceKind == "type_reference"
+                && namedArgumentLabels.Contains(reference.SymbolName));
+        Assert.True(
+            references.Count(reference =>
+                reference.SymbolName == "ExpressionPayload"
+                && reference.ReferenceKind == "type_reference") >= 8);
+        Assert.Contains(
+            references,
+            reference => reference.SymbolName == "ConstructorTarget"
+                && reference.ReferenceKind == "instantiate");
+        Assert.Contains(
+            references,
+            reference => reference.SymbolName == "InvokeAdapter"
+                && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(
+            references,
+            reference => reference.SymbolName == "Alias"
+                && reference.ReferenceKind == "type_reference");
+    }
+
 #if NET8_0
     [Fact]
 #else

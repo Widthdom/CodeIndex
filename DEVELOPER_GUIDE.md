@@ -1126,6 +1126,8 @@ Reference extraction deduplicates only within the same indexed file and language
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
 
+C# named-argument labels such as `overwrite:` are syntax, not type positions, and must not emit `type_reference` rows. The declaration-type scanner suppresses a leading single-colon label inside an argument fragment, including comma-terminated multiline argument lines, while preserving expression references in the argument value. Alias-qualified names (`Alias::Type`), statement and `case` labels, nullable types, and ternary expressions remain distinct colon-bearing constructs and are not suppressed by this rule.
+
 ### GPU and shader reference extraction
 
 CUDA, GLSL, HLSL, Metal, and WGSL use a request-scoped, stateless reference
@@ -4275,6 +4277,8 @@ authoritative な判定と一貫した推論を区別し、複数言語の evide
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
 
 TypeScript decorator は decorator 名を `annotation` 行として出力し、decorated declaration の型位置エッジを隠してはならない。たとえば `constructor(@Inject() svc: Service)` は `Inject` を `annotation`、`Service` を `type_reference` として記録し、`@Input() profile: UserProfile` も decorator と field type の両方を記録する。
+
+C# の `overwrite:` のような named-argument label は構文であり、型位置ではないため `type_reference` 行を出力してはならない。declaration-type scanner は argument fragment の先頭にある単一 colon の label を、comma で終わる複数行 argument も含めて抑止し、argument value 内の式参照は維持する。alias-qualified name（`Alias::Type`）、statement / `case` label、nullable type、ternary expression は別の colon 構文として扱い、この規則では抑止しない。
 
 ### GPU / shader の参照抽出
 
