@@ -494,6 +494,10 @@ Container ownership follows the same contract. If references repeatedly resolve
 an extracted declaration by name and source range, index candidates by name once
 and scan only that name's ordered range list. Preserve first-candidate behavior
 for duplicate names and keep the index local to one extraction call.
+For C#, both symbol assignment and reference resolution prefer the narrowest
+active callable range, including `test.method` and nested local functions, before
+an enclosing type. Named lambdas without a complete body range attach to that
+enclosing callable and do not become reference containers.
 Symbol container assignment keeps one reusable path buffer for the sorted
 per-symbol walk. Enumerate the active stack into that buffer and reverse it to
 outer-to-inner order; do not materialize both a stack array and a fresh path list
@@ -3650,6 +3654,10 @@ container ownership にも同じ契約を適用する。reference が extracted 
 source range で繰り返し解決する場合は、candidate を name ごとに一度だけ索引化し、その name の
 ordered range list だけを走査する。duplicate name の first-candidate behavior を維持し、index は
 1 回の extraction call 内だけに保持する。
+C# では symbol assignment と reference resolution の両方が、enclosing type より先に、
+`test.method` や nested local function を含む最も狭い active callable range を選ぶ。
+完全な body range を持たない named lambda はその enclosing callable に所属し、
+reference container にはしない。
 symbol の container assignment は、sort 済みの per-symbol walk で1つの path buffer を再利用する。
 active stack を buffer へ列挙して outer-to-inner 順に反転し、深く nest した生成ファイルの member
 ごとに stack array と新しい path list の両方を実体化してはならない。

@@ -192,22 +192,22 @@ public partial class SymbolExtractorTests
             symbol => symbol.Kind == "function" && symbol.Name == "CallbackLocal"));
         Assert.Equal((37, 41), (callbackLocal.StartLine, callbackLocal.EndLine));
         Assert.Equal((39, 41), (callbackLocal.BodyStartLine, callbackLocal.BodyEndLine));
-        Assert.Equal("class", callbackLocal.ContainerKind);
-        Assert.Equal("Scanner", callbackLocal.ContainerName);
+        Assert.Equal("function", callbackLocal.ContainerKind);
+        Assert.Equal("Build", callbackLocal.ContainerName);
 
         var delegateLocal = Assert.Single(symbols.Where(
             symbol => symbol.Kind == "function" && symbol.Name == "DelegateLocal"));
         Assert.Equal((49, 53), (delegateLocal.StartLine, delegateLocal.EndLine));
         Assert.Equal((51, 53), (delegateLocal.BodyStartLine, delegateLocal.BodyEndLine));
-        Assert.Equal("class", delegateLocal.ContainerKind);
-        Assert.Equal("Scanner", delegateLocal.ContainerName);
+        Assert.Equal("function", delegateLocal.ContainerKind);
+        Assert.Equal("Build", delegateLocal.ContainerName);
 
         var localCount = Assert.Single(symbols.Where(
             symbol => symbol.Kind == "function" && symbol.Name == "LocalCount"));
         Assert.Equal((58, 63), (localCount.StartLine, localCount.EndLine));
         Assert.Equal((61, 63), (localCount.BodyStartLine, localCount.BodyEndLine));
-        Assert.Equal("class", localCount.ContainerKind);
-        Assert.Equal("Scanner", localCount.ContainerName);
+        Assert.Equal("function", localCount.ContainerKind);
+        Assert.Equal("Build", localCount.ContainerName);
 
         var tryParser = Assert.Single(symbols.Where(
             symbol => symbol.Kind == "delegate" && symbol.Name == "TryParser"));
