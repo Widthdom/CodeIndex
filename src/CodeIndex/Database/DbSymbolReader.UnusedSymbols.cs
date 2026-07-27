@@ -39,6 +39,8 @@ public partial class DbReader
         var peerSignatureSql = GetSymbolColumnSql("signature", "''", "partial_peer_type");
         var ownQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_own_type");
         var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_peer_type");
+        var ownTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_own_type", "partial_own_ancestor");
+        var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_peer_type", "partial_peer_ancestor");
 
         return $@"
               AND NOT (
@@ -50,31 +52,29 @@ public partial class DbReader
                   AND EXISTS (
                       SELECT 1
                       FROM symbols partial_own_type
+                      JOIN symbols partial_peer_type
+                        ON partial_peer_type.file_id <> partial_own_type.file_id
+                       AND partial_peer_type.kind = partial_own_type.kind
+                       AND partial_peer_type.name = partial_own_type.name
+                      JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
+                      JOIN chunks partial_peer_chunk ON partial_peer_chunk.file_id = partial_peer_type.file_id
                       WHERE partial_own_type.file_id = {symbolAlias}.file_id
                         AND partial_own_type.kind = {containerKindSql}
                         AND partial_own_type.name = {containerNameSql}
                         AND lower({ownSignatureSql}) LIKE '%partial%'
+                        AND lower({peerSignatureSql}) LIKE '%partial%'
+                        AND partial_peer_file.lang = 'csharp'
                         AND (
                             {containerQualifiedNameSql} = ''
                             OR {containerQualifiedNameSql} = partial_own_type.name
                             OR {containerQualifiedNameSql} = {ownQualifiedNameSql}
                         )
-                  )
-                  AND EXISTS (
-                      SELECT 1
-                      FROM symbols partial_peer_type
-                      JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
-                      JOIN chunks partial_peer_chunk ON partial_peer_chunk.file_id = partial_peer_type.file_id
-                      WHERE partial_peer_file.lang = 'csharp'
-                        AND partial_peer_type.file_id <> {symbolAlias}.file_id
-                        AND partial_peer_type.kind = {containerKindSql}
-                        AND partial_peer_type.name = {containerNameSql}
-                        AND lower({peerSignatureSql}) LIKE '%partial%'
                         AND (
                             {containerQualifiedNameSql} = ''
                             OR {containerQualifiedNameSql} = partial_peer_type.name
                             OR {containerQualifiedNameSql} = {peerQualifiedNameSql}
                         )
+                        AND {ownTypeShapeSql} = {peerTypeShapeSql}
                         AND csharp_identifier_occurrence_count(partial_peer_chunk.content, {symbolAlias}.name) > 0
                       LIMIT 1
                   )
@@ -89,6 +89,32 @@ public partial class DbReader
                     WHEN {containerQualifiedNameSql} <> '' THEN {containerQualifiedNameSql} || '.' || {typeAlias}.name
                     ELSE {typeAlias}.name
                 END";
+    }
+
+    private string BuildCSharpPartialTypeShapeSql(string typeAlias, string ancestorAlias)
+    {
+        var typeStartLineSql = GetSymbolColumnSql("start_line", $"{typeAlias}.line", typeAlias);
+        var typeEndLineSql = GetSymbolColumnSql("end_line", typeStartLineSql, typeAlias);
+        var ancestorStartLineSql = GetSymbolColumnSql("start_line", $"{ancestorAlias}.line", ancestorAlias);
+        var ancestorEndLineSql = GetSymbolColumnSql("end_line", ancestorStartLineSql, ancestorAlias);
+        var ancestorSignatureSql = GetSymbolColumnSql("signature", "''", ancestorAlias);
+        return $@"COALESCE((
+                    SELECT GROUP_CONCAT(
+                               {ancestorAlias}.kind || ':' || {ancestorAlias}.name || '`' ||
+                               COALESCE(csharp_definition_type_arity(
+                                   {ancestorSignatureSql},
+                                   {ancestorAlias}.name,
+                                   {ancestorAlias}.kind), -1),
+                               '/' ORDER BY
+                                   {ancestorStartLineSql},
+                                   {ancestorEndLineSql} DESC,
+                                   {ancestorAlias}.id)
+                    FROM symbols {ancestorAlias}
+                    WHERE {ancestorAlias}.file_id = {typeAlias}.file_id
+                      AND {ancestorAlias}.kind IN ('class', 'struct', 'interface', 'record')
+                      AND {ancestorStartLineSql} <= {typeStartLineSql}
+                      AND {ancestorEndLineSql} >= {typeEndLineSql}
+                ), '')";
     }
 
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
@@ -708,6 +734,8 @@ public partial class DbReader
         var peerSignatureSql = GetSymbolColumnSql("signature", "''", "peer_type");
         var ownQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("own_type");
         var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("peer_type");
+        var ownTypeShapeSql = BuildCSharpPartialTypeShapeSql("own_type", "own_ancestor");
+        var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("peer_type", "peer_ancestor");
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"
@@ -735,6 +763,7 @@ public partial class DbReader
                   OR @containerQualifiedName = peer_type.name
                   OR @containerQualifiedName = {peerQualifiedNameSql}
               )
+              AND {ownTypeShapeSql} = {peerTypeShapeSql}
               AND csharp_identifier_occurrence_count(peer_chunk.content, @symbolName) > 0
             LIMIT 1";
         SqliteCommandPolicy.Add(cmd, "@fileId", candidate.FileId);

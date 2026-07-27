@@ -2354,6 +2354,7 @@ public partial class QueryCommandRunnerTests
                         private bool outputFormatExplicit;
                         private bool ActuallyUnused;
                         private bool OnlyUsedByOtherFamily;
+                        private bool OnlyUsedByOtherGenericArity;
 
                         [System.Text.Json.Serialization.JsonPropertyName("connectionString")]
                         public string ConnectionString { get; set; } = "";
@@ -2382,15 +2383,29 @@ public partial class QueryCommandRunnerTests
                 "src/Unrelated/Writer.cs",
                 "csharp",
                 """
-                namespace Demo.Unrelated;
-
-                public partial class Writer
+                namespace Demo.Unrelated
                 {
-                    private sealed partial class Parser
+                    public partial class Writer
                     {
-                        private bool OnlyUsedByOtherFamily;
+                        private sealed partial class Parser
+                        {
+                            private bool OnlyUsedByOtherFamily;
 
-                        public bool HasOtherFamilyOption() => OnlyUsedByOtherFamily;
+                            public bool HasOtherFamilyOption() => OnlyUsedByOtherFamily;
+                        }
+                    }
+                }
+
+                namespace Demo.Primary
+                {
+                    public partial class Writer<T>
+                    {
+                        private sealed partial class Parser
+                        {
+                            private bool OnlyUsedByOtherGenericArity;
+
+                            public bool HasOtherGenericArityOption() => OnlyUsedByOtherGenericArity;
+                        }
                     }
                 }
                 """);
@@ -2405,6 +2420,7 @@ public partial class QueryCommandRunnerTests
                         'outputFormatExplicit',
                         'ActuallyUnused',
                         'OnlyUsedByOtherFamily',
+                        'OnlyUsedByOtherGenericArity',
                         'ConnectionString'
                     )
                     """;
@@ -2445,6 +2461,10 @@ public partial class QueryCommandRunnerTests
                 jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "OnlyUsedByOtherFamily")
                     .GetProperty("unused_bucket").GetString());
             Assert.Equal(
+                "likely_unused_private",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "OnlyUsedByOtherGenericArity")
+                    .GetProperty("unused_bucket").GetString());
+            Assert.Equal(
                 "reflection_or_config_suspect",
                 jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "ConnectionString")
                     .GetProperty("unused_bucket").GetString());
@@ -2462,6 +2482,7 @@ public partial class QueryCommandRunnerTests
             Assert.DoesNotContain("outputFormatExplicit", compactStdout, StringComparison.Ordinal);
             Assert.Contains("ActuallyUnused", compactStdout, StringComparison.Ordinal);
             Assert.Contains("OnlyUsedByOtherFamily", compactStdout, StringComparison.Ordinal);
+            Assert.Contains("OnlyUsedByOtherGenericArity", compactStdout, StringComparison.Ordinal);
             Assert.Contains("ConnectionString", compactStdout, StringComparison.Ordinal);
 
             var (bucketExitCode, bucketStdout, bucketStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
@@ -2480,6 +2501,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, bucketStderr);
             Assert.Contains("ActuallyUnused", likelyUnusedNames);
             Assert.Contains("OnlyUsedByOtherFamily", likelyUnusedNames);
+            Assert.Contains("OnlyUsedByOtherGenericArity", likelyUnusedNames);
             Assert.Contains("ConnectionString", contractSuspectNames);
             Assert.DoesNotContain("_hasIssueMetadataColumns", likelyUnusedNames);
             Assert.DoesNotContain("endLineExplicit", likelyUnusedNames);
@@ -2497,6 +2519,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, actionableStderr);
             Assert.Contains("ActuallyUnused", actionableNames);
             Assert.Contains("OnlyUsedByOtherFamily", actionableNames);
+            Assert.Contains("OnlyUsedByOtherGenericArity", actionableNames);
             Assert.DoesNotContain("ConnectionString", actionableNames);
             Assert.DoesNotContain("_hasIssueMetadataColumns", actionableNames);
             Assert.DoesNotContain("endLineExplicit", actionableNames);
