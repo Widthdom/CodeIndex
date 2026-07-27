@@ -488,15 +488,14 @@ public static partial class ReferenceExtractor
     private static int CompareReferenceContainerCandidateSortEntries(
         ReferenceContainerCandidateSortEntry left,
         ReferenceContainerCandidateSortEntry right)
-    {
-        var compare = left.SpanLength.CompareTo(right.SpanLength);
-        return compare != 0
-            ? compare
-            : left.OriginalIndex.CompareTo(right.OriginalIndex);
-    }
+        => CallableContainerSelection.CompareInnermost(
+            left.Symbol,
+            left.OriginalIndex,
+            right.Symbol,
+            right.OriginalIndex);
 
     private static int GetReferenceContainerCandidateSpanLength(SymbolRecord symbol)
-        => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
+        => CallableContainerSelection.GetSpanLength(symbol);
 
     private static void ReportReferenceLookupBudgetHit(
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic,

@@ -2738,6 +2738,13 @@ public partial class ReferenceExtractorTests
         Assert.Same(later, resolver.Find(65));
         Assert.Same(method, resolver.Find(80));
         Assert.Same(local, resolver.Find(22));
+
+        var sameRangeType = Container("same-range-type", "class", 110, 120);
+        var sameRangeTest = Container("same-range-test", "test.method", 110, 120);
+        var sameRangeResolver = new ReferenceExtractor.InnermostContainerResolver(
+            [sameRangeType, sameRangeTest]);
+
+        Assert.Same(sameRangeTest, sameRangeResolver.Find(115));
     }
 
 

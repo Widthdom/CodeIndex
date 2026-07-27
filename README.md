@@ -137,6 +137,8 @@ membership checks reuse file-local lookup sets instead of rescanning every
 extracted symbol for each call site.
 C# declaration-container resolution and GitHub Actions job ownership likewise
 use name-indexed candidates instead of a full container scan per reference.
+For C#, symbol and reference ownership prefers the narrowest active callable,
+including test methods and nested local functions, before the enclosing type.
 Dense Python import, GitHub Actions dependency, JSON path, and Fortran procedure
 lists are scanned in place instead of allocating temporary split arrays.
 Python PEP 695 aliases and `TypeAlias` / `NewType` declarations are persisted as
@@ -546,6 +548,8 @@ reference extraction でも、C# property と Python import / class の反復 me
 call site ごとに全 extracted symbol を再走査せず、file-local な lookup set を再利用します。
 C# declaration-container 解決と GitHub Actions の job ownership も同様に、reference ごとの
 全 container 走査ではなく name-indexed candidate を使います。
+C# の symbol / reference ownership は、enclosing type より先に、test method や nested local
+function を含む最も狭い active callable を選びます。
 密な Python import、GitHub Actions dependency、JSON path、Fortran procedure list は、
 一時的な split array を作らず入力上で直接走査します。
 Python の PEP 695 alias と `TypeAlias` / `NewType` declaration は `typealias`、

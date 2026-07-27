@@ -240,6 +240,7 @@ public static partial class ReferenceExtractor
             {
                 if (language == "csharp")
                 {
+                    var containerMatchesPrimaryCtor = false;
                     foreach (var (
                                  rangeStart,
                                  rangeStartColumn,
@@ -248,6 +249,15 @@ public static partial class ReferenceExtractor
                                  syntheticRecordCtor) in
                              lookups.GetRecordPrimaryCtorRanges())
                     {
+                        containerMatchesPrimaryCtor |=
+                            ReferenceEquals(container, syntheticRecordCtor)
+                            || (container?.Kind == "function"
+                                && container.FileId == syntheticRecordCtor.FileId
+                                && container.StartLine == syntheticRecordCtor.StartLine
+                                && string.Equals(
+                                    container.Name,
+                                    syntheticRecordCtor.Name,
+                                    StringComparison.Ordinal));
                         if (lineNumber < rangeStart || lineNumber > rangeEnd)
                             continue;
                         if (lineNumber == rangeStart
@@ -258,6 +268,13 @@ public static partial class ReferenceExtractor
                         if (lineNumber == rangeEnd && column >= rangeEndColumn)
                             continue;
                         return syntheticRecordCtor;
+                    }
+
+                    if (containerMatchesPrimaryCtor)
+                    {
+                        return FindInnermostClassLike(
+                            lookups.GetEnclosingTypeCandidates(),
+                            lineNumber);
                     }
                 }
 

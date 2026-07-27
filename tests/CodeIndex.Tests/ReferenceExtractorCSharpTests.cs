@@ -584,6 +584,81 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCallableContainment_PrefersInnermostCallableRanges_Issue4840()
+    {
+        const string content = """
+            public class Host
+            {
+                [Fact]
+                public void BlockTest()
+                {
+                    TestCall();
+
+                    void Local()
+                    {
+                        LocalCall();
+
+                        void Nested()
+                        {
+                            NestedCall();
+                        }
+                    }
+
+                    Func<int> blockLambda = () =>
+                    {
+                        LambdaCall();
+                        return 1;
+                    };
+                }
+
+                public int ExpressionBody() => ExpressionCall();
+
+                public class Inner
+                {
+                    public void NestedTypeMethod()
+                    {
+                        NestedTypeCall();
+                    }
+                }
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("csharp", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Local"
+            && symbol.ContainerKind == "test.method"
+            && symbol.ContainerName == "BlockTest");
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.Name == "Nested"
+            && symbol.ContainerKind == "function"
+            && symbol.ContainerName == "Local");
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "lambda"
+            && symbol.Name == "blockLambda"
+            && symbol.ContainerKind == "test.method"
+            && symbol.ContainerName == "BlockTest");
+
+        AssertReferenceContainer("TestCall", "test.method", "BlockTest");
+        AssertReferenceContainer("LocalCall", "function", "Local");
+        AssertReferenceContainer("NestedCall", "function", "Nested");
+        AssertReferenceContainer("LambdaCall", "test.method", "BlockTest");
+        AssertReferenceContainer("ExpressionCall", "function", "ExpressionBody");
+        AssertReferenceContainer("NestedTypeCall", "function", "NestedTypeMethod");
+
+        void AssertReferenceContainer(string symbolName, string containerKind, string containerName)
+        {
+            var reference = Assert.Single(references.Where(r =>
+                r.SymbolName == symbolName
+                && r.ReferenceKind == "call"));
+            Assert.Equal(containerKind, reference.ContainerKind);
+            Assert.Equal(containerName, reference.ContainerName);
+        }
+    }
+
+    [Fact]
     public void Extract_CsharpSameLineDefinitionCalls_KeepRecursiveAndDelegatedReferences()
     {
         // issue #252: same-line definition suppression must drop only the declarator token,

@@ -56,7 +56,7 @@ public static partial class ReferenceExtractor
     internal sealed class InnermostContainerResolver
     {
         private readonly IReadOnlyList<SymbolRecord> candidates;
-        private readonly List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)>? candidatesByStart;
+        private readonly List<(SymbolRecord Symbol, int OriginalIndex)>? candidatesByStart;
         private SortedSet<ActiveContainer>? activeContainers;
         private int nextCandidateIndex;
         private int currentLine;
@@ -69,11 +69,11 @@ public static partial class ReferenceExtractor
             if (candidates.Count == 0)
                 return;
 
-            candidatesByStart = new List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)>(candidates.Count);
+            candidatesByStart = new List<(SymbolRecord Symbol, int OriginalIndex)>(candidates.Count);
             for (var index = 0; index < candidates.Count; index++)
             {
                 var symbol = candidates[index];
-                candidatesByStart.Add((symbol, GetContainerSpanLength(symbol), index));
+                candidatesByStart.Add((symbol, index));
             }
 
             candidatesByStart.Sort(CompareCandidatesByStart);
@@ -106,7 +106,7 @@ public static partial class ReferenceExtractor
                    && candidatesByStart[nextCandidateIndex].Symbol.BodyStartLine!.Value <= lineNumber)
             {
                 var candidate = candidatesByStart[nextCandidateIndex];
-                (activeContainers ??= []).Add(new ActiveContainer(candidate.Symbol, candidate.SpanLength, candidate.OriginalIndex));
+                (activeContainers ??= []).Add(new ActiveContainer(candidate.Symbol, candidate.OriginalIndex));
                 nextCandidateIndex++;
             }
 
@@ -121,12 +121,9 @@ public static partial class ReferenceExtractor
             return container;
         }
 
-        private static int GetContainerSpanLength(SymbolRecord symbol) =>
-            (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
-
         private static int CompareCandidatesByStart(
-            (SymbolRecord Symbol, int SpanLength, int OriginalIndex) left,
-            (SymbolRecord Symbol, int SpanLength, int OriginalIndex) right)
+            (SymbolRecord Symbol, int OriginalIndex) left,
+            (SymbolRecord Symbol, int OriginalIndex) right)
         {
             var compare = left.Symbol.BodyStartLine!.Value.CompareTo(right.Symbol.BodyStartLine!.Value);
             if (compare != 0)
@@ -136,23 +133,17 @@ public static partial class ReferenceExtractor
             if (compare != 0)
                 return compare;
 
-            compare = left.SpanLength.CompareTo(right.SpanLength);
-            if (compare != 0)
-                return compare;
-
             return left.OriginalIndex.CompareTo(right.OriginalIndex);
         }
 
-        private readonly record struct ActiveContainer(SymbolRecord Symbol, int SpanLength, int OriginalIndex) : IComparable<ActiveContainer>
+        private readonly record struct ActiveContainer(SymbolRecord Symbol, int OriginalIndex) : IComparable<ActiveContainer>
         {
             public int CompareTo(ActiveContainer other)
-            {
-                var spanComparison = SpanLength.CompareTo(other.SpanLength);
-                if (spanComparison != 0)
-                    return spanComparison;
-
-                return OriginalIndex.CompareTo(other.OriginalIndex);
-            }
+                => CallableContainerSelection.CompareInnermost(
+                    Symbol,
+                    OriginalIndex,
+                    other.Symbol,
+                    other.OriginalIndex);
         }
     }
 
