@@ -72,6 +72,15 @@ public partial class DbContext : IDisposable
             "csharp_identifier_occurrence_count",
             (string? text, string? identifier) => CountCSharpIdentifierOccurrences(text, identifier));
         connection.CreateFunction(
+            "csharp_identifier_occurrence_count_in_line_range",
+            (string? text, long? chunkStartLine, long? rangeStartLine, long? rangeEndLine, string? identifier) =>
+                CountCSharpIdentifierOccurrencesInLineRange(
+                    text,
+                    chunkStartLine,
+                    rangeStartLine,
+                    rangeEndLine,
+                    identifier));
+        connection.CreateFunction(
             "csharp_reference_type_arity",
             (string? context, string? identifier, long? columnNumber) =>
                 CSharpTypeReferenceArity.GetReferenceArity(context, identifier, columnNumber));
@@ -205,6 +214,64 @@ public partial class DbContext : IDisposable
         }
 
         return count;
+    }
+
+    internal static int CountCSharpIdentifierOccurrencesInLineRange(
+        string? text,
+        long? chunkStartLine,
+        long? rangeStartLine,
+        long? rangeEndLine,
+        string? identifier)
+    {
+        if (string.IsNullOrEmpty(text)
+            || string.IsNullOrEmpty(identifier)
+            || chunkStartLine is null
+            || rangeStartLine is null
+            || rangeEndLine is null
+            || chunkStartLine <= 0
+            || rangeStartLine <= 0
+            || rangeEndLine < rangeStartLine)
+        {
+            return 0;
+        }
+
+        var relativeStartLine = Math.Max(0, rangeStartLine.Value - chunkStartLine.Value);
+        var relativeEndLineExclusive = rangeEndLine.Value - chunkStartLine.Value + 1;
+        if (relativeEndLineExclusive <= 0
+            || relativeStartLine > int.MaxValue
+            || relativeEndLineExclusive > int.MaxValue)
+        {
+            return 0;
+        }
+
+        var startOffset = FindTextLineStartOffset(text, (int)relativeStartLine);
+        var endOffset = FindTextLineStartOffset(text, (int)relativeEndLineExclusive);
+        if (startOffset >= endOffset)
+            return 0;
+
+        var scopedText = startOffset == 0 && endOffset == text.Length
+            ? text
+            : text.Substring(startOffset, endOffset - startOffset);
+        return CountCSharpIdentifierOccurrences(scopedText, identifier);
+    }
+
+    private static int FindTextLineStartOffset(string text, int zeroBasedLine)
+    {
+        if (zeroBasedLine <= 0)
+            return 0;
+
+        var line = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '\n')
+                continue;
+
+            line++;
+            if (line == zeroBasedLine)
+                return i + 1;
+        }
+
+        return text.Length;
     }
 
     private static bool CSharpBaseReferenceMatches(
