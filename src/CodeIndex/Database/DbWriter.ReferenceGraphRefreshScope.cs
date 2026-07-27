@@ -157,7 +157,7 @@ public partial class DbWriter
         const string fullInstantiateNamePredicateSql = "AND s.name_folded IS NOT NULL";
         const string fullCSharpTypeSymbolSourceSql = "FROM symbols AS type_symbol";
         const string fullCSharpTypeNamePredicateSql = "AND type_symbol.name_folded IS NOT NULL";
-        const int expectedReferenceSourceCount = 12;
+        const int expectedReferenceSourceCount = 14;
 
         if (CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullDeleteSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullReferenceSourceSql)

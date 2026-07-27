@@ -1094,14 +1094,12 @@ public partial class ReferenceExtractorTests
             && reference.SymbolName == "deep-details"
             && reference.ContainerName == "Intro");
         Assert.Contains(references, reference =>
-            reference.ReferenceKind == "reference"
-            && reference.SymbolName == "api"
-            && reference.ContainerName == "Intro");
-        Assert.Contains(references, reference =>
             reference.ReferenceKind == "import"
             && reference.SymbolName == "docs/api.md"
             && reference.ContainerName == "Intro");
+        Assert.Equal(3, references.Count);
         Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored.md");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "api");
     }
 
     [Fact]
@@ -1122,6 +1120,10 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.ReferenceKind == "import"
             && reference.SymbolName == "USER_GUIDE.md#Error-Codes");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "error-codes"
+            && reference.TargetQualifier == "USER_GUIDE.md");
     }
 
     [Fact]

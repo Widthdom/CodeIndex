@@ -638,6 +638,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 |---|---|---|
 | `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
 | `add` | Dockerfile `ADD` destination paths | Dependency/file-flow search symbol |
+| `anchor` | Explicit Markdown HTML anchors | Definition target for path-scoped Markdown fragment references |
 | `annotation` | Annotation declarations or annotation-like language constructs | Metadata/search symbol |
 | `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
 | `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
@@ -659,7 +660,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
 | `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
-| `heading` | Markdown headings and language section markers such as C# regions, Python module docstrings, and JavaScript/TypeScript `@module` docblocks | Outline symbol |
+| `heading` | Markdown headings and language section markers such as C# regions, Python module docstrings, and JavaScript/TypeScript `@module` docblocks | Outline symbol; Markdown headings are definition targets for path-scoped fragment references |
 | `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directives | Context/search symbol |
 | `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
@@ -3784,6 +3785,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 |---|---|---|
 | `accessor` | owning property から別 symbol として抽出される accessor declaration | Search/filter symbol |
 | `add` | Dockerfile `ADD` の destination path | dependency / file-flow search symbol |
+| `anchor` | Markdown 内の明示的な HTML anchor | path に限定した Markdown fragment reference の定義対象 |
 | `annotation` | annotation declaration または annotation-like な言語構文 | Metadata/search symbol |
 | `async_function` | JavaScript / TypeScript の async function declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `async_generator` | JavaScript / TypeScript の async generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
@@ -3805,7 +3807,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
 | `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
 | `generator` | JavaScript / TypeScript generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
-| `heading` | Markdown heading、C# region、Python module docstring、JavaScript / TypeScript `@module` docblock などの language section marker | Outline symbol |
+| `heading` | Markdown heading、C# region、Python module docstring、JavaScript / TypeScript `@module` docblock などの language section marker | Outline symbol。Markdown heading は path に限定した fragment reference の定義対象 |
 | `hook` | JavaScript / TypeScript React custom hook binding | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directive | Context/search symbol |
 | `import` | import、using directive、alias、package include | Search/filter symbol |

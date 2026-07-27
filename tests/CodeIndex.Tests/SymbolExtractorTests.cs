@@ -5773,16 +5773,16 @@ public partial class SymbolExtractorTests
         var headings = symbols.Where(s => s.Kind == "heading").ToList();
 
         Assert.Equal(4, headings.Count);
-        Assert.Contains(headings, s => s.Name == "Guide" && s.ContainerName == null);
-        Assert.Contains(headings, s => s.Name == "Details" && s.ContainerName == "Guide");
-        Assert.Contains(headings, s => s.Name == "Deep Dive" && s.ContainerName == "Details");
-        Assert.Contains(headings, s => s.Name == "Appendix" && s.ContainerName == null);
+        Assert.Contains(headings, s => s.Name == "Guide" && s.IdentityNameFolded == "guide" && s.ContainerName == null);
+        Assert.Contains(headings, s => s.Name == "Details" && s.IdentityNameFolded == "details" && s.ContainerName == "Guide");
+        Assert.Contains(headings, s => s.Name == "Deep Dive" && s.IdentityNameFolded == "deep-dive" && s.ContainerName == "Details");
+        Assert.Contains(headings, s => s.Name == "Appendix" && s.IdentityNameFolded == "appendix" && s.ContainerName == null);
         Assert.DoesNotContain(headings, s => s.Name == "Not a heading");
         Assert.DoesNotContain(headings, s => s.Name == "Also ignored");
     }
 
     [Fact]
-    public void Extract_Markdown_ReferenceSignaturesUseOnlyLinkSpan_Issue4448()
+    public void Extract_Markdown_LinksAreReferencesNotDefinitionSymbols_Issues4448And4846()
     {
         const string content = """
             # Guide
@@ -5792,15 +5792,14 @@ public partial class SymbolExtractorTests
             See [the details][details-link] after another prose prefix.
             """;
 
-        var references = SymbolExtractor.Extract(1, "markdown", content)
-            .Where(symbol => symbol.Kind == "reference")
+        var symbols = SymbolExtractor.Extract(1, "markdown", content);
+        var references = ReferenceExtractor.Extract(1, "markdown", content, symbols)
+            .Where(reference => reference.ReferenceKind == "reference")
             .ToList();
 
-        Assert.Equal(3, references.Count);
-        Assert.Contains(references, symbol => symbol.Signature == "[Details](#details)");
-        Assert.Contains(references, symbol => symbol.Signature == "[details-link]: #details");
-        Assert.Contains(references, symbol => symbol.Signature == "[the details][details-link]");
-        Assert.All(references, symbol => Assert.DoesNotContain("prose prefix", symbol.Signature));
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "reference");
+        Assert.Equal(2, references.Count);
+        Assert.All(references, reference => Assert.Equal("details", reference.SymbolName));
     }
 
     [Fact]
@@ -5911,14 +5910,44 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "markdown", content);
         var headings = symbols.Where(s => s.Kind == "heading").ToList();
-        var references = symbols.Where(s => s.Kind == "reference").ToList();
+        var references = ReferenceExtractor.Extract(1, "markdown", content, symbols)
+            .Where(reference => reference.ReferenceKind == "reference")
+            .ToList();
 
-        Assert.Contains(headings, s => s.Name == "Guide" && s.Line == 1);
-        Assert.Contains(headings, s => s.Name == "Details" && s.Line == 6);
-        Assert.Equal(3, references.Count);
-        Assert.Contains(references, s => s.Name == "details");
-        Assert.Contains(references, s => s.Name == "guide");
-        Assert.Equal(2, references.Count(s => s.Name == "guide"));
+        Assert.Contains(headings, s => s.Name == "Guide" && s.IdentityNameFolded == "guide" && s.Line == 1);
+        Assert.Contains(headings, s => s.Name == "Details" && s.IdentityNameFolded == "details" && s.Line == 6);
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "reference");
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference => reference.SymbolName == "details");
+        Assert.Contains(references, reference => reference.SymbolName == "guide");
+    }
+
+    [Fact]
+    public void Extract_Markdown_NormalizesDuplicateUnicodeAndExplicitAnchorDefinitions_Issue4846()
+    {
+        const string content = """
+            # Error codes
+
+            ## Error codes
+
+            ## C# / 日本語: API!
+
+            ## 𠮷野 API
+
+            <a data-id="not-an-anchor"></a>
+            <a id="custom.anchor"></a>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "markdown", content);
+        var headings = symbols.Where(symbol => symbol.Kind == "heading").ToList();
+        var anchor = Assert.Single(symbols, symbol => symbol.Kind == "anchor");
+
+        Assert.Equal(
+            ["error-codes", "error-codes-1", "c-日本語-api", "𠮷野-api"],
+            headings.Select(symbol => symbol.IdentityNameFolded).ToArray());
+        Assert.Equal("custom.anchor", anchor.Name);
+        Assert.Equal("customanchor", anchor.IdentityNameFolded);
+        Assert.Equal("𠮷野 API", anchor.ContainerName);
     }
 
     [Fact]

@@ -193,8 +193,10 @@ public partial class DbReader
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
+        lang = DbReader.NormalizeQueryLanguage(lang);
         var validQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
-        if (validQueries != null && validQueries.Count > 1)
+        if (validQueries != null
+            && (validQueries.Count > 1 || string.Equals(lang, "markdown", StringComparison.Ordinal)))
             return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count;
 
         using var cmd = _conn.CreateCommand();
@@ -318,6 +320,9 @@ public partial class DbReader
                     var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(queryValue, lang, exact);
                     var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(queryValue) : default;
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
+                    var markdownAnchorClause = _symbolColumns.Contains("name_folded")
+                        ? $"(f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded = @query{idx}MarkdownAnchor)"
+                        : "0";
                     var qualifiedSymbolClause = SqlNameResolver.HasQualifier(queryValue)
                         ? BuildQualifiedSymbolMatchSql($"query{idx}", _foldReady)
                         : null;
@@ -333,18 +338,21 @@ public partial class DbReader
                             : $"((s.container_qualified_name = @query{idx}RustContainer COLLATE NOCASE OR s.container_name = @query{idx}RustContainer COLLATE NOCASE) AND s.name = @query{idx}RustLeaf COLLATE NOCASE)";
                     return _foldReady
                         ? allowLeafFallback
-                            ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
-                            : $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
+                            ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
+                            : $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
-                            ? $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
+                            ? $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }))
                 : string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
                     var qualifiedSymbolClause = SqlNameResolver.HasQualifier(queryValue)
                         ? BuildQualifiedSymbolMatchSql($"query{idx}", _foldReady)
                         : null;
-                    return $"(s.name LIKE @query{idx} ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
+                    var markdownAnchorLikeClause = _symbolColumns.Contains("name_folded")
+                        ? $" OR (f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded LIKE @query{idx}MarkdownAnchorLike ESCAPE '\\')"
+                        : string.Empty;
+                    return $"(s.name LIKE @query{idx} ESCAPE '\\'{markdownAnchorLikeClause} OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }));
             sql += $" AND ({orClauses})";
         }
@@ -378,6 +386,12 @@ public partial class DbReader
                 SqliteCommandPolicy.Add(cmd, $"@query{i}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
                 SqliteCommandPolicy.Add(cmd, $"@query{i}SegmentCount", SqlNameResolver.GetSegmentCount(value));
                 SqliteCommandPolicy.Add(cmd, $"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
+                if (_symbolColumns.Contains("name_folded"))
+                {
+                    var markdownAnchorIdentity = MarkdownAnchorIdentity.Normalize(value);
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}MarkdownAnchor", markdownAnchorIdentity);
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}MarkdownAnchorLike", $"%{EscapeLikeQuery(markdownAnchorIdentity)}%");
+                }
                 if (SqlNameResolver.HasQualifier(value))
                     AddQualifiedSymbolQueryParameters(cmd, $"query{i}", value);
                 var swiftBacktickAlias = ComputeSwiftBacktickAlias(value, lang);
@@ -599,6 +613,9 @@ public partial class DbReader
                     var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(queryValue, lang, exact);
                     var rustQualifiedParts = rustQualifiedExact ? NormalizeRustQualifiedExactQueryParts(queryValue) : default;
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
+                    var markdownAnchorClause = _symbolColumns.Contains("name_folded")
+                        ? $"(f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded = @query{idx}MarkdownAnchor)"
+                        : "0";
                     var qualifiedSymbolClause = SqlNameResolver.HasQualifier(queryValue)
                         ? BuildQualifiedSymbolMatchSql($"query{idx}", _foldReady)
                         : null;
@@ -614,18 +631,21 @@ public partial class DbReader
                             : $"((s.container_qualified_name = @query{idx}RustContainer COLLATE NOCASE OR s.container_name = @query{idx}RustContainer COLLATE NOCASE) AND s.name = @query{idx}RustLeaf COLLATE NOCASE)";
                     return _foldReady
                         ? allowLeafFallback
-                            ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
-                            : $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
+                            ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
+                            : $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
-                            ? $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
+                            ? $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }))
                 : string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
                     var qualifiedSymbolClause = SqlNameResolver.HasQualifier(queryValue)
                         ? BuildQualifiedSymbolMatchSql($"query{idx}", _foldReady)
                         : null;
-                    return $"(s.name LIKE @query{idx} ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
+                    var markdownAnchorLikeClause = _symbolColumns.Contains("name_folded")
+                        ? $" OR (f.lang = 'markdown' AND s.kind IN ('heading', 'anchor') AND s.name_folded LIKE @query{idx}MarkdownAnchorLike ESCAPE '\\')"
+                        : string.Empty;
+                    return $"(s.name LIKE @query{idx} ESCAPE '\\'{markdownAnchorLikeClause} OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }));
             sql += $" AND ({orClauses})";
         }
@@ -679,6 +699,12 @@ public partial class DbReader
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries[idx])) ?? SqlNameResolver.GetLeafName(effectiveQueries[idx]));
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}SegmentCount", SqlNameResolver.GetSegmentCount(effectiveQueries[idx]));
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
+                if (_symbolColumns.Contains("name_folded"))
+                {
+                    var markdownAnchorIdentity = MarkdownAnchorIdentity.Normalize(effectiveQueries[idx]);
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}MarkdownAnchor", markdownAnchorIdentity);
+                    SqliteCommandPolicy.Add(cmd, $"@query{idx}MarkdownAnchorLike", $"%{EscapeLikeQuery(markdownAnchorIdentity)}%");
+                }
                 if (SqlNameResolver.HasQualifier(effectiveQueries[idx]))
                     AddQualifiedSymbolQueryParameters(cmd, $"query{idx}", effectiveQueries[idx]);
                 if (rustQualifiedParts.QualifiedPath != null)
