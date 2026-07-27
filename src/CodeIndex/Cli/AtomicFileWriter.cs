@@ -9,6 +9,9 @@ internal static class AtomicFileWriter
 {
     internal const int MaxTempFileNameChars = 120;
     private const int MaxTempStemChars = 48;
+    private const int AtCurrentWorkingDirectory = -100;
+    private const uint LinuxRenameNoReplace = 1;
+    private const uint MacRenameExclusiveFlag = 0x00000004;
     internal static Action<string>? FlushParentDirectoryForTesting { get; set; }
 
     public enum WriteProfile
@@ -87,7 +90,15 @@ internal static class AtomicFileWriter
         => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite: true);
 
     public static void Write(string path, Action<Stream> writeContents, WriteProfile profile, bool overwrite)
-        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite);
+        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite, validateBeforePublish: null);
+
+    internal static void WriteWithPrePublishValidation(
+        string path,
+        Action<Stream> writeContents,
+        WriteProfile profile,
+        bool overwrite,
+        Action<string> validateBeforePublish)
+        => WriteCore(path, writeContents, ResolveProfileModeCallback(profile), profile, overwrite, validateBeforePublish);
 
     internal static void WritePreservingExistingOnFailure(
         string path,
@@ -178,13 +189,13 @@ internal static class AtomicFileWriter
         Action<Stream> writeContents,
         Action<string>? applyFileMode,
         WriteProfile profile,
-        bool overwrite)
+        bool overwrite,
+        Action<string>? validateBeforePublish = null)
     {
         ArgumentNullException.ThrowIfNull(writeContents);
 
         var tempPath = BuildTempPath(path);
         var ioTempPath = LongPath.EnsureWindowsPrefix(tempPath);
-        var moved = false;
 
         try
         {
@@ -195,29 +206,38 @@ internal static class AtomicFileWriter
                 stream.Flush(flushToDisk: true);
             }
 
+            validateBeforePublish?.Invoke(tempPath);
             if (overwrite)
             {
                 MoveReplacing(tempPath, path);
             }
             else
             {
+                var deleteUnixTempAfterPublish = false;
                 try
                 {
-                    MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
+                    if (OperatingSystem.IsWindows())
+                    {
+                        MoveFileCore(tempPath, path, overwrite: false, applyDestinationMode: null);
+                    }
+                    else
+                    {
+                        deleteUnixTempAfterPublish = PublishUnixNoReplace(ioTempPath, path);
+                    }
                 }
-                catch (IOException ex) when (File.Exists(LongPath.EnsureWindowsPrefix(path)))
+                catch (IOException ex) when (PathEntryExists(path))
                 {
                     throw new DestinationAlreadyExistsException(path, ex);
                 }
-                moved = true;
+
+                if (deleteUnixTempAfterPublish)
+                    File.Delete(ioTempPath);
                 FlushParentDirectoryAfterCreate(path);
             }
-            moved = true;
         }
         catch
         {
-            if (!moved)
-                TryDeleteFile(ioTempPath);
+            TryDeleteFile(ioTempPath);
             throw;
         }
     }
@@ -230,8 +250,79 @@ internal static class AtomicFileWriter
         return DataDirectorySecurity.OpenPrivateFileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
     }
 
+    private static bool PublishUnixNoReplace(string existingPath, string destinationPath)
+    {
+        try
+        {
+            // Prefer the platform no-clobber rename so publication can work on
+            // mounts that implement rename exclusion but do not support hard links.
+            int result;
+            if (OperatingSystem.IsLinux())
+            {
+                result = UnixRenameAt2(
+                    AtCurrentWorkingDirectory,
+                    existingPath,
+                    AtCurrentWorkingDirectory,
+                    destinationPath,
+                    LinuxRenameNoReplace);
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                result = MacRenameWithFlags(existingPath, destinationPath, MacRenameExclusiveFlag);
+            }
+            else
+            {
+                result = -1;
+            }
+
+            if (result == 0)
+                return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Older libc implementations may not expose the no-clobber rename
+            // entry point. The hard-link fallback below retains atomic refusal.
+        }
+
+        CreateUnixHardLink(existingPath, destinationPath);
+        return true;
+    }
+
+    private static void CreateUnixHardLink(string existingPath, string linkPath)
+    {
+        if (UnixLink(existingPath, linkPath) == 0)
+            return;
+
+        var errno = Marshal.GetLastPInvokeError();
+        throw new IOException(
+            $"Could not publish the atomic file without replacing the destination (errno {errno}).");
+    }
+
     private static Action<string>? ResolveProfileModeCallback(WriteProfile profile)
         => profile == WriteProfile.Sensitive ? DataDirectorySecurity.ApplyPrivateFileMode : null;
+
+    internal static bool PathEntryExists(string path)
+    {
+        var ioPath = LongPath.EnsureWindowsPrefix(path);
+        if (File.Exists(ioPath) || Directory.Exists(ioPath))
+            return true;
+
+        try
+        {
+            if (!string.IsNullOrEmpty(new FileInfo(ioPath).LinkTarget))
+                return true;
+
+            return !string.IsNullOrEmpty(new DirectoryInfo(ioPath).LinkTarget);
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
 
     internal static void MoveReplacing(string sourcePath, string destinationPath)
     {
@@ -418,6 +509,20 @@ internal static class AtomicFileWriter
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int UnixOpen(string path, int flags);
+
+    [DllImport("libc", EntryPoint = "link", SetLastError = true)]
+    private static extern int UnixLink(string existingPath, string linkPath);
+
+    [DllImport("libc", EntryPoint = "renameat2", SetLastError = true)]
+    private static extern int UnixRenameAt2(
+        int oldDirectoryFileDescriptor,
+        string oldPath,
+        int newDirectoryFileDescriptor,
+        string newPath,
+        uint flags);
+
+    [DllImport("libc", EntryPoint = "renamex_np", SetLastError = true)]
+    private static extern int MacRenameWithFlags(string oldPath, string newPath, uint flags);
 
     [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
     private static extern int UnixFsync(int fd);

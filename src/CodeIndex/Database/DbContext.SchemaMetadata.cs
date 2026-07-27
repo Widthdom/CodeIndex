@@ -62,7 +62,14 @@ public partial class DbContext : IDisposable
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const int HdlGraphContractVersion = 1;
     public const string HdlGraphContractVersionMetaKey = "hdl_graph_contract_version";
-    public const int ReferenceIdentityContractVersion = 2;
+    // Version 3 (#4825) invalidates persisted reference candidates written before C#
+    // type references were constrained to type-like symbols with compatible generic arity.
+    // Version 2 DBs can otherwise keep authoritative-looking property bindings and false
+    // dependency edges until an explicit index refresh.
+    // バージョン 3 (#4825) では、C# の型参照を型相当 symbol と互換 generic arity に限定する
+    // 前に永続化された reference candidate を無効化する。バージョン 2 の DB をそのまま信頼すると、
+    // 明示的な index 更新まで property への誤結合と偽 dependency edge が残るためである。
+    public const int ReferenceIdentityContractVersion = 3;
     public const string ReferenceIdentityContractVersionMetaKey = "reference_identity_contract_version";
     public static string GetDynamicReferenceGraphContractVersionMetaKey(string lang) =>
         $"dynamic_reference_graph_contract_version_{lang}";
