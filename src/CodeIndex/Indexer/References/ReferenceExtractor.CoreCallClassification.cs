@@ -124,7 +124,7 @@ public static partial class ReferenceExtractor
                         out var receiverNames)
                     && (receiverNames.InstanceNames.Contains(normalizedName)
                         || receiverNames.StaticNames.Contains(normalizedName))
-                    && call.Lookups.HasCSharpPrivateProperty(
+                    && call.Lookups.HasCSharpProperty(
                         containingType,
                         normalizedName))
                 {
