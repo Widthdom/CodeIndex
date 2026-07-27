@@ -29,12 +29,12 @@ internal sealed partial class FileContentLoader
         long sizeBytes;
         DateTime modifiedUtc;
         var readPath = _resolveFileReadPath(absolutePath);
-        var ioPath = LongPath.EnsureWindowsPrefix(readPath);
         for (var attempt = 0; ; attempt++)
         {
-            var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
-            using (var stream = _openReadForIndexContent(absolutePath))
+            DateTime modifiedBeforeRead;
+            using (var stream = OpenValidatedReadStream(absolutePath, readPath))
             {
+                modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
                     throw new FileIndexer.FileTooLargeSkippedException(
@@ -48,8 +48,8 @@ internal sealed partial class FileContentLoader
                     initialLength,
                     normalizedRelativePath,
                     cancellationToken);
+                modifiedUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
             }
-            modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
             if (modifiedUtc == modifiedBeforeRead || attempt > 0)
                 break;
         }
@@ -64,13 +64,14 @@ internal sealed partial class FileContentLoader
         CancellationToken cancellationToken)
     {
         var readPath = _resolveFileReadPath(absolutePath);
-        var ioPath = LongPath.EnsureWindowsPrefix(readPath);
         for (var attempt = 0; ; attempt++)
         {
-            var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
+            DateTime modifiedBeforeRead;
+            DateTime modifiedUtc;
             bool matched;
-            using (var stream = _openReadForIndexContent(absolutePath))
+            using (var stream = OpenValidatedReadStream(absolutePath, readPath))
             {
+                modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
                 var initialLength = stream.Length;
                 if (initialLength > maxFileSizeBytes)
                     throw new FileIndexer.FileTooLargeSkippedException(
@@ -85,14 +86,47 @@ internal sealed partial class FileContentLoader
                     normalizedRelativePath,
                     chunkPredicate,
                     cancellationToken);
+                modifiedUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
             }
 
             if (matched)
                 return true;
 
-            var modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
             if (modifiedUtc == modifiedBeforeRead || attempt > 0)
                 return false;
+        }
+    }
+
+    private FileStream OpenValidatedReadStream(string absolutePath, string expectedReadPath)
+    {
+        _validateResolvedFileReadPath?.Invoke(expectedReadPath);
+        FileIndexer.FileIdentity expectedIdentity = default;
+        if (_bindReadToFileSystemIdentity
+            && !FileIndexer.TryGetFileIdentity(expectedReadPath, out expectedIdentity))
+        {
+            throw new IOException(
+                "Failed to capture the filesystem identity of a symlink target before opening it.");
+        }
+
+        var stream = _openReadForIndexContent(absolutePath);
+        try
+        {
+            if (!_bindReadToFileSystemIdentity)
+                return stream;
+
+            if (!FileIndexer.TryGetFileIdentity(stream.SafeFileHandle, out var openedIdentity)
+                || openedIdentity != expectedIdentity)
+            {
+                throw new IOException(
+                    "File symlink target identity changed while it was opened; rerun indexing.");
+            }
+
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
         }
     }
 

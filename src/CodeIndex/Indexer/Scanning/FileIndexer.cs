@@ -245,7 +245,10 @@ public partial class FileIndexer
         _contentLoader = new FileContentLoader(
             _maxFileSizeBytes,
             _openReadForIndexContent,
-            symlinkPolicy == SymlinkPolicy.None ? null : ResolveFileReadPath);
+            symlinkPolicy == SymlinkPolicy.None ? null : ResolveFileReadPath,
+            bindReadToFileSystemIdentity: symlinkPolicy != SymlinkPolicy.None,
+            validateResolvedFileReadPath:
+                symlinkPolicy == SymlinkPolicy.Internal ? ValidateResolvedFileReadPath : null);
         _pathAccessValidator = pathAccessValidator;
         _bindConfigurationReadsToFileSystemIdentity = bindConfigurationReadsToFileSystemIdentity;
         _maxDanglingFileSystemEntryScanCandidates = Math.Max(

@@ -162,6 +162,62 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_Load_RejectsInternalLinkRetargetedDuringOpen_Issue4829()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("codeindex_loader_internal_retarget");
+        var externalRoot = TestProjectHelper.CreateTempProject("codeindex_loader_external_retarget");
+        try
+        {
+            var internalTarget = Path.Combine(projectRoot, "inside.py");
+            var externalTarget = Path.Combine(externalRoot, "outside.py");
+            var linkPath = Path.Combine(projectRoot, "alias.py");
+            File.WriteAllText(internalTarget, "inside\n");
+            File.WriteAllText(externalTarget, "secret\n");
+            var sharedModifiedUtc = DateTime.UtcNow.AddMinutes(-1);
+            File.SetLastWriteTimeUtc(internalTarget, sharedModifiedUtc);
+            File.SetLastWriteTimeUtc(externalTarget, sharedModifiedUtc);
+            try
+            {
+                File.CreateSymbolicLink(linkPath, internalTarget);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var retargeted = false;
+            var indexer = new FileIndexer(
+                projectRoot,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal,
+                openReadForIndexContent: path =>
+                {
+                    if (!retargeted)
+                    {
+                        File.Delete(path);
+                        File.CreateSymbolicLink(path, externalTarget);
+                        retargeted = true;
+                    }
+
+                    return BoundedFile.OpenReadForIndexContent(path);
+                });
+
+            var exception = Assert.Throws<IOException>(() => indexer.BuildRecord(linkPath));
+
+            Assert.True(retargeted);
+            Assert.Contains("identity changed", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(externalRoot);
+        }
+    }
+
+    [Fact]
     public void FileContentLoader_Load_CarriesConflictMarkerLine()
     {
         var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes("a\r\n<<<<<<< HEAD\r\nb\r\n"));

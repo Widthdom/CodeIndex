@@ -128,6 +128,15 @@ public partial class FileIndexer
         return false;
     }
 
+    private void ValidateResolvedFileReadPath(string resolvedReadPath)
+    {
+        if (!IsPathEqualOrParent(_projectRoot, resolvedReadPath))
+        {
+            throw new IOException(
+                "File symlink target resolved outside the project root before opening; rerun indexing.");
+        }
+    }
+
     private static string NormalizePathForComparison(string path)
     {
         var fullPath = Path.GetFullPath(path);
