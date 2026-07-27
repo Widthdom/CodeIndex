@@ -1,5 +1,7 @@
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -138,6 +140,163 @@ public partial class DbReaderTests
         Assert.True(analysis.CycleDetected);
         var cycle = Assert.Single(analysis.Cycles!);
         Assert.Equal(new[] { "A", "B", "C" }, cycle.Members);
+        Assert.Equal(3, cycle.MemberIdentities!.Count);
+        Assert.All(cycle.MemberIdentities, member => Assert.NotNull(member.SymbolId));
+        Assert.Equal(3, cycle.MemberIdentities.Select(member => member.SymbolId).Distinct().Count());
+    }
+
+    [Fact]
+    public void AnalyzeImpact_SameDisplayNameOnRealEdgeDoesNotReportSingletonCycle_Issue4847()
+    {
+        // Issue #4847: display names are presentation data. Two consecutive real edges
+        // through distinct canonical symbols named Run must not become a zero-hop cycle.
+        // Issue #4847: 表示名は提示用データであり、Run という別々の正規シンボルを
+        // 連続して辿る実エッジをゼロホップの cycle として扱ってはならない。
+        InsertIndexedFile("src/ImpactTarget.cs", "csharp",
+            """
+            namespace ImpactIdentity.Target;
+
+            public static class TargetWorker
+            {
+                public static void RunAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/ImpactMiddle.cs", "csharp",
+            """
+            namespace ImpactIdentity.Middle;
+
+            public static class MiddleWorker
+            {
+                public static void Run()
+                {
+                    ImpactIdentity.Target.TargetWorker.RunAsync();
+                }
+            }
+            """);
+        InsertIndexedFile("src/ImpactOuter.cs", "csharp",
+            """
+            namespace ImpactIdentity.Outer;
+
+            public static class OuterWorker
+            {
+                public static void Run()
+                {
+                    ImpactIdentity.Middle.MiddleWorker.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact(
+            "ImpactIdentity.Target.TargetWorker.RunAsync",
+            maxDepth: 2,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/Impact*.cs"],
+            withPaths: true);
+
+        Assert.False(analysis.CycleDetected);
+        Assert.Null(analysis.Cycles);
+        Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
+        Assert.True(
+            analysis.Callers.Count == 2,
+            string.Join(
+                " | ",
+                analysis.Callers.Select(caller =>
+                    $"{caller.Path}:{caller.CallerName}->{caller.CalleeName}:{caller.CallerSymbolId}->{caller.CalleeSymbolId}:depth={caller.Depth}")));
+        Assert.All(analysis.Callers, caller => Assert.Equal("Run", caller.CallerName));
+        Assert.All(analysis.Callers, caller => Assert.NotNull(caller.CallerSymbolId));
+        Assert.Equal(2, analysis.Callers.Select(caller => caller.CallerSymbolId).Distinct().Count());
+        var outerEdge = Assert.Single(analysis.Callers.Where(caller => caller.Depth == 2));
+        Assert.NotEqual(outerEdge.CallerSymbolId, outerEdge.CalleeSymbolId);
+        Assert.Equal([new List<string> { "RunAsync", "Run", "Run" }], outerEdge.Paths);
+        var pathDetails = Assert.Single(outerEdge.PathDetails!);
+        Assert.Equal(3, pathDetails.Select(node => node.SymbolId).Distinct().Count());
+        var structured = JsonNode.Parse(JsonSerializer.Serialize(
+            analysis,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }))!;
+        var structuredOuter = structured["callers"]!.AsArray()
+            .Single(node => node!["depth"]!.GetValue<int>() == 2)!;
+        Assert.Equal(outerEdge.CallerSymbolId, structuredOuter["caller_symbol_id"]!.GetValue<long>());
+        Assert.Equal(outerEdge.CalleeSymbolId, structuredOuter["callee_symbol_id"]!.GetValue<long>());
+        Assert.Equal(
+            pathDetails[^1].SymbolId,
+            structuredOuter["path_details"]![0]![2]!["symbol_id"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public void AnalyzeImpact_SameNameOverloadsRemainDistinctBySourceIdentity_Issue4847()
+    {
+        InsertIndexedFile("src/ImpactOverloads.cs", "csharp",
+            """
+            public static class ImpactOverloads
+            {
+                public static void Anchor() { }
+
+                public static void Run()
+                {
+                    Anchor();
+                }
+
+                public static void Run(int value)
+                {
+                    Anchor();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact(
+            "ImpactOverloads.Anchor",
+            maxDepth: 1,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/ImpactOverloads.cs"]);
+
+        Assert.False(analysis.CycleDetected);
+        Assert.Equal(2, analysis.Callers.Count);
+        Assert.All(analysis.Callers, caller => Assert.Equal("Run", caller.CallerName));
+        Assert.All(analysis.Callers, caller => Assert.NotNull(caller.CallerSymbolId));
+        Assert.Equal(2, analysis.Callers.Select(caller => caller.CallerSymbolId).Distinct().Count());
+        Assert.Single(analysis.Callers.Select(caller => caller.CalleeSymbolId).Distinct());
+        Assert.Equal(
+            analysis.Callers.Select(caller => caller.FirstLine).OrderBy(line => line),
+            analysis.Callers.Select(caller => caller.FirstLine));
+    }
+
+    [Fact]
+    public void AnalyzeImpact_DirectRecursionReportsRealSingletonCycle_Issue4847()
+    {
+        InsertIndexedFile("src/ImpactDirectRecursion.cs", "csharp",
+            """
+            public static class ImpactDirectRecursion
+            {
+                public static void Run()
+                {
+                    Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact(
+            "ImpactDirectRecursion.Run",
+            maxDepth: 2,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/ImpactDirectRecursion.cs"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.True(analysis.CycleDetected);
+        Assert.Equal(ImpactTerminationReasons.CycleDetected, analysis.TerminationReason);
+        Assert.Empty(analysis.Callers);
+        var cycle = Assert.Single(analysis.Cycles!);
+        Assert.Equal(["Run"], cycle.Members);
+        var member = Assert.Single(cycle.MemberIdentities!);
+        Assert.NotNull(member.SymbolId);
+        var structured = JsonNode.Parse(JsonSerializer.Serialize(
+            analysis,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }))!;
+        Assert.Equal(
+            member.SymbolId,
+            structured["cycles"]![0]!["member_identities"]![0]!["symbol_id"]!.GetValue<long>());
     }
 
     [Fact]
