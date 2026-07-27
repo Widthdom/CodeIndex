@@ -701,7 +701,10 @@ public static partial class ReferenceExtractor
         while (first < tokens.Count)
         {
             var token = head.Substring(tokens[first].Start, tokens[first].Length);
-            if (token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal) || IsDeclarationModifier(language, token))
+            if (token.StartsWith("[", StringComparison.Ordinal)
+                || token.StartsWith("@", StringComparison.Ordinal)
+                || IsDeclarationModifier(language, token)
+                || IsParameterModifier(language, token))
             {
                 first++;
                 continue;

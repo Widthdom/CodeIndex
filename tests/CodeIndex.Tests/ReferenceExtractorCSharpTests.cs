@@ -55,6 +55,88 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpParameterAndArgumentModifiers_KeepFollowingTypeReferences_Issue4832()
+    {
+        const string content = """
+            struct Payload {}
+            class Wrapper<T> {}
+            ref struct RefPacket {}
+
+            static class ModifierFixture
+            {
+                static ref Payload RefReturn(ref Payload value) => ref value;
+                static void Params(params Wrapper<Payload>[] items) {}
+
+                static void Consume(
+                    out Payload output,
+                    ref Wrapper<Payload> byRef,
+                    in Payload input,
+                    Payload tail)
+                {
+                    output = input;
+                }
+
+                static void Extend(
+                    this scoped ref Payload target,
+                    scoped in Payload input)
+                {
+                }
+
+                static void Run(Wrapper<Payload> byRef, Payload input)
+                {
+                    Consume(
+                        out Payload declared,
+                        ref byRef,
+                        in input,
+                        input);
+                    Consume(
+                        out var inferred,
+                        ref byRef,
+                        in input,
+                        input);
+                    _ = declared;
+                    _ = inferred;
+                }
+            }
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("csharp", content);
+        var modifierNames = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "out",
+            "ref",
+            "in",
+            "params",
+            "this",
+            "scoped",
+        };
+
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "type_reference"
+            && modifierNames.Contains(reference.SymbolName));
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "type_reference"
+            && reference.SymbolName == "var");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Payload"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.Contains("out Payload output", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Wrapper"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.Contains("ref Wrapper<Payload> byRef", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Payload"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.Contains("this scoped ref Payload target", StringComparison.Ordinal));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Payload"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.Contains("static ref Payload RefReturn", StringComparison.Ordinal));
+        Assert.Contains(symbols, symbol => symbol.Name == "RefPacket" && symbol.Kind == "struct");
+    }
+
+    [Fact]
     public void Extract_CSharpQualifiedDataReaderCall_DoesNotEmitCommonMemberReference_Issue4121()
     {
         const string content = """
