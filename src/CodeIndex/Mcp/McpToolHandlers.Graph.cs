@@ -573,7 +573,8 @@ public partial class McpServer
                 pathPatterns,
                 excludePaths,
                 excludeTests,
-                exact);
+                exact,
+                limit);
             var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
             if (graphCursor != null
                 && (!string.Equals(graphCursor.QueryFingerprint, queryFingerprint, StringComparison.Ordinal)
@@ -656,7 +657,8 @@ public partial class McpServer
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePaths,
         bool excludeTests,
-        bool exact)
+        bool exact,
+        int pageLimit)
     {
         var components = new List<string?>
         {
@@ -664,6 +666,7 @@ public partial class McpServer
             query,
             lang,
             exact ? "exact" : "substring",
+            $"page-limit:{pageLimit.ToString(CultureInfo.InvariantCulture)}",
             excludeTests ? "exclude-tests" : "include-tests",
         };
         components.AddRange((pathPatterns ?? [])

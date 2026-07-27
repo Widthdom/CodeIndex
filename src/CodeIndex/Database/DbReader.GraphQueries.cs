@@ -205,7 +205,7 @@ public partial class DbReader
                    MAX(r.is_mutual_recursion) AS is_mutual_recursion
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line LIMIT @limit OFFSET @offset";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line, first_column, r.lang, r.container_kind, r.container_name, r.symbol_name LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -648,7 +648,7 @@ public partial class DbReader
                    SUM(r.weighted_score) AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line LIMIT @limit OFFSET @offset";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line, r.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         string calleesQueryParam;

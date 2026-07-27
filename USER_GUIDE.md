@@ -381,7 +381,8 @@ Every `inspect` graph bundle also publishes independent
 `graph_sections.callees` envelopes with `total`, `returned`, `offset`, and
 `truncated`. A truncated section includes an opaque `next_cursor`; pass it back
 with `--cursor` and unchanged query filters to continue only that section.
-The cursor is bound to the query and index generation. Name and path/line
+The cursor is bound to the query, effective page size, and index generation, so
+keep the same `--limit` / `--top` value when continuing. Name and path/line
 inspection both preserve the selected persisted symbol ID, so location lookup
 returns the same candidate-scoped graph evidence as the corresponding name
 bundle instead of re-resolving a display name. MCP `analyze_symbol` exposes the
@@ -3512,7 +3513,8 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 `graph_sections.callees` envelope も公開し、`total`、`returned`、`offset`、
 `truncated` を示します。truncated な section には opaque な `next_cursor` が付き、
 query filter を変えず `--cursor` で渡すと、その section だけを継続できます。
-cursor は query と index generation に束縛されます。名前指定と path/line 指定の
+cursor は query、effective page size、index generation に束縛されるため、継続時は
+同じ `--limit` / `--top` 値を維持してください。名前指定と path/line 指定の
 どちらも選択された永続 symbol ID を維持するため、location lookup は display name を
 再解決せず、対応する name bundle と同じ candidate-scoped graph evidence を返します。
 MCP `analyze_symbol` も同じ section envelope を公開し、その cursor を受け付けます。

@@ -1472,6 +1472,16 @@ public partial class McpServerTests
         Assert.StartsWith("inspect-graph:v1:", nextCursor, StringComparison.Ordinal);
 
         arguments["cursor"] = nextCursor;
+        arguments["limit"] = 2;
+        request["id"] = 4840;
+        var pageLimitMismatchResponse = _server.HandleMessage(request)!;
+        Assert.True(pageLimitMismatchResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+        Assert.Contains(
+            "cursor does not match this analyze_symbol query or index generation",
+            pageLimitMismatchResponse.ToJsonString(),
+            StringComparison.Ordinal);
+
+        arguments["limit"] = 1;
         request["id"] = 4840;
         var secondResponse = _server.HandleMessage(request)!;
         var second = secondResponse["result"]!["structuredContent"]!;

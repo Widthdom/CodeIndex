@@ -1108,9 +1108,11 @@ Path/line resolution must select `symbols.id` and enter the same candidate-bundl
 name resolution; do not hand graph loaders only the display name. Each bounded references,
 callers, and callees section computes its own stable-order page and authoritative total.
 `graph_sections` reports `total`, `returned`, `offset`, and `truncated`, while CLI `inspect`
-and MCP `analyze_symbol` attach query- and index-generation-bound cursors independently to
-truncated sections. Candidate selectors are part of cursor scope so paging one overload or
-partial-family representative cannot borrow graph rows from another candidate.
+and MCP `analyze_symbol` attach query-, effective-page-size-, and index-generation-bound
+cursors independently to truncated sections. Caller/callee ordering ends with every grouped
+identity field so offset pages cannot skip tied rows. Candidate selectors are part of cursor
+scope so paging one overload or partial-family representative cannot borrow graph rows from
+another candidate.
 
 ### Reference taxonomy
 
@@ -4273,9 +4275,11 @@ candidate-bundle builder に入れてください。graph loader に display nam
 なりません。上限付きの references、callers、callees section は、それぞれ安定順序の page と
 authoritative な総数を計算します。`graph_sections` は `total`、`returned`、`offset`、
 `truncated` を報告し、CLI `inspect` と MCP `analyze_symbol` は truncated な section ごとに
-query と index generation に束縛した cursor を付けます。candidate selector も cursor scope
-に含め、1つの overload または partial-family representative の pagination が別 candidate の
-graph row を借用しないようにしてください。
+query、effective page size、index generation に束縛した cursor を付けます。
+caller/callee の順序は grouped identity field のすべてを末尾の tie-breaker に使い、offset page が
+同順位 row を飛ばさないようにします。candidate selector も cursor scope に含め、1つの overload
+または partial-family representative の pagination が別 candidate の graph row を借用しないように
+してください。
 
 ### 参照 taxonomy
 

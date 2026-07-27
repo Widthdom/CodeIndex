@@ -147,7 +147,8 @@ public static partial class QueryCommandRunner
                 inspectQuery,
                 options,
                 exact,
-                fileInspectMode);
+                fileInspectMode,
+                inspectLimit);
             var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
             if (graphCursor != null
                 && (!string.Equals(graphCursor.QueryFingerprint, queryFingerprint, StringComparison.Ordinal)
@@ -392,7 +393,8 @@ public static partial class QueryCommandRunner
         string inspectQuery,
         QueryCommandOptions options,
         bool exact,
-        bool fileInspectMode)
+        bool fileInspectMode,
+        int pageLimit)
     {
         var components = new List<string?>
         {
@@ -402,6 +404,7 @@ public static partial class QueryCommandRunner
             options.Lang,
             options.Kind,
             exact ? "exact" : "substring",
+            $"page-limit:{pageLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             options.ExcludeTests ? "exclude-tests" : "include-tests",
             options.GroupPartials ? "group-partials" : "physical-definitions",
         };

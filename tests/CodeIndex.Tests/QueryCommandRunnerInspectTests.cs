@@ -156,18 +156,28 @@ public partial class QueryCommandRunnerTests
                 {
                     public void RunSearch() { Other(); }
                     private void Other() { }
-                    public void CallerBeta() => RunSearch();
+                    public void CallerBetaA() => RunSearch();
+                    public void CallerBetaB() => RunSearch();
+                    public void CallerBetaC() => RunSearch();
                 }
                 """);
             MarkGraphAndFoldReady(dbPath);
 
             var (nameExitCode, nameStdout, nameStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["RunSearch", "--db", dbPath, "--json", "--limit", "5", "--lang", "csharp", "--exact-name"],
+                ["RunSearch", "--db", dbPath, "--json", "--limit", "2", "--lang", "csharp", "--exact-name"],
                 _jsonOptions));
             using var nameDocument = ParseJsonOutput(nameStdout);
             var alphaNameBundle = GetInspectCandidateBundle(
                 nameDocument.RootElement,
                 "InspectIdentity.Alpha.RunSearch");
+            var betaNameBundle = GetInspectCandidateBundle(
+                nameDocument.RootElement,
+                "InspectIdentity.Beta.RunSearch");
+            var betaCallerCursor = betaNameBundle
+                .GetProperty("graph_sections")
+                .GetProperty("callers")
+                .GetProperty("next_cursor")
+                .GetString();
 
             var locationArgs = new[]
             {
@@ -185,6 +195,9 @@ public partial class QueryCommandRunnerTests
             var callerSection = location.GetProperty("graph_sections").GetProperty("callers");
             var firstCaller = Assert.Single(location.GetProperty("callers").EnumerateArray());
             var nextCursor = callerSection.GetProperty("next_cursor").GetString();
+            var calleeSection = location.GetProperty("graph_sections").GetProperty("callees");
+            var firstCallee = Assert.Single(location.GetProperty("callees").EnumerateArray());
+            var calleeCursor = calleeSection.GetProperty("next_cursor").GetString();
 
             Assert.Equal(CommandExitCodes.Success, nameExitCode);
             Assert.Equal(string.Empty, nameStderr);
@@ -204,8 +217,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(0, callerSection.GetProperty("offset").GetInt32());
             Assert.True(callerSection.GetProperty("truncated").GetBoolean());
             Assert.False(string.IsNullOrWhiteSpace(nextCursor));
+            Assert.False(string.IsNullOrWhiteSpace(betaCallerCursor));
+            Assert.False(string.IsNullOrWhiteSpace(calleeCursor));
             Assert.Equal(2, location.GetProperty("graph_sections").GetProperty("references").GetProperty("total").GetInt32());
-            Assert.Equal(2, location.GetProperty("graph_sections").GetProperty("callees").GetProperty("total").GetInt32());
+            Assert.Equal(2, calleeSection.GetProperty("total").GetInt32());
 
             var continuationArgs = locationArgs
                 .Concat(["--cursor", nextCursor!])
@@ -227,6 +242,38 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, continuedCallerSection.GetProperty("offset").GetInt32());
             Assert.False(continuedCallerSection.GetProperty("truncated").GetBoolean());
             Assert.False(continuedCallerSection.TryGetProperty("next_cursor", out _));
+
+            var (calleeContinuationExitCode, calleeContinuationStdout, calleeContinuationStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    locationArgs.Concat(["--cursor", calleeCursor!]).ToArray(),
+                    _jsonOptions));
+            using var calleeContinuationDocument = ParseJsonOutput(calleeContinuationStdout);
+            var continuedCallee = Assert.Single(
+                calleeContinuationDocument.RootElement.GetProperty("callees").EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, calleeContinuationExitCode);
+            Assert.Equal(string.Empty, calleeContinuationStderr);
+            Assert.Equal(
+                ["First", "Second"],
+                new[]
+                {
+                    firstCallee.GetProperty("callee_name").GetString(),
+                    continuedCallee.GetProperty("callee_name").GetString(),
+                });
+
+            var (pageLimitMismatchExitCode, _, pageLimitMismatchStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunInspect(
+                    [
+                        "RunSearch",
+                        "--db", dbPath,
+                        "--json",
+                        "--limit", "1",
+                        "--lang", "csharp",
+                        "--exact-name",
+                        "--cursor", betaCallerCursor!,
+                    ],
+                    _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, pageLimitMismatchExitCode);
+            Assert.Contains("does not match this query or index generation", pageLimitMismatchStderr, StringComparison.Ordinal);
 
             var (queryMismatchExitCode, _, queryMismatchStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunInspect(
