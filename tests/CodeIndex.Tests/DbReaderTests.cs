@@ -2081,11 +2081,13 @@ public partial class DbReaderTests : IDisposable
         const string targetName = "Issue4841Target";
         const string callerName = "Issue4841Caller";
         const string callLine = "    void Issue4841Caller() { var text = \"日本語\";\tIssue4841Target(); Issue4841Target(); }";
+        const string methodGroupLine = "    void Issue4841MethodGroupCaller() { System.Action callback = @Issue4841Target; }";
         var source = string.Join('\n',
             "class Issue4841Probe",
             "{",
             "    void Issue4841Target() { }",
             callLine,
+            methodGroupLine,
             "}",
             "class Issue4841VeryLongParent { }",
             "class Issue4841Child : Issue4841VeryLongParent",
@@ -2094,6 +2096,7 @@ public partial class DbReaderTests : IDisposable
             "}",
             "");
         var expectedColumn = callLine.IndexOf(targetName, StringComparison.Ordinal) + 1;
+        var expectedMethodGroupColumn = methodGroupLine.IndexOf($"@{targetName}", StringComparison.Ordinal) + 1;
         InsertIndexedFile("src/Issue4841Probe.cs", "csharp", source);
 
         var precise = Assert.Single(_reader.GetCallees(callerName, lang: "csharp", exact: true));
@@ -2103,11 +2106,19 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(targetName.Length, precise.FirstLength);
         Assert.Equal(2, precise.ReferenceCount);
 
+        var methodGroup = Assert.Single(
+            _reader.GetCallees("Issue4841MethodGroupCaller", lang: "csharp", exact: true),
+            row => row.CalleeName == targetName);
+        Assert.Equal(5, methodGroup.FirstLine);
+        Assert.Equal(expectedMethodGroupColumn, methodGroup.FirstColumn);
+        Assert.Equal(targetName.Length + 1, methodGroup.FirstLength);
+        Assert.Equal(1, methodGroup.ReferenceCount);
+
         var constructorChain = Assert.Single(
             _reader.GetCallees("Issue4841Child", lang: "csharp", exact: true),
             row => row.CalleeName == "Issue4841VeryLongParent");
         Assert.Equal("Issue4841VeryLongParent", constructorChain.CalleeName);
-        Assert.Equal(9, constructorChain.FirstLine);
+        Assert.Equal(10, constructorChain.FirstLine);
         Assert.Equal(24, constructorChain.FirstColumn);
         Assert.Equal("base".Length, constructorChain.FirstLength);
 

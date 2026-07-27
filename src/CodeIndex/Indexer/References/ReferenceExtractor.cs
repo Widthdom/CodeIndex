@@ -342,8 +342,6 @@ public static partial class ReferenceExtractor
         if (ReferenceLimitReached(references))
             return false;
 
-        if (reference.SpanLength <= 0)
-            reference.SpanLength = Math.Max(1, reference.SymbolName.Length);
         references.Add(reference);
         return true;
     }

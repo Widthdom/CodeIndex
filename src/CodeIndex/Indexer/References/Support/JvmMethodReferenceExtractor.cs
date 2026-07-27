@@ -225,8 +225,10 @@ internal static class JvmMethodReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        var sourceLength = name.Length;
         name = NormalizeMethodReferenceName(language, name);
-        var dedupeKey = ReferenceExtractor.CreateReferenceDedupeKey(fileId, language, lineNumber, column, "call", name, container);
+        var oneBasedColumn = column + 1;
+        var dedupeKey = ReferenceExtractor.CreateReferenceDedupeKey(fileId, language, lineNumber, oneBasedColumn, "call", name, container);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -236,7 +238,8 @@ internal static class JvmMethodReferenceExtractor
             SymbolName = name,
             ReferenceKind = "call",
             Line = lineNumber,
-            Column = column,
+            Column = oneBasedColumn,
+            SpanLength = sourceLength,
             Context = context,
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
