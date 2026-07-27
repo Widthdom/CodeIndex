@@ -216,7 +216,7 @@ public partial class McpServer
         if (method == "notifications/initialized")
         {
             if (CurrentInitializeState.Phase == McpSessionPhase.Initialized)
-                _ = RefreshClientRootsAfterHandshakeAsync();
+                StartClientRootsRefreshAfterHandshake();
             return true;
         }
         if (method == "notifications/roots/list_changed")

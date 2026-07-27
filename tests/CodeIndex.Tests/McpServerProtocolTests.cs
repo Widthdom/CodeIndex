@@ -174,6 +174,48 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public async Task Initialize_LateTimedOutWorkerReleasesClaimForRetry_Issue4848()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion())
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(20),
+        };
+        var delayStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDelay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTests = _ =>
+        {
+            delayStarted.TrySetResult();
+            return releaseDelay.Task;
+        };
+
+        var timedOutResponseTask = server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"late-client","version":"1.0"},"capabilities":{}}}""");
+        try
+        {
+            await delayStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            var timedOutResponse = JsonNode.Parse(
+                await timedOutResponseTask.WaitAsync(TestDeterminism.DefaultTimeout) ?? string.Empty)!;
+            Assert.Equal("timeout", timedOutResponse["error"]!["data"]!["reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            server.RequestDelayForTests = null;
+            releaseDelay.TrySetResult();
+        }
+
+        await TestDeterminism.WaitUntilAsync(
+            () => server.BuildRequestTimeoutDiagnosticsStatus()["isolated_action_draining_count"]!.GetValue<long>() == 0,
+            "the late initialize worker to drain and release its sealed-frame claim");
+
+        var retryResponse = JsonNode.Parse(
+            await server.ProcessFrameAsync(
+                """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"retry-client","version":"2.0"},"capabilities":{}}}""")
+            ?? string.Empty)!;
+        Assert.NotNull(retryResponse["result"]);
+        Assert.Equal("retry-client/2.0", server.CurrentCaller);
+    }
+
+    [Fact]
     public async Task InitializedNotification_RequestsRootsOnlyWhenClientAdvertisesSupport_Issue4848()
     {
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
@@ -224,6 +266,61 @@ public partial class McpServerTests
 
         Assert.Empty(transport.OutOfBandFrames);
         Assert.Empty(server.ClientRootsForTests);
+    }
+
+    [Fact]
+    public async Task InitializedNotification_CoalescesAndDrainsRootsRefresh_Issue4848()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        Assert.NotNull(server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"roots":{}}}}""")!)?["result"]);
+
+        var rootsRequestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseRootsResponse = new ManualResetEventSlim(false);
+        var rootsRequestCount = 0;
+        string? requestedMethod = null;
+        server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            requestedMethod = method;
+            Interlocked.Increment(ref rootsRequestCount);
+            rootsRequestStarted.TrySetResult();
+            if (!releaseRootsResponse.Wait(TestDeterminism.DefaultTimeout))
+                throw new TimeoutException("Timed out waiting to release the coalesced roots response.");
+            return new JsonObject
+            {
+                ["roots"] = new JsonArray(new JsonObject { ["uri"] = "file:///coalesced-workspace" }),
+            };
+        };
+
+        Task? drainTask = null;
+        try
+        {
+            Assert.Null(server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","method":"notifications/initialized"}""")!));
+            await rootsRequestStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            for (var index = 0; index < 32; index++)
+            {
+                Assert.Null(server.HandleMessage(JsonNode.Parse(
+                    """{"jsonrpc":"2.0","method":"notifications/initialized"}""")!));
+            }
+
+            Assert.Equal(1, Volatile.Read(ref rootsRequestCount));
+            drainTask = server.DrainInFlightTasksAsync(
+                [],
+                TestDeterminism.DefaultTimeout,
+                TimeSpan.Zero);
+            Assert.False(drainTask.IsCompleted);
+        }
+        finally
+        {
+            releaseRootsResponse.Set();
+        }
+
+        Assert.NotNull(drainTask);
+        await drainTask!.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal("roots/list", requestedMethod);
+        Assert.Equal(["file:///coalesced-workspace"], server.ClientRootsForTests);
+        Assert.False(server.ClientRootsStaleForTests);
     }
 
     [Fact]

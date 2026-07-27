@@ -81,6 +81,14 @@ public partial class McpServer : IDisposable
     // 処理されることがある。短命の tombstone を置き、登録時に cancel を消費する (#1418)。
     private readonly ConcurrentDictionary<string, DateTimeOffset> _pendingRequestCancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingClientRequests = new(StringComparer.Ordinal);
+    // The initialized notification is a one-shot protocol barrier. Keep its roots refresh
+    // coalesced and observable by transport teardown so repeated notifications cannot create
+    // unbounded detached client requests (#4848).
+    // initialized notification は一度限りの protocol barrier として扱う。roots refresh を集約し、
+    // transport teardown から追跡して、通知の再送で detached request が増殖しないようにする (#4848)。
+    private readonly object _clientRootsHandshakeRefreshGate = new();
+    private Task? _clientRootsHandshakeRefreshTask;
+    private bool _clientRootsHandshakeRefreshStarted;
     private readonly object _requestTimeoutDiagnosticsGate = new();
     private readonly object _healthStateGate = new();
     // Shared writer operations must not use the session DbContext concurrently. This gate is

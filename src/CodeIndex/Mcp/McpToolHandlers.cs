@@ -1461,8 +1461,32 @@ public partial class McpServer
         }
     }
 
+    private void StartClientRootsRefreshAfterHandshake()
+    {
+        lock (_clientRootsHandshakeRefreshGate)
+        {
+            if (_clientRootsHandshakeRefreshStarted)
+                return;
+
+            _clientRootsHandshakeRefreshStarted = true;
+            _clientRootsHandshakeRefreshTask = RefreshClientRootsAfterHandshakeAsync();
+        }
+    }
+
+    private Task? GetClientRootsHandshakeRefreshTask()
+    {
+        lock (_clientRootsHandshakeRefreshGate)
+            return _clientRootsHandshakeRefreshTask;
+    }
+
     private async Task RefreshClientRootsAfterHandshakeAsync()
     {
+        // Yield before client I/O so the task is published under the coalescing gate before a
+        // synchronous test/client adapter can block. The execution context retains the active
+        // out-of-band writer and cancellation token.
+        // client I/O の前に yield し、同期 adapter が block しても task を coalescing gate 配下へ
+        // 先に公開する。execution context は out-of-band writer と cancellation token を保持する。
+        await Task.Yield();
         try
         {
             await RefreshClientRootsIfNeededAsync().ConfigureAwait(false);

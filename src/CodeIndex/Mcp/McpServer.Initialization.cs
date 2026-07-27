@@ -78,8 +78,8 @@ public partial class McpServer : IDisposable
             var response = CreateSuccessResponse(true, id, result);
             if (deferredInitializeCommits is null)
                 CommitInitializeState(initializeState);
-            else
-                deferredInitializeCommits.Register(response, initializeState);
+            else if (!deferredInitializeCommits.TryRegister(response, initializeState))
+                ReleaseInitializeAttempt(initializeAttemptId);
             return response;
         }
         catch
@@ -502,11 +502,18 @@ public partial class McpServer : IDisposable
     {
         private readonly object _gate = new();
         private readonly List<Entry> _entries = [];
+        private bool _sealed;
 
-        internal void Register(JsonNode response, PendingInitializeState state)
+        internal bool TryRegister(JsonNode response, PendingInitializeState state)
         {
             lock (_gate)
+            {
+                if (_sealed)
+                    return false;
+
                 _entries.Add(new Entry(response, state));
+                return true;
+            }
         }
 
         internal bool TryGetRegisteredState(JsonNode response, out PendingInitializeState state)
@@ -538,10 +545,13 @@ public partial class McpServer : IDisposable
             }
         }
 
-        internal PendingInitializeState[] GetRegisteredStates()
+        internal PendingInitializeState[] SealAndGetRegisteredStates()
         {
             lock (_gate)
+            {
+                _sealed = true;
                 return _entries.Select(static entry => entry.State).ToArray();
+            }
         }
 
         private static bool IsIncludedResponse(JsonNode serializedResponse, JsonNode candidate)
