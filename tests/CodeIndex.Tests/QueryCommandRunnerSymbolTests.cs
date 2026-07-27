@@ -251,6 +251,58 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunGoto_AllIgnoresDefaultLimitAndHonorsExplicitLimit_Issue4837()
+    {
+        const int definitionCount = 63;
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_goto_all_issue4837");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var index = 0; index < definitionCount; index++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/SharedDefinition{index:D2}.cs",
+                    "csharp",
+                    "namespace Demo;\n\npublic class SharedDefinition { }\n");
+            }
+
+            foreach (var outputArgs in new[]
+            {
+                Array.Empty<string>(),
+                new[] { "--json" },
+            })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                    ["SharedDefinition", "--db", dbPath, "--kind", "class", "--lang", "csharp", "--exact-name", "--all", .. outputArgs],
+                    _jsonOptions));
+
+                Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var locations = document.RootElement.EnumerateArray().ToList();
+
+                Assert.Equal(definitionCount, locations.Count);
+                Assert.EndsWith("/src/SharedDefinition00.cs", locations[0].GetProperty("uri").GetString());
+                Assert.EndsWith("/src/SharedDefinition62.cs", locations[^1].GetProperty("uri").GetString());
+            }
+
+            var (limitedExitCode, limitedStdout, limitedStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["SharedDefinition", "--db", dbPath, "--kind", "class", "--lang", "csharp", "--exact-name", "--all", "--limit", "7"],
+                _jsonOptions));
+
+            Assert.True(limitedExitCode == CommandExitCodes.Success, $"stdout: {limitedStdout}\nstderr: {limitedStderr}");
+            Assert.Equal(string.Empty, limitedStderr);
+            using var limitedDocument = ParseJsonOutput(limitedStdout);
+            Assert.Equal(7, limitedDocument.RootElement.GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CountJsonMaxJsonBytesRejectsBareVerbatimZero_Issue4165()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
