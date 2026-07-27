@@ -131,19 +131,26 @@ internal static partial class JsonEnvelopeWrapper
             return WriteBoundedResponseUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.");
         if (ProjectionFieldRegistry.IsDiscoveryRequest(controls.Fields))
         {
-            Console.WriteLine(ProjectionFieldRegistry.CreateDiscoveryDocument(command).ToJsonString(jsonOptions));
-            return CommandExitCodes.Success;
+            var discoveryJson = ProjectionFieldRegistry.CreateDiscoveryDocument(command).ToJsonString(jsonOptions);
+            return WriteProjectionRegistryResponse(
+                discoveryJson,
+                CommandExitCodes.Success,
+                controls.MaxJsonBytes);
         }
         if (!ProjectionFieldRegistry.TryValidate(command, controls.Fields, out var fieldError))
         {
-            return CommandErrorWriter.WriteJsonOrHuman(
-                true,
-                jsonOptions,
-                fieldError!.Message,
+            var errorJson = JsonSerializer.Serialize(
+                new CommandErrorJsonResult(
+                    "error",
+                    fieldError!.Message,
+                    fieldError.Hint,
+                    CommandErrorCodes.UsageError,
+                    Category: "usage"),
+                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult);
+            return WriteProjectionRegistryResponse(
+                errorJson,
                 CommandExitCodes.UsageError,
-                fieldError.Hint,
-                errorCode: CommandErrorCodes.UsageError,
-                category: "usage");
+                controls.MaxJsonBytes);
         }
         if (HasArgument(args, "--count"))
             return WriteBoundedResponseUsageError("Bounded response controls cannot be combined with --count.", "Run --count --json separately for a count-only response, or remove --count to page projected rows.");
@@ -472,6 +479,22 @@ internal static partial class JsonEnvelopeWrapper
 
     private static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
         => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine) <= maxJsonBytes;
+
+    private static int WriteProjectionRegistryResponse(
+        string json,
+        int exitCode,
+        int? maxJsonBytes)
+    {
+        if (maxJsonBytes.HasValue && !JsonFitsResponseBudget(json, maxJsonBytes.Value))
+        {
+            return WriteBoundedResponseUsageError(
+                $"--max-json-bytes {maxJsonBytes.Value} is too small for the projection-field response.",
+                "Increase --max-json-bytes and rerun the same --fields request.");
+        }
+
+        Console.WriteLine(json);
+        return exitCode;
+    }
 
     private static JsonObject? TakeCommandError(JsonArray rawResults, int exitCode)
     {

@@ -1,4 +1,8 @@
+using System.Reflection;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
 
@@ -144,6 +148,7 @@ internal static class ProjectionFieldRegistry
             "search",
             ["file", "line"],
             builder => builder
+                .Fields(GetJsonFieldNames<CompactSearchResult>())
                 .Fields(
                     "api_version", "query", "path", "lang", "visibility", "chunk_start_line",
                     "chunk_end_line", "snippet_start_line", "snippet_end_line", "snippet",
@@ -162,6 +167,7 @@ internal static class ProjectionFieldRegistry
             "definition",
             ["file", "line", "column"],
             builder => builder
+                .Fields(GetJsonFieldNames<SymbolResult>())
                 .Fields(
                     "disambiguator", "api_version", "path", "symbol_id", "lang", "kind", "sub_kind",
                     "name", "line", "start_line", "start_column", "end_line", "body_start_line",
@@ -170,7 +176,9 @@ internal static class ProjectionFieldRegistry
                     "is_metadata_target", "metadata_target_source", "same_line_signature_occurrence_index",
                     "content_omitted", "content_omitted_reason", "body_content", "body_content_start_line",
                     "body_content_end_line", "body_requested_start_line", "body_requested_end_line",
-                    "body_effective_start_line", "body_effective_end_line", "complexity")
+                    "body_effective_start_line", "body_effective_end_line", "body_content_truncated",
+                    "body_content_truncation_reasons", "body_content_recovery",
+                    "body_content_next_start_line", "complexity")
                 .Alias("file", "path")
                 .Alias("column", "start_column")
                 .Alias("body", "body_content"));
@@ -180,6 +188,7 @@ internal static class ProjectionFieldRegistry
             "find",
             ["file", "line", "column"],
             builder => builder
+                .Fields(GetJsonFieldNames<FileFindResult>())
                 .Fields(
                     "api_version", "path", "lang", "line", "column", "length", "original_line_length",
                     "start_line", "end_line", "snippet", "snippet_truncated",
@@ -194,44 +203,23 @@ internal static class ProjectionFieldRegistry
                 "git_is_dirty", "head_freshness", "version", "graph_table_available",
                 "hotspot_family_ready", "summary",
             ],
-            builder => builder.Fields(
-                "api_version", "files", "chunks", "symbols", "references", "unknown_extension_file_count",
-                "unknown_extension_files", "unknown_extension_files_truncated",
-                "unknown_extension_file_path_limit", "unknown_extension_extension_counts",
-                "unknown_extension_category_counts", "unknown_extension_groups", "indexed_at",
-                "last_workspace_freshened_at", "latest_modified", "project_root", "data_dir",
-                "data_dir_source", "data_dir_mode", "db_file_mode", "database_permission_policy",
-                "database_permission_diagnostics", "read_only_fallback", "wal_checkpoint_attempted",
-                "wal_checkpoint_succeeded", "read_only_immutable_fallback", "wal_stale_snapshot_risk",
-                "sqlite_connection_policy", "git_head", "git_is_dirty", "indexed_head_commit",
-                "worktree_head_changed", "indexed_head_sha", "indexed_head_branch",
-                "indexed_head_timestamp", "commits_ahead_of_indexed_head", "head_freshness", "languages",
-                "symbol_kinds", "symbols_by_language", "graph_supported_languages", "git_executable",
-                "extractors", "version", "summary", "graph_table_available", "graph_data_current",
-                "reference_extraction_limits", "reference_graph_complete",
-                "reference_extraction_cap_hits", "issues_table_available", "file_issues_data_current",
-                "migration_in_progress", "index_complete", "hotspot_family_ready",
-                "language_readiness", "csharp_symbol_name_ready", "csharp_metadata_target_ready",
-                "sql_graph_contract_ready", "fold_ready", "index_writer_version",
-                "index_newer_than_reader", "path_case_sensitive", "db_pragma_settings",
-                "prepared_command_cache", "maintenance_guidance", "db_size_bytes", "wal_size_bytes",
-                "process", "last_index_run", "workspace_check", "failed_checks", "repair_commands",
-                "query_context", "stale_after_seconds", "index_age_seconds",
-                "last_failed_or_partial_index_run", "mac_profile", "mac_profile_diagnostics",
-                "trust_overrides", "hooks", "hook_diagnostics", "index_newer_than_reader_reason",
-                "csharp_metadata_target_degraded_reason", "fold_ready_reason",
-                "sql_graph_contract_degraded_reason", "hotspot_family_degraded_reason",
-                "degraded_root_cause", "degraded_reason", "recommended_action", "alternative_action",
-                "readiness_degradations"));
+            builder => builder
+                .Fields(GetJsonFieldNames<StatusResult>())
+                .Fields(
+                    "effective_config", "log_path", "field", "label", "ready", "degraded",
+                    "remediation", "known_fields"));
 
     private static ProjectionCommandFieldSchema CreateHotspotsSchema()
         => Create(
             "hotspots",
             ["name", "kind", "path", "line", "reference_count", "reference_score", "ranking_score"],
             builder => builder
+                .Fields(GetJsonFieldNames<SymbolHotspotJsonResult>())
+                .Fields(GetJsonFieldNames<GroupedSymbolHotspotJsonResult>())
                 .Fields(
                     "name", "kind", "path", "line", "reference_count", "reference_score",
-                    "ranking_score", "generic_name_penalty", "visibility", "container")
+                    "ranking_score", "generic_name_penalty", "structural_rank_penalty",
+                    "symbol_count", "lang", "visibility", "container")
                 .Alias("file", "path"));
 
     private static ProjectionCommandFieldSchema CreateReferencesSchema()
@@ -239,6 +227,7 @@ internal static class ProjectionFieldRegistry
             "references",
             ["file", "line", "column"],
             builder => builder
+                .Fields(GetJsonFieldNames<ReferenceResult>())
                 .Fields(
                     "api_version", "path", "lang", "symbol_name", "target_symbol_id",
                     "target_symbol_key", "reference_kind", "line", "column", "context",
@@ -251,6 +240,8 @@ internal static class ProjectionFieldRegistry
             command,
             ["file", "line", "column"],
             builder => builder
+                .Fields(GetJsonFieldNames<CallerResult>())
+                .Fields(GetJsonFieldNames<CalleeResult>())
                 .Fields(
                     "api_version", "path", "lang", "caller_kind", "caller_name", "callee_name",
                     "reference_kind", "reference_kinds", "has_mixed_reference_kinds",
@@ -267,6 +258,7 @@ internal static class ProjectionFieldRegistry
             "symbols",
             ["path", "line", "kind", "name"],
             builder => builder
+                .Fields(GetJsonFieldNames<SymbolResult>())
                 .Fields(
                     "api_version", "path", "symbol_id", "lang", "kind", "sub_kind", "name", "line",
                     "start_line", "start_column", "end_line", "body_start_line", "body_end_line",
@@ -289,30 +281,17 @@ internal static class ProjectionFieldRegistry
         => Create(
             "languages",
             ["lang", "extensions", "symbol_extraction", "reference_extraction", "graph_queries"],
-            builder => builder.Fields(
-                "lang", "extensions", "exact_filenames", "filename_prefix_patterns", "legacy_patterns",
-                "pattern_provenance", "aliases", "symbol_extraction", "reference_extraction",
-                "graph_queries", "capability_gaps", "unsupported_guidance"));
+            builder => builder.Fields(GetJsonFieldNames<LanguageEntryJsonResult>()));
 
     private static ProjectionCommandFieldSchema CreateImpactSchema()
     {
-        var callerFields = new[]
-        {
-            "result_kind", "path", "lang", "caller_kind", "caller_name", "callee_name", "depth",
-            "first_line", "first_column", "reference_count", "reference_kind", "reference_kinds",
-            "reference_kind_counts",
-        };
+        var callerFields = GetJsonFieldNames<ImpactResult>().ToArray();
         var fileImpactFields = new[]
         {
             "result_kind", "path", "lang", "depth", "reference_count", "reference_kind",
             "reference_kinds", "reference_kind_counts",
         };
-        var definitionFields = new[]
-        {
-            "api_version", "path", "symbol_id", "lang", "kind", "name", "line", "start_line",
-            "start_column", "end_line", "body_start_line", "body_end_line", "signature",
-            "container_kind", "container_name", "visibility", "return_type",
-        };
+        var definitionFields = GetJsonFieldNames<SymbolResult>().ToArray();
         return Create(
             "impact",
             ["path", "caller_name", "callee_name", "depth", "first_line", "reference_count", "result_kind"],
@@ -332,7 +311,7 @@ internal static class ProjectionFieldRegistry
             [
                 "api_version", "file_count", "total_lines", "total_symbols", "total_references",
                 "indexed_at", "git_head", "git_is_dirty", "head_freshness", "graph_table_available",
-                "sections",
+                "languages", "modules", "entrypoints",
             ],
             builder => builder
                 .Fields(
@@ -340,10 +319,11 @@ internal static class ProjectionFieldRegistry
                     "indexed_at", "latest_modified", "workspace_indexed_at", "workspace_latest_modified",
                     "project_root", "git_head", "git_is_dirty", "indexed_head_commit", "indexed_head_sha",
                     "indexed_head_branch", "indexed_head_timestamp", "commits_ahead_of_indexed_head",
-                    "worktree_head_changed", "head_freshness", "language_count", "module_count",
-                    "entrypoint_count", "graph_table_available", "generated_code_policy",
+                    "worktree_head_changed", "head_freshness", "graph_table_available",
+                    "generated_code_policy",
                     "generated_file_count_excluded", "generated_file_count_excluded_authoritative",
-                    "generated_file_filter_available", "decomposition_plan", "sections")
+                    "generated_file_filter_available", "decomposition_plan", "compact",
+                    "compact_limit", "next_commands", "truncation")
                 .Collection("languages", ["lang", "files", "lines", "symbols", "references"])
                 .Collection("modules", ["module", "files", "lines", "symbols", "references"])
                 .Collection(
@@ -358,6 +338,17 @@ internal static class ProjectionFieldRegistry
                     ["path", "lang", "kind", "name", "line", "score", "match_type", "confidence", "hint_rank"],
                     pathAlias: true));
     }
+
+    private static IEnumerable<string> GetJsonFieldNames<T>()
+        => typeof(T)
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .OrderBy(property => property.MetadataToken)
+            .Where(property =>
+                property.GetCustomAttribute<JsonIgnoreAttribute>()?.Condition
+                is not JsonIgnoreCondition.Always)
+            .Select(property =>
+                property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name
+                ?? JsonNamingPolicy.SnakeCaseLower.ConvertName(property.Name));
 
     private static ProjectionCommandFieldSchema Create(
         string command,

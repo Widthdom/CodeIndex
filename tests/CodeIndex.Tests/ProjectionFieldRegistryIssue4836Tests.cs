@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 
@@ -172,6 +173,57 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
             foreach (var field in validFields)
                 Assert.True(ProjectionFieldRegistry.TryValidate(command, [field], out var error), error?.Message);
         }
+    }
+
+    [Theory]
+    [InlineData("search", "guard_evidence")]
+    [InlineData("search", "next_steps")]
+    [InlineData("definition", "body_content_recovery")]
+    [InlineData("symbols", "reference_count")]
+    [InlineData("symbols", "signature_truncated")]
+    [InlineData("hotspots", "symbol_count")]
+    [InlineData("hotspots", "definition_site_details")]
+    [InlineData("status", "index_matches_workspace")]
+    [InlineData("status", "effective_config")]
+    [InlineData("status", "update_check")]
+    [InlineData("references", "body_content")]
+    [InlineData("callers", "aggregate_truncated")]
+    [InlineData("callees", "body_content_recovery")]
+    [InlineData("impact", "path_details")]
+    [InlineData("map", "next_commands")]
+    public void ExistingConditionalAndModeSpecificFields_RemainValid_Issue4836(
+        string command,
+        string field)
+    {
+        Assert.True(
+            ProjectionFieldRegistry.TryValidate(command, [field], out var error),
+            error?.Message);
+
+        var discovery = ProjectionFieldRegistry.CreateDiscoveryDocument(command);
+        Assert.Contains(
+            discovery["valid_fields"]!.AsArray(),
+            item => item!.GetValue<string>() == field);
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("bogus")]
+    public void EarlyProjectionRegistryResponses_HonorMaxJsonBytes_Issue4836(string fields)
+    {
+        const int maxJsonBytes = 100;
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ProgramRunner.Run(
+                ["status", "--fields", fields, "--max-json-bytes", maxJsonBytes.ToString()],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.True(Encoding.UTF8.GetByteCount(stdout) <= maxJsonBytes);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(
+            $"--max-json-bytes {maxJsonBytes} is too small",
+            stderr,
+            StringComparison.Ordinal);
     }
 
     [Theory]
