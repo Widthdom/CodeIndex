@@ -331,7 +331,9 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var limit = all ? options.Limit : Math.Max(options.Limit, 2);
+            var limit = all
+                ? options.LimitExplicit ? options.Limit : int.MaxValue
+                : Math.Max(options.Limit, 2);
             var results = reader.GetDefinitions(options.Query, limit, options.Kind, options.Lang, includeBody: false, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
             if (results.Count == 0)
             {
