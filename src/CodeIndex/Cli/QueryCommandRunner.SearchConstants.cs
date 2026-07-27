@@ -28,5 +28,7 @@ public static partial class QueryCommandRunner
     private const int SearchEnvelopeMinCandidates = 200;
     private const int SearchEnvelopeOverFetchFactor = 50;
     private const int SearchEnvelopeMaxCandidates = MaxQueryResultLimit;
+    private const int SearchSampleSeed = 0;
+    private const string SearchSampleMode = "deterministic_seeded_v1";
     private const string SearchFilterNoMatchSentinel = "\0__cdidx_no_match__";
 }
