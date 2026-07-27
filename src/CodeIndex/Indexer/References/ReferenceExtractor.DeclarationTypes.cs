@@ -63,6 +63,17 @@ public static partial class ReferenceExtractor
                 resolveContainerForColumn(declarationTypeStart),
                 ignoredSegments);
         }
+
+        EmitCSharpModifierContinuationTypeReferences(
+            language,
+            line,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            ignoredSegments);
     }
 
     internal static void EmitTypeScriptDeclarationTypeReferences(
@@ -667,6 +678,62 @@ public static partial class ReferenceExtractor
             return false;
         typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
         return true;
+    }
+
+    private static void EmitCSharpModifierContinuationTypeReferences(
+        string language,
+        string line,
+        List<ReferenceRecord> references,
+        ReferenceDedupeSet seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? ignoredSegments)
+    {
+        if (language != "csharp")
+            return;
+
+        var fragments = SplitTopLevelCommaSpans(line);
+        if (fragments.Count <= 1)
+            return;
+
+        foreach (var (fragmentStart, fragmentLength) in fragments)
+        {
+            var fragment = line.Substring(fragmentStart, fragmentLength);
+            var tokens = GetTopLevelTokenSpans(fragment);
+            int first = 0;
+            while (first < tokens.Count)
+            {
+                var token = fragment.Substring(tokens[first].Start, tokens[first].Length);
+                if (!token.StartsWith("[", StringComparison.Ordinal))
+                    break;
+                first++;
+            }
+
+            if (first >= tokens.Count)
+                continue;
+
+            var firstToken = fragment.Substring(tokens[first].Start, tokens[first].Length);
+            if (!IsParameterModifier(language, firstToken)
+                || !TryGetParameterTypeRelativeSpan(fragment, language, out var typeRelativeStart, out var typeRelativeLength))
+            {
+                continue;
+            }
+
+            int absoluteStart = fragmentStart + typeRelativeStart;
+            AddTypeExpressionSegmentsForLanguage(
+                language,
+                references,
+                seen,
+                fileId,
+                fragment.Substring(typeRelativeStart, typeRelativeLength),
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                ignoredSegments);
+        }
     }
 
     private static bool TryGetSimpleDeclarationTypeSpan(string line, string language, out int typeStart, out int typeLength)

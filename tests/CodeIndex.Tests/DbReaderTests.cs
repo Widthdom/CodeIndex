@@ -416,6 +416,13 @@ public partial class DbReaderTests : IDisposable
             {
                 static void Params(params Wrapper<Payload>[] items) {}
 
+                static void Multi(
+                    out Payload first, out Wrapper<Payload> second)
+                {
+                    first = default;
+                    second = default;
+                }
+
                 static void Consume(
                     out Payload output,
                     ref Wrapper<Payload> byRef,
@@ -443,6 +450,8 @@ public partial class DbReaderTests : IDisposable
                         ref byRef,
                         in input,
                         input);
+                    Multi(
+                        out Payload first, out Wrapper<Payload> second);
                 }
             }
             """);
@@ -477,6 +486,8 @@ public partial class DbReaderTests : IDisposable
             pathPatterns: [path]);
         Assert.Contains(wrapperReferences, reference =>
             reference.Context.Contains("ref Wrapper<Payload> byRef", StringComparison.Ordinal));
+        Assert.Equal(2, wrapperReferences.Count(reference =>
+            reference.Context.Contains("out Payload first, out Wrapper<Payload> second", StringComparison.Ordinal)));
         Assert.All(wrapperReferences, reference => Assert.Equal("resolved", reference.ResolutionState));
 
         var callers = _reader.GetCallers(

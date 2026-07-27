@@ -67,6 +67,13 @@ public partial class ReferenceExtractorTests
                 static ref Payload RefReturn(ref Payload value) => ref value;
                 static void Params(params Wrapper<Payload>[] items) {}
 
+                static void Multi(
+                    out Payload first, out Wrapper<Payload> second)
+                {
+                    first = default;
+                    second = default;
+                }
+
                 static void Consume(
                     out Payload output,
                     ref Wrapper<Payload> byRef,
@@ -94,8 +101,12 @@ public partial class ReferenceExtractorTests
                         ref byRef,
                         in input,
                         input);
+                    Multi(
+                        out Payload first, out Wrapper<Payload> second);
                     _ = declared;
                     _ = inferred;
+                    _ = first;
+                    _ = second;
                 }
             }
             """;
@@ -125,6 +136,10 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "Wrapper"
             && reference.ReferenceKind == "type_reference"
             && reference.Context.Contains("ref Wrapper<Payload> byRef", StringComparison.Ordinal));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "Wrapper"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context.Contains("out Payload first, out Wrapper<Payload> second", StringComparison.Ordinal)));
         Assert.Contains(references, reference =>
             reference.SymbolName == "Payload"
             && reference.ReferenceKind == "type_reference"
