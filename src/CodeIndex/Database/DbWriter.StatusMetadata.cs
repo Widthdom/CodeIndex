@@ -48,6 +48,15 @@ public partial class DbWriter
             (DbContext.IndexIncompleteReasonsMetaKey, JsonStringListCodec.Serialize(reasons)));
     }
 
+    public void MarkIndexCompleteness(IReadOnlyList<string> incompleteReasons)
+    {
+        ArgumentNullException.ThrowIfNull(incompleteReasons);
+        if (incompleteReasons.Count == 0)
+            MarkIndexComplete();
+        else
+            MarkIndexIncomplete(incompleteReasons);
+    }
+
     /// <summary>
     /// Stamp unknown-extension scan coverage from the latest successful full-worktree scan.
     /// Stores the total count plus a bounded path sample so status callers can identify the

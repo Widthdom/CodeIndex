@@ -144,36 +144,14 @@ public partial class DbReader
             dbSizeBytes,
             dbPragmaSettings.AutoVacuum));
         var lastIndexRun = GetLastIndexRun();
-        var indexCompleteness = TryGetMetaStringInternal(DbContext.IndexCompletenessMetaKey);
-        var indexIncompleteReasons = ParseMetaStringList(TryGetMetaStringInternal(DbContext.IndexIncompleteReasonsMetaKey));
-        var batchInProgress = string.Equals(
-            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
-            "true",
-            StringComparison.OrdinalIgnoreCase);
-        var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(batchInProgress);
-        var indexComplete = !batchInProgress
-            && !string.Equals(indexCompleteness, "incomplete", StringComparison.OrdinalIgnoreCase);
         var referenceExtractionCapHits = GetReferenceExtractionCapHits();
-        var dynamicReferenceGraphContractsCurrent =
-            AreDynamicReferenceGraphContractsCurrent(langs);
-        var referenceGraphIncompleteReasons =
-            referenceExtractionCapHits.Reasons?.ToList() ?? [];
-        if (!dynamicReferenceGraphContractsCurrent
-            && !referenceGraphIncompleteReasons.Contains(
-                DynamicReferenceGraphContractStaleReason,
-                StringComparer.Ordinal))
-        {
-            referenceGraphIncompleteReasons.Add(DynamicReferenceGraphContractStaleReason);
-        }
-        var referenceGraphComplete = referenceExtractionCapHits.StateAvailable
-            && referenceExtractionCapHits.HitCount == 0
-            && dynamicReferenceGraphContractsCurrent;
-        if (batchInProgress)
-        {
-            indexIncompleteReasons ??= [];
-            if (!indexIncompleteReasons.Contains("batch_in_progress", StringComparer.Ordinal))
-                indexIncompleteReasons.Add("batch_in_progress");
-        }
+        var persistedReadiness = GetPersistedIndexGenerationReadiness(
+            referenceExtractionCapHits,
+            langs,
+            hdlGraphContractReady,
+            txn);
+        var batchInProgress = persistedReadiness.MigrationInProgress;
+        var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(batchInProgress);
 
         var result = new StatusResult
         {
@@ -196,22 +174,21 @@ public partial class DbReader
             IndexedHeadTimestamp = indexedHeadTimestamp,
             Languages = langs,
             SymbolsByLanguage = symbolsByLanguage.Count > 0 ? symbolsByLanguage : null,
-            GraphTableAvailable = _hasReferencesTable,
-            GraphDataCurrent = _hasReferencesTable
-                && indexComplete
-                && referenceGraphComplete
-                && hdlGraphContractReady,
+            GraphTableAvailable = persistedReadiness.GraphTableAvailable,
+            GraphDataCurrent = persistedReadiness.GraphDataCurrent,
             ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
-            ReferenceGraphComplete = referenceGraphComplete,
-            ReferenceGraphIncompleteReasons = referenceGraphComplete
+            ReferenceGraphComplete = persistedReadiness.ReferenceGraphComplete,
+            ReferenceGraphIncompleteReasons = persistedReadiness.ReferenceGraphComplete
                 ? null
-                : referenceGraphIncompleteReasons,
+                : persistedReadiness.ReferenceGraphIncompleteReasons.ToList(),
             ReferenceExtractionCapHits = referenceExtractionCapHits,
             IssuesTableAvailable = _hasIssuesPhysicalTable,
             FileIssuesDataCurrent = _hasIssuesTable,
             MigrationInProgress = batchInProgress,
-            IndexComplete = indexComplete,
-            IndexIncompleteReasons = indexComplete ? null : indexIncompleteReasons,
+            IndexComplete = persistedReadiness.IndexComplete,
+            IndexIncompleteReasons = persistedReadiness.IndexComplete
+                ? null
+                : persistedReadiness.IndexIncompleteReasons.ToList(),
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             LanguageReadiness = languageReadiness.Count > 0 ? languageReadiness : null,
@@ -294,21 +271,13 @@ public partial class DbReader
     }
 
     internal bool IsReferenceGraphComplete(ReferenceExtractionCapHitSummary capHits) =>
-        capHits.StateAvailable
-        && capHits.HitCount == 0
-        && AreDynamicReferenceGraphContractsCurrent(GetIndexedLanguageCounts());
+        GetPersistedIndexGenerationReadiness(capHits).ReferenceGraphComplete;
 
     internal IReadOnlyList<string> GetReferenceGraphIncompleteReasons(
         ReferenceExtractionCapHitSummary capHits)
     {
-        var reasons = capHits.Reasons.ToList();
-        if (!AreDynamicReferenceGraphContractsCurrent(GetIndexedLanguageCounts())
-            && !reasons.Contains(DynamicReferenceGraphContractStaleReason, StringComparer.Ordinal))
-        {
-            reasons.Add(DynamicReferenceGraphContractStaleReason);
-        }
-
-        return reasons;
+        return GetPersistedIndexGenerationReadiness(capHits)
+            .ReferenceGraphIncompleteReasons;
     }
 
     internal Dictionary<string, long> GetIndexedLanguageCounts()

@@ -103,7 +103,9 @@ public static partial class IndexCommandRunner
                     context.StaleFilePurgePlan.FileIds,
                     csharpPositiveNoOpPolicyCandidate
                         ? ObservePersistedCSharpPath
-                        : null)
+                        : null,
+                    maxFileSizeBytes:
+                        options.MaxFileSizeBytes ?? FileIndexer.DefaultMaxFileSizeBytes)
                 : null;
         Dictionary<string, IndexedFileStatReuseResult?>?
             csharpPrepassStatReuse = null;

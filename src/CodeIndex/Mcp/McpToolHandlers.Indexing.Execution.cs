@@ -516,7 +516,9 @@ public partial class McpServer
                 staleFilePurgePlan.FileIds,
                 csharpPositiveNoOpPolicyCandidate
                     ? ObservePersistedCSharpPath
-                    : null)
+                    : null,
+                maxFileSizeBytes:
+                    maxFileBytes ?? FileIndexer.DefaultMaxFileSizeBytes)
             : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         var priorPositiveCSharpSourceNoOpCandidate = false;
@@ -1173,10 +1175,10 @@ public partial class McpServer
             var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(
                 issuesStateAvailable: (indexSnapshot.Readiness & DbContext.IssuesReadyFlag) != 0);
             using var referenceSignalReader = new DbReader(writer.Connection, isReadOnly: true);
-            AddReferenceGraphCompletenessSignal(
-                structured,
-                referenceSignalReader,
+            var persistedReadiness = referenceSignalReader.GetPersistedIndexGenerationReadiness(
                 referenceExtractionCapHits);
+            AddIndexGenerationReadinessSignal(structured, persistedReadiness);
+            AddReferenceGraphCompletenessSignal(structured, persistedReadiness);
             if (!sqlGraphContractReady)
             {
                 AddSqlGraphContractSignal(
@@ -2024,7 +2026,7 @@ public partial class McpServer
                 (DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey, JsonSerializer.Serialize(
                     referenceExtractionCapHits,
                     StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)));
-            writer.MarkIndexComplete();
+            writer.MarkIndexCompleteness(writer.GetPersistedIndexOmissionReasons());
             writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also

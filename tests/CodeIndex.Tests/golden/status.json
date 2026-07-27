@@ -177,7 +177,8 @@
   },
   "reference_graph_complete": false,
   "reference_graph_incomplete_reasons": [
-    "reference_extraction_cap_state_unavailable"
+    "reference_extraction_cap_state_unavailable",
+    "graph_table_available=false"
   ],
   "reference_extraction_cap_hits": {
     "state_available": false,

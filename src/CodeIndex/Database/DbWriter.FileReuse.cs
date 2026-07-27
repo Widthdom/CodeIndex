@@ -353,6 +353,12 @@ public partial class DbWriter
                     WHERE file_id = f.id
                       AND kind = 'reference_count_exceeded'
                 )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = f.id
+                      AND kind = 'file_too_large'
+                )
                 AND (
                     @generated_suppressed IS NULL
                     OR (
@@ -413,7 +419,8 @@ public partial class DbWriter
         int initialCapacity = 0,
         IReadOnlySet<string>? includedPaths = null,
         IReadOnlyList<long>? excludedFileIds = null,
-        Action<string>? persistedCSharpPathObserver = null)
+        Action<string>? persistedCSharpPathObserver = null,
+        long maxFileSizeBytes = FileIndexer.DefaultMaxFileSizeBytes)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ReusableStatSnapshotReadForTesting?.Invoke();
@@ -442,6 +449,10 @@ public partial class DbWriter
                 AND NOT EXISTS (
                     SELECT 1 FROM file_issues
                     WHERE file_id = f.id AND kind = 'reference_count_exceeded'
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM file_issues
+                    WHERE file_id = f.id AND kind = 'file_too_large'
                 )"
             : string.Empty;
         var generatedSuppressionProjection = hasIssuesTable
@@ -468,6 +479,7 @@ public partial class DbWriter
                         AND typeof(f.modified) = 'text'
                         AND typeof(f.size) = 'integer'
                         AND f.size >= 0
+                        AND f.size <= @max_file_size
                         {staleIssuePredicate}
                         AND NOT EXISTS (
                             SELECT 1 FROM symbols
@@ -487,6 +499,7 @@ public partial class DbWriter
                 {
                     c.Parameters.Add("@max_symbols", SqliteType.Integer);
                     c.Parameters.Add("@max_references", SqliteType.Integer);
+                    c.Parameters.Add("@max_file_size", SqliteType.Integer);
                     if (hasIssuesTable)
                         c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
                 });
@@ -502,11 +515,14 @@ public partial class DbWriter
             ? initialCapacity
             : Math.Min(initialCapacity, includedPaths.Count);
         ReusableStatSnapshotInitialCapacityForTesting?.Invoke(reusableInitialCapacity);
-        var reusable = new ReusableIndexedFileStatsSnapshot(reusableInitialCapacity);
+        var reusable = new ReusableIndexedFileStatsSnapshot(
+            reusableInitialCapacity,
+            maxFileSizeBytes);
         try
         {
             cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
             cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
+            cmd.Parameters["@max_file_size"].Value = maxFileSizeBytes;
             if (hasIssuesTable)
                 cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
             cancellationToken.ThrowIfCancellationRequested();
@@ -1012,11 +1028,14 @@ internal sealed class ReusableIndexedFileStatsSnapshot : Dictionary<string, Reus
     private Dictionary<string, long>? _nonReusablePersistedSizes;
     private HashSet<string>? _unknownPersistedSizePaths;
 
-    internal ReusableIndexedFileStatsSnapshot(int capacity)
+    internal ReusableIndexedFileStatsSnapshot(int capacity, long maxFileSizeBytes)
         : base(0, StringComparer.Ordinal)
     {
         _reusableCapacity = capacity;
+        MaxFileSizeBytes = maxFileSizeBytes;
     }
+
+    internal long MaxFileSizeBytes { get; }
 
     internal void RecordReusable(string path, ReusableIndexedFileStat stat)
     {

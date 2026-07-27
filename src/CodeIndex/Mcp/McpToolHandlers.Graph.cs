@@ -672,19 +672,41 @@ public partial class McpServer
         DbReader reader,
         ReferenceExtractionCapHitSummary capHits)
     {
-        var complete = reader.IsReferenceGraphComplete(capHits);
-        var incompleteReasons = reader.GetReferenceGraphIncompleteReasons(capHits);
+        var readiness = reader.GetPersistedIndexGenerationReadiness(capHits);
+        AddReferenceGraphCompletenessSignal(payload, readiness);
+    }
+
+    private void AddReferenceGraphCompletenessSignal(
+        JsonObject payload,
+        PersistedIndexGenerationReadiness readiness)
+    {
         payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
             ReferenceExtractor.GetSafetyLimits(),
             _jsonOptions);
-        payload["reference_graph_complete"] = complete;
+        payload["reference_graph_complete"] = readiness.ReferenceGraphComplete;
         payload["reference_extraction_cap_hits"] = JsonSerializer.SerializeToNode(
-            capHits,
+            readiness.ReferenceExtractionCapHits,
             _jsonOptions);
-        if (!complete)
+        if (!readiness.ReferenceGraphComplete)
         {
             payload["reference_graph_incomplete_reasons"] = JsonSerializer.SerializeToNode(
-                incompleteReasons,
+                readiness.ReferenceGraphIncompleteReasons,
+                _jsonOptions);
+            payload["degraded"] = true;
+        }
+    }
+
+    private void AddIndexGenerationReadinessSignal(
+        JsonObject payload,
+        PersistedIndexGenerationReadiness readiness)
+    {
+        payload["graph_table_available"] = readiness.GraphTableAvailable;
+        payload["graph_data_current"] = readiness.GraphDataCurrent;
+        payload["index_complete"] = readiness.IndexComplete;
+        if (!readiness.IndexComplete)
+        {
+            payload["index_incomplete_reasons"] = JsonSerializer.SerializeToNode(
+                readiness.IndexIncompleteReasons,
                 _jsonOptions);
             payload["degraded"] = true;
         }

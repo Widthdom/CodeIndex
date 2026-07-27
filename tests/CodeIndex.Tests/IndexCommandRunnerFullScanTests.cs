@@ -266,6 +266,305 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("full", true, true, true, null, null)]
+    [InlineData("symbols-only", false, false, false, "symbols_only_references_omitted", "symbols_only_graph_omitted")]
+    [InlineData("max-file-bytes", true, false, false, "file_too_large", "file_too_large")]
+    [InlineData("max-symbols", true, false, false, "symbol_count_exceeded", "symbol_count_exceeded")]
+    [InlineData("max-references", true, false, false, "reference_count_exceeded", "reference_count_exceeded")]
+    public void Run_FullScan_CompletenessMatrixMatchesImmediateStatus_Issue4826(
+        string scenario,
+        bool expectedGraphTableAvailable,
+        bool expectedIndexComplete,
+        bool expectedReferenceGraphComplete,
+        string? expectedIndexReason,
+        string? expectedReferenceReason)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var args = new List<string> { projectRoot, "--json", "--quiet" };
+            switch (scenario)
+            {
+                case "full":
+                case "symbols-only":
+                    File.WriteAllText(
+                        Path.Combine(projectRoot, "App.cs"),
+                        "public class App { public void Run() { Helper(); } private void Helper() { } }\n");
+                    if (scenario == "symbols-only")
+                        args.Insert(1, "--symbols-only");
+                    break;
+                case "max-file-bytes":
+                    File.WriteAllText(
+                        Path.Combine(projectRoot, "large.py"),
+                        "print('start')\n" + new string('a', 256));
+                    args.InsertRange(1, ["--max-file-bytes", "128"]);
+                    break;
+                case "max-symbols":
+                    File.WriteAllText(
+                        Path.Combine(projectRoot, "generated.py"),
+                        string.Join('\n', Enumerable.Range(0, 4).Select(i => $"def f{i}(): pass")));
+                    args.InsertRange(1, ["--max-symbols-per-file", "2"]);
+                    break;
+                case "max-references":
+                    File.WriteAllText(
+                        Path.Combine(projectRoot, "DenseReferences.cs"),
+                        BuildDenseReferenceCSharpSource(3));
+                    args.InsertRange(1, ["--max-references-per-file", "2"]);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown completeness scenario: {scenario}");
+            }
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([.. args]);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(expectedGraphTableAvailable, indexJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.Equal(expectedIndexComplete, indexJson.GetProperty("index_complete").GetBoolean());
+            Assert.Equal(expectedReferenceGraphComplete, indexJson.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.Equal(
+                expectedGraphTableAvailable && expectedIndexComplete && expectedReferenceGraphComplete,
+                indexJson.GetProperty("graph_data_current").GetBoolean());
+            AssertCompletenessReason(indexJson, "index_incomplete_reasons", expectedIndexReason);
+            AssertCompletenessReason(indexJson, "reference_graph_incomplete_reasons", expectedReferenceReason);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            AssertCompletenessSignalsEqual(indexJson, statusJson);
+            if (scenario == "symbols-only")
+            {
+                var referenceDegradation = statusJson
+                    .GetProperty("readiness_degradations")
+                    .EnumerateArray()
+                    .Single(degradation =>
+                        degradation.GetProperty("field").GetString()
+                        == "reference_graph_complete");
+                Assert.Equal(
+                    DegradationReasonCodes.SymbolsOnlyGraphOmitted,
+                    referenceDegradation.GetProperty("root_cause").GetString());
+                Assert.Contains(
+                    "symbols-only",
+                    referenceDegradation.GetProperty("degraded_reason").GetString(),
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    "safety cap",
+                    referenceDegradation.GetProperty("degraded_reason").GetString(),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            {
+                var reader = new DbReader(db.Connection, db.IsReadOnly);
+                var workspaceHealth = reader.GetWorkspaceIndexHealth();
+                Assert.Equal(
+                    statusJson.GetProperty("graph_table_available").GetBoolean(),
+                    workspaceHealth.GraphTableAvailable);
+                Assert.Equal(
+                    statusJson.GetProperty("graph_data_current").GetBoolean(),
+                    workspaceHealth.GraphDataCurrent);
+                Assert.Equal(
+                    statusJson.GetProperty("index_complete").GetBoolean(),
+                    workspaceHealth.IndexComplete);
+                Assert.Equal(
+                    statusJson.GetProperty("reference_graph_complete").GetBoolean(),
+                    workspaceHealth.ReferenceGraphComplete);
+            }
+
+            if (scenario == "max-file-bytes")
+            {
+                var humanArgs = args
+                    .Where(arg => arg is not "--json" and not "--quiet")
+                    .ToArray();
+                var (humanExitCode, stdout, stderr) = RunAndCaptureStreams(humanArgs);
+                Assert.Equal(CommandExitCodes.Success, humanExitCode);
+                Assert.Contains("Index", stdout, StringComparison.Ordinal);
+                Assert.Contains("incomplete", stdout, StringComparison.Ordinal);
+                Assert.Contains(
+                    "Index generation is incomplete: file_too_large.",
+                    stderr,
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    "Reference graph is incomplete: file_too_large.",
+                    stderr,
+                    StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, true)]
+    public void Run_FullScan_FileSizePolicyTransitionReprocessesUnchangedFile_Issue4826(
+        bool initialCap,
+        bool nextCap,
+        bool expectedComplete)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "large.py"),
+                "print('start')\n" + new string('a', 256));
+            var initialArgs = new List<string> { projectRoot, "--json", "--quiet" };
+            if (initialCap)
+                initialArgs.InsertRange(1, ["--max-file-bytes", "128"]);
+            var (initialExitCode, _) = RunAndCaptureJson([.. initialArgs]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var nextArgs = new List<string> { projectRoot, "--json", "--quiet" };
+            if (nextCap)
+                nextArgs.InsertRange(1, ["--max-file-bytes", "128"]);
+            var (nextExitCode, nextJson) = RunAndCaptureJson([.. nextArgs]);
+
+            Assert.Equal(CommandExitCodes.Success, nextExitCode);
+            Assert.Equal(expectedComplete, nextJson.GetProperty("index_complete").GetBoolean());
+            Assert.Equal(
+                expectedComplete,
+                nextJson.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.Equal(
+                1,
+                nextJson.GetProperty("summary").GetProperty("files_extracted").GetInt64());
+            Assert.Equal(
+                1,
+                nextJson.GetProperty("summary").GetProperty("files_persisted").GetInt64());
+            AssertCompletenessReason(
+                nextJson,
+                "index_incomplete_reasons",
+                expectedComplete ? null : "file_too_large");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_IncompleteGenerationDoesNotExposeFoldOnlyRemediation_Issue4826()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "large.py"), "def ready(): return True\n");
+            File.WriteAllText(Path.Combine(projectRoot, "other.py"), "def other(): return True\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM codeindex_meta
+                    WHERE key IN (@version, @fingerprint)
+                    """;
+                command.Parameters.AddWithValue("@version", "fold_key_version");
+                command.Parameters.AddWithValue("@fingerprint", "fold_key_fingerprint");
+                command.ExecuteNonQuery();
+            }
+            File.WriteAllText(
+                Path.Combine(projectRoot, "large.py"),
+                "print('start')\n" + new string('a', 256));
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--max-file-bytes", "128", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
+            Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("degraded_reason").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("recommended_action").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("alternative_action").ValueKind);
+
+            var humanArgs = new[] { projectRoot, "--max-file-bytes", "128" };
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams(humanArgs);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.DoesNotContain("fold-only", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, true, null)]
+    [InlineData(true, false, "file_too_large")]
+    public void PersistedReadiness_OlderDatabaseWithoutCompletenessMetadataUsesSafeFallback_Issue4826(
+        bool capFileBytes,
+        bool expectedComplete,
+        string? expectedReason)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sample.py"),
+                capFileBytes
+                    ? "print('start')\n" + new string('a', 256)
+                    : "def ready(): return True\n");
+            var args = capFileBytes
+                ? new[] { projectRoot, "--max-file-bytes", "128", "--json", "--quiet" }
+                : new[] { projectRoot, "--json", "--quiet" };
+            var (indexExitCode, _) = RunAndCaptureJson(args);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM codeindex_meta
+                    WHERE key IN (@completeness, @reasons);
+                    """;
+                command.Parameters.AddWithValue(
+                    "@completeness",
+                    DbContext.IndexCompletenessMetaKey);
+                command.Parameters.AddWithValue(
+                    "@reasons",
+                    DbContext.IndexIncompleteReasonsMetaKey);
+                command.ExecuteNonQuery();
+            }
+
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var status = reader.GetStatus();
+            var workspaceHealth = reader.GetWorkspaceIndexHealth();
+
+            Assert.Equal(expectedComplete, status.IndexComplete);
+            Assert.Equal(expectedComplete, status.ReferenceGraphComplete);
+            Assert.Equal(expectedComplete, status.GraphDataCurrent);
+            Assert.Equal(expectedComplete, workspaceHealth.IndexComplete);
+            Assert.Equal(expectedComplete, workspaceHealth.ReferenceGraphComplete);
+            Assert.Equal(expectedComplete, workspaceHealth.GraphDataCurrent);
+            if (expectedReason == null)
+            {
+                Assert.Null(status.IndexIncompleteReasons);
+            }
+            else
+            {
+                Assert.Contains(expectedReason, status.IndexIncompleteReasons ?? []);
+                Assert.Contains(expectedReason, status.ReferenceGraphIncompleteReasons ?? []);
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void Run_FullScan_ExtractorFailurePersistsSuccessfulGraphAndTruthfulPartialState_Issue4609()
     {
@@ -298,6 +597,9 @@ public partial class IndexCommandRunnerTests
                     Assert.False(json.GetProperty("index_complete").GetBoolean());
                     Assert.True(json.GetProperty("graph_table_available").GetBoolean());
                     Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+                    Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
+                    AssertCompletenessReason(json, "index_incomplete_reasons", "file_index_error");
+                    AssertCompletenessReason(json, "reference_graph_incomplete_reasons", "file_index_error");
                     Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
 
                     var summary = json.GetProperty("summary");
@@ -329,6 +631,8 @@ public partial class IndexCommandRunnerTests
                     Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
                     Assert.False(statusJson.GetProperty("graph_data_current").GetBoolean());
                     Assert.False(statusJson.GetProperty("index_complete").GetBoolean());
+                    Assert.False(statusJson.GetProperty("reference_graph_complete").GetBoolean());
+                    AssertCompletenessSignalsEqual(json, statusJson);
                     Assert.Equal(summary.GetProperty("references_total").GetInt64(), statusJson.GetProperty("references").GetInt64());
                     Assert.Contains("INCOMPLETE", statusJson.GetProperty("summary").GetString(), StringComparison.Ordinal);
                     var lastFailure = statusJson.GetProperty("last_failed_or_partial_index_run");
@@ -355,6 +659,49 @@ public partial class IndexCommandRunnerTests
             DeleteDirectory(projectRoot);
         }
     }
+
+    private static void AssertCompletenessSignalsEqual(
+        JsonElement indexJson,
+        JsonElement statusJson)
+    {
+        foreach (var propertyName in new[]
+        {
+            "graph_table_available",
+            "graph_data_current",
+            "index_complete",
+            "reference_graph_complete",
+        })
+        {
+            Assert.Equal(
+                indexJson.GetProperty(propertyName).GetBoolean(),
+                statusJson.GetProperty(propertyName).GetBoolean());
+        }
+
+        Assert.Equal(
+            ReadCompletenessReasons(indexJson, "index_incomplete_reasons"),
+            ReadCompletenessReasons(statusJson, "index_incomplete_reasons"));
+        Assert.Equal(
+            ReadCompletenessReasons(indexJson, "reference_graph_incomplete_reasons"),
+            ReadCompletenessReasons(statusJson, "reference_graph_incomplete_reasons"));
+    }
+
+    private static void AssertCompletenessReason(
+        JsonElement json,
+        string propertyName,
+        string? expectedReason)
+    {
+        var reasons = ReadCompletenessReasons(json, propertyName);
+        if (expectedReason == null)
+            Assert.Empty(reasons);
+        else
+            Assert.Contains(expectedReason, reasons);
+    }
+
+    private static string[] ReadCompletenessReasons(JsonElement json, string propertyName) =>
+        json.TryGetProperty(propertyName, out var reasons)
+            && reasons.ValueKind == JsonValueKind.Array
+            ? reasons.EnumerateArray().Select(reason => reason.GetString()!).ToArray()
+            : [];
 
     [PublishedTrimmedCliFact]
     public void Run_FullScan_PublishedTrimmedBinary_IndexesJsonWorkerInputs_Issue4709()
@@ -2460,8 +2807,17 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, refreshExitCode);
             Assert.Equal("success", refreshJson.GetProperty("status").GetString());
-            Assert.True(refreshJson.GetProperty("index_complete").GetBoolean());
-            Assert.True(refreshJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(refreshJson.GetProperty("index_complete").GetBoolean());
+            AssertCompletenessReason(
+                refreshJson,
+                "index_incomplete_reasons",
+                "file_too_large");
+            Assert.False(refreshJson.GetProperty("reference_graph_complete").GetBoolean());
+            AssertCompletenessReason(
+                refreshJson,
+                "reference_graph_incomplete_reasons",
+                "file_too_large");
+            Assert.False(refreshJson.GetProperty("graph_data_current").GetBoolean());
             Assert.Equal(["IParseable.cs", "Money.cs"], loadedPaths.Order(StringComparer.Ordinal));
             Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
             using var refreshDb = new DbContext(
@@ -2775,6 +3131,8 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("[WARN] File too large", stderr);
+            Assert.Contains("Index generation is incomplete: file_too_large.", stderr);
+            Assert.Contains("Reference graph is incomplete: file_too_large.", stderr);
             Assert.DoesNotContain("Some files failed to index", stderr);
             Assert.DoesNotContain("rerun `cdidx index", stderr);
         }

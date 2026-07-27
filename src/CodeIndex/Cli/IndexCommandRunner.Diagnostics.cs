@@ -115,7 +115,8 @@ public static partial class IndexCommandRunner
             rowsDeleted,
             memoryTimeline,
             diagnostics: null,
-            referenceExtractionCapHits: null);
+            referenceExtractionCapHits: null,
+            indexIncompleteReasons: null);
 
     private static void StampLastIndexRunMetadata(
         DbWriter writer,
@@ -131,7 +132,8 @@ public static partial class IndexCommandRunner
         long rowsDeleted,
         IndexMemoryTimelineJsonResult? memoryTimeline,
         IReadOnlyList<string>? diagnostics,
-        ReferenceExtractionCapHitSummary? referenceExtractionCapHits)
+        ReferenceExtractionCapHitSummary? referenceExtractionCapHits,
+        IReadOnlyList<string>? indexIncompleteReasons)
     {
         writer.SetMetaValues(
             (DbContext.LastIndexRunModeMetaKey, mode),
@@ -152,7 +154,7 @@ public static partial class IndexCommandRunner
                 ? null
                 : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
         StampLastIndexRunDiagnostics(writer, diagnostics);
-        writer.MarkIndexComplete();
+        writer.MarkIndexCompleteness(indexIncompleteReasons ?? []);
         writer.ClearLastFailedIndexRunMetadata();
     }
 

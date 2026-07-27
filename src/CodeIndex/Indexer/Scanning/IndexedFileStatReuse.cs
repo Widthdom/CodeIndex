@@ -54,6 +54,7 @@ internal static class IndexedFileStatReuse
         string absolutePath,
         string relativePath,
         string? language,
+        long maxFileSizeBytes,
         int maxSymbolsPerFile,
         int maxReferencesPerFile,
         bool? generatedExtractionSuppressed,
@@ -66,7 +67,7 @@ internal static class IndexedFileStatReuse
         try
         {
             var info = new FileInfo(absolutePath);
-            if (!info.Exists)
+            if (!info.Exists || info.Length > maxFileSizeBytes)
                 return null;
 
             var fileId = writer.GetReusableUnchangedFileIdByStat(
@@ -93,7 +94,7 @@ internal static class IndexedFileStatReuse
     }
 
     internal static IndexedFileStatReuseResult? TryGetReusableUnchangedFile(
-        IReadOnlyDictionary<string, ReusableIndexedFileStat> reusableFiles,
+        ReusableIndexedFileStatsSnapshot reusableFiles,
         string absolutePath,
         string relativePath,
         string? language,
@@ -113,6 +114,7 @@ internal static class IndexedFileStatReuse
         {
             var info = new FileInfo(absolutePath);
             if (!info.Exists
+                || info.Length > reusableFiles.MaxFileSizeBytes
                 || info.Length != indexed.Size
                 || info.LastWriteTimeUtc != indexed.ModifiedUtc)
             {

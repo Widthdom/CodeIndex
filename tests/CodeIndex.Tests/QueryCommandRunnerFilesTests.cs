@@ -2892,7 +2892,27 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(2, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal([expectedFailure], failedChecks);
+            Assert.Equal(
+                scope == "graph"
+                    ? ["graph_table_available", "reference_graph_complete"]
+                    : [expectedFailure],
+                failedChecks);
+            if (scope == "graph")
+            {
+                var referenceDegradation = document.RootElement
+                    .GetProperty("readiness_degradations")
+                    .EnumerateArray()
+                    .Single(degradation =>
+                        degradation.GetProperty("field").GetString()
+                        == "reference_graph_complete");
+                Assert.Equal(
+                    DegradationReasonCodes.GraphTableMissing,
+                    referenceDegradation.GetProperty("root_cause").GetString());
+                Assert.DoesNotContain(
+                    "safety cap",
+                    referenceDegradation.GetProperty("degraded_reason").GetString(),
+                    StringComparison.OrdinalIgnoreCase);
+            }
         }
         finally
         {
