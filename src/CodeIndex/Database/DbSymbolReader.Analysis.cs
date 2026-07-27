@@ -82,7 +82,8 @@ public partial class DbReader
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth,
         int? bodyStartLine = null,
         int? bodyLineCount = null,
-        string? kind = null)
+        string? kind = null,
+        SymbolGraphPageRequest? graphPage = null)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
         using var txn = _conn.BeginTransaction(deferred: true);
@@ -110,15 +111,20 @@ public partial class DbReader
             baseGraphSupported,
             hasUnsupportedEnumMember: false,
             hasSupportedGraphDefinition);
-        var references = primaryDefinition != null
-            ? SearchReferences(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, maxLineWidth)
-            : [];
-        var callers = primaryDefinition != null
-            ? GetCallers(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
-            : [];
-        var callees = primaryDefinition != null
-            ? GetCallees(primaryDefinition.Name, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
-            : [];
+        var candidateBundle = primaryDefinition == null
+            ? null
+            : BuildSymbolCandidateBundle(
+                primaryDefinition,
+                limit,
+                includeNameFallback: true,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests,
+                maxLineWidth,
+                graphPage);
+        var references = candidateBundle?.References ?? [];
+        var callers = candidateBundle?.Callers ?? [];
+        var callees = candidateBundle?.Callees ?? [];
         var nearbySymbols = file != null
             ? GetNearbySymbols(
                 path,
@@ -137,6 +143,14 @@ public partial class DbReader
             WorkspaceIndexedAt = freshness.IndexedAt,
             WorkspaceLatestModified = freshness.LatestModified,
             GraphLanguage = graphLanguage,
+            GraphLanguageSource = lang != null
+                ? "language_filter"
+                : primaryDefinition?.Lang != null
+                    ? "definition"
+                    : null,
+            GraphLanguageConfidence = lang != null || primaryDefinition?.Lang != null
+                ? "authoritative"
+                : null,
             GraphSupported = baseGraphSupported,
             GraphSupportReason = graphSupportReason,
             Definitions = definitions,
@@ -144,6 +158,10 @@ public partial class DbReader
             References = [.. references],
             Callers = [.. callers],
             Callees = [.. callees],
+            GraphSections = candidateBundle?.GraphSections ?? new SymbolGraphSections(),
+            CandidateCount = candidateBundle == null ? 0 : 1,
+            GraphScope = candidateBundle == null ? null : "single_candidate",
+            CandidateBundles = candidateBundle == null ? null : [candidateBundle],
             GraphTableAvailable = _hasReferencesTable,
         };
         txn.Commit();
@@ -168,7 +186,8 @@ public partial class DbReader
                    {GetSymbolColumnSql("container_kind")} AS container_kind,
                    {GetSymbolColumnSql("container_name")} AS container_name,
                    {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type
+                   {GetSymbolColumnSql("return_type")} AS return_type,
+                   s.id AS symbol_id
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.path = @path
@@ -222,13 +241,14 @@ public partial class DbReader
             ContainerName = GetNullableString(reader, 11),
             Visibility = GetNullableString(reader, 12),
             ReturnType = GetNullableString(reader, 13),
+            SymbolId = reader.GetInt64(14),
         };
 
     /// <summary>
     /// Bundle definition, graph, and local file context for one symbol query.
     /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
     /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? bodyStartLine = null, int? bodyLineCount = null, string? kind = null, bool groupPartials = false)
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? bodyStartLine = null, int? bodyLineCount = null, string? kind = null, bool groupPartials = false, SymbolGraphPageRequest? graphPage = null)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
         {
@@ -290,22 +310,39 @@ public partial class DbReader
                 pathPatterns,
                 excludePathPatterns,
                 excludeTests,
-                maxLineWidth))
+                maxLineWidth,
+                graphPage))
             .ToList();
         var selectedBundle = candidateBundles.FirstOrDefault();
         var file = selectedBundle?.File;
+        var fallbackReferenceOffset = GetGraphSectionOffset(graphPage, "references", candidateSelector: null);
+        var fallbackCallerOffset = GetGraphSectionOffset(graphPage, "callers", candidateSelector: null);
+        var fallbackCalleeOffset = GetGraphSectionOffset(graphPage, "callees", candidateSelector: null);
         var references = selectedBundle?.References
             ?? (definitions.Count == 0
-                ? SearchReferences(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth)
+                ? SearchReferences(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth, offset: fallbackReferenceOffset)
                 : []);
         var callers = selectedBundle?.Callers
             ?? (definitions.Count == 0
-                ? GetCallers(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact)
+                ? GetCallers(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, offset: fallbackCallerOffset)
                 : []);
         var callees = selectedBundle?.Callees
             ?? (definitions.Count == 0
-                ? GetCallees(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact)
+                ? GetCallees(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, offset: fallbackCalleeOffset)
                 : []);
+        var graphSections = selectedBundle?.GraphSections
+            ?? (definitions.Count == 0
+                ? BuildGraphSections(
+                    CountSearchReferencesTotal(normalizedQuery, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact).Count,
+                    references.Count,
+                    fallbackReferenceOffset,
+                    CountCallersTotal(normalizedQuery, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact).Count,
+                    callers.Count,
+                    fallbackCallerOffset,
+                    CountCalleesTotal(normalizedQuery, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact).Count,
+                    callees.Count,
+                    fallbackCalleeOffset)
+                : new SymbolGraphSections());
         if (graphLanguage == null)
         {
             graphLanguageCandidates = references.Select(reference => reference.Lang)
@@ -390,6 +427,7 @@ public partial class DbReader
             References = [.. references],
             Callers = [.. callers],
             Callees = [.. callees],
+            GraphSections = graphSections,
             CandidateCount = candidateBundles.Count,
             GraphScope = candidateBundles.Count switch
             {
@@ -456,24 +494,44 @@ public partial class DbReader
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests,
-        int maxLineWidth)
+        int maxLineWidth,
+        SymbolGraphPageRequest? graphPage = null)
     {
         var identityScoped = CanScopeCandidateByIdentity(definition);
+        var selector = BuildSymbolCandidateSelector(definition);
+        var referenceOffset = GetGraphSectionOffset(graphPage, "references", selector.Selector);
+        var callerOffset = GetGraphSectionOffset(graphPage, "callers", selector.Selector);
+        var calleeOffset = GetGraphSectionOffset(graphPage, "callees", selector.Selector);
         var references = identityScoped
-            ? SearchReferencesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, maxLineWidth)
+            ? SearchReferencesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, maxLineWidth, referenceOffset)
             : includeNameFallback
-                ? SearchReferences(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, maxLineWidth)
+                ? SearchReferences(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, maxLineWidth, offset: referenceOffset)
                 : [];
         var callers = identityScoped
-            ? GetCallersForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests)
+            ? GetCallersForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, callerOffset)
             : includeNameFallback
-                ? GetCallers(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
+                ? GetCallers(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, offset: callerOffset)
                 : [];
         var callees = identityScoped
-            ? GetCalleesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests)
+            ? GetCalleesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, calleeOffset)
             : includeNameFallback
-                ? GetCallees(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
+                ? GetCallees(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, offset: calleeOffset)
                 : [];
+        var referenceTotal = identityScoped
+            ? CountSearchReferencesForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
+            : includeNameFallback
+                ? CountSearchReferencesTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
+                : 0;
+        var callerTotal = identityScoped
+            ? CountCallersForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
+            : includeNameFallback
+                ? CountCallersTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
+                : 0;
+        var calleeTotal = identityScoped
+            ? CountCalleesForCandidate(definition, pathPatterns, excludePathPatterns, excludeTests)
+            : includeNameFallback
+                ? CountCalleesTotal(definition.Name, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true).Count
+                : 0;
         var nearbySymbols = GetNearbySymbols(
             definition.Path,
             definition.StartLine,
@@ -492,7 +550,7 @@ public partial class DbReader
 
         return new SymbolCandidateBundle
         {
-            Selector = BuildSymbolCandidateSelector(definition),
+            Selector = selector,
             Definition = definition,
             File = GetFileByPath(definition.Path),
             GraphSupported = graphSupported,
@@ -502,8 +560,54 @@ public partial class DbReader
             References = references,
             Callers = callers,
             Callees = callees,
+            GraphSections = BuildGraphSections(
+                referenceTotal,
+                references.Count,
+                referenceOffset,
+                callerTotal,
+                callers.Count,
+                callerOffset,
+                calleeTotal,
+                callees.Count,
+                calleeOffset),
         };
     }
+
+    private static int GetGraphSectionOffset(
+        SymbolGraphPageRequest? page,
+        string section,
+        string? candidateSelector)
+        => page != null
+           && string.Equals(page.Section, section, StringComparison.Ordinal)
+           && string.Equals(page.CandidateSelector, candidateSelector, StringComparison.Ordinal)
+            ? Math.Max(0, page.Offset)
+            : 0;
+
+    private static SymbolGraphSections BuildGraphSections(
+        int referenceTotal,
+        int referenceReturned,
+        int referenceOffset,
+        int callerTotal,
+        int callerReturned,
+        int callerOffset,
+        int calleeTotal,
+        int calleeReturned,
+        int calleeOffset)
+        => new()
+        {
+            References = BuildGraphSection(referenceTotal, referenceReturned, referenceOffset),
+            Callers = BuildGraphSection(callerTotal, callerReturned, callerOffset),
+            Callees = BuildGraphSection(calleeTotal, calleeReturned, calleeOffset),
+        };
+
+    private static SymbolGraphSection BuildGraphSection(int total, int returned, int offset)
+        => new()
+        {
+            Total = total,
+            Returned = returned,
+            Offset = offset,
+            Truncated = offset + returned < total,
+        };
 
     private bool CanScopeCandidateByIdentity(DefinitionResult definition) =>
         _hasReferencesTable

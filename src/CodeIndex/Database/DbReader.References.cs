@@ -109,7 +109,8 @@ public partial class DbReader
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests,
-        int maxLineWidth)
+        int maxLineWidth,
+        int offset = 0)
     {
         if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
             return [];
@@ -123,10 +124,37 @@ public partial class DbReader
             excludePathPatterns,
             excludeTests,
             exact: true,
-            offset: 0,
+            offset,
             maxLineWidth,
             excludeSelfReferences: false,
             targetSymbolId: symbolId);
+    }
+
+    private int CountSearchReferencesForCandidate(
+        DefinitionResult definition,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
+            return 0;
+
+        using var cmd = CreateSearchReferencesCommandCore(
+            definition.Name,
+            limit: 1,
+            definition.Lang,
+            referenceKind: null,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact: true,
+            offset: 0,
+            includeOrdering: false,
+            excludeSelfReferences: false,
+            targetSymbolId: symbolId);
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({cmd.CommandText})";
+        var raw = cmd.ExecuteScalar();
+        return raw is long count ? checked((int)count) : Convert.ToInt32(raw);
     }
 
     internal ReferencePositionResolution GetReferencePositionResolution(

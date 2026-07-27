@@ -145,7 +145,7 @@ internal static class CliFlagSchema
         "search", "definition", "find", "status", "hotspots", "references", "callers", "callees",
         "symbols", "files", "languages", "impact", "map",
     ];
-    private static readonly string[] CursorCommands = ["search", "outline", "unused", "deps", .. BoundedProjectionCommands];
+    private static readonly string[] CursorCommands = ["search", "outline", "unused", "deps", "inspect", .. BoundedProjectionCommands];
     private static readonly string[] AllResultCommands = ["goto", "find", "unused"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];

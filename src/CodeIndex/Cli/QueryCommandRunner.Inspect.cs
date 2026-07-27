@@ -61,6 +61,23 @@ public static partial class QueryCommandRunner
         }
         if (TryWriteUnexpectedExtraPositionals("inspect", options))
             return CommandExitCodes.UsageError;
+        if (!TryReadInspectCursor(cmdArgs, out var cursor, out var cursorError))
+        {
+            WriteUsageError(
+                cursorError!,
+                GetUsageLineOrThrow("inspect"),
+                "Pass an unchanged inspect query with a next_cursor returned by one graph section.");
+            return CommandExitCodes.UsageError;
+        }
+        InspectGraphCursor? graphCursor = null;
+        if (cursor != null && !InspectGraphCursorCodec.TryParse(cursor, out graphCursor))
+        {
+            WriteUsageError(
+                "invalid inspect graph cursor",
+                GetUsageLineOrThrow("inspect"),
+                "Use a next_cursor returned by the same inspect query and graph section.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.StartLine.HasValue && options.EndLine.HasValue && options.EndLine.Value < options.StartLine.Value)
         {
             WriteValidationError(
@@ -126,6 +143,28 @@ public static partial class QueryCommandRunner
             var inspectQuery = fileInspectMode
                 ? $"{inspectPath}:{inspectLine}"
                 : options.Query!;
+            var queryFingerprint = BuildInspectGraphQueryFingerprint(
+                inspectQuery,
+                options,
+                exact,
+                fileInspectMode);
+            var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
+            if (graphCursor != null
+                && (!string.Equals(graphCursor.QueryFingerprint, queryFingerprint, StringComparison.Ordinal)
+                    || !string.Equals(graphCursor.GenerationFingerprint, generation.Fingerprint, StringComparison.Ordinal)))
+            {
+                WriteUsageError(
+                    "inspect graph cursor does not match this query or index generation",
+                    GetUsageLineOrThrow("inspect"),
+                    "Rerun the original inspect query without --cursor, then use the newly returned section cursor.");
+                return CommandExitCodes.UsageError;
+            }
+            var graphPage = graphCursor == null
+                ? null
+                : new SymbolGraphPageRequest(
+                    graphCursor.Section,
+                    graphCursor.Offset,
+                    graphCursor.CandidateSelector);
             var analysis = fileInspectMode
                 ? reader.AnalyzeFileLine(
                     inspectPath!,
@@ -139,7 +178,8 @@ public static partial class QueryCommandRunner
                     options.MaxLineWidth,
                     options.BodyStartLine,
                     options.BodyLines,
-                    kind: options.Kind)
+                    kind: options.Kind,
+                    graphPage: graphPage)
                 : reader.AnalyzeSymbol(
                     inspectQuery,
                     inspectLimit,
@@ -153,7 +193,18 @@ public static partial class QueryCommandRunner
                     options.BodyStartLine,
                     options.BodyLines,
                     kind: options.Kind,
-                    groupPartials: options.GroupPartials);
+                    groupPartials: options.GroupPartials,
+                    graphPage: graphPage);
+            if (graphCursor?.CandidateSelector != null
+                && !(analysis.CandidateBundles?.Any(bundle =>
+                    string.Equals(bundle.Selector.Selector, graphCursor.CandidateSelector, StringComparison.Ordinal)) ?? false))
+            {
+                WriteUsageError(
+                    "inspect graph cursor candidate is no longer available",
+                    GetUsageLineOrThrow("inspect"),
+                    "Rerun the inspect query without --cursor and select a cursor from the current candidate bundle.");
+                return CommandExitCodes.UsageError;
+            }
             var sourceExcerpt = BuildInspectSourceExcerpt(reader, options, analysis, inspectPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
@@ -180,6 +231,11 @@ public static partial class QueryCommandRunner
             if (options.Json)
             {
                 var compactTruncation = options.Compact ? ApplySymbolAnalysisCompactCaps(analysis, compactLimit) : null;
+                SynchronizeInspectGraphSectionCounts(analysis);
+                ApplyInspectGraphContinuationCursors(
+                    analysis,
+                    queryFingerprint,
+                    generation.Fingerprint);
                 ApplyBodyRecoveryCommands(analysis, options.DbPath);
                 var payload = JsonSerializer.SerializeToNode(analysis, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolAnalysisResult)!.AsObject();
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
@@ -208,6 +264,11 @@ public static partial class QueryCommandRunner
             }
             else
             {
+                SynchronizeInspectGraphSectionCounts(analysis);
+                ApplyInspectGraphContinuationCursors(
+                    analysis,
+                    queryFingerprint,
+                    generation.Fingerprint);
                 Console.WriteLine($"Query: {analysis.Query}");
                 if (analysis.File != null)
                     Console.WriteLine($"File : {analysis.File.Path} ({analysis.File.Lang ?? "?"}, {analysis.File.Lines} lines)");
@@ -258,8 +319,11 @@ public static partial class QueryCommandRunner
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
+                WriteInspectGraphSectionStatus("References", analysis.GraphSections.References);
                 WriteRepoMapSection("Callers", analysis.Callers.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
+                WriteInspectGraphSectionStatus("Callers", analysis.GraphSections.Callers);
                 WriteRepoMapSection("Callees", analysis.Callees.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
+                WriteInspectGraphSectionStatus("Callees", analysis.GraphSections.Callees);
                 if (analysis.CandidateBundles is { Count: > 1 })
                 {
                     foreach (var bundle in analysis.CandidateBundles)
@@ -267,14 +331,199 @@ public static partial class QueryCommandRunner
                         var title = $"Candidate {bundle.Selector.Selector} ({bundle.Selector.QualifiedName})";
                         WriteRepoMapSection(title, [$"{bundle.Definition.Kind,-10} {bundle.Definition.Path}:{bundle.Definition.StartLine}-{bundle.Definition.EndLine}"]);
                         WriteRepoMapSection($"{title} references", bundle.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
+                        WriteInspectGraphSectionStatus($"{title} references", bundle.GraphSections.References);
                         WriteRepoMapSection($"{title} callers", bundle.Callers.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
+                        WriteInspectGraphSectionStatus($"{title} callers", bundle.GraphSections.Callers);
                         WriteRepoMapSection($"{title} callees", bundle.Callees.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
+                        WriteInspectGraphSectionStatus($"{title} callees", bundle.GraphSections.Callees);
                     }
                 }
             }
 
             return IsEmptySymbolAnalysis(analysis) && sourceExcerpt == null ? ZeroResultExitCode(options) : CommandExitCodes.Success;
         });
+    }
+
+    private static bool TryReadInspectCursor(
+        string[] args,
+        out string? cursor,
+        out string? error)
+    {
+        cursor = null;
+        error = null;
+        for (var index = 0; index < args.Length; index++)
+        {
+            var arg = args[index];
+            string? value = null;
+            if (arg.StartsWith("--cursor=", StringComparison.Ordinal))
+            {
+                value = arg["--cursor=".Length..];
+            }
+            else if (string.Equals(arg, "--cursor", StringComparison.Ordinal))
+            {
+                if (++index >= args.Length)
+                {
+                    error = "--cursor requires a value";
+                    return false;
+                }
+                value = args[index];
+            }
+            else
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                error = "--cursor requires a non-empty value";
+                return false;
+            }
+            if (cursor != null)
+            {
+                error = "--cursor may be specified only once";
+                return false;
+            }
+            cursor = value;
+        }
+        return true;
+    }
+
+    private static string BuildInspectGraphQueryFingerprint(
+        string inspectQuery,
+        QueryCommandOptions options,
+        bool exact,
+        bool fileInspectMode)
+    {
+        var components = new List<string?>
+        {
+            "inspect",
+            fileInspectMode ? "location" : "symbol",
+            inspectQuery,
+            options.Lang,
+            options.Kind,
+            exact ? "exact" : "substring",
+            options.ExcludeTests ? "exclude-tests" : "include-tests",
+            options.GroupPartials ? "group-partials" : "physical-definitions",
+        };
+        components.AddRange(options.PathPatterns
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => "path:" + path));
+        components.AddRange(options.ExcludePaths
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => "exclude:" + path));
+        return InspectGraphCursorCodec.BuildQueryFingerprint(components);
+    }
+
+    internal static void SynchronizeInspectGraphSectionCounts(SymbolAnalysisResult analysis)
+    {
+        SynchronizeInspectGraphSections(
+            analysis.GraphSections,
+            analysis.References.Count,
+            analysis.Callers.Count,
+            analysis.Callees.Count);
+        if (analysis.CandidateBundles == null)
+            return;
+        foreach (var bundle in analysis.CandidateBundles)
+        {
+            SynchronizeInspectGraphSections(
+                bundle.GraphSections,
+                bundle.References.Count,
+                bundle.Callers.Count,
+                bundle.Callees.Count);
+        }
+    }
+
+    private static void SynchronizeInspectGraphSections(
+        SymbolGraphSections sections,
+        int referenceCount,
+        int callerCount,
+        int calleeCount)
+    {
+        SynchronizeInspectGraphSection(sections.References, referenceCount);
+        SynchronizeInspectGraphSection(sections.Callers, callerCount);
+        SynchronizeInspectGraphSection(sections.Callees, calleeCount);
+    }
+
+    private static void SynchronizeInspectGraphSection(SymbolGraphSection section, int returned)
+    {
+        section.Returned = returned;
+        section.Truncated = section.Offset + returned < section.Total;
+    }
+
+    internal static void ApplyInspectGraphContinuationCursors(
+        SymbolAnalysisResult analysis,
+        string queryFingerprint,
+        string generationFingerprint)
+    {
+        var primarySelector = analysis.GraphScope == "query_fallback"
+            ? null
+            : analysis.CandidateBundles?.FirstOrDefault()?.Selector.Selector;
+        ApplyInspectGraphContinuationCursors(
+            analysis.GraphSections,
+            primarySelector,
+            queryFingerprint,
+            generationFingerprint);
+        if (analysis.CandidateBundles == null)
+            return;
+        foreach (var bundle in analysis.CandidateBundles)
+        {
+            ApplyInspectGraphContinuationCursors(
+                bundle.GraphSections,
+                bundle.Selector.Selector,
+                queryFingerprint,
+                generationFingerprint);
+        }
+    }
+
+    private static void ApplyInspectGraphContinuationCursors(
+        SymbolGraphSections sections,
+        string? candidateSelector,
+        string queryFingerprint,
+        string generationFingerprint)
+    {
+        ApplyInspectGraphContinuationCursor(
+            sections.References,
+            "references",
+            candidateSelector,
+            queryFingerprint,
+            generationFingerprint);
+        ApplyInspectGraphContinuationCursor(
+            sections.Callers,
+            "callers",
+            candidateSelector,
+            queryFingerprint,
+            generationFingerprint);
+        ApplyInspectGraphContinuationCursor(
+            sections.Callees,
+            "callees",
+            candidateSelector,
+            queryFingerprint,
+            generationFingerprint);
+    }
+
+    private static void ApplyInspectGraphContinuationCursor(
+        SymbolGraphSection section,
+        string sectionName,
+        string? candidateSelector,
+        string queryFingerprint,
+        string generationFingerprint)
+    {
+        section.NextCursor = section.Truncated && section.Returned > 0
+            ? InspectGraphCursorCodec.Format(
+                sectionName,
+                checked(section.Offset + section.Returned),
+                candidateSelector,
+                queryFingerprint,
+                generationFingerprint)
+            : null;
+    }
+
+    private static void WriteInspectGraphSectionStatus(string label, SymbolGraphSection section)
+    {
+        Console.WriteLine(
+            $"{label} completeness: returned {section.Returned} of {section.Total} (offset {section.Offset}, truncated: {section.Truncated.ToString().ToLowerInvariant()})");
+        if (section.NextCursor != null)
+            Console.WriteLine($"{label} next cursor: {section.NextCursor}");
     }
 
     private static void AddInspectLogicalPartialJsonFields(JsonObject payload, SymbolAnalysisResult analysis)
@@ -323,6 +572,8 @@ public static partial class QueryCommandRunner
             keep.Add("graph_scope");
             keep.Add("selection_required");
         }
+        if (field is "graph" or "references" or "callers" or "callees")
+            keep.Add("graph_sections");
 
         switch (field)
         {

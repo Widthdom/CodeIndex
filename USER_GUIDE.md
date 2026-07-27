@@ -376,6 +376,16 @@ For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `--compact`. It implies JSON output, caps list sections to 5 items by default
 (or the explicit `--limit` / `--top` value), and adds `compact`,
 `compact_limit`, and `truncation.sections.*` metadata.
+Every `inspect` graph bundle also publishes independent
+`graph_sections.references`, `graph_sections.callers`, and
+`graph_sections.callees` envelopes with `total`, `returned`, `offset`, and
+`truncated`. A truncated section includes an opaque `next_cursor`; pass it back
+with `--cursor` and unchanged query filters to continue only that section.
+The cursor is bound to the query and index generation. Name and path/line
+inspection both preserve the selected persisted symbol ID, so location lookup
+returns the same candidate-scoped graph evidence as the corresponding name
+bundle instead of re-resolving a display name. MCP `analyze_symbol` exposes the
+same section envelopes and accepts their cursors.
 For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--outline-only` is shorthand for
@@ -410,6 +420,7 @@ cdidx inspect Compute --outline-only      # file/definition/nearby symbol summar
 cdidx inspect Compute --body-only         # definitions with body_content only
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 cdidx inspect Compute --line 42 --context 2 --json
+cdidx inspect Compute --json --limit 1 --cursor '<next_cursor>'
 ```
 
 ## Editor and index portability
@@ -3496,6 +3507,15 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 `--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
 既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、
 `compact`、`compact_limit`、`truncation.sections.*` metadata を追加します。
+すべての `inspect` graph bundle は、独立した
+`graph_sections.references`、`graph_sections.callers`、
+`graph_sections.callees` envelope も公開し、`total`、`returned`、`offset`、
+`truncated` を示します。truncated な section には opaque な `next_cursor` が付き、
+query filter を変えず `--cursor` で渡すと、その section だけを継続できます。
+cursor は query と index generation に束縛されます。名前指定と path/line 指定の
+どちらも選択された永続 symbol ID を維持するため、location lookup は display name を
+再解決せず、対応する name bundle と同じ candidate-scoped graph evidence を返します。
+MCP `analyze_symbol` も同じ section envelope を公開し、その cursor を受け付けます。
 `inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
 top-level group を選択します。`--outline-only` は
@@ -3528,6 +3548,7 @@ cdidx inspect Compute --outline-only      # ファイル・定義・近傍シン
 cdidx inspect Compute --body-only         # body_content 付き definitions のみ
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 cdidx inspect Compute --line 42 --context 2 --json
+cdidx inspect Compute --json --limit 1 --cursor '<next_cursor>'
 ```
 
 ## Editor / index portability
