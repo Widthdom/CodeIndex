@@ -132,6 +132,8 @@ public partial class DbReaderTests
             }
             """);
 
+        Assert.Empty(_reader.GetFileDependencies(lang: "dependency_lock"));
+
         var childAnalysis = _reader.AnalyzeSymbol(
             "Microsoft.Data.Sqlite.Core",
             limit: 10,
