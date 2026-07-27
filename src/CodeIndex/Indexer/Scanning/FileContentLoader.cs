@@ -100,12 +100,13 @@ internal sealed partial class FileContentLoader(
         bool retryOnMutation,
         CancellationToken cancellationToken)
     {
-        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+        var readPath = FileIndexer.ResolveFileReadPath(absolutePath);
+        var ioPath = LongPath.EnsureWindowsPrefix(readPath);
         cancellationToken.ThrowIfCancellationRequested();
         var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
         byte[]? bytes = null;
         bool lengthChanged;
-        using (var stream = _openReadForIndexContent(absolutePath))
+        using (var stream = _openReadForIndexContent(readPath))
         {
             var initialLength = stream.Length;
             if (initialLength > maxFileSizeBytes)

@@ -14,6 +14,21 @@ public partial class FileIndexer
         return CodeIndex.Cli.PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
     }
 
+    private static bool IsLexicalPathEqualOrParent(string candidateParent, string candidateChild)
+    {
+        var normalizedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidateParent));
+        var normalizedChild = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidateChild));
+        return CodeIndex.Cli.PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
+    }
+
+    internal static string ResolveFileReadPath(string path)
+        => NormalizePathForComparison(path);
+
+    internal static bool FileReadPathsEqual(string left, string right)
+        => CodeIndex.Cli.PathCasing.PathsEqual(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)));
+
     private static string NormalizePathForComparison(string path)
     {
         var fullPath = Path.GetFullPath(path);

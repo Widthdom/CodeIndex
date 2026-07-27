@@ -656,7 +656,8 @@ internal static class CSharpStaticInterfacePrepass
             try
             {
                 validateTarget?.Invoke(target);
-                var info = new FileInfo(LongPath.EnsureWindowsPrefix(target.FilePath));
+                var resolvedPath = FileIndexer.ResolveFileReadPath(target.FilePath);
+                var info = new FileInfo(LongPath.EnsureWindowsPrefix(resolvedPath));
                 info.Refresh();
                 if (!info.Exists)
                 {
@@ -664,7 +665,10 @@ internal static class CSharpStaticInterfacePrepass
                     return false;
                 }
 
-                snapshots[target.IndexPath] = new FileStatSnapshot(info.Length, info.LastWriteTimeUtc);
+                snapshots[target.IndexPath] = new FileStatSnapshot(
+                    info.Length,
+                    info.LastWriteTimeUtc,
+                    resolvedPath);
             }
             catch (Exception ex) when (ex is IOException
                                        or UnauthorizedAccessException
@@ -686,7 +690,10 @@ internal static class CSharpStaticInterfacePrepass
     {
         foreach (var (path, snapshot) in before)
         {
-            if (!after.TryGetValue(path, out var current) || current != snapshot)
+            if (!after.TryGetValue(path, out var current)
+                || current.Size != snapshot.Size
+                || current.ModifiedUtc != snapshot.ModifiedUtc
+                || !FileIndexer.FileReadPathsEqual(current.ResolvedPath, snapshot.ResolvedPath))
             {
                 changedPath = path;
                 return false;
@@ -722,10 +729,12 @@ internal static class CSharpStaticInterfacePrepass
             try
             {
                 validateTarget?.Invoke(target);
-                var info = new FileInfo(LongPath.EnsureWindowsPrefix(target.FilePath));
+                var resolvedPath = FileIndexer.ResolveFileReadPath(target.FilePath);
+                var info = new FileInfo(LongPath.EnsureWindowsPrefix(resolvedPath));
                 info.Refresh();
                 if (!info.Exists
                     || !snapshots.TryGetValue(target.IndexPath, out var snapshot)
+                    || !FileIndexer.FileReadPathsEqual(resolvedPath, snapshot.ResolvedPath)
                     || info.Length != snapshot.Size
                     || info.LastWriteTimeUtc != snapshot.ModifiedUtc)
                 {
@@ -770,9 +779,11 @@ internal static class CSharpStaticInterfacePrepass
         try
         {
             validatePath?.Invoke(filePath);
-            var info = new FileInfo(LongPath.EnsureWindowsPrefix(filePath));
+            var resolvedPath = FileIndexer.ResolveFileReadPath(filePath);
+            var info = new FileInfo(LongPath.EnsureWindowsPrefix(resolvedPath));
             info.Refresh();
             if (!info.Exists
+                || !FileIndexer.FileReadPathsEqual(resolvedPath, snapshot.ResolvedPath)
                 || info.Length != snapshot.Size
                 || info.LastWriteTimeUtc != snapshot.ModifiedUtc)
             {
@@ -956,7 +967,10 @@ internal static class CSharpStaticInterfacePrepass
         }
     }
 
-    internal readonly record struct FileStatSnapshot(long Size, DateTime ModifiedUtc);
+    internal readonly record struct FileStatSnapshot(
+        long Size,
+        DateTime ModifiedUtc,
+        string ResolvedPath);
 
     internal readonly record struct DirectoryStatSnapshot(DateTime ModifiedUtc);
 
