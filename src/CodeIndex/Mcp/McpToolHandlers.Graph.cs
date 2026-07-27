@@ -560,10 +560,60 @@ public partial class McpServer
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
+        var rawCursor = args?["cursor"]?.GetValue<string>();
+        InspectGraphCursor? graphCursor = null;
+        if (rawCursor != null && !InspectGraphCursorCodec.TryParse(rawCursor, out graphCursor))
+            return CreateToolErrorResponse(id, "cursor must be an inspect graph next_cursor returned by analyze_symbol.");
 
         return WithDbReader(id, args, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var queryFingerprint = BuildAnalyzeSymbolGraphQueryFingerprint(
+                query,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                exact,
+                limit);
+            var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
+            if (graphCursor != null
+                && (!string.Equals(graphCursor.QueryFingerprint, queryFingerprint, StringComparison.Ordinal)
+                    || !string.Equals(graphCursor.GenerationFingerprint, generation.Fingerprint, StringComparison.Ordinal)))
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    "cursor does not match this analyze_symbol query or index generation; rerun without cursor.");
+            }
+            var graphPage = graphCursor == null
+                ? null
+                : new SymbolGraphPageRequest(
+                    graphCursor.Section,
+                    graphCursor.Offset,
+                    graphCursor.CandidateSelector);
+            var analysis = reader.AnalyzeSymbol(
+                query,
+                limit,
+                lang,
+                includeBody,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                exact,
+                maxLineWidth,
+                graphPage: graphPage);
+            if (graphCursor?.CandidateSelector != null
+                && !(analysis.CandidateBundles?.Any(bundle =>
+                    string.Equals(bundle.Selector.Selector, graphCursor.CandidateSelector, StringComparison.Ordinal)) ?? false))
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    "cursor candidate is no longer available; rerun analyze_symbol without cursor.");
+            }
+            QueryCommandRunner.SynchronizeInspectGraphSectionCounts(analysis);
+            QueryCommandRunner.ApplyInspectGraphContinuationCursors(
+                analysis,
+                queryFingerprint,
+                generation.Fingerprint);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
                 DbReader.IsSqlLanguage(lang)
@@ -599,6 +649,33 @@ public partial class McpServer
             adjustments.ApplyTo(structured);
             return CreateToolResult(id, BuildAnalyzeSymbolSummary(analysis), structured);
         });
+    }
+
+    private static string BuildAnalyzeSymbolGraphQueryFingerprint(
+        string query,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePaths,
+        bool excludeTests,
+        bool exact,
+        int pageLimit)
+    {
+        var components = new List<string?>
+        {
+            "mcp:analyze_symbol",
+            query,
+            lang,
+            exact ? "exact" : "substring",
+            $"page-limit:{pageLimit.ToString(CultureInfo.InvariantCulture)}",
+            excludeTests ? "exclude-tests" : "include-tests",
+        };
+        components.AddRange((pathPatterns ?? [])
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => "path:" + path));
+        components.AddRange((excludePaths ?? [])
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => "exclude:" + path));
+        return InspectGraphCursorCodec.BuildQueryFingerprint(components);
     }
 
     private static string BuildAnalyzeSymbolSummary(SymbolAnalysisResult analysis)

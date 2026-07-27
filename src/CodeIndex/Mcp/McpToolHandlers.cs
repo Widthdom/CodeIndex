@@ -736,6 +736,7 @@ public partial class McpServer
             ["reference_count"] = analysis.References.Count,
             ["caller_count"] = analysis.Callers.Count,
             ["callee_count"] = analysis.Callees.Count,
+            ["graph_sections"] = JsonSerializer.SerializeToNode(analysis.GraphSections, _jsonOptions),
             ["candidate_count"] = analysis.CandidateCount,
             ["candidate_reference_count"] = analysis.CandidateBundles?.Sum(bundle => bundle.References.Count) ?? 0,
             ["candidate_caller_count"] = analysis.CandidateBundles?.Sum(bundle => bundle.Callers.Count) ?? 0,
@@ -798,6 +799,7 @@ public partial class McpServer
             ["reference_count"] = analysis.References.Count,
             ["caller_count"] = analysis.Callers.Count,
             ["callee_count"] = analysis.Callees.Count,
+            ["graph_sections"] = JsonSerializer.SerializeToNode(analysis.GraphSections, _jsonOptions),
             ["candidate_count"] = analysis.CandidateCount,
             ["graph_scope"] = analysis.GraphScope,
             ["selection_required"] = analysis.SelectionRequired,
@@ -839,6 +841,7 @@ public partial class McpServer
             ["references"] = ToJsonArray(analysis.References),
             ["callers"] = ToJsonArray(analysis.Callers),
             ["callees"] = ToJsonArray(analysis.Callees),
+            ["graph_sections"] = JsonSerializer.SerializeToNode(analysis.GraphSections, _jsonOptions),
             ["candidate_count"] = analysis.CandidateCount,
             ["graph_scope"] = analysis.GraphScope,
             ["selection_required"] = analysis.SelectionRequired,
@@ -885,6 +888,7 @@ public partial class McpServer
                 ["reference_count"] = bundle.References.Count,
                 ["caller_count"] = bundle.Callers.Count,
                 ["callee_count"] = bundle.Callees.Count,
+                ["graph_sections"] = JsonSerializer.SerializeToNode(bundle.GraphSections, _jsonOptions),
             });
         }
         return result;
