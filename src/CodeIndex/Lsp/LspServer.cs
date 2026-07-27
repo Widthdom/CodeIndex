@@ -150,13 +150,18 @@ internal sealed partial class LspServer : IDisposable
     private readonly LspLiveDocumentStore _liveDocumentStore;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _requestCancellations = new(StringComparer.Ordinal);
     private long _contentChangeEntriesDropped;
+    internal Action<string>? InboundSessionDispatchReservedForTesting { get; set; }
     internal Action<string>? BeforeSessionDispatchForTesting { get; set; }
     internal Action<CancellationToken>? BeforeSymbolRequestForTesting { get; set; }
 
     private readonly record struct PositionTokenContext(string Token, string ResolvedPath, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
     private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
     private readonly record struct IndexedDocumentContext(string DocumentPath, string ResolvedPath, string IndexedPath, string? WorkspaceRoot);
-    private readonly record struct InboundMessage(string Payload, string? RequestKey, CancellationTokenSource? RequestCancellation);
+    private readonly record struct InboundMessage(
+        string Payload,
+        string? RequestKey,
+        CancellationTokenSource? RequestCancellation,
+        SessionDispatchAction? SessionAction);
     private readonly record struct SymbolResponse(
         JsonArray FinalItems,
         IEnumerable<JsonNode> PartialItems,
@@ -183,8 +188,11 @@ internal sealed partial class LspServer : IDisposable
     private enum SessionDispatchAction
     {
         Dispatch,
+        Initialize,
         Ignore,
         Shutdown,
+        Exit,
+        ExitBeforeShutdown,
         ServerNotInitialized,
         InvalidRequest,
     }
@@ -301,14 +309,21 @@ internal sealed partial class LspServer : IDisposable
                 if (TryHandleCancellationNotification(read.Payload))
                     continue;
 
-                var inbound = CreateInboundMessage(read.Payload, cancellationToken);
+                SessionDispatchAction? reservedSessionAction = null;
+                if (TryReserveInboundSessionDispatch(read.Payload, out var sessionAction))
+                    reservedSessionAction = sessionAction;
+
+                var inbound = CreateInboundMessage(
+                    read.Payload,
+                    cancellationToken,
+                    reservedSessionAction);
                 if (messages.Writer.TryWrite(inbound))
                     continue;
 
-                var busyResponse = CreateOverloadResponse(read.Payload);
+                var busyResponse = CreateOverloadResponse(read.Payload, reservedSessionAction);
                 if (busyResponse != null)
                 {
-                    ReleaseInboundMessage(inbound);
+                    AbandonInboundMessage(inbound);
                     await overloadResponses.Writer
                         .WriteAsync(busyResponse, readCancellation.Token)
                         .ConfigureAwait(false);
@@ -323,7 +338,7 @@ internal sealed partial class LspServer : IDisposable
                 }
                 catch
                 {
-                    ReleaseInboundMessage(inbound);
+                    AbandonInboundMessage(inbound);
                     throw;
                 }
             }
@@ -352,12 +367,17 @@ internal sealed partial class LspServer : IDisposable
     }
 
     internal JsonObject? HandleMessage(string payload) =>
-        HandleMessage(payload, outbound: null, CancellationToken.None);
+        HandleMessage(
+            payload,
+            outbound: null,
+            CancellationToken.None,
+            reservedSessionAction: null);
 
     private JsonObject? HandleMessage(
         string payload,
         Action<JsonObject>? outbound,
-        CancellationToken requestCancellation)
+        CancellationToken requestCancellation,
+        SessionDispatchAction? reservedSessionAction)
     {
         // Run() normally obtains payloads through TryReadMessage, but internal callers can bypass
         // that frame reader; keep the JSON parse under the same byte budget either way.
@@ -396,11 +416,15 @@ internal sealed partial class LspServer : IDisposable
                     return hasId ? Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage) : null;
                 }
 
-                var dispatchAction = BeginSessionDispatch(method, hasId);
+                var dispatchAction = reservedSessionAction ?? BeginSessionDispatch(method, hasId);
                 switch (dispatchAction)
                 {
                     case SessionDispatchAction.Ignore:
                         return null;
+                    case SessionDispatchAction.Exit:
+                        return HandleExit(exitBeforeShutdown: false);
+                    case SessionDispatchAction.ExitBeforeShutdown:
+                        return HandleExit(exitBeforeShutdown: true);
                     case SessionDispatchAction.ServerNotInitialized:
                         return Error(id, LspServerNotInitializedCode, LspServerNotInitializedMessage);
                     case SessionDispatchAction.InvalidRequest:
@@ -409,7 +433,9 @@ internal sealed partial class LspServer : IDisposable
                         return HandleShutdown(id);
                 }
 
-                var initializationCompleted = false;
+                var initializationHandled = false;
+                var deferInitializationCompletion =
+                    reservedSessionAction == SessionDispatchAction.Initialize;
                 try
                 {
                     BeforeSessionDispatchForTesting?.Invoke(method);
@@ -450,8 +476,9 @@ internal sealed partial class LspServer : IDisposable
 
                     if (string.Equals(method, "initialize", StringComparison.Ordinal))
                     {
-                        CompleteInitialization();
-                        initializationCompleted = true;
+                        if (!deferInitializationCompletion)
+                            CompleteInitialization();
+                        initializationHandled = true;
                     }
 
                     return response;
@@ -467,7 +494,8 @@ internal sealed partial class LspServer : IDisposable
                 finally
                 {
                     if (string.Equals(method, "initialize", StringComparison.Ordinal)
-                        && !initializationCompleted)
+                        && !initializationHandled
+                        && !deferInitializationCompletion)
                     {
                         AbortInitialization();
                     }
@@ -497,6 +525,7 @@ internal sealed partial class LspServer : IDisposable
         {
             await foreach (var inbound in reader.ReadAllAsync().ConfigureAwait(false))
             {
+                var initializeStateSettled = false;
                 try
                 {
                     var notifications = Channel.CreateBounded<JsonObject>(
@@ -527,7 +556,8 @@ internal sealed partial class LspServer : IDisposable
                                 .AsTask()
                                 .GetAwaiter()
                                 .GetResult(),
-                            processingCancellation.Token);
+                            processingCancellation.Token,
+                            inbound.SessionAction);
                     }
                     finally
                     {
@@ -543,9 +573,24 @@ internal sealed partial class LspServer : IDisposable
                             response,
                             serverCancellation).ConfigureAwait(false);
                     }
+
+                    if (inbound.SessionAction == SessionDispatchAction.Initialize)
+                    {
+                        if (response?["error"] == null)
+                            CompleteInitialization();
+                        else
+                            AbortInitialization();
+                        initializeStateSettled = true;
+                    }
                 }
                 finally
                 {
+                    if (inbound.SessionAction == SessionDispatchAction.Initialize
+                        && !initializeStateSettled)
+                    {
+                        AbortInitialization();
+                    }
+
                     ReleaseInboundMessage(inbound);
                 }
 
@@ -564,7 +609,7 @@ internal sealed partial class LspServer : IDisposable
         finally
         {
             while (reader.TryRead(out var pending))
-                ReleaseInboundMessage(pending);
+                AbandonInboundMessage(pending);
         }
     }
 
@@ -621,19 +666,22 @@ internal sealed partial class LspServer : IDisposable
         }
     }
 
-    private InboundMessage CreateInboundMessage(string payload, CancellationToken serverCancellation)
+    private InboundMessage CreateInboundMessage(
+        string payload,
+        CancellationToken serverCancellation,
+        SessionDispatchAction? sessionAction)
     {
         if (!TryGetRequestKey(payload, out var requestKey))
-            return new InboundMessage(payload, null, null);
+            return new InboundMessage(payload, null, null, sessionAction);
 
         var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
         if (!_requestCancellations.TryAdd(requestKey, requestCancellation))
         {
             requestCancellation.Dispose();
-            return new InboundMessage(payload, null, null);
+            return new InboundMessage(payload, null, null, sessionAction);
         }
 
-        return new InboundMessage(payload, requestKey, requestCancellation);
+        return new InboundMessage(payload, requestKey, requestCancellation, sessionAction);
     }
 
     private void ReleaseInboundMessage(InboundMessage inbound)
@@ -651,6 +699,50 @@ internal sealed partial class LspServer : IDisposable
         inbound.RequestCancellation.Dispose();
     }
 
+    private void AbandonInboundMessage(InboundMessage inbound)
+    {
+        ReleaseInboundMessage(inbound);
+        if (inbound.SessionAction is SessionDispatchAction.Dispatch
+            or SessionDispatchAction.Initialize)
+        {
+            EndSessionDispatch();
+        }
+    }
+
+    private bool TryReserveInboundSessionDispatch(
+        string payload,
+        out SessionDispatchAction sessionAction)
+    {
+        sessionAction = default;
+        if (payload.Length > MaxLspFrameBytes || Encoding.UTF8.GetByteCount(payload) > MaxLspFrameBytes)
+            return false;
+
+        try
+        {
+            using var document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("method", out var methodElement)
+                || methodElement.ValueKind != JsonValueKind.String
+                || methodElement.GetString() is not { } method)
+            {
+                return false;
+            }
+
+            var hasId = root.TryGetProperty("id", out var idElement);
+            if (hasId && !LspProtocol.TryParseRequestId(payload, idElement, out _, out _))
+                return false;
+
+            sessionAction = BeginSessionDispatch(method, hasId);
+            InboundSessionDispatchReservedForTesting?.Invoke(method);
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
     private bool TryHandleCancellationNotification(string payload)
     {
         try
@@ -660,7 +752,8 @@ internal sealed partial class LspServer : IDisposable
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("method", out var method)
                 || method.ValueKind != JsonValueKind.String
-                || !string.Equals(method.GetString(), "$/cancelRequest", StringComparison.Ordinal))
+                || !string.Equals(method.GetString(), "$/cancelRequest", StringComparison.Ordinal)
+                || root.TryGetProperty("id", out _))
             {
                 return false;
             }
@@ -706,7 +799,12 @@ internal sealed partial class LspServer : IDisposable
         return null;
     }
 
-    internal JsonObject? CreateOverloadResponse(string payload)
+    internal JsonObject? CreateOverloadResponse(string payload) =>
+        CreateOverloadResponse(payload, reservedSessionAction: null);
+
+    private JsonObject? CreateOverloadResponse(
+        string payload,
+        SessionDispatchAction? reservedSessionAction)
     {
         try
         {
@@ -722,6 +820,20 @@ internal sealed partial class LspServer : IDisposable
             }
 
             var methodName = method.GetString();
+            if (reservedSessionAction.HasValue)
+            {
+                return reservedSessionAction.Value switch
+                {
+                    SessionDispatchAction.ServerNotInitialized =>
+                        Error(id, LspServerNotInitializedCode, LspServerNotInitializedMessage),
+                    SessionDispatchAction.InvalidRequest =>
+                        Error(id, JsonRpcInvalidRequestCode, JsonRpcInvalidRequestMessage),
+                    SessionDispatchAction.Dispatch =>
+                        Error(id, JsonRpcServerBusyCode, JsonRpcServerBusyMessage),
+                    _ => null,
+                };
+            }
+
             lock (_sessionStateGate)
             {
                 if (string.Equals(methodName, "initialize", StringComparison.Ordinal))
@@ -890,15 +1002,13 @@ internal sealed partial class LspServer : IDisposable
 
                         _sessionState = LspSessionState.Initializing;
                         _activeSessionDispatches++;
-                        return SessionDispatchAction.Dispatch;
+                        return SessionDispatchAction.Initialize;
                     }
 
                     if (string.Equals(method, "exit", StringComparison.Ordinal) && !hasId)
                     {
                         _sessionState = LspSessionState.Exited;
-                        _exitRequestedBeforeShutdown = true;
-                        _exitRequested = true;
-                        return SessionDispatchAction.Ignore;
+                        return SessionDispatchAction.ExitBeforeShutdown;
                     }
 
                     return hasId
@@ -916,9 +1026,7 @@ internal sealed partial class LspServer : IDisposable
                     if (string.Equals(method, "exit", StringComparison.Ordinal) && !hasId)
                     {
                         _sessionState = LspSessionState.Exited;
-                        _exitRequestedBeforeShutdown = true;
-                        _exitRequested = true;
-                        return SessionDispatchAction.Ignore;
+                        return SessionDispatchAction.ExitBeforeShutdown;
                     }
 
                     return hasId
@@ -931,6 +1039,12 @@ internal sealed partial class LspServer : IDisposable
                         return hasId
                             ? SessionDispatchAction.InvalidRequest
                             : SessionDispatchAction.Ignore;
+                    }
+
+                    if (string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
+                        && hasId)
+                    {
+                        return SessionDispatchAction.InvalidRequest;
                     }
 
                     if (string.Equals(method, "shutdown", StringComparison.Ordinal))
@@ -948,9 +1062,7 @@ internal sealed partial class LspServer : IDisposable
                             return SessionDispatchAction.InvalidRequest;
 
                         _sessionState = LspSessionState.Exited;
-                        _exitRequestedBeforeShutdown = true;
-                        _exitRequested = true;
-                        return SessionDispatchAction.Ignore;
+                        return SessionDispatchAction.ExitBeforeShutdown;
                     }
 
                     _activeSessionDispatches++;
@@ -960,8 +1072,7 @@ internal sealed partial class LspServer : IDisposable
                     if (string.Equals(method, "exit", StringComparison.Ordinal) && !hasId)
                     {
                         _sessionState = LspSessionState.Exited;
-                        _exitRequested = true;
-                        return SessionDispatchAction.Ignore;
+                        return SessionDispatchAction.Exit;
                     }
 
                     return hasId
@@ -972,6 +1083,13 @@ internal sealed partial class LspServer : IDisposable
                     return SessionDispatchAction.Ignore;
             }
         }
+    }
+
+    private JsonObject? HandleExit(bool exitBeforeShutdown)
+    {
+        _exitRequestedBeforeShutdown = exitBeforeShutdown;
+        _exitRequested = true;
+        return null;
     }
 
     private void CompleteInitialization()

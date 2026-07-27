@@ -379,6 +379,9 @@ public class LspServerTests
                 server.CreateOverloadResponse(symbolRequest)!["error"]!["code"]!.GetValue<int>());
             Assert.Null(server.CreateOverloadResponse(
                 "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"shutdown\"}"));
+            var idBearingCancellation = server.HandleMessage(
+                "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"$/cancelRequest\",\"params\":{\"id\":1}}");
+            Assert.Equal(-32600, idBearingCancellation!["error"]!["code"]!.GetValue<int>());
 
             var duplicateInitialize = server.HandleMessage(
                 "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}");
@@ -505,6 +508,208 @@ public class LspServerTests
         finally
         {
             release.Set();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_PipelinedMessagesUseReceiveTimeLifecycleState_Issue4849()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_pipelined_lifecycle");
+        using var pipelinedMessagesReserved = new CountdownEvent(2);
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "pipelined.cs");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot)
+            {
+                InboundSessionDispatchReservedForTesting = method =>
+                {
+                    if (string.Equals(method, "workspace/symbol", StringComparison.Ordinal)
+                        || string.Equals(method, "textDocument/didOpen", StringComparison.Ordinal))
+                    {
+                        pipelinedMessagesReserved.Signal();
+                    }
+                },
+            };
+            var didOpen = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                method = "textDocument/didOpen",
+                @params = new
+                {
+                    textDocument = new
+                    {
+                        uri = new Uri(sourcePath).AbsoluteUri,
+                        text = "class Pipelined { }\n",
+                    },
+                },
+            });
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(
+                    Frame("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}")),
+                Encoding.UTF8.GetBytes(
+                    Frame("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"Needle\"}}")
+                    + Frame(didOpen)));
+            using var output = new FirstWriteGateMemoryStream();
+
+            try
+            {
+                var runTask = server.RunAsync(input, output);
+                await output.WaitForBlockedWriteAsync().WaitAsync(TestDeterminism.DefaultTimeout);
+                input.ReleaseSuffix();
+                Assert.True(pipelinedMessagesReserved.Wait(TestDeterminism.DefaultTimeout));
+                output.ReleaseWrites();
+
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    await runTask.WaitAsync(TestDeterminism.DefaultTimeout));
+            }
+            finally
+            {
+                input.ReleaseSuffix();
+                output.ReleaseWrites();
+            }
+
+            var messages = ReadLspMessages(output);
+            Assert.Contains(messages, entry => entry.Message["id"]?.GetValue<int>() == 1);
+            var preInitialize = Assert.Single(
+                messages,
+                entry => entry.Message["id"]?.GetValue<int>() == 2);
+            Assert.Equal(
+                LspServer.LspServerNotInitializedCode,
+                preInitialize.Message["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(0, server.LiveDocumentBytesForTests);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IdBearingCancellationUsesRequestLifecycleErrors_Issue4849()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_cancel_request_lifecycle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+            const string cancelBeforeInitialize =
+                "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"$/cancelRequest\",\"params\":{\"id\":1}}";
+            using var beforeInput = new MemoryStream(Encoding.UTF8.GetBytes(Frame(cancelBeforeInitialize)));
+            using var beforeOutput = new MemoryStream();
+
+            Assert.Equal(CommandExitCodes.Success, server.Run(beforeInput, beforeOutput));
+            var beforeResponse = Assert.Single(ReadLspMessages(beforeOutput));
+            Assert.Equal(
+                LspServer.LspServerNotInitializedCode,
+                beforeResponse.Message["error"]!["code"]!.GetValue<int>());
+
+            InitializeSession(server);
+            const string shutdown = "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"shutdown\"}";
+            const string cancelAfterShutdown =
+                "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"$/cancelRequest\",\"params\":{\"id\":1}}";
+            const string exit = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+            using var afterInput = new MemoryStream(Encoding.UTF8.GetBytes(
+                Frame(shutdown) + Frame(cancelAfterShutdown) + Frame(exit)));
+            using var afterOutput = new MemoryStream();
+
+            Assert.Equal(CommandExitCodes.Success, server.Run(afterInput, afterOutput));
+            var afterMessages = ReadLspMessages(afterOutput);
+            Assert.Contains(afterMessages, entry => entry.Message["id"]?.GetValue<int>() == 8);
+            var afterResponse = Assert.Single(
+                afterMessages,
+                entry => entry.Message["id"]?.GetValue<int>() == 9);
+            Assert.Equal(-32600, afterResponse.Message["error"]!["code"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_QueuedShutdownRejectsLaterOverloadRequests_Issue4849()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_queued_shutdown");
+        using var requestEntered = new ManualResetEventSlim(false);
+        using var shutdownReserved = new ManualResetEventSlim(false);
+        using var requestRelease = new ManualResetEventSlim(false);
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot)
+            {
+                InboundSessionDispatchReservedForTesting = method =>
+                {
+                    if (string.Equals(method, "shutdown", StringComparison.Ordinal))
+                        shutdownReserved.Set();
+                },
+                BeforeSymbolRequestForTesting = cancellationToken =>
+                {
+                    requestEntered.Set();
+                    requestRelease.Wait(cancellationToken);
+                },
+            };
+            InitializeSession(server);
+            var frames = new StringBuilder(Frame(
+                "{\"jsonrpc\":\"2.0\",\"id\":\"active-4849\",\"method\":\"workspace/symbol\",\"params\":{\"query\":\"\"}}"));
+            for (var i = 0; i < 40; i++)
+            {
+                frames.Append(Frame(JsonSerializer.Serialize(new
+                {
+                    jsonrpc = "2.0",
+                    id = 484900 + i,
+                    method = "unknown",
+                })));
+            }
+            frames.Append(Frame("{\"jsonrpc\":\"2.0\",\"id\":484950,\"method\":\"shutdown\"}"));
+            frames.Append(Frame("{\"jsonrpc\":\"2.0\",\"id\":484951,\"method\":\"unknown\"}"));
+            frames.Append(Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"));
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(frames.ToString()));
+            using var output = new MemoryStream();
+
+            var runTask = server.RunAsync(input, output);
+            Assert.True(requestEntered.Wait(TestDeterminism.DefaultTimeout));
+            Assert.True(shutdownReserved.Wait(TestDeterminism.DefaultTimeout));
+            requestRelease.Set();
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                await runTask.WaitAsync(TestDeterminism.DefaultTimeout));
+            var messages = ReadLspMessages(output);
+            var shutdown = Assert.Single(
+                messages,
+                entry => entry.Message["id"] is JsonValue responseId
+                    && responseId.TryGetValue<int>(out var value)
+                    && value == 484950);
+            Assert.Null(shutdown.Message["result"]);
+            var afterShutdown = Assert.Single(
+                messages,
+                entry => entry.Message["id"] is JsonValue responseId
+                    && responseId.TryGetValue<int>(out var value)
+                    && value == 484951);
+            Assert.Equal(-32600, afterShutdown.Message["error"]!["code"]!.GetValue<int>());
+        }
+        finally
+        {
+            requestRelease.Set();
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -1918,7 +2123,7 @@ public class LspServerTests
     }
 
     [Fact]
-    public void Run_ShutdownThenExit_StopsBeforeLaterFrames_Issue4849()
+    public async Task RunAsync_ShutdownThenExit_StopsBeforeLaterFrames_Issue4849()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_shutdown_exit");
         try
@@ -1933,17 +2138,21 @@ public class LspServerTests
             const string postShutdownNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{}}";
             const string postShutdownRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"Needle\"}}";
             const string lateInitializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"initialize\",\"params\":{}}";
-            using var input = new MemoryStream(Encoding.UTF8.GetBytes(
-                Frame(initializeRequest)
-                + Frame(initializedNotification)
-                + Frame(shutdownRequest)
-                + Frame(postShutdownNotification)
-                + Frame(postShutdownRequest)
-                + Frame(exitNotification)
-                + Frame(lateInitializeRequest)));
-            using var output = new MemoryStream();
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(Frame(initializeRequest)),
+                Encoding.UTF8.GetBytes(
+                    Frame(initializedNotification)
+                    + Frame(shutdownRequest)
+                    + Frame(postShutdownNotification)
+                    + Frame(postShutdownRequest)
+                    + Frame(exitNotification)
+                    + Frame(lateInitializeRequest)));
+            using var output = new SignalingMemoryStream();
 
-            var exitCode = server.Run(input, output);
+            var runTask = server.RunAsync(input, output);
+            await output.WaitForWriteAsync().WaitAsync(TestDeterminism.DefaultTimeout);
+            input.ReleaseSuffix();
+            var exitCode = await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             output.Position = 0;

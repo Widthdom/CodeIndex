@@ -433,10 +433,12 @@ inventing language-server analysis.
 `LspServer` uses one lock-protected lifecycle state machine across ordinary
 dispatch, the cancellation fast path, and queue-overload responses. Its phases
 are before-initialize, initializing, running, shutdown, and exited. Only the
-first `initialize` request can enter initialization; shutdown changes phase
-before waiting for active dispatches, then disposes an owned query context and
-reader exactly once. After shutdown, requests receive `-32600`, notifications
-are ignored, and only the `exit` notification completes the normal lifecycle.
+first `initialize` request can enter initialization. The transport reserves each
+frame's lifecycle action in receive order, and initialization becomes running
+only after the response is written. Shutdown changes phase before waiting for
+active dispatches, then disposes an owned query context and reader exactly once.
+After shutdown, requests receive `-32600`, notifications are ignored, and only
+the `exit` notification completes the normal lifecycle.
 Disk-backed position-line caching must enforce its 4 MiB input limit while
 streaming, not only through a pre-read `Length` check. Bytes beyond the limit
 must never reach text decoding, including when a shared file grows concurrently,
@@ -3611,9 +3613,11 @@ analysis を作り上げず、空配列または null を返す。
 `LspServer` は通常 dispatch、cancellation fast path、queue-overload response の全経路で、
 1 つの lock 保護された lifecycle state machine を使う。phase は before-initialize、
 initializing、running、shutdown、exited である。最初の `initialize` request だけが初期化へ
-遷移できる。shutdown は active dispatch の完了待ちより先に phase を変更し、その後に所有する
-query context と reader を正確に 1 回だけ破棄する。shutdown 後の request は `-32600` を返し、
-notification は無視し、`exit` notification だけが正常な lifecycle を完了させる。
+遷移できる。transport は各 frame の lifecycle action を受信順で予約し、initialize response の
+書き込み後にだけ running へ遷移する。shutdown は active dispatch の完了待ちより先に phase を
+変更し、その後に所有する query context と reader を正確に 1 回だけ破棄する。shutdown 後の
+request は `-32600` を返し、notification は無視し、`exit` notification だけが正常な lifecycle を
+完了させる。
 disk 上の position-line cache は、事前の `Length` check だけでなく streaming 中も 4 MiB の
 input 上限を強制する必要がある。共有 file が同時に増大する場合も上限超過 byte を text decode に
 渡してはならず、bounded な failure reason は `position_file_too_large` のままとする。
