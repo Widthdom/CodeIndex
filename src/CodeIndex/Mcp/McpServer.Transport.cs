@@ -925,6 +925,8 @@ public partial class McpServer : IDisposable
         }
         finally
         {
+            foreach (var state in deferredInitializeCommits.GetRegisteredStates())
+                ReleaseInitializeAttempt(state.InitializeAttemptId);
             frameCorrelationScope?.Dispose();
         }
     }

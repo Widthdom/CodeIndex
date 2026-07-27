@@ -18,6 +18,14 @@ namespace CodeIndex.Mcp;
 
 public partial class McpServer : IDisposable
 {
+    private enum McpSessionPhase
+    {
+        PreInitialize,
+        Initializing,
+        Initialized,
+        ShuttingDown,
+        Closed,
+    }
 
     /// <summary>
     /// Handle the initialize handshake.
@@ -28,33 +36,63 @@ public partial class McpServer : IDisposable
         JsonNode? _params,
         DeferredInitializeCommits? deferredInitializeCommits)
     {
-        var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
-        if (negotiated == null)
-        {
-            // No overlap between the client's requested version and this server's supported
-            // set. Issue #1554: respond with structured `-32602` (invalid params) carrying the
-            // requested + supported versions in `error.data` so clients can branch on it
-            // instead of guessing why the handshake silently failed. Reject before committing
-            // any client/session snapshot so a failed re-initialize cannot corrupt the active
-            // session (#4536, #4540).
-            // クライアント要求バージョンとサーバー対応集合に重なりがない場合。Issue #1554:
-            // クライアントが分岐判定できるよう、`error.data` に要求バージョンと対応バージョン
-            // を入れた -32602 (invalid params) を返す。client/session snapshot の commit 前に
-            // 拒否し、失敗した re-initialize で有効 session を壊さない (#4536, #4540)。
-            DeferFrameLog(BuildUnsupportedProtocolLog(requestedVersion));
-            return CreateUnsupportedProtocolError(id, requestedVersion);
-        }
+        if (!TryBeginInitialize(out var initializeAttemptId, out var currentPhase))
+            return CreateDuplicateInitializeError(id, currentPhase);
 
-        // Parse caller-controlled identity, capability, and root metadata into a detached
-        // draft. None of it becomes observable session state until protocol negotiation and
-        // complete success-response serialization have both succeeded (#4540).
-        // caller が制御する identity / capability / root metadata は切り離した draft へ解析する。
-        // protocol 交渉と success response の serialization が完了するまで公開しない (#4540)。
-        var initializeState = BuildInitializeState(_params);
-        var result = new JsonObject
+        try
         {
-            ["protocolVersion"] = negotiated,
-            ["capabilities"] = new JsonObject
+            var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
+            if (negotiated == null)
+            {
+                // No overlap between the client's requested version and this server's supported
+                // set. Release the initialization claim so a corrected handshake can retry.
+                // クライアント要求バージョンとサーバー対応集合に重なりがない場合。修正した
+                // handshake が再試行できるよう initialization claim を解放する。
+                ReleaseInitializeAttempt(initializeAttemptId);
+                DeferFrameLog(BuildUnsupportedProtocolLog(requestedVersion));
+                return CreateUnsupportedProtocolError(id, requestedVersion);
+            }
+
+            // Parse caller-controlled identity, capability, and root metadata into a detached
+            // draft. None of it becomes observable session state until protocol negotiation and
+            // complete success-response serialization have both succeeded (#4540).
+            // caller が制御する identity / capability / root metadata は切り離した draft へ解析する。
+            // protocol 交渉と success response の serialization 成功まで公開しない (#4540)。
+            var initializeState = BuildInitializeState(
+                _params,
+                negotiated,
+                initializeAttemptId);
+            var result = new JsonObject
+            {
+                ["protocolVersion"] = negotiated,
+                ["capabilities"] = BuildServerCapabilities(negotiated),
+                ["serverInfo"] = new JsonObject
+                {
+                    ["name"] = "cdidx",
+                    ["version"] = _version
+                },
+                // Server instructions — tool-selection guidance for AI clients
+                // サーバー指示 — AIクライアント向けツール選択ガイダンス
+                ["instructions"] = BuildInstructions()
+            };
+            var response = CreateSuccessResponse(true, id, result);
+            if (deferredInitializeCommits is null)
+                CommitInitializeState(initializeState);
+            else
+                deferredInitializeCommits.Register(response, initializeState);
+            return response;
+        }
+        catch
+        {
+            ReleaseInitializeAttempt(initializeAttemptId);
+            throw;
+        }
+    }
+
+    private static JsonObject BuildServerCapabilities(string negotiatedProtocolVersion)
+        => negotiatedProtocolVersion switch
+        {
+            "2025-06-18" or "2025-03-26" or "2024-11-05" => new JsonObject
             {
                 ["tools"] = new JsonObject
                 {
@@ -70,28 +108,13 @@ public partial class McpServer : IDisposable
                     ["listChanged"] = false
                 },
                 ["logging"] = new JsonObject(),
-                ["roots"] = new JsonObject
-                {
-                    ["listChanged"] = true
-                },
-                ["sampling"] = new JsonObject()
             },
-            ["serverInfo"] = new JsonObject
-            {
-                ["name"] = "cdidx",
-                ["version"] = _version
-            },
-            // Server instructions — tool-selection guidance for AI clients
-            // サーバー指示 — AIクライアント向けツール選択ガイダンス
-            ["instructions"] = BuildInstructions()
+            _ => throw new InvalidOperationException(
+                $"Cannot build MCP server capabilities for unsupported protocol version '{negotiatedProtocolVersion}'."),
         };
-        var response = CreateSuccessResponse(true, id, result);
-        if (deferredInitializeCommits is null)
-            CommitInitializeState(initializeState);
-        else
-            deferredInitializeCommits.Register(response, initializeState);
-        return response;
-    }
+
+    private static bool SupportsClientRootsNegotiation(string? negotiatedProtocolVersion)
+        => negotiatedProtocolVersion is "2025-06-18" or "2025-03-26" or "2024-11-05";
 
     /// <summary>
     /// Build a detached snapshot of caller-controlled initialize metadata. The caller must
@@ -99,7 +122,10 @@ public partial class McpServer : IDisposable
     /// caller が制御する initialize metadata の切り離した snapshot を構築する。呼び出し元は
     /// protocol 交渉と success response の serialization 成功後に限って commit すること。
     /// </summary>
-    private PendingInitializeState BuildInitializeState(JsonNode? initializeParams)
+    private PendingInitializeState BuildInitializeState(
+        JsonNode? initializeParams,
+        string negotiatedProtocolVersion,
+        long initializeAttemptId)
     {
         BoundedMcpText? clientNameDisplay = null;
         BoundedMcpText? clientVersionDisplay = null;
@@ -184,6 +210,8 @@ public partial class McpServer : IDisposable
         }
 
         return new PendingInitializeState(
+            initializeAttemptId,
+            negotiatedProtocolVersion,
             ResolveCallerIdentity(initializeParams),
             markClientRootsStale,
             clientNameDisplay,
@@ -202,10 +230,14 @@ public partial class McpServer : IDisposable
     {
         lock (_initializeStateGate)
         {
-            var committed = BuildCommittedInitializeState(
-                PublishedInitializeState,
-                state,
-                logCallerSwap: true);
+            var current = PublishedInitializeState;
+            if (current.Phase != McpSessionPhase.Initializing
+                || current.InitializeAttemptId != state.InitializeAttemptId)
+            {
+                return;
+            }
+
+            var committed = BuildCommittedInitializeState(state);
 
             // One release publication makes lifecycle and all negotiated metadata visible
             // together; no reader can observe initialized=true with a partial state (#4540).
@@ -215,29 +247,118 @@ public partial class McpServer : IDisposable
         }
     }
 
-    private InitializeSessionState BuildCommittedInitializeState(
-        InitializeSessionState previous,
-        PendingInitializeState state,
-        bool logCallerSwap)
+    private bool TryBeginInitialize(
+        out long initializeAttemptId,
+        out McpSessionPhase currentPhase)
     {
-        var caller = previous.Caller;
-
-        // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
-        // identity, but reject successful re-initialize attempts that swap named identities.
-        // caller の sticky 制御: "unknown" から名前付き ID への昇格だけを許可し、成功した
-        // re-initialize による名前付き ID 同士のスワップは拒否する。
-        if (caller == "unknown")
+        lock (_initializeStateGate)
         {
-            caller = state.ResolvedCaller;
-        }
-        else if (state.ResolvedCaller != caller && state.ResolvedCaller != "unknown" && logCallerSwap)
-        {
-            DeferFrameLog(BuildCallerSwapRejectionLog(caller, state.ResolvedCaller));
-        }
+            var current = PublishedInitializeState;
+            currentPhase = current.Phase;
+            if (current.Phase != McpSessionPhase.PreInitialize)
+            {
+                initializeAttemptId = 0;
+                return false;
+            }
 
+            initializeAttemptId = ++_nextInitializeAttemptId;
+            Volatile.Write(
+                ref _initializeState,
+                current with
+                {
+                    Phase = McpSessionPhase.Initializing,
+                    InitializeAttemptId = initializeAttemptId,
+                });
+            return true;
+        }
+    }
+
+    private void ReleaseInitializeAttempt(long initializeAttemptId)
+    {
+        lock (_initializeStateGate)
+        {
+            var current = PublishedInitializeState;
+            if (current.Phase != McpSessionPhase.Initializing
+                || current.InitializeAttemptId != initializeAttemptId)
+            {
+                return;
+            }
+
+            Volatile.Write(ref _initializeState, InitializeSessionState.Empty);
+        }
+    }
+
+    private JsonObject CreateDuplicateInitializeError(
+        JsonNode? id,
+        McpSessionPhase currentPhase)
+        => CreateErrorResponse(
+            hasId: true,
+            id,
+            code: -32600,
+            message: currentPhase == McpSessionPhase.Initializing
+                ? "Invalid request: initialize is already in progress for this session."
+                : "Invalid request: initialize has already been completed for this session.",
+            category: McpErrorEnvelope.CategoryInvalidRequest,
+            suggestion: "Reuse the negotiated MCP session, or create a new transport session before sending initialize again.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "duplicate_initialize",
+                ["session_phase"] = FormatSessionPhase(currentPhase),
+            });
+
+    private static string FormatSessionPhase(McpSessionPhase phase)
+        => phase switch
+        {
+            McpSessionPhase.PreInitialize => "pre_initialize",
+            McpSessionPhase.Initializing => "initializing",
+            McpSessionPhase.Initialized => "initialized",
+            McpSessionPhase.ShuttingDown => "shutting_down",
+            McpSessionPhase.Closed => "closed",
+            _ => "unknown",
+        };
+
+    private void MarkSessionShuttingDown()
+    {
+        lock (_initializeStateGate)
+        {
+            var current = PublishedInitializeState;
+            if (current.Phase is McpSessionPhase.ShuttingDown or McpSessionPhase.Closed)
+                return;
+
+            Volatile.Write(
+                ref _initializeState,
+                current with
+                {
+                    Phase = McpSessionPhase.ShuttingDown,
+                    InitializeAttemptId = 0,
+                });
+        }
+    }
+
+    private void MarkSessionClosed()
+    {
+        lock (_initializeStateGate)
+        {
+            var current = PublishedInitializeState;
+            Volatile.Write(
+                ref _initializeState,
+                current with
+                {
+                    Phase = McpSessionPhase.Closed,
+                    InitializeAttemptId = 0,
+                });
+        }
+    }
+
+    private static InitializeSessionState BuildCommittedInitializeState(
+        PendingInitializeState state)
+    {
         return new InitializeSessionState(
-            true,
-            caller,
+            McpSessionPhase.Initialized,
+            0,
+            state.NegotiatedProtocolVersion,
+            state.ResolvedCaller,
             state.ClientNameDisplay,
             state.ClientVersionDisplay,
             state.ClientCapabilities,
@@ -248,11 +369,13 @@ public partial class McpServer : IDisposable
             state.ClientRoots.ToArray(),
             state.ClientRootDiagnostics.ToArray(),
             state.ClientRootsTruncated,
-            state.MarkClientRootsStale || previous.ClientRootsStale);
+            state.MarkClientRootsStale);
     }
 
     private sealed record InitializeSessionState(
-        bool Initialized,
+        McpSessionPhase Phase,
+        long InitializeAttemptId,
+        string? NegotiatedProtocolVersion,
         string Caller,
         BoundedMcpText? ClientNameDisplay,
         BoundedMcpText? ClientVersionDisplay,
@@ -267,7 +390,9 @@ public partial class McpServer : IDisposable
         bool ClientRootsStale)
     {
         internal static InitializeSessionState Empty { get; } = new(
-            false,
+            McpSessionPhase.PreInitialize,
+            0,
+            null,
             "unknown",
             null,
             null,
@@ -281,12 +406,15 @@ public partial class McpServer : IDisposable
             false,
             true);
 
+        internal bool Initialized => Phase == McpSessionPhase.Initialized;
         internal string? ClientName => ClientNameDisplay?.Text;
         internal string? ClientVersion => ClientVersionDisplay?.Text;
         internal int ClientRootCount => ClientRoots.Length;
     }
 
     private sealed record PendingInitializeState(
+        long InitializeAttemptId,
+        string NegotiatedProtocolVersion,
         string ResolvedCaller,
         bool MarkClientRootsStale,
         BoundedMcpText? ClientNameDisplay,
@@ -408,6 +536,12 @@ public partial class McpServer : IDisposable
                     .Select(entry => entry.State)
                     .ToArray();
             }
+        }
+
+        internal PendingInitializeState[] GetRegisteredStates()
+        {
+            lock (_gate)
+                return _entries.Select(static entry => entry.State).ToArray();
         }
 
         private static bool IsIncludedResponse(JsonNode serializedResponse, JsonNode candidate)

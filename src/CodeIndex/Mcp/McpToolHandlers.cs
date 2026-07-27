@@ -1416,7 +1416,10 @@ public partial class McpServer
     private async Task RefreshClientRootsIfNeededAsync()
     {
         var expectedState = CurrentInitializeState;
-        if (!expectedState.ClientRootsStale || !HasClientCapability(expectedState, "roots"))
+        if (expectedState.Phase != McpSessionPhase.Initialized
+            || !expectedState.ClientRootsStale
+            || !SupportsClientRootsNegotiation(expectedState.NegotiatedProtocolVersion)
+            || !HasClientCapability(expectedState, "roots"))
             return;
 
         var result = await SendClientRequestAsync("roots/list", null, _currentRequestToken.Value).ConfigureAwait(false);
@@ -1455,6 +1458,19 @@ public partial class McpServer
                     ClientRootsStale = false,
                 });
             _ = frameInitializeState?.TryRefreshClientRoots(expectedState, refreshedRoots);
+        }
+    }
+
+    private async Task RefreshClientRootsAfterHandshakeAsync()
+    {
+        try
+        {
+            await RefreshClientRootsIfNeededAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or JsonException)
+        {
+            WriteMcpLogLine(
+                $"[cdidx-mcp] Client roots negotiation failed ({ex.GetType().Name}); retaining the stale roots boundary.");
         }
     }
 

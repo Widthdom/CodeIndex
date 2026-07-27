@@ -5831,7 +5831,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public async Task RunAsync_StdioBatchInitializeFencesAdjacentRequests_Issue4545()
+    public async Task RunAsync_StdioBatchDuplicateInitializeFencesAdjacentRequests_Issue4545_Issue4848()
     {
         using var server = new McpServer(
             _dbPath,
@@ -5899,11 +5899,14 @@ public sealed class Caller
         var responseText = Assert.Single(transport.WrittenFrames, static frame => frame is not null);
         var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
         Assert.Equal([454520, 454521, 454522], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
-        Assert.All(responses, static response => Assert.NotNull(response!["result"]));
+        Assert.NotNull(responses[0]!["result"]);
+        Assert.Equal(-32600, responses[1]!["error"]!["code"]!.GetValue<int>());
         Assert.Equal(
-            "batch-fence-client",
-            responses[2]!["result"]!["structuredContent"]!["mcp_session"]!["client_info"]!["name"]!.GetValue<string>());
-        Assert.Equal("batch-fence-client", server.CurrentCaller);
+            "duplicate_initialize",
+            responses[1]!["error"]!["data"]!["reason"]!.GetValue<string>());
+        Assert.NotNull(responses[2]!["result"]);
+        Assert.Null(responses[2]!["result"]!["structuredContent"]!["mcp_session"]!["client_info"]);
+        Assert.Equal("unknown", server.CurrentCaller);
     }
 
     [Fact]
@@ -7160,7 +7163,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public async Task ProcessFrameAsync_BatchInitializeDoesNotFlowBackIntoTimedOutPriorGeneration_Issue4540_Issue4545()
+    public async Task ProcessFrameAsync_BatchDuplicateInitializeDoesNotReplaceTimedOutPriorGeneration_Issue4540_Issue4545_Issue4848()
     {
         using var server = new McpServer(
             _dbPath,
@@ -7215,9 +7218,12 @@ public sealed class Caller
             var responseText = await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
             var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
             Assert.Equal("Request timed out", responses[0]!["error"]!["message"]!.GetValue<string>());
-            Assert.NotNull(responses[1]!["result"]);
+            Assert.Equal(-32600, responses[1]!["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(
+                "duplicate_initialize",
+                responses[1]!["error"]!["data"]!["reason"]!.GetValue<string>());
             Assert.Equal("ok", responses[2]!["result"]!["status"]!.GetValue<string>());
-            Assert.Equal("later-generation", server.CurrentCaller);
+            Assert.Equal("unknown", server.CurrentCaller);
         }
         finally
         {

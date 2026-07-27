@@ -804,9 +804,6 @@ public partial class McpServer : IDisposable
     internal static string BuildRateLimitedLog(string toolName, string caller, long retryAfterMs) =>
         $"[cdidx-mcp] Rate limit exceeded: tool='{BoundToolNameForDisplay(toolName).Text}', caller='{BoundClientIdentityForDisplay(caller).Text}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
 
-    internal static string BuildCallerSwapRejectionLog(string current, string attempted) =>
-        $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{BoundClientIdentityForDisplay(attempted).Text}': retaining original caller '{BoundClientIdentityForDisplay(current).Text}' so rate-limit buckets cannot be reset mid-session.";
-
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";
 

@@ -463,31 +463,6 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void BuildCallerSwapRejectionLog_IsActionable()
-    {
-        var log = McpServer.BuildCallerSwapRejectionLog("first-client", "second-client");
-        Assert.Contains("Ignoring re-initialize", log);
-        Assert.Contains("first-client", log);
-        Assert.Contains("second-client", log);
-    }
-
-    [Fact]
-    public void BuildCallerSwapRejectionLog_TruncatesClientInfoIdentities_Issue3120()
-    {
-        var current = new string('c', McpBoundedText.MaxClientIdentityChars + 25);
-        var attempted = new string('a', McpBoundedText.MaxClientIdentityChars + 25);
-        var currentDisplay = McpBoundedText.ForDisplay(current, McpBoundedText.MaxClientIdentityChars);
-        var attemptedDisplay = McpBoundedText.ForDisplay(attempted, McpBoundedText.MaxClientIdentityChars);
-
-        var log = McpServer.BuildCallerSwapRejectionLog(current, attempted);
-
-        Assert.DoesNotContain(current, log, StringComparison.Ordinal);
-        Assert.DoesNotContain(attempted, log, StringComparison.Ordinal);
-        Assert.Contains(currentDisplay.Text, log);
-        Assert.Contains(attemptedDisplay.Text, log);
-    }
-
-    [Fact]
     public void BuildRateLimitedLog_IsActionable()
     {
         var log = McpServer.BuildRateLimitedLog("search", "client-a", 250);
