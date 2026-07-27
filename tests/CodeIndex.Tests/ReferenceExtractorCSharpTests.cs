@@ -793,7 +793,7 @@ public partial class ReferenceExtractorTests
 
                 public void Wire(IEnumerable<int> xs)
                 {
-                    Action a = Fire;
+                    Action a = @Fire;
                     Func<int, int> f = Compute;
                     var g = this.Compute;
                     var h = new Func<int, int>(Compute);
@@ -812,6 +812,16 @@ public partial class ReferenceExtractorTests
             Assert.Equal("function", reference.ContainerKind);
             Assert.Equal("Wire", reference.ContainerName);
         });
+        var escapedMethodGroupLine = content
+            .Split('\n')
+            .Single(line => line.Contains("@Fire", StringComparison.Ordinal));
+        var escapedMethodGroup = Assert.Single(references.Where(r =>
+            r.SymbolName == "Fire"
+            && r.ReferenceKind == "call"));
+        Assert.Equal(
+            escapedMethodGroupLine.IndexOf("@Fire", StringComparison.Ordinal) + 1,
+            escapedMethodGroup.Column);
+        Assert.Equal("@Fire".Length, escapedMethodGroup.SpanLength);
     }
 
     [Fact]

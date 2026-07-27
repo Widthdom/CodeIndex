@@ -54,7 +54,8 @@ public static partial class ReferenceExtractor
                 line.Context,
                 line.LineNumber,
                 callContainer,
-                line.Language);
+                line.Language,
+                sourceLength: name.Length);
         };
 
     private static Action<string, int> CreateGradleDslReferenceEmitter(
@@ -73,7 +74,8 @@ public static partial class ReferenceExtractor
                 line.Context,
                 line.LineNumber,
                 callContainer,
-                line.Language);
+                line.Language,
+                sourceLength: name.Length);
         };
 
     private static void EmitCoreCallReferences(CoreCallReferenceContext call)

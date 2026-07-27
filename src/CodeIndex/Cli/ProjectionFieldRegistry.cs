@@ -239,9 +239,7 @@ internal static class ProjectionFieldRegistry
         var resultFields = isCallerCommand
             ? GetJsonFieldNames<CallerResult>()
             : GetJsonFieldNames<CalleeResult>();
-        var compactFields = isCallerCommand
-            ? new[] { "file", "line", "column" }
-            : ["file", "line"];
+        string[] compactFields = ["file", "line", "column"];
         return Create(
             command,
             compactFields,
@@ -253,9 +251,8 @@ internal static class ProjectionFieldRegistry
                     "reference_extraction_limits", "reference_graph_complete",
                     "reference_extraction_cap_hits")
                     .Alias("file", "path")
-                    .Alias("line", "first_line");
-                if (isCallerCommand)
-                    builder.Alias("column", "first_column");
+                    .Alias("line", "first_line")
+                    .Alias("column", "first_column");
             });
     }
 

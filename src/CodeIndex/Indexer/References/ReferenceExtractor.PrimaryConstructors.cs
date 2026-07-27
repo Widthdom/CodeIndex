@@ -42,7 +42,8 @@ public static partial class ReferenceExtractor
         string referenceKind,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        int? sourceLength = null)
     {
         var dedupeKey = CreateReferenceDedupeKey(fileId, null, lineNumber, column, referenceKind, name, container);
         if (!seen.Add(dedupeKey))
@@ -55,6 +56,7 @@ public static partial class ReferenceExtractor
             ReferenceKind = referenceKind,
             Line = lineNumber,
             Column = column,
+            SpanLength = Math.Max(1, sourceLength ?? name.Length),
             Context = context,
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
@@ -96,7 +98,17 @@ public static partial class ReferenceExtractor
                 continue;
 
             var container = resolveContainerForColumn(nameGroup.Index);
-            AddChainReference(references, seen, fileId, name, nameGroup.Index, "call", context, lineNumber, container);
+            AddChainReference(
+                references,
+                seen,
+                fileId,
+                name,
+                nameGroup.Index + 1,
+                "call",
+                context,
+                lineNumber,
+                container,
+                rawName.Length);
         }
     }
 

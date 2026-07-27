@@ -2076,6 +2076,93 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallees_PreservesFirstPreciseCallSiteAndLegacyLineOnlyFallback_Issue4841()
+    {
+        const string targetName = "Issue4841Target";
+        const string callerName = "Issue4841Caller";
+        const string callLine = "    void Issue4841Caller() { var text = \"日本語\";\tIssue4841Target(); Issue4841Target(); }";
+        const string methodGroupLine = "    void Issue4841MethodGroupCaller() { System.Action callback = @Issue4841Target; }";
+        var source = string.Join('\n',
+            "class Issue4841Probe",
+            "{",
+            "    void Issue4841Target() { }",
+            callLine,
+            methodGroupLine,
+            "}",
+            "class Issue4841VeryLongParent { }",
+            "class Issue4841Child : Issue4841VeryLongParent",
+            "{",
+            "    Issue4841Child() : base() { }",
+            "}",
+            "");
+        var expectedColumn = callLine.IndexOf(targetName, StringComparison.Ordinal) + 1;
+        var expectedMethodGroupColumn = methodGroupLine.IndexOf($"@{targetName}", StringComparison.Ordinal) + 1;
+        InsertIndexedFile("src/Issue4841Probe.cs", "csharp", source);
+
+        var precise = Assert.Single(_reader.GetCallees(callerName, lang: "csharp", exact: true));
+
+        Assert.Equal(4, precise.FirstLine);
+        Assert.Equal(expectedColumn, precise.FirstColumn);
+        Assert.Equal(targetName.Length, precise.FirstLength);
+        Assert.Equal(2, precise.ReferenceCount);
+
+        var methodGroup = Assert.Single(
+            _reader.GetCallees("Issue4841MethodGroupCaller", lang: "csharp", exact: true),
+            row => row.CalleeName == targetName);
+        Assert.Equal(5, methodGroup.FirstLine);
+        Assert.Equal(expectedMethodGroupColumn, methodGroup.FirstColumn);
+        Assert.Equal(targetName.Length + 1, methodGroup.FirstLength);
+        Assert.Equal(1, methodGroup.ReferenceCount);
+
+        var constructorChain = Assert.Single(
+            _reader.GetCallees("Issue4841Child", lang: "csharp", exact: true),
+            row => row.CalleeName == "Issue4841VeryLongParent");
+        Assert.Equal("Issue4841VeryLongParent", constructorChain.CalleeName);
+        Assert.Equal(10, constructorChain.FirstLine);
+        Assert.Equal(24, constructorChain.FirstColumn);
+        Assert.Equal("base".Length, constructorChain.FirstLength);
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE symbol_references
+                SET span_length = NULL
+                WHERE container_name = @caller
+                  AND symbol_name = @target;
+                """;
+            command.Parameters.AddWithValue("@caller", callerName);
+            command.Parameters.AddWithValue("@target", targetName);
+            Assert.Equal(2, command.ExecuteNonQuery());
+        }
+
+        var spanless = Assert.Single(_reader.GetCallees(callerName, lang: "csharp", exact: true));
+
+        Assert.Equal(expectedColumn, spanless.FirstColumn);
+        Assert.Null(spanless.FirstLength);
+        Assert.Equal(2, spanless.ReferenceCount);
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE symbol_references
+                SET column_number = NULL
+                WHERE container_name = @caller
+                  AND symbol_name = @target;
+                """;
+            command.Parameters.AddWithValue("@caller", callerName);
+            command.Parameters.AddWithValue("@target", targetName);
+            Assert.Equal(2, command.ExecuteNonQuery());
+        }
+
+        var legacy = Assert.Single(_reader.GetCallees(callerName, lang: "csharp", exact: true));
+
+        Assert.Equal(4, legacy.FirstLine);
+        Assert.Null(legacy.FirstColumn);
+        Assert.Null(legacy.FirstLength);
+        Assert.Equal(2, legacy.ReferenceCount);
+    }
+
+    [Fact]
     public void GetCallers_CppFriendReferenceRequiresExplicitKind()
     {
         InsertIndexedFile("src/widget.cpp", "cpp",
