@@ -82,6 +82,12 @@ public static partial class SymbolExtractor
     private static readonly Regex CSharpConstOrStaticReadonlyFieldRegex = new(
         @"(?:\bconst\b|\bstatic\b[^=;]*\breadonly\b|\breadonly\b[^=;]*\bstatic\b)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpExplicitLambdaReturnTypeRegex = new(
+        $@"^(?:{CSharpTypePattern})$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpTypeFollowedByDeclaratorRegex = new(
+        $@"^(?:{CSharpTypePattern})\s+(?<declarator>{CSharpIdentifierPattern})$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool IsCSharpConstOrStaticReadonlyField(string signature)
         => CSharpConstOrStaticReadonlyFieldRegex.IsMatch(signature);

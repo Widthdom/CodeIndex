@@ -46,6 +46,18 @@ public partial class SymbolExtractorTests
                         await Task.Yield();
                         return secondAsyncValue;
                     });
+                    var explicitReturn = Apply(
+                        static int (int explicitValue) => explicitValue + 1);
+                    var explicitAsyncReturn = Apply(
+                        async static Task<int> (int asyncExplicitValue) =>
+                        {
+                            await Task.Yield();
+                            return asyncExplicitValue;
+                        });
+                    var combiningIdentifier = Apply(
+                        static café => café + 1);
+                    var escapedIdentifier = Apply(
+                        static \u0061 => \u0061 + 1);
                     var nested = Apply(
                         static outerValue =>
                             Apply(static innerValue => outerValue + innerValue));
@@ -55,6 +67,10 @@ public partial class SymbolExtractorTests
                         + untyped(1)
                         + asyncStatic(1).Result
                         + asyncThenStatic(1).Result
+                        + explicitReturn(1)
+                        + explicitAsyncReturn(1).Result
+                        + combiningIdentifier(1)
+                        + escapedIdentifier(1)
                         + nested(1));
                 }
 
@@ -73,6 +89,13 @@ public partial class SymbolExtractorTests
             "item",
             "asyncValue",
             "secondAsyncValue",
+            "int",
+            "Task",
+            "explicitValue",
+            "asyncExplicitValue",
+            "café",
+            "a",
+            @"\u0061",
             "outerValue",
             "innerValue",
         };

@@ -2128,7 +2128,8 @@ public static partial class SymbolExtractor
             return false;
 
         int parameterStart;
-        if (matchLine[cursor] == ')')
+        var hasParenthesizedParameters = matchLine[cursor] == ')';
+        if (hasParenthesizedParameters)
         {
             var depth = 1;
             cursor--;
@@ -2150,27 +2151,63 @@ public static partial class SymbolExtractor
         else
         {
             var parameterEnd = cursor + 1;
-            while (cursor >= 0 && IsCSharpLambdaIdentifierCharacter(matchLine[cursor]))
-                cursor--;
-
-            parameterStart = cursor + 1;
-            if (parameterStart == parameterEnd)
+            if (!TryReadCSharpLambdaIdentifierBackward(
+                    matchLine,
+                    ref cursor,
+                    out parameterStart,
+                    out var identifierEnd)
+                || identifierEnd != parameterEnd)
+            {
                 return false;
+            }
         }
 
         cursor = parameterStart - 1;
         SkipCSharpWhitespaceBackward(matchLine, ref cursor);
 
+        if (TryReadCSharpStaticLambdaModifiersBackward(
+                matchLine,
+                cursor,
+                out var modifierStart))
+        {
+            headerStart = modifierStart;
+            headerEnd = arrowIndex + 2;
+            return true;
+        }
+
+        if (!hasParenthesizedParameters
+            || !TryFindCSharpExplicitReturnStaticLambdaModifier(
+                matchLine,
+                parameterStart,
+                out modifierStart))
+        {
+            return false;
+        }
+
+        headerStart = modifierStart;
+        headerEnd = arrowIndex + 2;
+        return true;
+    }
+
+    private static bool TryReadCSharpStaticLambdaModifiersBackward(
+        string text,
+        int cursor,
+        out int modifierStart)
+    {
         var hasStaticModifier = false;
-        var modifierStart = parameterStart;
+        modifierStart = -1;
         for (var modifierCount = 0; modifierCount < 2 && cursor >= 0; modifierCount++)
         {
-            var tokenEnd = cursor + 1;
-            while (cursor >= 0 && IsCSharpLambdaIdentifierCharacter(matchLine[cursor]))
-                cursor--;
+            if (!TryReadCSharpLambdaIdentifierBackward(
+                    text,
+                    ref cursor,
+                    out var tokenStart,
+                    out var tokenEnd))
+            {
+                break;
+            }
 
-            var tokenStart = cursor + 1;
-            var token = matchLine.AsSpan(tokenStart, tokenEnd - tokenStart);
+            var token = text.AsSpan(tokenStart, tokenEnd - tokenStart);
             if (!token.SequenceEqual("static".AsSpan())
                 && !token.SequenceEqual("async".AsSpan()))
             {
@@ -2179,14 +2216,190 @@ public static partial class SymbolExtractor
 
             hasStaticModifier |= token.SequenceEqual("static".AsSpan());
             modifierStart = tokenStart;
-            SkipCSharpWhitespaceBackward(matchLine, ref cursor);
+            SkipCSharpWhitespaceBackward(text, ref cursor);
         }
 
-        if (!hasStaticModifier)
+        return hasStaticModifier;
+    }
+
+    private static bool TryFindCSharpExplicitReturnStaticLambdaModifier(
+        string text,
+        int parameterStart,
+        out int modifierStart)
+    {
+        modifierStart = -1;
+        var searchBefore = parameterStart;
+        while (searchBefore > 0)
+        {
+            var staticIndex = text.LastIndexOf(
+                "static",
+                searchBefore - 1,
+                StringComparison.Ordinal);
+            if (staticIndex < 0)
+                return false;
+
+            searchBefore = staticIndex;
+            if (!IsCSharpStandaloneKeywordAt(text, staticIndex, "static"))
+                continue;
+
+            var returnTypeStart = SkipWhitespace(text, staticIndex + "static".Length);
+            if (IsCSharpStandaloneKeywordAt(text, returnTypeStart, "async"))
+                returnTypeStart = SkipWhitespace(text, returnTypeStart + "async".Length);
+
+            var candidateModifierStart = staticIndex;
+            var precedingCursor = staticIndex - 1;
+            SkipCSharpWhitespaceBackward(text, ref precedingCursor);
+            if (TryReadCSharpLambdaIdentifierBackward(
+                    text,
+                    ref precedingCursor,
+                    out var precedingTokenStart,
+                    out var precedingTokenEnd)
+                && text.AsSpan(precedingTokenStart, precedingTokenEnd - precedingTokenStart)
+                    .SequenceEqual("async".AsSpan()))
+            {
+                candidateModifierStart = precedingTokenStart;
+            }
+
+            if (!IsCSharpExplicitLambdaReturnType(
+                    text,
+                    returnTypeStart,
+                    parameterStart))
+            {
+                continue;
+            }
+
+            modifierStart = candidateModifierStart;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpExplicitLambdaReturnType(
+        string text,
+        int start,
+        int end)
+    {
+        while (start < end && char.IsWhiteSpace(text[start]))
+            start++;
+        while (end > start && char.IsWhiteSpace(text[end - 1]))
+            end--;
+
+        if (IsCSharpStandaloneKeywordAt(text, start, "scoped"))
+        {
+            start = SkipWhitespace(text, start + "scoped".Length);
+        }
+        if (IsCSharpStandaloneKeywordAt(text, start, "ref"))
+        {
+            start = SkipWhitespace(text, start + "ref".Length);
+            if (IsCSharpStandaloneKeywordAt(text, start, "readonly"))
+                start = SkipWhitespace(text, start + "readonly".Length);
+        }
+
+        if (start >= end)
             return false;
 
-        headerStart = modifierStart;
-        headerEnd = arrowIndex + 2;
+        var returnType = text[start..end];
+        if (!CSharpExplicitLambdaReturnTypeRegex.IsMatch(returnType))
+            return false;
+
+        var declaratorMatch = CSharpTypeFollowedByDeclaratorRegex.Match(returnType);
+        if (!declaratorMatch.Success)
+            return true;
+
+        var declaratorIndex = declaratorMatch.Groups["declarator"].Index;
+        var previousIndex = declaratorIndex - 1;
+        while (previousIndex >= 0 && char.IsWhiteSpace(returnType[previousIndex]))
+            previousIndex--;
+
+        // Whitespace around `.` / `::` is legal inside a qualified type and does not
+        // introduce a local-function name. Any other trailing identifier after a complete
+        // type is a declarator, so the arrow belongs to a real expression-bodied method.
+        // qualified type 内の `.` / `::` 周辺空白は合法で、local-function 名ではない。
+        // それ以外で完全な type に続く末尾 identifier は declarator なので、本物の
+        // expression-bodied method として維持する。
+        return previousIndex >= 0 && returnType[previousIndex] is '.' or ':';
+    }
+
+    private static bool IsCSharpStandaloneKeywordAt(
+        string text,
+        int start,
+        string keyword)
+    {
+        if (start < 0 || start + keyword.Length > text.Length)
+            return false;
+        if (!text.AsSpan(start, keyword.Length).SequenceEqual(keyword.AsSpan()))
+            return false;
+
+        var before = start - 1;
+        var after = start + keyword.Length;
+        return (before < 0 || !IsCSharpLambdaIdentifierPart(text[before]))
+            && (after >= text.Length || !IsCSharpLambdaIdentifierPart(text[after]));
+    }
+
+    private static bool TryReadCSharpLambdaIdentifierBackward(
+        string text,
+        ref int cursor,
+        out int tokenStart,
+        out int tokenEnd)
+    {
+        tokenEnd = cursor + 1;
+        while (cursor >= 0)
+        {
+            if (TrySkipCSharpUnicodeEscapeBackward(text, ref cursor))
+                continue;
+
+            var decodeStatus = Rune.DecodeLastFromUtf16(
+                text.AsSpan(0, cursor + 1),
+                out var rune,
+                out var charsConsumed);
+            if (decodeStatus != System.Buffers.OperationStatus.Done
+                || !IsCSharpLambdaIdentifierPart(rune))
+            {
+                break;
+            }
+
+            cursor -= charsConsumed;
+        }
+
+        if (cursor >= 0 && text[cursor] == '@')
+            cursor--;
+
+        tokenStart = cursor + 1;
+        return tokenStart < tokenEnd;
+    }
+
+    private static bool TrySkipCSharpUnicodeEscapeBackward(
+        string text,
+        ref int cursor)
+    {
+        if (TrySkipCSharpUnicodeEscapeBackward(text, ref cursor, 'U', 8))
+            return true;
+
+        return TrySkipCSharpUnicodeEscapeBackward(text, ref cursor, 'u', 4);
+    }
+
+    private static bool TrySkipCSharpUnicodeEscapeBackward(
+        string text,
+        ref int cursor,
+        char prefix,
+        int digitCount)
+    {
+        var slashIndex = cursor - digitCount - 1;
+        if (slashIndex < 0
+            || text[slashIndex] != '\\'
+            || text[slashIndex + 1] != prefix)
+        {
+            return false;
+        }
+
+        for (var i = slashIndex + 2; i <= cursor; i++)
+        {
+            if (!Uri.IsHexDigit(text[i]))
+                return false;
+        }
+
+        cursor = slashIndex - 1;
         return true;
     }
 
@@ -2196,8 +2409,22 @@ public static partial class SymbolExtractor
             cursor--;
     }
 
-    private static bool IsCSharpLambdaIdentifierCharacter(char ch) =>
-        char.IsLetterOrDigit(ch) || ch is '_' or '@';
+    private static bool IsCSharpLambdaIdentifierPart(char ch) =>
+        char.IsSurrogate(ch) || IsCSharpLambdaIdentifierPart(new Rune(ch));
+
+    private static bool IsCSharpLambdaIdentifierPart(Rune rune) =>
+        Rune.GetUnicodeCategory(rune) is
+            System.Globalization.UnicodeCategory.UppercaseLetter or
+            System.Globalization.UnicodeCategory.LowercaseLetter or
+            System.Globalization.UnicodeCategory.TitlecaseLetter or
+            System.Globalization.UnicodeCategory.ModifierLetter or
+            System.Globalization.UnicodeCategory.OtherLetter or
+            System.Globalization.UnicodeCategory.LetterNumber or
+            System.Globalization.UnicodeCategory.NonSpacingMark or
+            System.Globalization.UnicodeCategory.SpacingCombiningMark or
+            System.Globalization.UnicodeCategory.DecimalDigitNumber or
+            System.Globalization.UnicodeCategory.ConnectorPunctuation or
+            System.Globalization.UnicodeCategory.Format;
 
     private static bool IsCSharpMultilineExpressionBodiedMember(string[] lines, int startLineIndex, int startColumn)
     {
