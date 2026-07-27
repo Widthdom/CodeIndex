@@ -35,18 +35,14 @@ public partial class DbReader
         var containerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
         var containerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, symbolAlias);
-        var ownContainerNameSql = GetSymbolColumnSql("container_name", "''", "partial_own_type");
         var ownSignatureSql = GetSymbolColumnSql("signature", "''", "partial_own_type");
-        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "partial_peer_type");
         var peerSignatureSql = GetSymbolColumnSql("signature", "''", "partial_peer_type");
-        var ownQualifiedNameSql = $@"CASE
-                            WHEN {ownContainerNameSql} <> '' THEN {ownContainerNameSql} || '.' || partial_own_type.name
-                            ELSE partial_own_type.name
-                        END";
-        var peerQualifiedNameSql = $@"CASE
-                            WHEN {peerContainerNameSql} <> '' THEN {peerContainerNameSql} || '.' || partial_peer_type.name
-                            ELSE partial_peer_type.name
-                        END";
+        var ownQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_own_type");
+        var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("partial_peer_type");
+        var ownTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_own_type", "partial_own_ancestor");
+        var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_peer_type", "partial_peer_ancestor");
+        var peerTypeStartLineSql = GetSymbolColumnSql("start_line", "partial_peer_type.line", "partial_peer_type");
+        var peerTypeEndLineSql = GetSymbolColumnSql("end_line", peerTypeStartLineSql, "partial_peer_type");
 
         return $@"
               AND NOT (
@@ -58,35 +54,76 @@ public partial class DbReader
                   AND EXISTS (
                       SELECT 1
                       FROM symbols partial_own_type
+                      JOIN symbols partial_peer_type
+                        ON partial_peer_type.file_id <> partial_own_type.file_id
+                       AND partial_peer_type.kind = partial_own_type.kind
+                       AND partial_peer_type.name = partial_own_type.name
+                      JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
+                      JOIN chunks partial_peer_chunk ON partial_peer_chunk.file_id = partial_peer_type.file_id
                       WHERE partial_own_type.file_id = {symbolAlias}.file_id
                         AND partial_own_type.kind = {containerKindSql}
                         AND partial_own_type.name = {containerNameSql}
                         AND lower({ownSignatureSql}) LIKE '%partial%'
+                        AND lower({peerSignatureSql}) LIKE '%partial%'
+                        AND partial_peer_file.lang = 'csharp'
                         AND (
                             {containerQualifiedNameSql} = ''
                             OR {containerQualifiedNameSql} = partial_own_type.name
                             OR {containerQualifiedNameSql} = {ownQualifiedNameSql}
                         )
-                  )
-                  AND EXISTS (
-                      SELECT 1
-                      FROM symbols partial_peer_type
-                      JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
-                      JOIN chunks partial_peer_chunk ON partial_peer_chunk.file_id = partial_peer_type.file_id
-                      WHERE partial_peer_file.lang = 'csharp'
-                        AND partial_peer_type.file_id <> {symbolAlias}.file_id
-                        AND partial_peer_type.kind = {containerKindSql}
-                        AND partial_peer_type.name = {containerNameSql}
-                        AND lower({peerSignatureSql}) LIKE '%partial%'
                         AND (
                             {containerQualifiedNameSql} = ''
                             OR {containerQualifiedNameSql} = partial_peer_type.name
                             OR {containerQualifiedNameSql} = {peerQualifiedNameSql}
                         )
-                        AND csharp_identifier_occurrence_count(partial_peer_chunk.content, {symbolAlias}.name) > 0
+                        AND {ownTypeShapeSql} = {peerTypeShapeSql}
+                        AND partial_peer_chunk.end_line >= {peerTypeStartLineSql}
+                        AND partial_peer_chunk.start_line <= {peerTypeEndLineSql}
+                        AND csharp_identifier_occurrence_count_in_line_range(
+                                partial_peer_chunk.content,
+                                partial_peer_chunk.start_line,
+                                {peerTypeStartLineSql},
+                                {peerTypeEndLineSql},
+                                {symbolAlias}.name) > 0
                       LIMIT 1
                   )
               )";
+    }
+
+    private string BuildCSharpPartialTypeQualifiedNameSql(string typeAlias)
+    {
+        var containerNameSql = GetSymbolColumnSql("container_name", "''", typeAlias);
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, typeAlias);
+        return $@"CASE
+                    WHEN {containerQualifiedNameSql} <> '' THEN {containerQualifiedNameSql} || '.' || {typeAlias}.name
+                    ELSE {typeAlias}.name
+                END";
+    }
+
+    private string BuildCSharpPartialTypeShapeSql(string typeAlias, string ancestorAlias)
+    {
+        var typeStartLineSql = GetSymbolColumnSql("start_line", $"{typeAlias}.line", typeAlias);
+        var typeEndLineSql = GetSymbolColumnSql("end_line", typeStartLineSql, typeAlias);
+        var ancestorStartLineSql = GetSymbolColumnSql("start_line", $"{ancestorAlias}.line", ancestorAlias);
+        var ancestorEndLineSql = GetSymbolColumnSql("end_line", ancestorStartLineSql, ancestorAlias);
+        var ancestorSignatureSql = GetSymbolColumnSql("signature", "''", ancestorAlias);
+        return $@"COALESCE((
+                    SELECT GROUP_CONCAT(
+                               {ancestorAlias}.kind || ':' || {ancestorAlias}.name || '`' ||
+                               COALESCE(csharp_definition_type_arity(
+                                   {ancestorSignatureSql},
+                                   {ancestorAlias}.name,
+                                   {ancestorAlias}.kind), -1),
+                               '/' ORDER BY
+                                   {ancestorStartLineSql},
+                                   {ancestorEndLineSql} DESC,
+                                   {ancestorAlias}.id)
+                    FROM symbols {ancestorAlias}
+                    WHERE {ancestorAlias}.file_id = {typeAlias}.file_id
+                      AND {ancestorAlias}.kind IN ('class', 'struct', 'interface', 'record')
+                      AND {ancestorStartLineSql} <= {typeStartLineSql}
+                      AND {ancestorEndLineSql} >= {typeEndLineSql}
+                ), '')";
     }
 
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
@@ -702,18 +739,14 @@ public partial class DbReader
             return false;
         }
 
-        var ownContainerNameSql = GetSymbolColumnSql("container_name", "''", "own_type");
         var ownSignatureSql = GetSymbolColumnSql("signature", "''", "own_type");
-        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "peer_type");
         var peerSignatureSql = GetSymbolColumnSql("signature", "''", "peer_type");
-        var ownQualifiedNameSql = $@"CASE
-                WHEN {ownContainerNameSql} <> '' THEN {ownContainerNameSql} || '.' || own_type.name
-                ELSE own_type.name
-            END";
-        var peerQualifiedNameSql = $@"CASE
-                WHEN {peerContainerNameSql} <> '' THEN {peerContainerNameSql} || '.' || peer_type.name
-                ELSE peer_type.name
-            END";
+        var ownQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("own_type");
+        var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("peer_type");
+        var ownTypeShapeSql = BuildCSharpPartialTypeShapeSql("own_type", "own_ancestor");
+        var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("peer_type", "peer_ancestor");
+        var peerTypeStartLineSql = GetSymbolColumnSql("start_line", "peer_type.line", "peer_type");
+        var peerTypeEndLineSql = GetSymbolColumnSql("end_line", peerTypeStartLineSql, "peer_type");
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"
@@ -741,7 +774,15 @@ public partial class DbReader
                   OR @containerQualifiedName = peer_type.name
                   OR @containerQualifiedName = {peerQualifiedNameSql}
               )
-              AND csharp_identifier_occurrence_count(peer_chunk.content, @symbolName) > 0
+              AND {ownTypeShapeSql} = {peerTypeShapeSql}
+              AND peer_chunk.end_line >= {peerTypeStartLineSql}
+              AND peer_chunk.start_line <= {peerTypeEndLineSql}
+              AND csharp_identifier_occurrence_count_in_line_range(
+                      peer_chunk.content,
+                      peer_chunk.start_line,
+                      {peerTypeStartLineSql},
+                      {peerTypeEndLineSql},
+                      @symbolName) > 0
             LIMIT 1";
         SqliteCommandPolicy.Add(cmd, "@fileId", candidate.FileId);
         SqliteCommandPolicy.Add(cmd, "@containerKind", candidate.ContainerKind);
