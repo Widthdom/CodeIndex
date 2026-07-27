@@ -302,7 +302,9 @@ public partial class McpServerTests
         Assert.Equal("compact", analyzeStructured["format"]!.GetValue<string>());
         Assert.True(analyzeStructured["definition_count"]!.GetValue<int>() >= 1);
         Assert.NotNull(analyzeStructured["definitions"]);
+        Assert.NotNull(analyzeStructured["graph_sections"]);
         var compactCandidateDefinition = analyzeStructured["candidate_bundles"]![0]!["definition"]!;
+        Assert.NotNull(analyzeStructured["candidate_bundles"]![0]!["graph_sections"]);
         Assert.Null(compactCandidateDefinition["content"]);
         Assert.Null(compactCandidateDefinition["body_content"]);
 
@@ -312,6 +314,8 @@ public partial class McpServerTests
         var analyzeCountStructured = analyzeCountResponse["result"]!["structuredContent"]!;
         var countCandidateDefinition = analyzeCountStructured["candidate_bundles"]![0]!["definition"]!;
         Assert.True(analyzeCountStructured["count_only"]!.GetValue<bool>());
+        Assert.NotNull(analyzeCountStructured["graph_sections"]);
+        Assert.NotNull(analyzeCountStructured["candidate_bundles"]![0]!["graph_sections"]);
         Assert.Null(countCandidateDefinition["content"]);
         Assert.Null(countCandidateDefinition["body_content"]);
     }
@@ -1403,6 +1407,15 @@ public partial class McpServerTests
         Assert.NotNull(response["result"]!["structuredContent"]!["nearby_symbols"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["callers"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["callees"]);
+        var graphSections = response["result"]!["structuredContent"]!["graph_sections"]!;
+        foreach (var sectionName in new[] { "references", "callers", "callees" })
+        {
+            var section = graphSections[sectionName]!;
+            Assert.NotNull(section["total"]);
+            Assert.NotNull(section["returned"]);
+            Assert.NotNull(section["offset"]);
+            Assert.NotNull(section["truncated"]);
+        }
         Assert.NotNull(response["result"]!["structuredContent"]!["workspace_indexed_at"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["workspace_latest_modified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["project_root"]);
@@ -1411,6 +1424,79 @@ public partial class McpServerTests
         Assert.Empty(response["result"]!["structuredContent"]!["graph_language_candidates"]!.AsArray());
         Assert.False(response["result"]!["structuredContent"]!["graph_language_conflict"]!.GetValue<bool>());
         Assert.True(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_PaginatesOneIdentityScopedGraphSection_Issue4839()
+    {
+        InsertIndexedFile(
+            "src/analyze-symbol-page-4839.cs",
+            "csharp",
+            """
+            public sealed class AnalyzeSymbolPage4839
+            {
+                public void Target4839() { }
+                public void CallerOne4839() => Target4839();
+                public void CallerTwo4839() => Target4839();
+            }
+            """);
+        var arguments = new JsonObject
+        {
+            ["query"] = "Target4839",
+            ["limit"] = 1,
+            ["lang"] = "csharp",
+            ["exactName"] = true,
+        };
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4839,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "analyze_symbol",
+                ["arguments"] = arguments,
+            },
+        };
+
+        var firstResponse = _server.HandleMessage(request)!;
+        var first = firstResponse["result"]!["structuredContent"]!;
+        var firstSection = first["graph_sections"]!["callers"]!;
+        var firstCaller = Assert.Single(first["callers"]!.AsArray())!;
+        var nextCursor = firstSection["next_cursor"]!.GetValue<string>();
+
+        Assert.Equal(2, firstSection["total"]!.GetValue<int>());
+        Assert.Equal(1, firstSection["returned"]!.GetValue<int>());
+        Assert.Equal(0, firstSection["offset"]!.GetValue<int>());
+        Assert.True(firstSection["truncated"]!.GetValue<bool>());
+        Assert.StartsWith("inspect-graph:v1:", nextCursor, StringComparison.Ordinal);
+
+        arguments["cursor"] = nextCursor;
+        arguments["limit"] = 2;
+        request["id"] = 4840;
+        var pageLimitMismatchResponse = _server.HandleMessage(request)!;
+        Assert.True(pageLimitMismatchResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+        Assert.Contains(
+            "cursor does not match this analyze_symbol query or index generation",
+            pageLimitMismatchResponse.ToJsonString(),
+            StringComparison.Ordinal);
+
+        arguments["limit"] = 1;
+        request["id"] = 4840;
+        var secondResponse = _server.HandleMessage(request)!;
+        var second = secondResponse["result"]!["structuredContent"]!;
+        Assert.False(
+            secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+            second.ToJsonString());
+        var secondSection = second["graph_sections"]!["callers"]!;
+        var secondCaller = Assert.Single(second["callers"]!.AsArray())!;
+
+        Assert.NotEqual(firstCaller.ToJsonString(), secondCaller.ToJsonString());
+        Assert.Equal(2, secondSection["total"]!.GetValue<int>());
+        Assert.Equal(1, secondSection["returned"]!.GetValue<int>());
+        Assert.Equal(1, secondSection["offset"]!.GetValue<int>());
+        Assert.False(secondSection["truncated"]!.GetValue<bool>());
+        Assert.Null(secondSection["next_cursor"]);
     }
 
     [Fact]
