@@ -21,6 +21,11 @@ public partial class QueryCommandRunnerTests
                 public sealed class ExpressionPayload
                 {
                 }
+
+                public sealed class PatternHolder
+                {
+                    public object? Value { get; init; }
+                }
                 """);
             TestProjectHelper.WriteTextFile(
                 projectRoot,
@@ -31,6 +36,7 @@ public partial class QueryCommandRunnerTests
                 public sealed class CollisionHolder
                 {
                     public bool overwrite { get; } = true;
+                    public object? Value { get; }
                 }
                 """);
             TestProjectHelper.WriteTextFile(
@@ -50,10 +56,23 @@ public partial class QueryCommandRunnerTests
                             positional: 2,
                             payload: typeof(ExpressionPayload),
                             overwrite: condition ? true : false);
+                        SinkOut(payload: out ExpressionPayload declaredPayload);
+                        if (declaredPayload is PatternHolder
+                            {
+                                Value: ExpressionPayload propertyPayload,
+                            })
+                        {
+                            _ = propertyPayload;
+                        }
                     }
 
                     private static void Sink(int positional, bool overwrite, Type payload)
                     {
+                    }
+
+                    private static void SinkOut(out ExpressionPayload payload)
+                    {
+                        payload = new();
                     }
                 }
                 """);
@@ -126,6 +145,26 @@ public partial class QueryCommandRunnerTests
                     JOIN files AS source_file ON source_file.id = reference.file_id
                     WHERE source_file.path = 'src/Consumer.cs'
                       AND reference.symbol_name = 'overwrite'
+                      AND reference.reference_kind = 'type_reference'
+                    """;
+                Assert.Equal(0L, (long)command.ExecuteScalar()!);
+
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references AS reference
+                    JOIN files AS source_file ON source_file.id = reference.file_id
+                    WHERE source_file.path = 'src/Consumer.cs'
+                      AND reference.symbol_name = 'ExpressionPayload'
+                      AND reference.reference_kind = 'type_reference'
+                    """;
+                Assert.Equal(5L, (long)command.ExecuteScalar()!);
+
+                command.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references AS reference
+                    JOIN files AS source_file ON source_file.id = reference.file_id
+                    WHERE source_file.path = 'src/Consumer.cs'
+                      AND reference.symbol_name IN ('payload', 'Value')
                       AND reference.reference_kind = 'type_reference'
                     """;
                 Assert.Equal(0L, (long)command.ExecuteScalar()!);

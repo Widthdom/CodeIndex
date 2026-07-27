@@ -7484,6 +7484,11 @@ public partial class ReferenceExtractorTests
             }
 
             public sealed class ExpressionPayload {}
+            public sealed class PatternHolder
+            {
+                public object Value { get; init; } = new();
+            }
+
             public sealed class ConstructorTarget
             {
                 public ConstructorTarget(bool overwrite, Type payload) {}
@@ -7493,6 +7498,7 @@ public partial class ReferenceExtractorTests
             {
                 private static void Invoke(int positional, bool overwrite, Type payload) {}
                 private static object InvokeAdapter(bool overwrite, Type payload) => new();
+                private static void InvokeOut(out ExpressionPayload payload) => payload = new();
                 private static void Outer(object inner) {}
 
                 [Probe(typeof(ExpressionPayload), overwrite: true)]
@@ -7502,6 +7508,7 @@ public partial class ReferenceExtractorTests
                     Invoke(payload: typeof(ExpressionPayload), positional: 2, overwrite: false);
                     _ = new ConstructorTarget(overwrite: true, payload: typeof(ExpressionPayload));
                     Outer(inner: InvokeAdapter(overwrite: true, payload: typeof(ExpressionPayload)));
+                    InvokeOut(payload: out ExpressionPayload declaredPayload);
                     Invoke(
                         positional: 3,
                         payload: typeof(ExpressionPayload),
@@ -7510,6 +7517,13 @@ public partial class ReferenceExtractorTests
                 retry:
                     if (value is ExpressionPayload matched)
                         goto done;
+                    if (value is PatternHolder
+                        {
+                            Value: ExpressionPayload propertyPayload,
+                        })
+                    {
+                        _ = propertyPayload;
+                    }
                     switch (value)
                     {
                         case ExpressionPayload casePayload:
@@ -7529,18 +7543,18 @@ public partial class ReferenceExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-        var namedArgumentLabels = new HashSet<string>(
-            ["overwrite", "payload", "positional", "inner"],
+        var colonLabels = new HashSet<string>(
+            ["overwrite", "payload", "positional", "inner", "Value"],
             StringComparer.Ordinal);
 
         Assert.DoesNotContain(
             references,
             reference => reference.ReferenceKind == "type_reference"
-                && namedArgumentLabels.Contains(reference.SymbolName));
+                && colonLabels.Contains(reference.SymbolName));
         Assert.True(
             references.Count(reference =>
                 reference.SymbolName == "ExpressionPayload"
-                && reference.ReferenceKind == "type_reference") >= 8);
+                && reference.ReferenceKind == "type_reference") >= 10);
         Assert.Contains(
             references,
             reference => reference.SymbolName == "ConstructorTarget"

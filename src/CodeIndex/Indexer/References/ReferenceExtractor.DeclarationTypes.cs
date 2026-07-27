@@ -625,16 +625,25 @@ public static partial class ReferenceExtractor
         typeStart = -1;
         typeLength = 0;
 
-        if (language == "csharp" && StartsWithCSharpNamedArgumentLabel(parameterFragment))
-            return false;
+        int candidateOffset = 0;
+        bool hasLeadingCSharpColonLabel = language == "csharp"
+            && TryGetCSharpLeadingColonLabelValueStart(parameterFragment, out candidateOffset);
+        var candidateSource = candidateOffset == 0
+            ? parameterFragment
+            : parameterFragment.Substring(candidateOffset);
 
-        int end = FindTopLevelAssignmentIndex(parameterFragment);
+        int end = FindTopLevelAssignmentIndex(candidateSource);
         if (end < 0)
-            end = parameterFragment.Length;
-        var candidate = parameterFragment.Substring(0, end);
+            end = candidateSource.Length;
+        var candidate = candidateSource.Substring(0, end);
         var tokens = GetTopLevelTokenSpans(candidate);
         if (tokens.Count < 2)
             return false;
+        if (hasLeadingCSharpColonLabel
+            && !candidate.AsSpan(tokens[0].Start, tokens[0].Length).Equals("out", StringComparison.Ordinal))
+        {
+            return false;
+        }
 
         int first = 0;
         while (first < tokens.Count)
@@ -652,7 +661,8 @@ public static partial class ReferenceExtractor
         if (first >= tokens.Count - 1)
             return false;
 
-        typeStart = tokens[first].Start;
+        int relativeTypeStart = tokens[first].Start;
+        typeStart = candidateOffset + relativeTypeStart;
         int lastTypeToken = tokens.Count - 2;
         while (lastTypeToken >= first)
         {
@@ -668,7 +678,7 @@ public static partial class ReferenceExtractor
 
         if (lastTypeToken < first)
             return false;
-        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
+        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - relativeTypeStart;
         return true;
     }
 
@@ -680,12 +690,10 @@ public static partial class ReferenceExtractor
         if (IsDefinitelyNotTypeDeclarationLine(line, language))
             return false;
 
-        if (language == "csharp"
+        int headStart = 0;
+        bool hasLeadingCSharpColonLabel = language == "csharp"
             && line.AsSpan().TrimEnd().EndsWith(",")
-            && StartsWithCSharpNamedArgumentLabel(line))
-        {
-            return false;
-        }
+            && TryGetCSharpLeadingColonLabelValueStart(line, out headStart);
 
         int firstParen = FindFirstTopLevelChar(line, '(');
         int firstTerminator = FindFirstTopLevelChar(line, ';');
@@ -702,7 +710,7 @@ public static partial class ReferenceExtractor
         if (firstParen >= 0 && firstParen < boundary)
             return false;
 
-        var head = line.Substring(0, boundary);
+        var head = line.Substring(headStart, boundary - headStart);
         var tokens = GetTopLevelTokenSpans(head);
         if (tokens.Count < 2)
             return false;
@@ -711,7 +719,10 @@ public static partial class ReferenceExtractor
         while (first < tokens.Count)
         {
             var token = head.Substring(tokens[first].Start, tokens[first].Length);
-            if (token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal) || IsDeclarationModifier(language, token))
+            if (token.StartsWith("[", StringComparison.Ordinal)
+                || token.StartsWith("@", StringComparison.Ordinal)
+                || IsDeclarationModifier(language, token)
+                || (hasLeadingCSharpColonLabel && IsParameterModifier(language, token)))
             {
                 first++;
                 continue;
@@ -722,19 +733,23 @@ public static partial class ReferenceExtractor
 
         if (first >= tokens.Count - 1)
             return false;
+        if (hasLeadingCSharpColonLabel && first != tokens.Count - 2)
+            return false;
 
         var declaredNameToken = head.Substring(tokens[^1].Start, tokens[^1].Length);
         if (!IsSimpleDeclarationIdentifier(language, declaredNameToken))
             return false;
 
-        typeStart = tokens[first].Start;
+        int relativeTypeStart = tokens[first].Start;
+        typeStart = headStart + relativeTypeStart;
         int lastTypeToken = tokens.Count - 2;
-        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
+        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - relativeTypeStart;
         return true;
     }
 
-    private static bool StartsWithCSharpNamedArgumentLabel(string text)
+    private static bool TryGetCSharpLeadingColonLabelValueStart(string text, out int valueStart)
     {
+        valueStart = 0;
         int index = 0;
         while (index < text.Length && char.IsWhiteSpace(text[index]))
             index++;
@@ -754,9 +769,18 @@ public static partial class ReferenceExtractor
         while (index < text.Length && char.IsWhiteSpace(text[index]))
             index++;
 
-        return index < text.Length
-            && text[index] == ':'
-            && (index + 1 >= text.Length || text[index + 1] != ':');
+        if (index >= text.Length
+            || text[index] != ':'
+            || (index + 1 < text.Length && text[index + 1] == ':'))
+        {
+            return false;
+        }
+
+        index++;
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        valueStart = index;
+        return true;
     }
 
     private static bool IsDefinitelyNotTypeDeclarationLine(string line, string language)
