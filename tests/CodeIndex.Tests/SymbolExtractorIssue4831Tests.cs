@@ -112,6 +112,30 @@ internal static class Issue4831CSharpFixture
             bool Symbols,
             long Count);
         """;
+
+    internal const string PreprocessorSource = """
+        public sealed class ConditionalScanner
+        {
+        #if FEATURE
+            public void FeatureMethod(
+        #else
+            public void FallbackMethod(
+        #endif
+                int value)
+            {
+            }
+
+        #region Handlers (
+            public void InsideRegion()
+            {
+            }
+        #endregion
+
+            public void AfterRegion()
+            {
+            }
+        }
+        """;
 }
 
 public partial class SymbolExtractorTests
@@ -182,5 +206,27 @@ public partial class SymbolExtractorTests
             symbols,
             symbol => symbol.Kind == "function"
                 && symbol.Name is "out" or "ref" or "in" or "params");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DeclarationScopeHandlesPreprocessorBranchesAndPayloads_Issue4831()
+    {
+        var symbols = SymbolExtractor.Extract(
+            1,
+            "csharp",
+            Issue4831CSharpFixture.PreprocessorSource);
+
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function" && symbol.Name == "FeatureMethod");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function" && symbol.Name == "FallbackMethod");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function" && symbol.Name == "InsideRegion");
+        Assert.Contains(
+            symbols,
+            symbol => symbol.Kind == "function" && symbol.Name == "AfterRegion");
     }
 }

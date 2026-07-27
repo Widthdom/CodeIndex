@@ -269,6 +269,22 @@ public static partial class SymbolExtractor
         }
     }
 
+    private enum CSharpPreprocessorDirectiveKind
+    {
+        None,
+        If,
+        Alternative,
+        EndIf,
+        Other,
+    }
+
+    private readonly record struct CSharpDeclarationDelimiterState(
+        int ParenDepth,
+        int ParenBaseline,
+        bool[] ParenContributions,
+        (int ParenDepth, bool RestoresBaseline)[] BraceBaselines,
+        string StatementText);
+
     private static CSharpDeclarationStartScope BuildCSharpDeclarationStartScope(
         string[] structuralLines,
         CSharpTypeBodyScope typeBodyScope)
@@ -281,6 +297,7 @@ public static partial class SymbolExtractor
         var statementBuffer = new StringBuilder(256);
         var braceBaselines = new Stack<(int ParenDepth, bool RestoresBaseline)>();
         var parenContributions = new Stack<bool>();
+        var conditionalBranchStates = new Stack<CSharpDeclarationDelimiterState>();
         var parenDepth = 0;
         var parenBaseline = 0;
 
@@ -294,6 +311,50 @@ public static partial class SymbolExtractor
             }
 
             var line = structuralLines[lineIndex];
+            var directiveKind = GetCSharpPreprocessorDirectiveKind(line);
+            if (directiveKind != CSharpPreprocessorDirectiveKind.None)
+            {
+                switch (directiveKind)
+                {
+                    case CSharpPreprocessorDirectiveKind.If:
+                        conditionalBranchStates.Push(new CSharpDeclarationDelimiterState(
+                            parenDepth,
+                            parenBaseline,
+                            parenContributions.ToArray(),
+                            braceBaselines.ToArray(),
+                            statementBuffer.ToString()));
+                        break;
+                    case CSharpPreprocessorDirectiveKind.Alternative:
+                        if (conditionalBranchStates.TryPeek(out var branchStart))
+                        {
+                            parenDepth = branchStart.ParenDepth;
+                            parenBaseline = branchStart.ParenBaseline;
+                            RestoreCSharpDeclarationDelimiterStack(
+                                parenContributions,
+                                branchStart.ParenContributions);
+                            RestoreCSharpDeclarationDelimiterStack(
+                                braceBaselines,
+                                branchStart.BraceBaselines);
+                            statementBuffer.Clear();
+                            statementBuffer.Append(branchStart.StatementText);
+                        }
+                        break;
+                    case CSharpPreprocessorDirectiveKind.EndIf:
+                        if (conditionalBranchStates.Count > 0)
+                            conditionalBranchStates.Pop();
+                        break;
+                }
+
+                // Preprocessor payloads are not C# expressions. In particular, arbitrary
+                // `#region` text may contain unmatched delimiters and conditional branches
+                // are mutually exclusive rather than one linear token stream.
+                // preprocessor payload は C# 式ではない。特に任意の `#region` text は
+                // 未閉じ delimiter を含み得て、conditional branch は一つの線形 token
+                // stream ではなく相互排他的である。
+                statementBuffer.Append(' ');
+                continue;
+            }
+
             for (var column = 0; column < line.Length; column++)
             {
                 var previousState = isInsideExpressionContinuation;
@@ -382,6 +443,36 @@ public static partial class SymbolExtractor
         return new CSharpDeclarationStartScope(
             lineStartInsideExpressionContinuation,
             transitions);
+    }
+
+    private static CSharpPreprocessorDirectiveKind GetCSharpPreprocessorDirectiveKind(string line)
+    {
+        var cursor = SkipWhitespace(line, 0);
+        if (cursor >= line.Length || line[cursor] != '#')
+            return CSharpPreprocessorDirectiveKind.None;
+
+        cursor = SkipWhitespace(line, cursor + 1);
+        var directiveStart = cursor;
+        while (cursor < line.Length && char.IsLetter(line[cursor]))
+            cursor++;
+
+        var directive = line[directiveStart..cursor];
+        return directive switch
+        {
+            "if" => CSharpPreprocessorDirectiveKind.If,
+            "elif" or "else" => CSharpPreprocessorDirectiveKind.Alternative,
+            "endif" => CSharpPreprocessorDirectiveKind.EndIf,
+            _ => CSharpPreprocessorDirectiveKind.Other,
+        };
+    }
+
+    private static void RestoreCSharpDeclarationDelimiterStack<T>(
+        Stack<T> destination,
+        T[] topFirstItems)
+    {
+        destination.Clear();
+        for (var index = topFirstItems.Length - 1; index >= 0; index--)
+            destination.Push(topFirstItems[index]);
     }
 
     private static bool IsCSharpTypeBodyAttributeArgumentOpeningParen(
