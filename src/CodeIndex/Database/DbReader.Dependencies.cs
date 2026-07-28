@@ -1055,7 +1055,9 @@ public partial class DbReader
                     .Where(static evidence => evidence.Origin != "markdown_heading_name_match")
                     .Sum(static evidence => evidence.ReferenceCount)
                 : result.ReferenceCount;
-            result.RankingScore = DependencyNoiseProfile.ComputeRankingScore(rankingReferenceCount, result.Symbols);
+            result.RankingScore = result.SymbolSamples is { } symbolSamples
+                ? DependencyNoiseProfile.ComputeRankingScore(rankingReferenceCount, symbolSamples)
+                : DependencyNoiseProfile.ComputeRankingScore(rankingReferenceCount, result.Symbols);
         }
 
         return results

@@ -5826,15 +5826,32 @@ public partial class QueryCommandRunnerTests
             dbPath,
             "docs/source.md",
             "markdown",
-            "# Source\n\n[target](target,file.md#error)\n");
+            "# Source\n\n[comma](Path,target.md#error)\n[plain](z-target.md#error)\n");
         TestProjectHelper.InsertIndexedFile(
             dbPath,
-            "docs/target,file.md",
+            "docs/Path,target.md",
+            "markdown",
+            "# error\n");
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/z-target.md",
             "markdown",
             "# error\n");
         MarkDependencyGraphReady(dbPath);
 
-        var symbol = "target,file.md#error";
+        var (rankingExitCode, rankingStdout, rankingStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--lang", "markdown", "--suppress-noise", "--limit", "1"],
+            _jsonOptions));
+
+        using var rankingDocument = ParseJsonOutput(rankingStdout);
+        var rankingEdge = Assert.Single(rankingDocument.RootElement.GetProperty("edges").EnumerateArray());
+
+        Assert.Equal(CommandExitCodes.Success, rankingExitCode);
+        Assert.Equal(string.Empty, rankingStderr);
+        Assert.Equal("docs/Path,target.md", rankingEdge.GetProperty("target_path").GetString());
+        Assert.Equal(1.0, rankingEdge.GetProperty("ranking_score").GetDouble());
+
+        var symbol = "Path,target.md#error";
         var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
             ["--db", dbPath, "--json", "--lang", "markdown", "--suppress-noise", "--symbol", symbol],
             _jsonOptions));
@@ -5957,6 +5974,43 @@ public partial class QueryCommandRunnerTests
         Assert.True(json.GetProperty("analysis_complete").GetBoolean());
         Assert.False(json.GetProperty("truncated").GetBoolean());
         Assert.Equal(2, json.GetProperty("graph_edge_count").GetInt32());
+    }
+
+    [Fact]
+    public void AddBoundedWorkspaceCycleCandidates_CapsRetainedAndSuppressedBuckets_Issue4868()
+    {
+        static FileDependencyResult CreateCandidate(string targetPath, string origin)
+            => new()
+            {
+                TargetPath = targetPath,
+                Evidence =
+                [
+                    new FileDependencyEvidence
+                    {
+                        Origin = origin,
+                        ReferenceCount = 1,
+                    },
+                ],
+            };
+
+        var candidates = Enumerable.Range(0, 1_000)
+            .Select(index => CreateCandidate($"noise-{index}", "markdown_heading_name_match"))
+            .Concat(Enumerable.Range(0, 10)
+                .Select(index => CreateCandidate($"retained-{index}", "markdown_explicit_link")));
+        var retainedResults = new List<FileDependencyResult>();
+        var suppressedResults = new List<FileDependencyResult>();
+
+        var limitReached = QueryCommandRunner.AddBoundedWorkspaceCycleCandidates(
+            candidates,
+            retainedResults,
+            suppressedResults,
+            limit: 3);
+
+        Assert.True(limitReached);
+        Assert.Equal(3, retainedResults.Count);
+        Assert.Equal(3, suppressedResults.Count);
+        Assert.All(retainedResults, result => Assert.StartsWith("retained-", result.TargetPath));
+        Assert.All(suppressedResults, result => Assert.StartsWith("noise-", result.TargetPath));
     }
 
     [Fact]

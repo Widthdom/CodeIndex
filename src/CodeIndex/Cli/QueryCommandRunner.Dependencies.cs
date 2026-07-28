@@ -1543,7 +1543,7 @@ public static partial class QueryCommandRunner
             SourceDb = edge.SourceDb,
             TargetDb = edge.TargetDb,
             ReferenceCount = referenceCount,
-            RankingScore = DependencyNoiseProfile.ComputeRankingScore(referenceCount, string.Join(",", symbolSamples)),
+            RankingScore = DependencyNoiseProfile.ComputeRankingScore(referenceCount, symbolSamples),
             Symbols = string.Join(",", symbolSamples),
             SymbolSamples = symbolSamples,
             Evidence = evidence,
@@ -1838,8 +1838,29 @@ public static partial class QueryCommandRunner
         var memberDbs = BuildWorkspaceDependencyDatabaseList(options);
         var primaryDb = memberDbs[0];
         TagFileDependencyResults(results, primaryDb);
-        if (!options.DependencySuppressNoise && results.Count >= limit)
+        List<FileDependencyResult>? retainedResults = null;
+        List<FileDependencyResult>? suppressedResults = null;
+        if (options.DependencySuppressNoise)
+        {
+            candidateRowCount = 0;
+            retainedResults = [];
+            suppressedResults = [];
+            if (AddBoundedWorkspaceCycleCandidates(
+                    results,
+                    retainedResults,
+                    suppressedResults,
+                    limit))
+            {
+                candidateRowCount = retainedResults.Count;
+                return OrderWorkspaceCycleCandidates(retainedResults, limit);
+            }
+            results.Clear();
+        }
+        else if (results.Count >= limit)
+        {
             return results.Take(limit).ToList();
+        }
+
         foreach (var normalizedDbPath in memberDbs.Skip(1))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1857,9 +1878,24 @@ public static partial class QueryCommandRunner
                 options.DependencySymbols,
                 options.DependencySymbolFamilies,
                 options.DependencySuppressNoise);
-            candidateRowCount += memberCandidateRows;
             TagFileDependencyResults(memberResults, normalizedDbPath);
-            results.AddRange(memberResults);
+            if (options.DependencySuppressNoise)
+            {
+                if (AddBoundedWorkspaceCycleCandidates(
+                        memberResults,
+                        retainedResults!,
+                        suppressedResults!,
+                        limit))
+                {
+                    candidateRowCount = retainedResults!.Count;
+                    return OrderWorkspaceCycleCandidates(retainedResults, limit);
+                }
+            }
+            else
+            {
+                candidateRowCount += memberCandidateRows;
+                results.AddRange(memberResults);
+            }
             if (!options.DependencySuppressNoise && results.Count >= limit)
                 return results.Take(limit).ToList();
         }
@@ -1871,8 +1907,23 @@ public static partial class QueryCommandRunner
                 if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
                     continue;
                 var crossDbResults = GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit, cancellationToken);
-                candidateRowCount += crossDbResults.Count;
-                results.AddRange(crossDbResults);
+                if (options.DependencySuppressNoise)
+                {
+                    if (AddBoundedWorkspaceCycleCandidates(
+                            crossDbResults,
+                            retainedResults!,
+                            suppressedResults!,
+                            limit))
+                    {
+                        candidateRowCount = retainedResults!.Count;
+                        return OrderWorkspaceCycleCandidates(retainedResults, limit);
+                    }
+                }
+                else
+                {
+                    candidateRowCount += crossDbResults.Count;
+                    results.AddRange(crossDbResults);
+                }
                 if (!options.DependencySuppressNoise && results.Count >= limit)
                     return results.Take(limit).ToList();
             }
@@ -1880,8 +1931,33 @@ public static partial class QueryCommandRunner
         if (!options.DependencySuppressNoise)
             return results.Take(limit).ToList();
 
-        candidateRowCount = results.Count(HasRetainedDependencyEvidence);
-        return OrderWorkspaceCycleCandidates(results, limit);
+        candidateRowCount = retainedResults!.Count;
+        return OrderWorkspaceCycleCandidates(retainedResults.Concat(suppressedResults!), limit);
+    }
+
+    internal static bool AddBoundedWorkspaceCycleCandidates(
+        IEnumerable<FileDependencyResult> candidates,
+        List<FileDependencyResult> retainedResults,
+        List<FileDependencyResult> suppressedResults,
+        int limit)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (HasRetainedDependencyEvidence(candidate))
+            {
+                if (retainedResults.Count < limit)
+                    retainedResults.Add(candidate);
+            }
+            else if (suppressedResults.Count < limit)
+            {
+                suppressedResults.Add(candidate);
+            }
+
+            if (retainedResults.Count >= limit)
+                return true;
+        }
+
+        return false;
     }
 
     private static List<FileDependencyResult> OrderWorkspaceCycleCandidates(
@@ -2185,7 +2261,9 @@ public static partial class QueryCommandRunner
                     .Where(static evidence => evidence.Origin != "markdown_heading_name_match")
                     .Sum(static evidence => evidence.ReferenceCount)
                 : result.ReferenceCount;
-            result.RankingScore = DependencyNoiseProfile.ComputeRankingScore(rankingReferenceCount, result.Symbols);
+            result.RankingScore = result.SymbolSamples is { } symbolSamples
+                ? DependencyNoiseProfile.ComputeRankingScore(rankingReferenceCount, symbolSamples)
+                : DependencyNoiseProfile.ComputeRankingScore(rankingReferenceCount, result.Symbols);
         }
 
         return results
