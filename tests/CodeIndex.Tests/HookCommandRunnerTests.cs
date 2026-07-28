@@ -656,6 +656,34 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_UninstallHuman_ReportsManagedHookDeleteWarning_Issue4855()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_human_warning");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var installExit = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
+            Assert.Equal(CommandExitCodes.Success, installExit);
+            HookCommandRunner.DeleteFileForTesting = _ => throw new IOException("delete denied");
+
+            var result = RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]);
+
+            Assert.Equal(CommandExitCodes.InstallError, result.ExitCode);
+            Assert.Equal(string.Empty, result.StdOut);
+            Assert.Contains("Warning:", result.StdErr, StringComparison.Ordinal);
+            Assert.Contains("failed to delete managed_hook", result.StdErr, StringComparison.Ordinal);
+            Assert.Contains("pre-commit", result.StdErr, StringComparison.Ordinal);
+            Assert.Contains(nameof(IOException), result.StdErr, StringComparison.Ordinal);
+            Assert.Contains($"Error [{CommandErrorCodes.HookOperationFailed}]:", result.StdErr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            HookCommandRunner.DeleteFileForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Hooks_UninstallJson_ReportsChainedHookBackupFailure()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_backup_warning");

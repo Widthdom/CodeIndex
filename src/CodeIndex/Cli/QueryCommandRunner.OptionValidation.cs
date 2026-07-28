@@ -41,13 +41,17 @@ public static partial class QueryCommandRunner
                 ? "Pass this cursor back to the unchanged `cdidx inspect` query that returned it."
                 : "fix the invalid or missing option value, then rerun with the command shape below.";
         WriteParseError(primaryError, primaryHint, commandName, options, jsonOptions);
-        if (options.ParseError != null && dbPathError != null)
+        if (options.ParseError != null
+            && dbPathError != null
+            && !(options.Json && jsonOptions != null))
+        {
             WriteParseError(
                 dbPathError,
                 "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.",
                 commandName,
                 options,
                 jsonOptions);
+        }
         return true;
     }
 

@@ -7,6 +7,64 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public sealed class CliNonDatabaseErrorContractTests
 {
+    [Fact]
+    public void OutlineCompactWithoutPath_UsesSingleJsonEnvelope_Issue4855()
+    {
+        var result = ConsoleCapture.Capture(() => QueryCommandRunner.RunOutline(
+            ["--compact"],
+            ProgramRunner.CreateDefaultJsonOptions()));
+
+        Assert.Equal(CommandExitCodes.UsageError, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout);
+        AssertStableEnvelope(
+            document.RootElement,
+            CommandExitCodes.UsageError,
+            CommandErrorCodes.UsageError,
+            "usage",
+            "outline");
+    }
+
+    [Fact]
+    public void HooksUnsupportedInlineJsonFormat_UsesSingleJsonEnvelope_Issue4855()
+    {
+        var result = ConsoleCapture.Capture(() => ProgramRunner.Run(
+            ["hooks", "status", "--json=array"],
+            appVersion: "test"));
+
+        Assert.Equal(CommandExitCodes.UsageError, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout);
+        AssertStableEnvelope(
+            document.RootElement,
+            CommandExitCodes.UsageError,
+            CommandErrorCodes.UsageError,
+            "usage",
+            "hooks");
+    }
+
+    [Fact]
+    public void OutlineCombinedParseAndDatabasePathErrors_EmitsOneJsonDocument_Issue4855()
+    {
+        var missingDbPath = Path.Combine(
+            Path.GetTempPath(),
+            $"cdidx_missing_outline_{Guid.NewGuid():N}.db");
+        var result = ConsoleCapture.Capture(() => QueryCommandRunner.RunOutline(
+            ["missing.cs", "--db", missingDbPath, "--limit", "nope", "--json"],
+            ProgramRunner.CreateDefaultJsonOptions()));
+
+        Assert.Equal(CommandExitCodes.UsageError, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout);
+        AssertStableEnvelope(
+            document.RootElement,
+            CommandExitCodes.UsageError,
+            CommandErrorCodes.UsageError,
+            "usage",
+            "outline");
+        Assert.DoesNotContain("does not point to an existing database", result.Stdout, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("empty", CommandExitCodes.UsageError, CommandErrorCodes.UsageError, "usage", "hooks")]
     [InlineData("not_found", CommandExitCodes.NotFound, CommandErrorCodes.FileNotFound, "not_found", "outline")]
@@ -27,18 +85,12 @@ public sealed class CliNonDatabaseErrorContractTests
         Assert.Equal(expectedExitCode, jsonResult.ExitCode);
         Assert.Equal(string.Empty, jsonResult.Stderr);
         using (var document = JsonDocument.Parse(jsonResult.Stdout))
-        {
-            var root = document.RootElement;
-            Assert.Equal("1", root.GetProperty("api_version").GetString());
-            Assert.Equal("error", root.GetProperty("status").GetString());
-            Assert.Equal(expectedErrorCode, root.GetProperty("error_code").GetString());
-            Assert.Equal(expectedCategory, root.GetProperty("category").GetString());
-            Assert.Equal(expectedCommand, root.GetProperty("command").GetString());
-            Assert.Equal(expectedExitCode, root.GetProperty("exit_code").GetInt32());
-            Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("message").GetString()));
-            Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("hint").GetString()));
-            Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("usage").GetString()));
-        }
+            AssertStableEnvelope(
+                document.RootElement,
+                expectedExitCode,
+                expectedErrorCode,
+                expectedCategory,
+                expectedCommand);
         if (scenario == "platform")
             Assert.DoesNotContain(scope.ProjectRoot, jsonResult.Stdout, StringComparison.Ordinal);
 
@@ -49,6 +101,24 @@ public sealed class CliNonDatabaseErrorContractTests
         Assert.Contains($"Error [{expectedErrorCode}]:", humanResult.Stderr, StringComparison.Ordinal);
         Assert.Contains("Hint:", humanResult.Stderr, StringComparison.Ordinal);
         Assert.Contains("Usage:", humanResult.Stderr, StringComparison.Ordinal);
+    }
+
+    private static void AssertStableEnvelope(
+        JsonElement root,
+        int expectedExitCode,
+        string expectedErrorCode,
+        string expectedCategory,
+        string expectedCommand)
+    {
+        Assert.Equal("1", root.GetProperty("api_version").GetString());
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal(expectedErrorCode, root.GetProperty("error_code").GetString());
+        Assert.Equal(expectedCategory, root.GetProperty("category").GetString());
+        Assert.Equal(expectedCommand, root.GetProperty("command").GetString());
+        Assert.Equal(expectedExitCode, root.GetProperty("exit_code").GetInt32());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("message").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("hint").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("usage").GetString()));
     }
 
     private sealed class FailureScenarioScope : IDisposable

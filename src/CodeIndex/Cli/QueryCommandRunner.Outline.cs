@@ -8,7 +8,10 @@ public static partial class QueryCommandRunner
 {
     public static int RunOutline(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var wantsJson = cmdArgs.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
+        var wantsJson = cmdArgs.Any(static arg =>
+            arg == "--compact"
+            || arg == "--json"
+            || arg.StartsWith("--json=", StringComparison.Ordinal));
         var usage = GetUsageLineOrThrow("outline");
         if (cmdArgs.Length == 0 || cmdArgs[0].StartsWith('-'))
         {

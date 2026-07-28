@@ -352,8 +352,8 @@ and leave stderr empty. Human failures write the matching coded `Error`,
 
 | Failure class | Exit code | Error code | Category |
 |---|---:|---|---|
-| Usage / invalid arguments | 1 or 7 | `E010_INVALID_ARGUMENT` | `usage` |
-| Missing outline path | 2 | `E019_PATH_NOT_FOUND` | `not_found` |
+| Usage / invalid arguments | 1 or 7 | `E010_USAGE_ERROR` | `usage` |
+| Missing outline path | 2 | `E019_FILE_NOT_FOUND` | `not_found` |
 | Invalid configuration | 1 | `E024_CONFIG_INVALID` | `configuration` |
 | Hook platform or filesystem failure | 9 | `E025_HOOK_OPERATION_FAILED` | `platform` |
 | Hooks outside a Git repository | 2 | `E026_NOT_GIT_REPOSITORY` | `not_found` |
@@ -3584,8 +3584,8 @@ sanitization し、上限を適用してから merge します。JSON の失敗�
 
 | failure class | exit code | error code | category |
 |---|---:|---|---|
-| usage / 不正な引数 | 1 または 7 | `E010_INVALID_ARGUMENT` | `usage` |
-| outline path が見つからない | 2 | `E019_PATH_NOT_FOUND` | `not_found` |
+| usage / 不正な引数 | 1 または 7 | `E010_USAGE_ERROR` | `usage` |
+| outline path が見つからない | 2 | `E019_FILE_NOT_FOUND` | `not_found` |
 | 不正な設定 | 1 | `E024_CONFIG_INVALID` | `configuration` |
 | hook の platform / filesystem failure | 9 | `E025_HOOK_OPERATION_FAILED` | `platform` |
 | Git repository 外での hooks 実行 | 2 | `E026_NOT_GIT_REPOSITORY` | `not_found` |

@@ -21,6 +21,9 @@ public static class HookCommandRunner
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(args);
+        var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
+        if (wantsJson && !options.Json)
+            options = options with { Json = true };
         if (options.ShowHelp)
         {
             PrintUsage();
@@ -604,6 +607,12 @@ fi
         var hasWarnings = warnings is { Count: > 0 };
         if (exitCode != CommandExitCodes.Success)
         {
+            if (!json && hasWarnings)
+            {
+                foreach (var warning in warnings!)
+                    CommandErrorWriter.WriteWarning(warning.Message);
+            }
+
             JsonObject? additionalJsonProperties = null;
             if (json)
             {

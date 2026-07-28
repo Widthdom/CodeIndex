@@ -93,7 +93,7 @@ internal static class CommandErrorWriter
             CommandExitCodes.UsageError or CommandExitCodes.InvalidArgument or CommandExitCodes.ExUsage
                 => (CommandErrorCodes.UsageError, "usage"),
             CommandExitCodes.NotFound
-                => (CommandErrorCodes.QueryNotFound, "not_found"),
+                => (CommandErrorCodes.CommandFailed, "not_found"),
             CommandExitCodes.DatabaseError or CommandExitCodes.TransientDatabaseError
                 => (CommandErrorCodes.DbError, "database_error"),
             CommandExitCodes.FeatureUnavailable
