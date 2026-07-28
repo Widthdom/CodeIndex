@@ -523,11 +523,13 @@ Constructors and enum members are semantic refinements because extractors reuse
 broader persisted kinds. Constructor detection honors explicit subkind/keyword
 metadata, dedicated initializer names, and type-name constructors only in
 languages where that declaration shape is valid; same-name methods in other
-languages and finalizers stay functions. This includes named Dart constructors,
-Java compact record constructors, case-insensitive Pascal constructor keywords,
-and Visual Basic `New`. Enum-entry detection recognizes decorated, escaped,
-indirect, and comma-grouped persisted shapes across C#, Java, Kotlin, PHP, and
-Swift while keeping a nested enum as an enum declaration. The current persisted
+languages, return-typed same-name methods, JavaScript object/static `constructor`
+members, shell functions, and finalizers stay functions. This includes named
+Dart constructors, Java compact record constructors, C# verbatim constructor
+identifiers, case-insensitive Pascal constructor keywords, and Visual Basic
+`New`. Enum-entry detection recognizes decorated, escaped (including C# verbatim
+identifiers), indirect, and comma-grouped persisted shapes across C#, Java,
+Kotlin, PHP, and Swift while keeping a nested enum as an enum declaration. The current persisted
 catalog has no standalone `parameter` kind; the conservative fallback keeps
 legacy or plugin-provided parameter-like symbols compatible.
 
@@ -3825,10 +3827,12 @@ fallback は次のとおりである。
 constructor と enum member は extractor が広い永続化 kind を再利用するため、metadata に基づいて
 意味を詳細化する。constructor は明示 subkind / keyword、専用 initializer 名、およびその declaration
 形状が有効な言語だけで型名 constructor を認識する。他言語の同名 method と finalizer は function の
-ままにする。これには Dart の named constructor、Java の compact record constructor、大文字小文字を
-区別しない Pascal の constructor keyword、Visual Basic の `New` も含む。enum entry は C#、Java、
-Kotlin、PHP、Swift における annotation 付き、escape 済み、indirect、comma-grouped の保存形状を
-認識し、enum 内の nested enum は enum declaration のままにする。現在の永続化 catalog には独立した
+ままにする。戻り値型付きの同名 method、JavaScript object / static の `constructor` member、shell
+function も同様である。これには Dart の named constructor、Java の compact record constructor、
+C# の逐語識別子を使う constructor、大文字小文字を区別しない Pascal の constructor keyword、
+Visual Basic の `New` も含む。enum entry は C#、Java、Kotlin、PHP、Swift における annotation 付き、
+C# の逐語識別子を含む escape 済み、indirect、comma-grouped の保存形状を認識し、enum 内の nested
+enum は enum declaration のままにする。現在の永続化 catalog には独立した
 `parameter` kind がないため、legacy または plugin が提供する parameter 相当の symbol は保守的な
 fallback で互換性を維持する。
 

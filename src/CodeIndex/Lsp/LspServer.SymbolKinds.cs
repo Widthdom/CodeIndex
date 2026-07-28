@@ -126,14 +126,23 @@ internal sealed partial class LspServer
             return false;
         }
 
-        if (string.Equals(symbol.SubKind, "constructor", StringComparison.Ordinal) ||
-            SignatureStartsWithKeywordAfterModifiers(
-                symbol.Signature,
-                "constructor",
-                ignoreCase: symbol.Lang == "pascal"))
+        if (string.Equals(symbol.SubKind, "constructor", StringComparison.Ordinal))
+            return true;
+
+        var startsWithConstructorKeyword = SignatureStartsWithKeywordAfterModifiers(
+            symbol.Signature,
+            "constructor",
+            ignoreCase: symbol.Lang == "pascal");
+        if (startsWithConstructorKeyword && symbol.Lang == "pascal")
+            return true;
+        if (startsWithConstructorKeyword &&
+            symbol.Lang is "javascript" or "typescript" or "kotlin" &&
+            !string.IsNullOrWhiteSpace(symbol.ContainerName) &&
+            string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal))
         {
             return true;
         }
+
         if (string.IsNullOrWhiteSpace(symbol.ContainerName))
             return false;
 
@@ -141,7 +150,9 @@ internal sealed partial class LspServer
         var matchesContainerName = string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal) ||
             (symbol.Lang == "dart" &&
              symbol.Name.StartsWith(symbol.ContainerName + ".", StringComparison.Ordinal));
-        if (usesContainerName && matchesContainerName)
+        if (usesContainerName &&
+            matchesContainerName &&
+            string.IsNullOrWhiteSpace(symbol.ReturnType))
         {
             return SignatureContainsNamedDeclaration(
                 symbol.Signature,
@@ -183,9 +194,9 @@ internal sealed partial class LspServer
         }
         if (symbol.Kind is not ("function" or "property"))
             return symbol.Kind == "enum" &&
-                SignatureContainsEnumMemberDeclarator(symbol.Signature, symbol.Name);
+                SignatureContainsEnumMemberDeclarator(symbol.Signature, symbol.Name, symbol.Lang);
 
-        return SignatureContainsEnumMemberDeclarator(symbol.Signature, symbol.Name);
+        return SignatureContainsEnumMemberDeclarator(symbol.Signature, symbol.Name, symbol.Lang);
     }
 
     private static bool SignatureStartsWithKeywordAfterModifiers(
@@ -255,10 +266,14 @@ internal sealed partial class LspServer
            word.Equals("sealed", comparison) ||
            word.Equals("static", comparison);
 
-    private static bool SignatureContainsEnumMemberDeclarator(string signature, string name)
+    private static bool SignatureContainsEnumMemberDeclarator(
+        string signature,
+        string name,
+        string? lang)
     {
+        var verbatimIdentifierName = lang == "csharp" ? name : null;
         var remaining = signature.AsSpan().TrimStart();
-        while (TryConsumeLeadingDecoration(ref remaining))
+        while (TryConsumeLeadingDecoration(ref remaining, verbatimIdentifierName))
         {
         }
         TryConsumeLeadingKeyword(ref remaining, "indirect");
@@ -273,7 +288,10 @@ internal sealed partial class LspServer
         for (var index = 0; index <= remaining.Length; index++)
         {
             if (index == remaining.Length)
-                return SegmentStartsWithEnumMemberName(remaining[segmentStart..], name);
+                return SegmentStartsWithEnumMemberName(
+                    remaining[segmentStart..],
+                    name,
+                    verbatimIdentifierName);
 
             var character = remaining[index];
             if (quote != '\0')
@@ -320,22 +338,33 @@ internal sealed partial class LspServer
                     braceDepth--;
                     break;
                 case ',' when parenthesisDepth == 0 && bracketDepth == 0 && braceDepth == 0:
-                    if (SegmentStartsWithEnumMemberName(remaining[segmentStart..index], name))
+                    if (SegmentStartsWithEnumMemberName(
+                        remaining[segmentStart..index],
+                        name,
+                        verbatimIdentifierName))
+                    {
                         return true;
+                    }
                     segmentStart = index + 1;
                     break;
                 case ';' when parenthesisDepth == 0 && bracketDepth == 0 && braceDepth == 0:
-                    return SegmentStartsWithEnumMemberName(remaining[segmentStart..index], name);
+                    return SegmentStartsWithEnumMemberName(
+                        remaining[segmentStart..index],
+                        name,
+                        verbatimIdentifierName);
             }
         }
 
         return false;
     }
 
-    private static bool SegmentStartsWithEnumMemberName(ReadOnlySpan<char> segment, string name)
+    private static bool SegmentStartsWithEnumMemberName(
+        ReadOnlySpan<char> segment,
+        string name,
+        string? verbatimIdentifierName)
     {
         segment = segment.TrimStart();
-        while (TryConsumeLeadingDecoration(ref segment))
+        while (TryConsumeLeadingDecoration(ref segment, verbatimIdentifierName))
         {
         }
 
@@ -367,7 +396,9 @@ internal sealed partial class LspServer
         return segment.IsEmpty || segment[0] is '(' or '{' or '=';
     }
 
-    private static bool TryConsumeLeadingDecoration(ref ReadOnlySpan<char> text)
+    private static bool TryConsumeLeadingDecoration(
+        ref ReadOnlySpan<char> text,
+        string? verbatimIdentifierName = null)
     {
         var original = text;
         if (!text.IsEmpty && text[0] == '[')
@@ -380,6 +411,20 @@ internal sealed partial class LspServer
 
         if (text.IsEmpty || text[0] != '@')
             return false;
+
+        if (!string.IsNullOrEmpty(verbatimIdentifierName) &&
+            text[1..].StartsWith(verbatimIdentifierName, StringComparison.Ordinal))
+        {
+            var identifierEnd = verbatimIdentifierName.Length + 1;
+            var hasBoundaryAfter = identifierEnd == text.Length ||
+                !IsIdentifierCharacter(text[identifierEnd]);
+            var suffix = text[identifierEnd..].TrimStart();
+            if (hasBoundaryAfter &&
+                (suffix.IsEmpty || suffix[0] is '(' or '{' or '=' or ',' or ';'))
+            {
+                return false;
+            }
+        }
 
         var index = 1;
         while (index < text.Length &&
@@ -470,11 +515,16 @@ internal sealed partial class LspServer
                 return false;
 
             var nameEnd = nameStart + name.Length;
-            var hasIdentifierBoundaryBefore = nameStart == 0 || !IsIdentifierCharacter(signature[nameStart - 1]);
+            var hasVerbatimPrefix = nameStart > 0 &&
+                signature[nameStart - 1] == '@' &&
+                (nameStart == 1 || !IsIdentifierCharacter(signature[nameStart - 2]));
+            var hasIdentifierBoundaryBefore = nameStart == 0 ||
+                hasVerbatimPrefix ||
+                !IsIdentifierCharacter(signature[nameStart - 1]);
             var hasIdentifierBoundaryAfter = nameEnd == signature.Length || !IsIdentifierCharacter(signature[nameEnd]);
             if (hasIdentifierBoundaryBefore && hasIdentifierBoundaryAfter)
             {
-                var before = nameStart - 1;
+                var before = nameStart - (hasVerbatimPrefix ? 2 : 1);
                 while (before >= 0 && char.IsWhiteSpace(signature[before]))
                     before--;
                 if (before < 0 || signature[before] != '~')

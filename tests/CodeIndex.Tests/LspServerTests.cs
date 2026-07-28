@@ -1347,6 +1347,7 @@ public class LspServerTests
             SubKind = symbol.SubKind,
             Name = symbol.Name,
             Signature = symbol.Signature,
+            ReturnType = symbol.ReturnType,
             ContainerKind = symbol.ContainerKind,
             ContainerName = symbol.ContainerName,
         };
@@ -1354,6 +1355,7 @@ public class LspServerTests
         var typeScriptSymbols = SymbolExtractor.Extract(1, "typescript", """
             class Widget {
               constructor() {}
+              static constructor() {}
               Widget() {}
             }
             """);
@@ -1366,6 +1368,12 @@ public class LspServerTests
             (12, 3),
             LspServer.MapLspKindsForTesting(ToResult(
                 Assert.Single(typeScriptSymbols, symbol => symbol.Signature?.StartsWith("Widget", StringComparison.Ordinal) == true),
+                "typescript")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(typeScriptSymbols, symbol =>
+                    symbol.Signature?.StartsWith("static constructor", StringComparison.Ordinal) == true),
                 "typescript")));
 
         var kotlinSymbols = SymbolExtractor.Extract(2, "kotlin", """
@@ -1428,6 +1436,9 @@ public class LspServerTests
                 Point {
                 }
             }
+            class JavaThing {
+                void JavaThing() {}
+            }
             """);
         Assert.Equal(
             (22, 20),
@@ -1445,6 +1456,13 @@ public class LspServerTests
                 Assert.Single(javaSymbols, symbol =>
                     symbol.Name == "Point" &&
                     symbol.Kind == "function"),
+                "java")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(javaSymbols, symbol =>
+                    symbol.Name == "JavaThing" &&
+                    symbol.ReturnType == "void"),
                 "java")));
 
         var swiftSymbols = SymbolExtractor.Extract(5, "swift", """
@@ -1506,12 +1524,44 @@ public class LspServerTests
                 Assert.Single(pascalSymbols, symbol => symbol.Name == "Create"),
                 "pascal")));
 
+        var csharpSymbols = SymbolExtractor.Extract(9, "csharp", """
+            class @class {
+                public @class() {}
+            }
+            enum Escaped {
+                @event = 1,
+            }
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(csharpSymbols, symbol =>
+                    symbol.Name == "class" &&
+                    symbol.Kind == "function"),
+                "csharp")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(csharpSymbols, symbol => symbol.Name == "event"),
+                "csharp")));
+
+        var shellSymbols = SymbolExtractor.Extract(10, "shell", """
+            constructor() {
+              echo ordinary
+            }
+            """);
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(shellSymbols, symbol => symbol.Name == "constructor"),
+                "shell")));
+
         var semanticMappings = new (string Kind, string Detail, string? SubKind, string ContainerKind, string ContainerName, int SymbolKind, int CompletionItemKind)[]
         {
             ("function", "public MapKindB()", null, "class", "MapKindB", 9, 4),
             ("function", "static MapKindB()", null, "class", "MapKindB", 9, 4),
             ("function", "~MapKindB()", null, "class", "MapKindB", 12, 3),
-            ("function", "constructor()", null, "class", "MapKindB", 9, 4),
+            ("function", "constructor()", null, "class", "MapKindB", 12, 3),
             ("function", "subkind constructor", "constructor", "class", "MapKindB", 9, 4),
             ("enum", "MapKindB,", null, "enum", "MappingEnum", 22, 20),
             ("enum", "enum MapKindB {", null, "enum", "MappingEnum", 10, 13),
@@ -1520,6 +1570,8 @@ public class LspServerTests
             ("property", "indirect case MapKindB(Int)", null, "enum", "MappingEnum", 22, 20),
             ("property", "case Other, MapKindB(Int)", null, "enum", "MappingEnum", 22, 20),
             ("function", "@Deprecated MapKindB(1)", null, "enum", "MappingEnum", 22, 20),
+            ("function", "public @MapKindB()", null, "class", "MapKindB", 9, 4),
+            ("enum", "@MapKindB = 1", null, "enum", "MappingEnum", 22, 20),
             ("enum", "[Obsolete] public enum MapKindB {", null, "enum", "MappingEnum", 10, 13),
             ("property", "val MapKindB: Int", null, "enum", "MappingEnum", 7, 10),
             ("function", "void MapKindB()", null, "enum", "MappingEnum", 12, 3),
