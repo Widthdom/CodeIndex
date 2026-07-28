@@ -2567,6 +2567,123 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_ConstructorNavigation_HandlesAdversarialConstructorForms_Issue4850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_constructor_adversarial");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var typesPath = Path.Combine(projectRoot, "types.cs");
+            var callerPath = Path.Combine(projectRoot, "caller.cs");
+            var typesSource = """
+                namespace Demo;
+
+                public class Lifecycle
+                {
+                    static Lifecycle() { }
+                    ~Lifecycle() { }
+                }
+
+                public class Primary(int value)
+                {
+                    public Primary() : this(0) { }
+                }
+
+                public class Box { }
+                public class Box<T> { }
+
+                public class Choice
+                {
+                    public Choice(int value) { }
+                    public Choice(string value) { }
+                }
+                """;
+            var callerSource = """
+                namespace Demo;
+
+                public class Caller
+                {
+                    public object CreateLifecycle() => new Lifecycle();
+                    public object CreatePrimaryDefault() => new Primary();
+                    public object CreatePrimaryValue() => new Primary(1);
+                    public object CreateGeneric() => new Box<int>();
+                    public object CreateChoice() => new Choice(1);
+                }
+                """;
+
+            foreach (var (path, relativePath, source) in new[]
+            {
+                (typesPath, "types.cs", typesSource),
+                (callerPath, "caller.cs", callerSource),
+            })
+            {
+                File.WriteAllText(path, source);
+                TestProjectHelper.InsertIndexedFile(dbPath, relativePath, "csharp", source);
+            }
+            MarkGraphReady(dbPath);
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var reader = new DbReader(db);
+            foreach (var (line, token, expectedKinds, expectedLines) in new[]
+            {
+                (4, "Lifecycle", new[] { "class" }, new[] { 2 }),
+                (5, "Primary", new[] { "class", "function" }, new[] { 10 }),
+                (6, "Primary", new[] { "class", "function" }, new[] { 8 }),
+                (7, "Box", new[] { "class" }, new[] { 14 }),
+                (8, "Choice", new[] { "function", "function" }, new[] { 18, 19 }),
+            })
+            {
+                var character =
+                    CharacterOf(callerSource, line, $"new {token}") + "new ".Length;
+                var resolution = reader.GetReferencePositionResolution(
+                    "caller.cs",
+                    token,
+                    line + 1,
+                    character + 1,
+                    64);
+                var actualKinds = resolution.Candidates
+                    .Select(candidate => candidate.Definition.Kind)
+                    .OrderBy(kind => kind, StringComparer.Ordinal)
+                    .ToArray();
+                Assert.True(
+                    expectedKinds.OrderBy(kind => kind, StringComparer.Ordinal).SequenceEqual(actualKinds),
+                    $"Unexpected candidates for {token} on line {line}: {string.Join(", ", actualKinds)}");
+
+                using var server = new LspServer(
+                    reader,
+                    "1.2.3",
+                    ProgramRunner.CreateDefaultJsonOptions(),
+                    projectRoot);
+                foreach (var method in new[] { "textDocument/definition", "textDocument/declaration" })
+                {
+                    var response = server.HandleMessage(CreatePositionRequest(
+                        method,
+                        callerPath,
+                        48520 + line,
+                        line,
+                        character));
+
+                    Assert.NotNull(response);
+                    var locations = response!["result"]!.AsArray();
+                    Assert.Equal(expectedLines.Length, locations.Count);
+                    Assert.All(locations, location =>
+                        Assert.Equal(new Uri(typesPath).AbsoluteUri, location!["uri"]!.GetValue<string>()));
+                    Assert.Equal(
+                        expectedLines,
+                        locations
+                            .Select(location => location!["range"]!["start"]!["line"]!.GetValue<int>())
+                            .OrderBy(value => value)
+                            .ToArray());
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Declaration_ReturnsDefinitionLocation_Issues3537And4420()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_alias");

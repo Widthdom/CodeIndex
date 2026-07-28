@@ -2709,6 +2709,10 @@ symbols. When no explicit constructor is indexed, including implicit constructor
 on partial classes and positional records, they return one stable representative
 type declaration. This is separate from ordinary type-reference navigation, which
 may intentionally return every declaration in one logical partial-type family.
+Static constructors and finalizers are never treated as `new` targets. Primary
+constructor declarations remain eligible beside secondary constructors, generic
+type arity scopes constructor identity, and same-arity overloads remain constructor
+locations instead of falling back to same-named type declarations.
 CLI `definition` and `goto` are name-based; use `--kind function` for explicit
 constructors, or a type kind together with `--group-partials` for the logical type
 family.
@@ -5830,6 +5834,10 @@ C# の constructor navigation は source position を考慮します。`new Type
 明示 constructor が index されていない場合は、安定した代表 type declaration を
 1 件返します。この経路は通常の type-reference navigation と分離されており、後者は
 1 つの logical partial-type family に属する全 declaration を意図的に返す場合があります。
+static constructor と finalizer は `new` の target として扱いません。primary constructor
+declaration は secondary constructor と併存しても候補に残り、generic type arity で
+constructor identity を限定します。同一 arity の overload も同名 type declaration へ
+fallback せず、constructor location の集合として返します。
 CLI の `definition` と `goto` は名前ベースなので、明示 constructor には
 `--kind function`、logical type family には type kind と `--group-partials` を
 組み合わせてください。

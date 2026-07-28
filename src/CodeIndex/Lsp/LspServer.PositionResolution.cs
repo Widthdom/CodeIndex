@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
 using CodeIndex.Security;
@@ -101,12 +102,15 @@ internal sealed partial class LspServer : IDisposable
             selected = resolution.Candidates
                 .Where(candidate => TryGetCSharpDefinitionParameterCount(candidate.Definition, out var parameterCount) &&
                     parameterCount == argumentCount)
-                .Take(2)
                 .ToList();
-            if (selected.Count == 1)
+            if (selected.Count > 0)
             {
-                var arityDefinition = _reader.GetDefinitionForSymbol(selected[0].Definition);
-                return arityDefinition == null ? [] : [arityDefinition];
+                return selected
+                    .Select(candidate => _reader.GetDefinitionForSymbol(candidate.Definition))
+                    .OfType<DefinitionResult>()
+                    .OrderBy(definition => definition.Path, StringComparer.Ordinal)
+                    .ThenBy(definition => definition.StartLine)
+                    .ToList();
             }
         }
 
@@ -163,12 +167,30 @@ internal sealed partial class LspServer : IDisposable
             return false;
         }
 
-        var nameStart = FindIdentifierOccurrence(definition.Signature, definition.Name, 0);
-        if (nameStart < 0)
-            return false;
-        var openParenthesis = definition.Signature.IndexOf('(', nameStart + definition.Name.Length);
-        return openParenthesis >= 0 &&
-            TryCountCommaSeparatedItems(definition.Signature, openParenthesis, allowAngleBrackets: true, out parameterCount);
+        var count = CSharpTypeReferenceArity.GetConstructorParameterCount(
+            definition.Signature,
+            definition.Name,
+            definition.Kind);
+        if (!count.HasValue)
+        {
+            if (!string.Equals(definition.Kind, "function", StringComparison.Ordinal))
+                return false;
+            var nameStart = FindIdentifierOccurrence(definition.Signature, definition.Name, 0);
+            if (nameStart < 0)
+                return false;
+            var openParenthesis = definition.Signature.IndexOf(
+                '(',
+                nameStart + definition.Name.Length);
+            return openParenthesis >= 0 &&
+                TryCountCommaSeparatedItems(
+                    definition.Signature,
+                    openParenthesis,
+                    allowAngleBrackets: true,
+                    out parameterCount);
+        }
+
+        parameterCount = count.Value;
+        return true;
     }
 
     private static bool TryCountCommaSeparatedItems(
