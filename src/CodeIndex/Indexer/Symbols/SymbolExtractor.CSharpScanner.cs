@@ -820,8 +820,9 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    // For C# plain fields (kind `property`, BodyStyle.None), find the end of the
-    // field's declaration statement on the same (merged) match line so the
+    // For C# plain fields (internally tagged as `property`, BodyStyle.None, and
+    // normalized to public `field`), find the end of the field's declaration
+    // statement on the same (merged) match line so the
     // signature can be clamped to the full declaration text and the same-line
     // pattern scanner can resume after the terminating `;`. Walks with paren /
     // bracket / brace depth tracking so `{` / `}` inside an initializer
@@ -831,8 +832,9 @@ public static partial class SymbolExtractor
     // so signature and advance both stop before the wrapper terminator. Input
     // is expected to be the structurally-masked match line so string-literal
     // `{` / `;` cannot poison the depth tracker.
-    // C# 通常フィールド（kind `property`、BodyStyle.None）向けに、結合済みマッチ行での
-    // 宣言文の終端位置を返す。signature を `;` まで含む完全な宣言文字列に揃え、かつ
+    // C# 通常フィールド（内部タグは `property`、BodyStyle.None、公開時に `field` へ
+    // 正規化）向けに、結合済みマッチ行での宣言文の終端位置を返す。signature を `;`
+    // まで含む完全な宣言文字列に揃え、かつ
     // 同一行のパターンスキャンを `;` の次から再開できるようにするために使う。paren /
     // bracket / brace の深さを追うので、初期化子（コレクション / オブジェクト初期化子や
     // ラムダ本体）内の `{` / `}` で判定が途切れない。深さ 0 で出現する `}`（囲む型本体の

@@ -938,11 +938,12 @@ public static partial class SymbolExtractor
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
             // accepted anywhere, not just at the front, so legacy orderings like
             // `readonly public static` / `static public readonly` still classify as fields
-            // instead of falling through to the plain-field (kind `property`) row. Closes #355.
+            // instead of falling through to the internally `property`-tagged plain-field row,
+            // whose public output is normalized to `field`. Closes #355.
             // static/readonly の順序は自由で、`new`（メンバー隠蔽）も任意位置に置ける。visibility も
             // 先頭以外の位置に現れることを許容し、`readonly public static` や `static public readonly`
-            // のような旧来の並びでも kind `field` で取り扱う。通常フィールド（kind `property`）の
-            // 正規表現に流れ落ちないようにする。Closes #355.
+            // のような旧来の並びでも kind `field` で取り扱う。公開時に `field` へ正規化される
+            // 内部 `property` タグの通常フィールド正規表現に流れ落ちないようにする。Closes #355.
             // Share CSharpTypePattern with const and plain fields so tuple, nullable-tuple, and
             // generic-over-tuple types retain stable field kind and complete return-type metadata.
             // const / 通常フィールドと CSharpTypePattern を共有し、tuple / nullable tuple /
@@ -955,8 +956,9 @@ public static partial class SymbolExtractor
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static|readonly)\s+)+"
               + $@"(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*[=;]",
                 RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
-            // Plain field (instance, readonly, volatile, plain static, etc.) — kind `property`.
-            // Must come AFTER the `const` and `static readonly` patterns (which take priority
+            // Plain field (instance, readonly, volatile, plain static, etc.). It keeps the
+            // internal `property` tag used by scanner gating and normalizes public output to
+            // `field`. Must come AFTER the `const` and `static readonly` patterns (which take priority
             // with kind `function`), and BEFORE the structural declaration patterns.
             // The terminator `=(?![=>])` or `;` distinguishes fields from methods (which end
             // with `(`), property accessors (which end with `{`), expression-bodied members
@@ -965,7 +967,8 @@ public static partial class SymbolExtractor
             // regex engine cannot backtrack past an unconsumed `public static event …`
             // declaration and match it as a field whose returnType is `public static event …`.
             // Closes #298.
-            // 通常フィールド（instance / readonly / volatile / 通常 static など） — kind は `property`。
+            // 通常フィールド（instance / readonly / volatile / 通常 static など）。スキャナーの
+            // ゲート判定に使う内部 `property` タグを維持し、公開時に `field` へ正規化する。
             // `const` / `static readonly` パターン（kind `function`）より後、型宣言パターンより前に置く。
             // 終端を `=(?![=>])` または `;` にすることで、メソッド（`(`）、プロパティアクセサ（`{`）、
             // 式本体メンバー（`=>`）、比較演算子オーバーロード（`==`）を除外する。

@@ -3978,7 +3978,7 @@ public partial class QueryCommandRunnerTests
                 symbol.GetProperty("kind").GetString() == "function"
                 && symbol.GetProperty("name").GetString() == "Match"));
             var x = Assert.Single(symbols.Where(symbol =>
-                symbol.GetProperty("kind").GetString() == "property"
+                symbol.GetProperty("kind").GetString() == "field"
                 && symbol.GetProperty("name").GetString() == "X"));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);

@@ -212,6 +212,20 @@ public static partial class SymbolExtractor
         if (lang == "python" && pattern.Kind is "function" or "class")
             signature = BuildPythonLogicalHeaderSignature(lines, lineIndex, absoluteStartColumn);
 
+        if (lang == "csharp"
+            && pattern.Kind == "property"
+            && pattern.BodyStyle == BodyStyle.None)
+        {
+            // The plain-field matcher historically reused the internal `property` tag so it
+            // could share the property/field scanning pipeline. Persist the public taxonomy
+            // value here, after the field-only terminator pattern has already distinguished
+            // declarations from accessor and expression-bodied properties. #4865
+            // plain-field matcher は property / field の走査経路を共有するため内部的に
+            // `property` tag を再利用してきた。field 専用終端 pattern が accessor /
+            // expression-bodied property を区別した後、公開 taxonomy の `field` に正規化する。
+            kind = "field";
+        }
+
         if (kind == "function"
             && lang == "csharp"
             && pattern.BodyStyle == BodyStyle.None
