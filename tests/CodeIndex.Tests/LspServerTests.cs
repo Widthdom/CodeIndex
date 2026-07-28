@@ -1375,6 +1375,7 @@ public class LspServerTests
             }
             enum class KtColor {
                 RED,
+                `mixed-case`,
             }
             """);
         Assert.Equal(
@@ -1391,6 +1392,11 @@ public class LspServerTests
             (22, 20),
             LspServer.MapLspKindsForTesting(ToResult(
                 Assert.Single(kotlinSymbols, symbol => symbol.Name == "RED"),
+                "kotlin")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(kotlinSymbols, symbol => symbol.Name == "mixed-case"),
                 "kotlin")));
 
         var soliditySymbols = SymbolExtractor.Extract(3, "solidity", """
@@ -1412,9 +1418,14 @@ public class LspServerTests
 
         var javaSymbols = SymbolExtractor.Extract(4, "java", """
             enum Outer {
+                @Deprecated
                 A;
                 enum Inner {
                     B;
+                }
+            }
+            record Point(int x) {
+                Point {
                 }
             }
             """);
@@ -1428,10 +1439,19 @@ public class LspServerTests
             LspServer.MapLspKindsForTesting(ToResult(
                 Assert.Single(javaSymbols, symbol => symbol.Name == "Inner"),
                 "java")));
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(javaSymbols, symbol =>
+                    symbol.Name == "Point" &&
+                    symbol.Kind == "function"),
+                "java")));
 
         var swiftSymbols = SymbolExtractor.Extract(5, "swift", """
             enum SwiftColor {
                 case red
+                indirect case node(Int)
+                case first, second(Int)
             }
             """);
         Assert.Equal(
@@ -1439,6 +1459,52 @@ public class LspServerTests
             LspServer.MapLspKindsForTesting(ToResult(
                 Assert.Single(swiftSymbols, symbol => symbol.Name == "red"),
                 "swift")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(swiftSymbols, symbol => symbol.Name == "node"),
+                "swift")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(swiftSymbols, symbol => symbol.Name == "second"),
+                "swift")));
+
+        var dartSymbols = SymbolExtractor.Extract(6, "dart", """
+            class Animal {
+                Animal.named();
+                factory Animal.empty() => Animal.named();
+            }
+            """);
+        Assert.All(
+            dartSymbols.Where(symbol => symbol.Kind == "function"),
+            symbol => Assert.Equal(
+                (9, 4),
+                LspServer.MapLspKindsForTesting(ToResult(symbol, "dart"))));
+
+        var visualBasicSymbols = SymbolExtractor.Extract(7, "vb", """
+            Public Class VisualBasicThing
+                Public Sub New()
+                End Sub
+            End Class
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(visualBasicSymbols, symbol => symbol.Name.Equals("New", StringComparison.OrdinalIgnoreCase)),
+                "vb")));
+
+        var pascalSymbols = SymbolExtractor.Extract(8, "pascal", """
+            type
+              PascalThing = class
+                Constructor Create;
+              end;
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(pascalSymbols, symbol => symbol.Name == "Create"),
+                "pascal")));
 
         var semanticMappings = new (string Kind, string Detail, string? SubKind, string ContainerKind, string ContainerName, int SymbolKind, int CompletionItemKind)[]
         {
@@ -1451,6 +1517,10 @@ public class LspServerTests
             ("enum", "enum MapKindB {", null, "enum", "MappingEnum", 10, 13),
             ("function", "MapKindB", null, "enum", "MappingEnum", 22, 20),
             ("property", "case MapKindB", null, "enum", "MappingEnum", 22, 20),
+            ("property", "indirect case MapKindB(Int)", null, "enum", "MappingEnum", 22, 20),
+            ("property", "case Other, MapKindB(Int)", null, "enum", "MappingEnum", 22, 20),
+            ("function", "@Deprecated MapKindB(1)", null, "enum", "MappingEnum", 22, 20),
+            ("enum", "[Obsolete] public enum MapKindB {", null, "enum", "MappingEnum", 10, 13),
             ("property", "val MapKindB: Int", null, "enum", "MappingEnum", 7, 10),
             ("function", "void MapKindB()", null, "enum", "MappingEnum", 12, 3),
         };

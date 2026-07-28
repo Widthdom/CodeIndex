@@ -523,11 +523,13 @@ Constructors and enum members are semantic refinements because extractors reuse
 broader persisted kinds. Constructor detection honors explicit subkind/keyword
 metadata, dedicated initializer names, and type-name constructors only in
 languages where that declaration shape is valid; same-name methods in other
-languages and finalizers stay functions. Enum-entry detection recognizes the
-persisted C#, Java, Kotlin, and Swift shapes while keeping a nested enum as an
-enum declaration. The current persisted catalog has no standalone `parameter`
-kind; the conservative fallback keeps legacy or plugin-provided parameter-like
-symbols compatible.
+languages and finalizers stay functions. This includes named Dart constructors,
+Java compact record constructors, case-insensitive Pascal constructor keywords,
+and Visual Basic `New`. Enum-entry detection recognizes decorated, escaped,
+indirect, and comma-grouped persisted shapes across C#, Java, Kotlin, PHP, and
+Swift while keeping a nested enum as an enum declaration. The current persisted
+catalog has no standalone `parameter` kind; the conservative fallback keeps
+legacy or plugin-provided parameter-like symbols compatible.
 
 Document/workspace symbol providers advertise work-done support and honor
 bounded string/integer `partialResultToken` and `workDoneToken` values. Partial
@@ -3823,9 +3825,12 @@ fallback は次のとおりである。
 constructor と enum member は extractor が広い永続化 kind を再利用するため、metadata に基づいて
 意味を詳細化する。constructor は明示 subkind / keyword、専用 initializer 名、およびその declaration
 形状が有効な言語だけで型名 constructor を認識する。他言語の同名 method と finalizer は function の
-ままにする。enum entry は C#、Java、Kotlin、Swift の保存形状を認識し、enum 内の nested enum は
-enum declaration のままにする。現在の永続化 catalog には独立した `parameter` kind がないため、
-legacy または plugin が提供する parameter 相当の symbol は保守的な fallback で互換性を維持する。
+ままにする。これには Dart の named constructor、Java の compact record constructor、大文字小文字を
+区別しない Pascal の constructor keyword、Visual Basic の `New` も含む。enum entry は C#、Java、
+Kotlin、PHP、Swift における annotation 付き、escape 済み、indirect、comma-grouped の保存形状を
+認識し、enum 内の nested enum は enum declaration のままにする。現在の永続化 catalog には独立した
+`parameter` kind がないため、legacy または plugin が提供する parameter 相当の symbol は保守的な
+fallback で互換性を維持する。
 
 document/workspace symbol provider は work-done 対応を advertise し、上限付きの string /
 integer `partialResultToken` と `workDoneToken` を処理する。partial result は provider の

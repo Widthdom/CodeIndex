@@ -121,23 +121,32 @@ internal sealed partial class LspServer
     {
         if (symbol.Kind is not ("function" or "method") ||
             string.IsNullOrEmpty(symbol.Name) ||
-            string.IsNullOrWhiteSpace(symbol.Signature) ||
-            string.IsNullOrWhiteSpace(symbol.ContainerName))
+            string.IsNullOrWhiteSpace(symbol.Signature))
         {
             return false;
         }
 
         if (string.Equals(symbol.SubKind, "constructor", StringComparison.Ordinal) ||
-            SignatureStartsWithKeywordAfterModifiers(symbol.Signature, "constructor"))
+            SignatureStartsWithKeywordAfterModifiers(
+                symbol.Signature,
+                "constructor",
+                ignoreCase: symbol.Lang == "pascal"))
         {
             return true;
         }
+        if (string.IsNullOrWhiteSpace(symbol.ContainerName))
+            return false;
 
         var usesContainerName = symbol.Lang is "csharp" or "cpp" or "dart" or "groovy" or "java";
-        if (usesContainerName &&
-            string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal))
+        var matchesContainerName = string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal) ||
+            (symbol.Lang == "dart" &&
+             symbol.Name.StartsWith(symbol.ContainerName + ".", StringComparison.Ordinal));
+        if (usesContainerName && matchesContainerName)
         {
-            return SignatureContainsNamedCall(symbol.Signature, symbol.Name);
+            return SignatureContainsNamedDeclaration(
+                symbol.Signature,
+                symbol.Name,
+                allowBodyBrace: symbol.Lang == "java");
         }
 
         var usesDedicatedName = symbol.Lang switch
@@ -147,9 +156,15 @@ internal sealed partial class LspServer
             "ruby" => symbol.Name == "initialize",
             "scala" => symbol.Name == "this",
             "swift" => symbol.Name == "init",
+            "vb" => symbol.Name.Equals("New", StringComparison.OrdinalIgnoreCase),
             _ => false,
         };
-        return usesDedicatedName && SignatureContainsNamedCall(symbol.Signature, symbol.Name);
+        return usesDedicatedName &&
+            SignatureContainsNamedDeclaration(
+                symbol.Signature,
+                symbol.Name,
+                allowBodyBrace: false,
+                ignoreCase: symbol.Lang == "vb");
     }
 
     private static bool IsEnumMemberSymbol(SymbolResult symbol)
@@ -161,37 +176,36 @@ internal sealed partial class LspServer
             return false;
         }
 
-        if (symbol.Kind == "enum")
-            return !SignatureStartsWithKeywordAfterModifiers(symbol.Signature, "enum");
+        if (symbol.Kind == "enum" &&
+            SignatureStartsWithKeywordAfterModifiers(symbol.Signature, "enum"))
+        {
+            return false;
+        }
         if (symbol.Kind is not ("function" or "property"))
-            return false;
+            return symbol.Kind == "enum" &&
+                SignatureContainsEnumMemberDeclarator(symbol.Signature, symbol.Name);
 
-        var signature = symbol.Signature.AsSpan().TrimStart();
-        TryConsumeLeadingKeyword(ref signature, "case");
-        if (signature.Length > 0 && signature[0] == '@')
-            signature = signature[1..];
-        if (!signature.StartsWith(symbol.Name, StringComparison.Ordinal))
-            return false;
-
-        var remainder = signature[symbol.Name.Length..];
-        if (remainder.Length > 0 && IsIdentifierCharacter(remainder[0]))
-            return false;
-        remainder = remainder.TrimStart();
-        return remainder.IsEmpty || remainder[0] is ',' or ';' or '(' or '{' or '=';
+        return SignatureContainsEnumMemberDeclarator(symbol.Signature, symbol.Name);
     }
 
-    private static bool SignatureStartsWithKeywordAfterModifiers(string signature, string keyword)
+    private static bool SignatureStartsWithKeywordAfterModifiers(
+        string signature,
+        string keyword,
+        bool ignoreCase = false)
     {
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var remaining = signature.AsSpan().TrimStart();
         while (!remaining.IsEmpty)
         {
-            if (TryConsumeLeadingKeyword(ref remaining, keyword))
+            if (TryConsumeLeadingDecoration(ref remaining))
+                continue;
+            if (TryConsumeLeadingKeyword(ref remaining, keyword, comparison))
                 return true;
 
             var wordEnd = 0;
             while (wordEnd < remaining.Length && IsIdentifierCharacter(remaining[wordEnd]))
                 wordEnd++;
-            if (wordEnd == 0 || !IsDeclarationModifier(remaining[..wordEnd]))
+            if (wordEnd == 0 || !IsDeclarationModifier(remaining[..wordEnd], comparison))
                 return false;
             remaining = remaining[wordEnd..].TrimStart();
         }
@@ -199,9 +213,12 @@ internal sealed partial class LspServer
         return false;
     }
 
-    private static bool TryConsumeLeadingKeyword(ref ReadOnlySpan<char> text, string keyword)
+    private static bool TryConsumeLeadingKeyword(
+        ref ReadOnlySpan<char> text,
+        string keyword,
+        StringComparison comparison = StringComparison.Ordinal)
     {
-        if (!text.StartsWith(keyword, StringComparison.Ordinal) ||
+        if (!text.StartsWith(keyword, comparison) ||
             (text.Length > keyword.Length && IsIdentifierCharacter(text[keyword.Length])))
         {
             return false;
@@ -211,28 +228,244 @@ internal sealed partial class LspServer
         return true;
     }
 
-    private static bool IsDeclarationModifier(ReadOnlySpan<char> word)
-        => word.SequenceEqual("abstract") ||
-           word.SequenceEqual("actual") ||
-           word.SequenceEqual("class") ||
-           word.SequenceEqual("declare") ||
-           word.SequenceEqual("default") ||
-           word.SequenceEqual("expect") ||
-           word.SequenceEqual("export") ||
-           word.SequenceEqual("external") ||
-           word.SequenceEqual("final") ||
-           word.SequenceEqual("internal") ||
-           word.SequenceEqual("private") ||
-           word.SequenceEqual("protected") ||
-           word.SequenceEqual("public") ||
-           word.SequenceEqual("static");
+    private static bool IsDeclarationModifier(
+        ReadOnlySpan<char> word,
+        StringComparison comparison)
+        => word.Equals("abstract", comparison) ||
+           word.Equals("actual", comparison) ||
+           word.Equals("base", comparison) ||
+           word.Equals("class", comparison) ||
+           word.Equals("declare", comparison) ||
+           word.Equals("default", comparison) ||
+           word.Equals("expect", comparison) ||
+           word.Equals("export", comparison) ||
+           word.Equals("external", comparison) ||
+           word.Equals("fileprivate", comparison) ||
+           word.Equals("final", comparison) ||
+           word.Equals("indirect", comparison) ||
+           word.Equals("interface", comparison) ||
+           word.Equals("internal", comparison) ||
+           word.Equals("open", comparison) ||
+           word.Equals("package", comparison) ||
+           word.Equals("partial", comparison) ||
+           word.Equals("private", comparison) ||
+           word.Equals("protected", comparison) ||
+           word.Equals("public", comparison) ||
+           word.Equals("readonly", comparison) ||
+           word.Equals("sealed", comparison) ||
+           word.Equals("static", comparison);
 
-    private static bool SignatureContainsNamedCall(string signature, string name)
+    private static bool SignatureContainsEnumMemberDeclarator(string signature, string name)
     {
+        var remaining = signature.AsSpan().TrimStart();
+        while (TryConsumeLeadingDecoration(ref remaining))
+        {
+        }
+        TryConsumeLeadingKeyword(ref remaining, "indirect");
+        TryConsumeLeadingKeyword(ref remaining, "case");
+
+        var segmentStart = 0;
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var quote = '\0';
+        var escaped = false;
+        for (var index = 0; index <= remaining.Length; index++)
+        {
+            if (index == remaining.Length)
+                return SegmentStartsWithEnumMemberName(remaining[segmentStart..], name);
+
+            var character = remaining[index];
+            if (quote != '\0')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+                if (character == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (character == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (character is '"' or '\'')
+            {
+                quote = character;
+                continue;
+            }
+
+            switch (character)
+            {
+                case '(':
+                    parenthesisDepth++;
+                    break;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    break;
+                case ',' when parenthesisDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    if (SegmentStartsWithEnumMemberName(remaining[segmentStart..index], name))
+                        return true;
+                    segmentStart = index + 1;
+                    break;
+                case ';' when parenthesisDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    return SegmentStartsWithEnumMemberName(remaining[segmentStart..index], name);
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SegmentStartsWithEnumMemberName(ReadOnlySpan<char> segment, string name)
+    {
+        segment = segment.TrimStart();
+        while (TryConsumeLeadingDecoration(ref segment))
+        {
+        }
+
+        ReadOnlySpan<char> candidate;
+        if (!segment.IsEmpty && segment[0] == '`')
+        {
+            var closingBacktick = segment[1..].IndexOf('`');
+            if (closingBacktick < 0)
+                return false;
+            candidate = segment.Slice(1, closingBacktick);
+            segment = segment[(closingBacktick + 2)..];
+        }
+        else
+        {
+            if (!segment.IsEmpty && segment[0] == '@')
+                segment = segment[1..];
+            var nameEnd = 0;
+            while (nameEnd < segment.Length && IsIdentifierCharacter(segment[nameEnd]))
+                nameEnd++;
+            if (nameEnd == 0)
+                return false;
+            candidate = segment[..nameEnd];
+            segment = segment[nameEnd..];
+        }
+
+        if (!candidate.Equals(name, StringComparison.Ordinal))
+            return false;
+        segment = segment.TrimStart();
+        return segment.IsEmpty || segment[0] is '(' or '{' or '=';
+    }
+
+    private static bool TryConsumeLeadingDecoration(ref ReadOnlySpan<char> text)
+    {
+        var original = text;
+        if (!text.IsEmpty && text[0] == '[')
+        {
+            if (!TryConsumeBalanced(ref text, '[', ']'))
+                return false;
+            text = text.TrimStart();
+            return !text.IsEmpty;
+        }
+
+        if (text.IsEmpty || text[0] != '@')
+            return false;
+
+        var index = 1;
+        while (index < text.Length &&
+               (IsIdentifierCharacter(text[index]) || text[index] is '.' or ':'))
+        {
+            index++;
+        }
+        if (index == 1)
+            return false;
+
+        var hadWhitespace = index < text.Length && char.IsWhiteSpace(text[index]);
+        text = text[index..].TrimStart();
+        if (!text.IsEmpty && text[0] == '(')
+        {
+            if (!TryConsumeBalanced(ref text, '(', ')'))
+            {
+                text = original;
+                return false;
+            }
+            text = text.TrimStart();
+            return !text.IsEmpty;
+        }
+
+        if (hadWhitespace && !text.IsEmpty)
+            return true;
+
+        text = original;
+        return false;
+    }
+
+    private static bool TryConsumeBalanced(
+        ref ReadOnlySpan<char> text,
+        char opening,
+        char closing)
+    {
+        var depth = 0;
+        var quote = '\0';
+        var escaped = false;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (quote != '\0')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+                if (character == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (character == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (character is '"' or '\'')
+            {
+                quote = character;
+                continue;
+            }
+            if (character == opening)
+                depth++;
+            else if (character == closing && --depth == 0)
+            {
+                text = text[(index + 1)..];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SignatureContainsNamedDeclaration(
+        string signature,
+        string name,
+        bool allowBodyBrace,
+        bool ignoreCase = false)
+    {
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var searchStart = 0;
         while (searchStart < signature.Length)
         {
-            var nameStart = signature.IndexOf(name, searchStart, StringComparison.Ordinal);
+            var nameStart = signature.IndexOf(name, searchStart, comparison);
             if (nameStart < 0)
                 return false;
 
@@ -249,8 +482,11 @@ internal sealed partial class LspServer
                     var after = nameEnd;
                     while (after < signature.Length && char.IsWhiteSpace(signature[after]))
                         after++;
-                    if (after < signature.Length && signature[after] == '(')
+                    if (after < signature.Length &&
+                        (signature[after] == '(' || (allowBodyBrace && signature[after] == '{')))
+                    {
                         return true;
+                    }
                 }
             }
 
