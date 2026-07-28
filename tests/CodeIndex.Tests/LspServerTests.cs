@@ -2912,6 +2912,11 @@ public class LspServerTests
                 {
                     public Widget() { }
                 }
+
+                public class LocalCaller
+                {
+                    public object CreateValue() => new Widget(1);
+                }
                 """;
             var explicitBSource = """
                 namespace Demo;
@@ -2966,9 +2971,9 @@ public class LspServerTests
                 File.WriteAllText(path, source);
                 TestProjectHelper.InsertIndexedFile(dbPath, relativePath, "csharp", source);
             }
-            MarkGraphReady(dbPath);
-
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            new DbWriter(db.Connection).MarkGraphReady();
             using var reader = new DbReader(db);
             var packetResolution = reader.GetReferencePositionResolution(
                 "caller.cs",
@@ -2986,6 +2991,37 @@ public class LspServerTests
                 projectRoot);
             Assert.NotNull(server.HandleMessage(
                 CreateInitializeRequestWithWorkspaceFolder(projectRoot, 48500)));
+
+            var localValueCharacter =
+                CharacterOf(explicitASource, 9, "new Widget") + "new ".Length;
+            var localValueResolution = reader.GetReferencePositionResolution(
+                "explicit-a.cs",
+                "Widget",
+                10,
+                localValueCharacter + 1,
+                64);
+            var localValueCandidate = Assert.Single(localValueResolution.Candidates);
+            Assert.Equal("explicit-b.cs", localValueCandidate.Definition.Path);
+            Assert.Equal("function", localValueCandidate.Definition.Kind);
+
+            foreach (var method in new[] { "textDocument/definition", "textDocument/declaration" })
+            {
+                var localValueResponse = server.HandleMessage(CreatePositionRequest(
+                    method,
+                    explicitAPath,
+                    48511,
+                    9,
+                    localValueCharacter));
+
+                Assert.NotNull(localValueResponse);
+                var localValueLocation = Assert.Single(localValueResponse!["result"]!.AsArray());
+                Assert.Equal(
+                    new Uri(explicitBPath).AbsoluteUri,
+                    localValueLocation!["uri"]!.GetValue<string>());
+                Assert.Equal(
+                    4,
+                    localValueLocation["range"]!["start"]!["line"]!.GetValue<int>());
+            }
 
             foreach (var (line, character, expectedPath, expectedLine) in new[]
             {
@@ -3089,15 +3125,15 @@ public class LspServerTests
                 File.WriteAllText(path, source);
                 TestProjectHelper.InsertIndexedFile(dbPath, relativePath, "csharp", source);
             }
-            MarkGraphReady(dbPath);
-
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            new DbWriter(db.Connection).MarkGraphReady();
             using var reader = new DbReader(db);
             foreach (var (line, token, expectedKinds, expectedLines) in new[]
             {
                 (4, "Lifecycle", new[] { "class" }, new[] { 2 }),
-                (5, "Primary", new[] { "class", "function" }, new[] { 10 }),
-                (6, "Primary", new[] { "class", "function" }, new[] { 8 }),
+                (5, "Primary", new[] { "function" }, new[] { 10 }),
+                (6, "Primary", new[] { "class" }, new[] { 8 }),
                 (7, "Box", new[] { "class" }, new[] { 14 }),
                 (8, "Choice", new[] { "function", "function" }, new[] { 18, 19 }),
             })
@@ -3145,6 +3181,119 @@ public class LspServerTests
                             .Select(location => location!["range"]!["start"]!["line"]!.GetValue<int>())
                             .OrderBy(value => value)
                             .ToArray());
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_ConstructorNavigation_PreservesValueTypeAndDelegateConstruction_Issue4850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_constructor_value_types");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var typesPath = Path.Combine(projectRoot, "types.cs");
+            var callerPath = Path.Combine(projectRoot, "caller.cs");
+            var typesSource = """
+                namespace Demo;
+
+                public struct Sample
+                {
+                    public Sample(int value) { }
+                }
+
+                public readonly record struct Pair
+                {
+                    public Pair(int value) { }
+                }
+
+                public readonly record struct InlinePair(int Value);
+
+                public enum Shade { Red }
+                public delegate void Callback();
+                """;
+            var callerSource = """
+                namespace Demo;
+
+                public class Caller
+                {
+                    private void Run() { }
+                    public object CreateSampleDefault() => new Sample();
+                    public object CreateSampleValue() => new Sample(1);
+                    public object CreatePairDefault() => new Pair();
+                    public object CreatePairValue() => new Pair(1);
+                    public object CreateInlinePairDefault() => new InlinePair();
+                    public object CreateInlinePairValue() => new InlinePair(1);
+                    public Shade CreateShade() => new Shade();
+                    public Callback CreateCallback() => new Callback(Run);
+                }
+                """;
+
+            foreach (var (path, relativePath, source) in new[]
+            {
+                (typesPath, "types.cs", typesSource),
+                (callerPath, "caller.cs", callerSource),
+            })
+            {
+                File.WriteAllText(path, source);
+                TestProjectHelper.InsertIndexedFile(dbPath, relativePath, "csharp", source);
+            }
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            new DbWriter(db.Connection).MarkGraphReady();
+            using var reader = new DbReader(db);
+            using var server = new LspServer(
+                reader,
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+            Assert.NotNull(server.HandleMessage(
+                CreateInitializeRequestWithWorkspaceFolder(projectRoot, 48540)));
+
+            foreach (var (line, token, expectedKind, expectedLine) in new[]
+            {
+                (5, "Sample", "struct", 2),
+                (6, "Sample", "function", 4),
+                (7, "Pair", "struct", 7),
+                (8, "Pair", "function", 9),
+                (9, "InlinePair", "struct", 12),
+                (10, "InlinePair", "struct", 12),
+                (11, "Shade", "enum", 14),
+                (12, "Callback", "delegate", 15),
+            })
+            {
+                var character =
+                    CharacterOf(callerSource, line, $"new {token}") + "new ".Length;
+                var resolution = reader.GetReferencePositionResolution(
+                    "caller.cs",
+                    token,
+                    line + 1,
+                    character + 1,
+                    64);
+                var candidate = Assert.Single(resolution.Candidates);
+                Assert.Equal(expectedKind, candidate.Definition.Kind);
+                Assert.Equal("types.cs", candidate.Definition.Path);
+
+                foreach (var method in new[] { "textDocument/definition", "textDocument/declaration" })
+                {
+                    var response = server.HandleMessage(CreatePositionRequest(
+                        method,
+                        callerPath,
+                        48540 + line,
+                        line,
+                        character));
+
+                    Assert.NotNull(response);
+                    var location = Assert.Single(response!["result"]!.AsArray());
+                    Assert.Equal(new Uri(typesPath).AbsoluteUri, location!["uri"]!.GetValue<string>());
+                    Assert.Equal(
+                        expectedLine,
+                        location["range"]!["start"]!["line"]!.GetValue<int>());
                 }
             }
         }

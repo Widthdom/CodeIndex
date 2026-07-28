@@ -2720,7 +2720,10 @@ may intentionally return every declaration in one logical partial-type family.
 Static constructors and finalizers are never treated as `new` targets. Primary
 constructor declarations remain eligible beside secondary constructors, generic
 type arity scopes constructor identity, and same-arity overloads remain constructor
-locations instead of falling back to same-named type declarations.
+locations instead of falling back to same-named type declarations. Default
+construction of value types remains attached to the type declaration even when
+other explicit constructors exist, and enum and delegate construction remain
+navigable.
 CLI `definition` and `goto` are name-based; use `--kind function` for explicit
 constructors, or a type kind together with `--group-partials` for the logical type
 family.
@@ -5860,7 +5863,9 @@ C# の constructor navigation は source position を考慮します。`new Type
 static constructor と finalizer は `new` の target として扱いません。primary constructor
 declaration は secondary constructor と併存しても候補に残り、generic type arity で
 constructor identity を限定します。同一 arity の overload も同名 type declaration へ
-fallback せず、constructor location の集合として返します。
+fallback せず、constructor location の集合として返します。他の明示 constructor が
+存在する場合も value type の default construction は type declaration に結び付けたままにし、
+enum と delegate の construction も navigation 可能な状態を保ちます。
 CLI の `definition` と `goto` は名前ベースなので、明示 constructor には
 `--kind function`、logical type family には type kind と `--group-partials` を
 組み合わせてください。

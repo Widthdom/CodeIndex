@@ -25,6 +25,44 @@ internal static class CSharpTypeReferenceArity
         return cursor < context.Length && context[cursor] == '.';
     }
 
+    internal static int? GetInvocationArgumentCount(
+        string? context,
+        string? symbolName,
+        long? columnNumber)
+    {
+        if (string.IsNullOrWhiteSpace(context) || string.IsNullOrWhiteSpace(symbolName))
+            return null;
+
+        var occurrence = FindClosestIdentifierOccurrence(context, symbolName, columnNumber);
+        if (occurrence < 0)
+            return null;
+
+        var cursor = occurrence + symbolName.Length;
+        if (!SkipCSharpTrivia(context, ref cursor))
+            return null;
+        if (cursor < context.Length && context[cursor] == '<')
+        {
+            if (!TryCountTopLevelTypeArguments(
+                    context,
+                    cursor,
+                    out _,
+                    out var closeAngleIndex))
+            {
+                return null;
+            }
+
+            cursor = closeAngleIndex + 1;
+            if (!SkipCSharpTrivia(context, ref cursor))
+                return null;
+        }
+
+        return cursor < context.Length
+               && context[cursor] == '('
+               && TryCountTopLevelParameters(context, cursor, out var count)
+            ? count
+            : null;
+    }
+
     internal static int? GetDefinitionArity(string? signature, string? symbolName, string? symbolKind)
     {
         if (string.IsNullOrWhiteSpace(symbolName))
@@ -99,6 +137,12 @@ internal static class CSharpTypeReferenceArity
 
         return null;
     }
+
+    internal static bool IsValueTypeDeclaration(string? signature, string? symbolKind)
+        => string.Equals(symbolKind, "struct", StringComparison.Ordinal)
+           || (string.Equals(symbolKind, "record", StringComparison.Ordinal)
+               && !string.IsNullOrWhiteSpace(signature)
+               && ContainsIdentifier(signature, "struct", signature.Length));
 
     private static int FindClosestIdentifierOccurrence(string text, string identifier, long? columnNumber)
     {

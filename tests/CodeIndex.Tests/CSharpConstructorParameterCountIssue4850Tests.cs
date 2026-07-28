@@ -33,4 +33,19 @@ public sealed class CSharpConstructorParameterCountIssue4850Tests
                 "Widget",
                 signature.Contains("class", StringComparison.Ordinal) ? "class" : "function"));
     }
+
+    [Theory]
+    [InlineData("new Widget()", "Widget", 5, 0)]
+    [InlineData("new Widget<int>(1, Factory.Create(\"x,y\"))", "Widget", 5, 2)]
+    [InlineData("first = new Widget(1); second = new Widget(2, 3);", "Widget", 37, 2)]
+    public void GetInvocationArgumentCount_UsesReferencedOccurrence_Issue4850(
+        string context,
+        string name,
+        long column,
+        int expected)
+    {
+        Assert.Equal(
+            expected,
+            CSharpTypeReferenceArity.GetInvocationArgumentCount(context, name, column));
+    }
 }
