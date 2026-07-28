@@ -16,6 +16,7 @@ internal static class DiffCommandOptionsParser
         var offsetExplicit = false;
         int? maxJsonBytes = null;
         string? cursor = null;
+        string? cursorSelectionFingerprint = null;
         string? parseError = null;
 
         for (var i = 0; i < args.Length; i++)
@@ -109,11 +110,11 @@ internal static class DiffCommandOptionsParser
             parseError = "--cursor cannot be combined with --offset";
         if (parseError is null && cursor is not null)
         {
-            var selectionFingerprint = DiffCursorCodec.CreateSelectionFingerprint(
-                dbs[0],
-                dbs[1],
-                includeContent);
-            if (!DiffCursorCodec.TryDecode(cursor, selectionFingerprint, out offset, out var cursorError))
+            if (!DiffCursorCodec.TryDecode(
+                    cursor,
+                    out offset,
+                    out cursorSelectionFingerprint,
+                    out var cursorError))
                 parseError = cursorError;
         }
         if (parseError is null && offset > int.MaxValue - limit)
@@ -132,6 +133,7 @@ internal static class DiffCommandOptionsParser
             OffsetExplicit = offsetExplicit,
             MaxJsonBytes = maxJsonBytes,
             Cursor = cursor,
+            CursorSelectionFingerprint = cursorSelectionFingerprint,
             ParseError = parseError,
         };
     }

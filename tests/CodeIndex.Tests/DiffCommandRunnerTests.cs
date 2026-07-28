@@ -364,6 +364,22 @@ public class DiffCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, mismatchExitCode);
             using var mismatchDocument = JsonDocument.Parse(mismatchOutput);
             Assert.Equal("error", mismatchDocument.RootElement.GetProperty("status").GetString());
+
+            TestProjectHelper.InsertIndexedFile(
+                leftDb,
+                "src/AfterCursorMutation.cs",
+                "csharp",
+                "public static class AfterCursorMutation { }");
+            var (staleExitCode, staleOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--cursor", nextCursor!]);
+
+            Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
+            using var staleDocument = JsonDocument.Parse(staleOutput);
+            Assert.Equal("error", staleDocument.RootElement.GetProperty("status").GetString());
+            Assert.Contains(
+                "no longer matches the selected database contents",
+                staleDocument.RootElement.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
         }
         finally
         {

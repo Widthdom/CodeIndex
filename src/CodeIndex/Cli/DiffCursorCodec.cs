@@ -11,14 +11,33 @@ internal static class DiffCursorCodec
 
     internal static string CreateSelectionFingerprint(string leftDb, string rightDb, bool includeContent)
     {
-        var material = string.Join(
-            "\n",
-            "diff-record-contract:v1",
-            leftDb,
-            rightDb,
-            includeContent ? "include-content" : "redacted");
-        return HexEncoding.ToLowerHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        using var hash = CreateSelectionHash(leftDb, rightDb, includeContent);
+        return CompleteSelectionFingerprint(hash);
     }
+
+    internal static IncrementalHash CreateSelectionHash(string leftDb, string rightDb, bool includeContent)
+    {
+        var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendSelectionPart(hash, "diff-record-selection:v1");
+        AppendSelectionPart(hash, leftDb);
+        AppendSelectionPart(hash, rightDb);
+        AppendSelectionPart(hash, includeContent ? "include-content" : "redacted");
+        return hash;
+    }
+
+    internal static void AppendSelectionRecord(
+        IncrementalHash hash,
+        string area,
+        string side,
+        string identitySha256)
+    {
+        AppendSelectionPart(hash, area);
+        AppendSelectionPart(hash, side);
+        AppendSelectionPart(hash, identitySha256);
+    }
+
+    internal static string CompleteSelectionFingerprint(IncrementalHash hash)
+        => HexEncoding.ToLowerHexString(hash.GetHashAndReset());
 
     internal static string Encode(int offset, string selectionFingerprint)
     {
@@ -30,11 +49,12 @@ internal static class DiffCursorCodec
 
     internal static bool TryDecode(
         string cursor,
-        string expectedSelectionFingerprint,
         out int offset,
+        out string selectionFingerprint,
         out string error)
     {
         offset = 0;
+        selectionFingerprint = string.Empty;
         if (cursor.Length > MaxCursorLength
             || !cursor.StartsWith(Prefix, StringComparison.Ordinal)
             || !TryFromBase64Url(cursor[Prefix.Length..], out var payloadBytes))
@@ -55,11 +75,13 @@ internal static class DiffCursorCodec
             return false;
         }
 
-        var actualFingerprint = payload[(separator + 1)..];
-        if (!FixedTimeEquals(actualFingerprint, expectedSelectionFingerprint))
+        selectionFingerprint = payload[(separator + 1)..];
+        if (selectionFingerprint.Length != SHA256.HashSizeInBytes * 2
+            || selectionFingerprint.Any(character => !Uri.IsHexDigit(character)))
         {
             offset = 0;
-            error = "--cursor does not match the selected database pair or content policy; restart without --cursor";
+            selectionFingerprint = string.Empty;
+            error = $"--cursor must be an opaque {Prefix} cursor returned by a prior detailed diff response";
             return false;
         }
 
@@ -67,12 +89,21 @@ internal static class DiffCursorCodec
         return true;
     }
 
-    private static bool FixedTimeEquals(string left, string right)
+    internal static bool FixedTimeEquals(string left, string right)
     {
         var leftBytes = Encoding.UTF8.GetBytes(left);
         var rightBytes = Encoding.UTF8.GetBytes(right);
         return leftBytes.Length == rightBytes.Length
             && CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
+
+    private static void AppendSelectionPart(IncrementalHash hash, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(length, bytes.Length);
+        hash.AppendData(length);
+        hash.AppendData(bytes);
     }
 
     private static string ToBase64Url(byte[] bytes)

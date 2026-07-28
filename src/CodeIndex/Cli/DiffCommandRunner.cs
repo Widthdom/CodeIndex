@@ -64,6 +64,21 @@ public static class DiffCommandRunner
         try
         {
             var result = CompareDatabases(options, cancellationToken);
+            if (options.CursorSelectionFingerprint is { } cursorSelectionFingerprint
+                && (result.SelectionFingerprint is not { } currentSelectionFingerprint
+                    || !DiffCursorCodec.FixedTimeEquals(
+                        cursorSelectionFingerprint,
+                        currentSelectionFingerprint)))
+            {
+                return DiffResultWriter.WriteCommandError(
+                    options.Json || options.SummaryOnly,
+                    jsonOptions,
+                    "--cursor no longer matches the selected database contents; restart without --cursor",
+                    CommandExitCodes.UsageError,
+                    "Rerun the detailed diff without --cursor to start from the current deterministic record sequence.",
+                    CommandErrorCodes.UsageError,
+                    options.MaxJsonBytes);
+            }
 
             var outputExitCode = DiffResultWriter.WriteResult(result, options, jsonOptions);
             if (outputExitCode.HasValue)
@@ -128,7 +143,8 @@ public static class DiffCommandRunner
         CancellationToken cancellationToken,
         string? leftDisplayPath = null,
         string? rightDisplayPath = null,
-        bool includeContent = false)
+        bool includeContent = false,
+        bool emitCursorMetadata = true)
     {
         var options = new DiffCommandOptions
         {
@@ -138,6 +154,7 @@ public static class DiffCommandRunner
             Offset = offset,
             Detailed = detailed,
             IncludeContent = includeContent,
+            EmitCursorMetadata = emitCursorMetadata,
         };
         var result = CompareDatabases(options, cancellationToken);
         return result with
@@ -455,17 +472,19 @@ public static class DiffCommandRunner
             AddPagingDiagnostic(diagnostics, fileDiff.Omitted, fileDiff.HasMore, "file differences", options);
         }
 
-        DiffRecordPageCollector? collector = null;
-        if (options.Detailed && !options.SummaryOnly)
-        {
-            collector = new DiffRecordPageCollector(
+        using DiffRecordPageCollector? collector = options.Detailed && !options.SummaryOnly
+            ? new DiffRecordPageCollector(
+                options.LeftDb!,
+                options.RightDb!,
                 options.Offset,
                 options.Limit,
                 options.IncludeContent,
                 options.Json
                     ? options.MaxJsonBytes ?? DefaultDiffJsonBytes
-                    : null);
-
+                    : null)
+            : null;
+        if (collector is not null)
+        {
             cancellationToken.ThrowIfCancellationRequested();
             identical &= CollectOrderedRows(
                 leftConnection,
@@ -584,24 +603,30 @@ public static class DiffCommandRunner
             hasMore = collector.TotalCount > (long)options.Offset + records.Count;
             truncated = omittedCount > 0;
             truncationReason = truncated ? "limit_or_offset" : null;
-            selectionFingerprint = DiffCursorCodec.CreateSelectionFingerprint(
-                options.LeftDb!,
-                options.RightDb!,
-                options.IncludeContent);
-            currentCursor = DiffCursorCodec.Encode(options.Offset, selectionFingerprint);
-            if (hasMore && records.Count > 0)
+            selectionFingerprint = collector.CompleteSelectionFingerprint();
+            if (options.EmitCursorMetadata)
+            {
+                currentCursor = DiffCursorCodec.Encode(options.Offset, selectionFingerprint);
+                if (hasMore && records.Count > 0)
+                {
+                    nextOffset = checked(options.Offset + records.Count);
+                    nextCursor = DiffCursorCodec.Encode(nextOffset.Value, selectionFingerprint);
+                }
+
+                replay = BuildReplayMetadata(options, selectionFingerprint, currentCursor, nextCursor);
+            }
+            else if (hasMore && records.Count > 0)
             {
                 nextOffset = checked(options.Offset + records.Count);
-                nextCursor = DiffCursorCodec.Encode(nextOffset.Value, selectionFingerprint);
             }
-
-            replay = BuildReplayMetadata(options, selectionFingerprint, currentCursor, nextCursor);
             if (truncated)
             {
                 diagnostics.Add(new DiffDiagnosticJsonResult(
                     "diff_records_truncated",
-                    hasMore && records.Count > 0
+                    hasMore && records.Count > 0 && options.EmitCursorMetadata
                         ? "Detailed diff records were omitted; use replay.next_page_arguments to continue from the next whole record."
+                        : hasMore && records.Count > 0
+                            ? $"Detailed diff records were omitted; continue from the next whole record with --offset {nextOffset}."
                         : hasMore && options.Limit == 0
                             ? "Detailed diff records were omitted because --limit is 0; rerun with a positive --limit."
                         : "Detailed diff records before the requested offset were omitted from this page."));
@@ -684,7 +709,7 @@ public static class DiffCommandRunner
         var selectionFingerprint = options.Detailed
             ? DiffCursorCodec.CreateSelectionFingerprint(options.LeftDb!, options.RightDb!, options.IncludeContent)
             : null;
-        var currentCursor = selectionFingerprint is null
+        var currentCursor = selectionFingerprint is null || !options.EmitCursorMetadata
             ? null
             : DiffCursorCodec.Encode(options.Offset, selectionFingerprint);
 
@@ -1347,11 +1372,9 @@ public static class DiffCommandRunner
             $"sha256:{hash} ({bytes.LongLength} UTF-8 bytes)");
     }
 
-    private static DiffRecordJsonResult CreateDiffRecord(
+    private static string CreateDiffRecordIdentity(
         DiffRowSchema schema,
-        string side,
-        DiffRow row,
-        bool includeContent)
+        DiffRow row)
     {
         if (schema.FieldNames.Length != row.SortValues.Length)
         {
@@ -1361,20 +1384,32 @@ public static class DiffCommandRunner
 
         using var identityHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         AppendIdentityPart(identityHash, schema.Area);
-        var fields = new List<DiffFieldJsonResult>(row.SortValues.Length);
         for (var i = 0; i < row.SortValues.Length; i++)
         {
             var name = schema.FieldNames[i];
             var value = row.SortValues[i];
             AppendIdentityPart(identityHash, name);
             AppendIdentityValue(identityHash, value);
-            fields.Add(CreateDiffField(name, value, includeContent));
         }
+
+        return HexEncoding.ToLowerHexString(identityHash.GetHashAndReset());
+    }
+
+    private static DiffRecordJsonResult CreateDiffRecord(
+        DiffRowSchema schema,
+        string side,
+        DiffRow row,
+        string identitySha256,
+        bool includeContent)
+    {
+        var fields = new List<DiffFieldJsonResult>(row.SortValues.Length);
+        for (var i = 0; i < row.SortValues.Length; i++)
+            fields.Add(CreateDiffField(schema.FieldNames[i], row.SortValues[i], includeContent));
 
         return new DiffRecordJsonResult(
             schema.Area,
             side,
-            HexEncoding.ToLowerHexString(identityHash.GetHashAndReset()),
+            identitySha256,
             fields);
     }
 
@@ -1459,16 +1494,20 @@ public static class DiffCommandRunner
         string Area,
         string[] FieldNames);
 
-    private sealed class DiffRecordPageCollector
+    private sealed class DiffRecordPageCollector : IDisposable
     {
         private readonly int _offset;
         private readonly int _limit;
         private readonly bool _includeContent;
         private readonly int? _materializationByteBudget;
+        private readonly IncrementalHash _selectionHash;
         private long _materializedRecordBytes;
         private bool _materializationBudgetReached;
+        private bool _selectionFingerprintCompleted;
 
         internal DiffRecordPageCollector(
+            string leftDb,
+            string rightDb,
             int offset,
             int limit,
             bool includeContent,
@@ -1478,6 +1517,7 @@ public static class DiffCommandRunner
             _limit = limit;
             _includeContent = includeContent;
             _materializationByteBudget = materializationByteBudget;
+            _selectionHash = DiffCursorCodec.CreateSelectionHash(leftDb, rightDb, includeContent);
         }
 
         internal List<DiffRecordJsonResult> Records { get; } = [];
@@ -1485,11 +1525,22 @@ public static class DiffCommandRunner
 
         internal void Add(DiffRowSchema schema, string side, DiffRow row)
         {
+            var identitySha256 = CreateDiffRecordIdentity(schema, row);
+            DiffCursorCodec.AppendSelectionRecord(
+                _selectionHash,
+                schema.Area,
+                side,
+                identitySha256);
             if (TotalCount >= _offset &&
                 Records.Count < _limit &&
                 !_materializationBudgetReached)
             {
-                var record = CreateDiffRecord(schema, side, row, _includeContent);
+                var record = CreateDiffRecord(
+                    schema,
+                    side,
+                    row,
+                    identitySha256,
+                    _includeContent);
                 if (_materializationByteBudget is null)
                 {
                     Records.Add(record);
@@ -1508,11 +1559,23 @@ public static class DiffCommandRunner
             TotalCount++;
         }
 
+        internal string CompleteSelectionFingerprint()
+        {
+            if (_selectionFingerprintCompleted)
+                throw new InvalidOperationException("diff selection fingerprint was already completed");
+
+            _selectionFingerprintCompleted = true;
+            return DiffCursorCodec.CompleteSelectionFingerprint(_selectionHash);
+        }
+
         internal void AddMetadata(string area, string key, string? leftValue, string? rightValue)
             => Add(
                 new DiffRowSchema(area, ["key", "left_value", "right_value"]),
                 "changed",
                 new DiffRow([key, leftValue, rightValue]));
+
+        public void Dispose()
+            => _selectionHash.Dispose();
     }
 
     private sealed record DiffRow(
@@ -1550,5 +1613,7 @@ internal sealed class DiffCommandOptions
     public bool OffsetExplicit { get; init; }
     public int? MaxJsonBytes { get; init; }
     public string? Cursor { get; init; }
+    public string? CursorSelectionFingerprint { get; init; }
+    public bool EmitCursorMetadata { get; init; } = true;
     public string? ParseError { get; init; }
 }

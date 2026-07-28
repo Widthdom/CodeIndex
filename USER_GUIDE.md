@@ -532,7 +532,9 @@ record boundaries, so the result remains valid JSON. `total_count`, `returned_co
 `--limit` bounds the unified record page, `--offset` remains available for
 direct paging, and `next_cursor` plus `replay.next_page_arguments` provide the
 preferred deterministic continuation contract. Reuse the same database
-arguments and emitted replay flags to resume.
+arguments and emitted replay flags to resume. Cursors bind the complete
+deterministic difference sequence as well as the database arguments and content
+policy; if either database changes, restart without `--cursor`.
 
 ## Flag compatibility and migrations
 
@@ -3756,7 +3758,9 @@ page の状態は `total_count`、`returned_count`、`omitted_count`、`truncate
 `truncation_reason` で確認できます。`--limit` は unified record page を制限し、
 direct paging 用の `--offset` も引き続き使えます。deterministic な続きの取得には
 `next_cursor` と `replay.next_page_arguments` を使うことを推奨します。同じ database
-arguments と、出力された replay flags を再利用して再開してください。
+arguments と、出力された replay flags を再利用して再開してください。cursor は database
+arguments と content policy に加えて deterministic な差分 sequence 全体に束縛されます。
+いずれかの database が変更された場合は `--cursor` なしで最初からやり直してください。
 
 ## フラグ互換性と移行
 
