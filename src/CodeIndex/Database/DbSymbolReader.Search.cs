@@ -442,7 +442,11 @@ public partial class DbReader
             foreach (var q in validQueries)
                 perName.Add(SearchSymbols(new[] { q! }, requestedPrefix, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine, groupPartials));
 
-            var seen = new HashSet<(string Path, int Line, string Name, string Kind)>();
+            // De-duplicate the same physical symbol returned by multiple query branches while
+            // preserving distinct indexed rows that happen to share a path/line/name/kind tuple.
+            // 複数 query branch が返した同一 physical symbol は除外する一方、path/line/name/kind が
+            // 偶然一致する別の indexed row は保持する。
+            var seen = new HashSet<long?>();
             var merged = new List<SymbolResult>();
             var cursors = new int[perName.Count];
             bool advanced;
@@ -454,7 +458,7 @@ public partial class DbReader
                     while (cursors[i] < perName[i].Count)
                     {
                         var r = perName[i][cursors[i]++];
-                        if (seen.Add((r.Path, r.Line, r.Name, r.Kind)))
+                        if (seen.Add(r.SymbolId))
                         {
                             merged.Add(r);
                             advanced = true;

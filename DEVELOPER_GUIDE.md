@@ -895,11 +895,15 @@ Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition t
 
 MCP stderr diagnostics are prefixed with `[rid=<opaque-token> rid_type=<id-type> rid_length=<decoded-value-length> cid=<correlation-id>]` when a request context has an id. Every `tools/call` also emits one structured JSON line with `event: "mcp.tool.invocation"`, the same opaque `request_id` / `request_id_type` / `request_id_length` tuple, the tool name, elapsed milliseconds, status, result count when available, error metadata, argument keys, and argument lengths. Neither the raw request id nor argument values are logged in this telemetry.
 
-### MCP search pagination
+### MCP query pagination
 
 MCP `search` responses include `result_stable_at`, copied from the index freshness timestamp for the database snapshot used by that call. Clients that page through search results should compare `result_stable_at` across calls; if it changes, an intervening index mutation may have shifted the result set and the client should restart pagination.
 
 Non-empty `search` responses also include `next_cursor`. Passing that value back as the `cursor` argument with the same query and filters continues after the last returned `(score, chunk rowid)` anchor. The cursor is an opaque response value; clients should not construct or edit it.
+
+The high-volume discovery tools `symbols`, `files`, and `validate` also accept an opaque `cursor`. Every non-count response reports `returned_count`, authoritative `total_count`, `remaining_count`, `cursor_offset`, `page_limit`, `has_more`, `result_stable_at`, and `next_cursor`; the final or empty page returns `has_more: false` and `next_cursor: null`. Each page reads its generation, total, and rows in one SQLite snapshot, and deterministic ordering lets clients enumerate all rows without gaps or duplicates.
+
+Pass `next_cursor` back to the same tool with the exact same filters, `format`, and `limit`. These tokens are stateless and bound to both that normalized query and the index generation. Invalid tokens return `cursor_malformed`, changed arguments return `cursor_query_mismatch`, out-of-range offsets return `cursor_offset_out_of_range`, and an intervening index generation returns `cursor_stale` with the `index_stale` category. In all four cases, discard the token and restart without `cursor`. `countOnly: true` and `format: "count"` do not accept a cursor. The `status` tool publishes the token input bound as `mcp.limits.max_query_cursor_characters`.
 
 ### MCP health probes
 
@@ -4112,11 +4116,15 @@ operator は environment variable で既定値を上書きできる。
 
 MCP stderr diagnostic は request context に id がある場合、`[rid=<opaque-token> rid_type=<id-type> rid_length=<decode 後の値長> cid=<correlation-id>]` prefix を付ける。すべての `tools/call` は同じ opaque な `request_id` / `request_id_type` / `request_id_length` tuple、`event: "mcp.tool.invocation"`、tool name、elapsed milliseconds、status、可能な場合の result count、error metadata、argument key、argument length を含む structured JSON line も出す。request id の生値と argument value はこの telemetry に記録しない。
 
-### MCP 検索ページング
+### MCP クエリページング
 
 MCP `search` response には、その call が使った DB snapshot の index freshness timestamp からコピーした `result_stable_at` を含める。client が search result を page する場合は、call 間で `result_stable_at` を比較すること。値が変わっていれば、途中の index mutation により result set がずれた可能性があるため、pagination を最初からやり直すべきである。
 
 non-empty な `search` response には `next_cursor` も含める。同じ query と filter でその値を `cursor` argument として渡すと、最後に返した `(score, chunk rowid)` anchor の後から継続する。cursor は opaque な response value であり、client が構築・編集してはいけない。
+
+大量の discovery 結果を返す `symbols`、`files`、`validate` も opaque な `cursor` を受け付ける。count 以外の全 response は `returned_count`、authoritative な `total_count`、`remaining_count`、`cursor_offset`、`page_limit`、`has_more`、`result_stable_at`、`next_cursor` を報告し、最終 page または空 page は `has_more: false` と `next_cursor: null` を返す。各 page は generation、total、row を単一 SQLite snapshot で読み、決定的な順序により gap や duplicate なしで全 row を列挙できる。
+
+`next_cursor` は、filter、`format`、`limit` を一切変えずに同じ tool へ渡す。token は stateless で、正規化済み query と index generation の両方に束縛される。不正 token は `cursor_malformed`、argument 変更は `cursor_query_mismatch`、範囲外 offset は `cursor_offset_out_of_range`、途中の index generation 変更は `index_stale` category の `cursor_stale` を返す。いずれも token を破棄し、`cursor` なしで最初からやり直す。`countOnly: true` と `format: "count"` は cursor を受け付けない。`status` tool は token 入力上限を `mcp.limits.max_query_cursor_characters` として公開する。
 
 ### MCP ヘルスプローブ
 

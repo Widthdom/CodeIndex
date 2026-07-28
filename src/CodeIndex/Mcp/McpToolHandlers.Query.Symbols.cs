@@ -49,6 +49,7 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var includeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         if (!TryReadSinceArgument(args, out var since, out var sinceError))
             return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "symbols", out var exact, out var exactError))
@@ -59,6 +60,19 @@ public partial class McpServer
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
+        var rawCursor = args?["cursor"]?.GetValue<string>();
+        if (countOnly && rawCursor is not null)
+            return CreateToolErrorResponse(id, "cursor is not supported when symbols uses countOnly or format=count.");
+        McpQueryCursor? cursor = null;
+        if (rawCursor is not null && !TryParseMcpQueryCursor(rawCursor, out cursor))
+        {
+            return CreateMcpCursorError(
+                id,
+                "symbols",
+                "cursor_malformed",
+                "cursor must be an opaque response:v2 next_cursor returned by symbols.",
+                stale: false);
+        }
 
         // Merge query + names into a de-duplicated OR list. `|` is treated as a literal name character
         // so operator symbols (e.g. `operator |`) stay searchable; multi-name must use repeated `names[]`.
@@ -75,7 +89,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Too many symbol names ({queriesForSearch.Count}); maximum is {QueryCommandRunner.MaxSymbolQueryNames}. Split the request into smaller batches.");
         IReadOnlyList<string>? effectiveQueries = queriesForSearch.Count == 0 ? null : queriesForSearch;
 
-        return WithDbReader(id, args, reader =>
+        return WithDbReader(id, args, reader => reader.RunInReadSnapshot(() =>
         {
             JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             var hasExactPredicate = exact && effectiveQueries is { Count: > 0 };
@@ -99,7 +113,61 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countSummary.Count, "symbol")}.", payload);
             }
 
-            var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+            var queryFingerprint = BuildMcpQueryFingerprint(
+                "symbols",
+                limit,
+                format,
+                new Dictionary<string, string?>
+                {
+                    ["query"] = query,
+                    ["kind"] = kind,
+                    ["lang"] = lang,
+                    ["since"] = since?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+                    ["exact"] = exact ? "true" : "false",
+                    ["exclude-tests"] = excludeTests ? "true" : "false",
+                    ["include-generated"] = includeGenerated ? "true" : "false",
+                },
+                ("names", effectiveQueries, PreserveOrder: true),
+                ("path", pathPatterns, PreserveOrder: false),
+                ("exclude-path", excludePaths, PreserveOrder: false),
+                ("visibility", visibilityFilters, PreserveOrder: false),
+                ("exclude-visibility", excludeVisibilityFilters, PreserveOrder: false));
+            var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
+            var total = reader.CountSearchSymbolsTotal(
+                effectiveQueries,
+                kind,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                since,
+                exact,
+                visibilityFilters,
+                excludeVisibilityFilters).Count;
+            if (ValidateMcpQueryCursor(
+                    id,
+                    "symbols",
+                    cursor,
+                    queryFingerprint,
+                    generation.Fingerprint,
+                    total) is JsonObject cursorError)
+            {
+                return cursorError;
+            }
+            var offset = cursor?.Offset ?? 0;
+            var results = reader.SearchSymbols(
+                effectiveQueries,
+                limit,
+                kind,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                since,
+                exact,
+                visibilityFilters,
+                excludeVisibilityFilters,
+                offset: offset);
             var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
                 ? QueryCommandRunner.BuildExactZeroHint(
@@ -126,11 +194,22 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddMcpPaginationEnvelope(
+                    payload,
+                    total,
+                    returnedCount: 0,
+                    offset,
+                    limit,
+                    queryFingerprint,
+                    generation);
                 AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
                 if (hasExactPredicate)
                     AddExactGraphSignal(payload, exactSignal);
-                AddExactZeroHint(payload, exactZeroHint);
-                AddFreshnessHint(payload, reader);
+                if (total == 0)
+                {
+                    AddExactZeroHint(payload, exactZeroHint);
+                    AddFreshnessHint(payload, reader);
+                }
                 adjustments.ApplyTo(payload);
                 return CreateToolResult(id, "No symbols found.", payload);
             }
@@ -146,6 +225,14 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddMcpPaginationEnvelope(
+                structured,
+                total,
+                results.Count,
+                offset,
+                limit,
+                queryFingerprint,
+                generation);
             AddVisibilityFilterEcho(structured, visibilityFilters, excludeVisibilityFilters);
             if (format == "compact")
             {
@@ -162,7 +249,7 @@ public partial class McpServer
                 "Use definition to confirm the declaration for the best symbol candidate; then use references, callers, or callees depending on the change.");
             adjustments.ApplyTo(structured);
             return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "symbol"), structured);
-        });
+        }));
     }
 
     private JsonNode ExecuteDefinition(JsonNode? id, JsonNode? args)
