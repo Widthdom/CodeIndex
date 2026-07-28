@@ -1906,11 +1906,23 @@ public partial class DbReader
         var freshness = GetFreshnessHint();
         var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
         var indexedHeadTimestamp = TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey);
+        // files_resource_generation_* triggers advance this persisted counter inside the
+        // same transaction as every indexed-file insert/update/delete. Unlike indexed_at,
+        // it cannot collapse multiple committed indexing batches into the same second.
+        // files_resource_generation_* trigger は indexed-file の insert/update/delete と
+        // 同じ transaction 内でこの永続 counter を進めるため、同一秒内の複数 commit
+        // batch が indexed_at 上で同一 generation に潰れることを防ぐ。
+        var committedWriteGeneration =
+            TryGetMetaStringInternal(DbContext.ResourceListGenerationMetaKey);
         var indexedAt = freshness.IndexedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
         var stableAt = indexedHeadTimestamp ?? indexedAt;
         var identity = string.Create(
             CultureInfo.InvariantCulture,
-            $"{indexedHeadSha ?? "no-indexed-head"}\n{indexedHeadTimestamp ?? "no-indexed-head-timestamp"}\n{indexedAt ?? "no-indexed-at"}\n{freshness.FileCount}");
+            $"{indexedHeadSha ?? "no-indexed-head"}\n"
+            + $"{indexedHeadTimestamp ?? "no-indexed-head-timestamp"}\n"
+            + $"{indexedAt ?? "no-indexed-at"}\n"
+            + $"{freshness.FileCount}\n"
+            + $"{committedWriteGeneration ?? "no-committed-write-generation"}");
         return (identity, stableAt);
     }
 

@@ -191,6 +191,122 @@ public partial class McpServerTests
         Assert.InRange(bytesWritten, 1, 32 * 1024);
     }
 
+    [Fact]
+    public void DiscoveryTools_RejectCursorsAfterSameSecondCommittedIndexBatch_Issue4853()
+    {
+        SeedIssue4853DiscoveryRows(3);
+        using (var fixTimestamp = _db.Connection.CreateCommand())
+        {
+            fixTimestamp.CommandText =
+                "UPDATE files SET indexed_at = '2099-01-01T00:00:00.0000000Z'";
+            fixTimestamp.ExecuteNonQuery();
+        }
+
+        var requests = new (string Tool, JsonObject Arguments)[]
+        {
+            (
+                "symbols",
+                new JsonObject
+                {
+                    ["query"] = "Issue4853Symbol",
+                    ["path"] = "src/pagination4853",
+                    ["limit"] = 1,
+                    ["format"] = "compact",
+                }),
+            (
+                "files",
+                new JsonObject
+                {
+                    ["query"] = "pagination4853",
+                    ["limit"] = 1,
+                }),
+            (
+                "validate",
+                new JsonObject
+                {
+                    ["kind"] = "line_too_long",
+                    ["path"] = "src/pagination4853",
+                    ["limit"] = 1,
+                    ["format"] = "compact",
+                }),
+        };
+        var cursors = requests.ToDictionary(
+            request => request.Tool,
+            request => CallIssue4853Tool(
+                _server,
+                request.Tool,
+                request.Arguments,
+                id: 30)["next_cursor"]!.GetValue<string>(),
+            StringComparer.Ordinal);
+
+        string[] beforeGeneration;
+        using (var reader = new DbReader(_db))
+            beforeGeneration = reader.GetPaginationGeneration().Identity.Split('\n');
+
+        var writer = new DbWriter(_db.Connection);
+        using (var transaction = writer.BeginTransaction())
+        {
+            const string path = "src/pagination4853/item-00.cs";
+            const string replacement = "public sealed class Issue4853Symbol99 { }";
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = path,
+                Lang = "csharp",
+                Size = Encoding.UTF8.GetByteCount(replacement),
+                Lines = 1,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = "issue-4853-replacement",
+            });
+            writer.InsertSymbols(
+            [
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = "Issue4853Symbol99",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = replacement,
+                },
+            ]);
+            writer.InsertIssues(
+                fileId,
+                [
+                    new FileIssue
+                    {
+                        Path = path,
+                        Line = 1,
+                        Kind = "line_too_long",
+                        Severity = FileIssue.SeverityWarning,
+                        Origin = FileIssue.OriginSourceLiteral,
+                        Message = "Issue 4853 replacement diagnostic",
+                    },
+                ]);
+            transaction.Commit();
+        }
+
+        string[] afterGeneration;
+        using (var reader = new DbReader(_db))
+            afterGeneration = reader.GetPaginationGeneration().Identity.Split('\n');
+        Assert.Equal(beforeGeneration[..4], afterGeneration[..4]);
+        Assert.NotEqual(beforeGeneration[4], afterGeneration[4]);
+
+        using var refreshedServer = new McpServer(_dbPath, "1.0.0-test", dbPathExplicit: true);
+        for (var index = 0; index < requests.Length; index++)
+        {
+            var request = requests[index];
+            request.Arguments["cursor"] = cursors[request.Tool];
+            var stale = CallIssue4853ToolError(
+                refreshedServer,
+                request.Tool,
+                request.Arguments,
+                id: 40 + index);
+            Assert.Equal("index_stale", stale["category"]!.GetValue<string>());
+            Assert.Equal("cursor_stale", stale["error_code"]!.GetValue<string>());
+        }
+    }
+
     private void AssertIssue4853Pages(string toolName, JsonObject arguments, string identityField)
     {
         var expectedTotal = 5;
