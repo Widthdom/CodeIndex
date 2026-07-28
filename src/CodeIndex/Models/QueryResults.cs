@@ -2248,6 +2248,8 @@ public class FileDependencyResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public double RankingScore { get; set; }
     public string Symbols { get; set; } = string.Empty;
+    [JsonIgnore]
+    public List<string>? SymbolSamples { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<FileDependencyEvidence>? Evidence { get; set; }
 }

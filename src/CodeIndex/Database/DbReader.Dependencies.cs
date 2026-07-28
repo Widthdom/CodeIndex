@@ -958,7 +958,7 @@ public partial class DbReader
             SELECT limited_edge_totals.source_path,
                    limited_edge_totals.target_path,
                    limited_edge_totals.reference_count,
-                   COALESCE(GROUP_CONCAT(CASE WHEN ranked_edge_symbols.symbol_rank <= @symbolSampleLimit THEN ranked_edge_symbols.symbol_name END), '') AS symbols,
+                   COALESCE(GROUP_CONCAT(CASE WHEN ranked_edge_symbols.symbol_rank <= @symbolSampleLimit THEN ranked_edge_symbols.symbol_name END, char(31)), '') AS symbols,
                    COALESCE(edge_evidence_payloads.evidence_payload, '') AS evidence_payload
             FROM limited_edge_totals
             LEFT JOIN ranked_edge_symbols
@@ -994,12 +994,14 @@ public partial class DbReader
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var symbolSamples = ParseDependencySymbols(reader.GetString(3));
                 results.Add(new FileDependencyResult
                 {
                     SourcePath = reader.GetString(0),
                     TargetPath = reader.GetString(1),
                     ReferenceCount = reader.GetInt32(2),
-                    Symbols = reader.GetString(3),
+                    SymbolSamples = symbolSamples,
+                    Symbols = string.Join(",", symbolSamples),
                     Evidence = ParseDependencyEvidence(reader.GetString(4)),
                 });
             }
@@ -1035,6 +1037,11 @@ public partial class DbReader
 
         return evidence;
     }
+
+    internal static List<string> ParseDependencySymbols(string payload)
+        => string.IsNullOrEmpty(payload)
+            ? []
+            : payload.Split('\u001f', StringSplitOptions.RemoveEmptyEntries).ToList();
 
     private static List<FileDependencyResult> RankDependencyResults(
         List<FileDependencyResult> results,
@@ -1252,7 +1259,7 @@ public partial class DbReader
             SELECT edge_reference_totals.source_path,
                    edge_reference_totals.target_path,
                    edge_reference_totals.reference_count,
-                   COALESCE(GROUP_CONCAT(CASE WHEN symbol_rank <= @symbolSampleLimit THEN symbol_name END), '') AS symbols,
+                   COALESCE(GROUP_CONCAT(CASE WHEN symbol_rank <= @symbolSampleLimit THEN symbol_name END, char(31)), '') AS symbols,
                    COALESCE(edge_evidence_payloads.evidence_payload, '') AS evidence_payload
             FROM edge_reference_totals
             LEFT JOIN ranked_edge_symbols
@@ -1286,13 +1293,15 @@ public partial class DbReader
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 candidateRowCount++;
+                var symbolSamples = ParseDependencySymbols(reader.GetString(3));
                 results.Add(new FileDependencyResult
                 {
                     SourcePath = reader.GetString(0),
                     TargetPath = reader.GetString(1),
                     ReferenceCount = reader.GetInt32(2),
                     RankingScore = reader.GetInt32(2),
-                    Symbols = reader.GetString(3),
+                    SymbolSamples = symbolSamples,
+                    Symbols = string.Join(",", symbolSamples),
                     Evidence = ParseDependencyEvidence(reader.GetString(4)),
                 });
             }
