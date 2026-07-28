@@ -105,6 +105,26 @@ public partial class McpServerTests
         Assert.Equal("cursor_query_mismatch", mismatch["error_code"]!.GetValue<string>());
 
         var writer = new DbWriter(_db.Connection);
+        writer.SetMeta(DbWriter.FoldBackfillGraphRefreshPendingMetaKey, "1");
+        using (var foldRefreshedServer = new McpServer(_dbPath, "1.0.0-test", dbPathExplicit: true))
+        {
+            var foldStale = CallIssue4853ToolError(
+                foldRefreshedServer,
+                "symbols",
+                new JsonObject
+                {
+                    ["query"] = "Issue4853Symbol",
+                    ["path"] = "src/pagination4853",
+                    ["limit"] = 1,
+                    ["format"] = "compact",
+                    ["cursor"] = cursor,
+                },
+                id: 4);
+            Assert.Equal("index_stale", foldStale["category"]!.GetValue<string>());
+            Assert.Equal("cursor_stale", foldStale["error_code"]!.GetValue<string>());
+        }
+
+        writer.SetMeta(DbWriter.FoldBackfillGraphRefreshPendingMetaKey, null);
         writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, "2026-07-28T02:00:00.0000000+00:00");
         using var refreshedServer = new McpServer(_dbPath, "1.0.0-test", dbPathExplicit: true);
         var stale = CallIssue4853ToolError(
@@ -118,7 +138,7 @@ public partial class McpServerTests
                 ["format"] = "compact",
                 ["cursor"] = cursor,
             },
-            id: 4);
+            id: 5);
         Assert.Equal("index_stale", stale["category"]!.GetValue<string>());
         Assert.Equal("cursor_stale", stale["error_code"]!.GetValue<string>());
         Assert.True(stale["retry_safe"]!.GetValue<bool>());

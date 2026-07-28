@@ -1263,6 +1263,8 @@ public partial class McpServer
             if (countOnly)
             {
                 payload["format"] = "count";
+                payload["truncated"] = false;
+                payload["more_available"] = false;
             }
             else if (format == "compact")
             {

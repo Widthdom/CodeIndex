@@ -68,6 +68,24 @@ public partial class McpServer
         return InspectGraphCursorCodec.BuildQueryFingerprint(components);
     }
 
+    private static (string Fingerprint, string? StableAt) BuildMcpGenerationFingerprint(
+        DbReader reader,
+        bool includeFoldState = false)
+    {
+        if (!includeFoldState)
+            return InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
+
+        var generation = reader.GetPaginationGeneration();
+        return (
+            InspectGraphCursorCodec.BuildQueryFingerprint(
+            [
+                "mcp-generation:v1",
+                generation.Identity,
+                reader.GetFoldPaginationGenerationIdentity(),
+            ]),
+            generation.StableAt);
+    }
+
     private JsonObject CreateMcpCursorError(
         JsonNode? id,
         string toolName,

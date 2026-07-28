@@ -1914,6 +1914,17 @@ public partial class DbReader
         return (identity, stableAt);
     }
 
+    internal string GetFoldPaginationGenerationIdentity()
+    {
+        var userVersion = ExecuteScalar("PRAGMA user_version");
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{userVersion & DbContext.FoldReadyFlag}\n"
+            + $"{TryGetMetaStringInternal("fold_key_version") ?? "no-fold-key-version"}\n"
+            + $"{TryGetMetaStringInternal("fold_key_fingerprint") ?? "no-fold-key-fingerprint"}\n"
+            + $"{TryGetMetaStringInternal(DbWriter.FoldBackfillGraphRefreshPendingMetaKey) ?? "no-fold-backfill-pending"}");
+    }
+
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()
     {
         return (

@@ -5188,6 +5188,8 @@ public partial class McpServerTests
         var count = countResponse["result"]!["structuredContent"]!;
         Assert.Equal("count", count["format"]!.GetValue<string>());
         Assert.Equal(1, count["count"]!.GetValue<int>());
+        Assert.False(count["truncated"]!.GetValue<bool>());
+        Assert.False(count["more_available"]!.GetValue<bool>());
         Assert.Null(count["issues"]);
     }
 

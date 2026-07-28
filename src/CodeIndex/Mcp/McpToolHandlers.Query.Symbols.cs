@@ -132,7 +132,7 @@ public partial class McpServer
                 ("exclude-path", excludePaths, PreserveOrder: false),
                 ("visibility", visibilityFilters, PreserveOrder: false),
                 ("exclude-visibility", excludeVisibilityFilters, PreserveOrder: false));
-            var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
+            var generation = BuildMcpGenerationFingerprint(reader, includeFoldState: true);
             var total = reader.CountSearchSymbolsTotal(
                 effectiveQueries,
                 kind,
