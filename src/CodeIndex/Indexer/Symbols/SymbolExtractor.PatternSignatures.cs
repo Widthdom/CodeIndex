@@ -370,12 +370,19 @@ public static partial class SymbolExtractor
                 out var fieldLastLineExclusiveEndColumn)
             && fieldLastLineIndex > lineIndex)
         {
-            signature = BuildCSharpMultilineSignature(
-                lines,
-                lineIndex,
-                gateRawStartColumn,
-                fieldLastLineIndex,
-                fieldLastLineExclusiveEndColumn);
+            signature = pattern.Kind == "property"
+                ? BuildSanitizedCSharpMultilineSignature(
+                    lines,
+                    lineIndex,
+                    gateRawStartColumn,
+                    fieldLastLineIndex,
+                    fieldLastLineExclusiveEndColumn)
+                : BuildCSharpMultilineSignature(
+                    lines,
+                    lineIndex,
+                    gateRawStartColumn,
+                    fieldLastLineIndex,
+                    fieldLastLineExclusiveEndColumn);
             return true;
         }
 

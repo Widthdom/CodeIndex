@@ -134,6 +134,7 @@ internal sealed partial class LspServer : IDisposable
         "class" => 5,
         "function" or "test.method" => 12,
         "property" => 7,
+        "field" => 8,
         "enum" => 10,
         "interface" => 11,
         "namespace" => 3,

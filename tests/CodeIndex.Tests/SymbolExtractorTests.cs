@@ -8677,6 +8677,32 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_LargeMultilineFieldSignature_StripsLineCommentsBeforeSummarizing_Issue4865()
+    {
+        var largeInitializer = string.Join(
+            ",\n",
+            Enumerable.Range(0, 160).Select(index => $"            \"value-{index:D3}\""));
+        var content = $$"""
+            public sealed class CommentedFields
+            {
+                private string A = "a", // keep the following declarator visible
+                    B =
+                    string.Concat(
+            {{largeInitializer}},
+                        "end");
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var field = Assert.Single(symbols.Where(symbol => symbol.Name == "A"));
+        Assert.Equal("field", field.Kind);
+        Assert.Equal("private string A = …, B = …;", field.Signature);
+        Assert.DoesNotContain("keep the following", field.Signature, StringComparison.Ordinal);
+        Assert.DoesNotContain("value-000", field.Signature, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineDeclaratorListsStillExpandAfterEarlierSiblings()
     {
         // Same-line field declarator lists must still expand trailing declarators even

@@ -2855,6 +2855,22 @@ public static partial class SymbolExtractor
         int lastLineIndex,
         int? lastLineExclusiveEndColumn)
     {
+        var sanitized = BuildSanitizedCSharpMultilineSignature(
+            lines,
+            startLineIndex,
+            startColumn,
+            lastLineIndex,
+            lastLineExclusiveEndColumn);
+        return NormalizeCSharpConstraintGenericWhitespace(sanitized);
+    }
+
+    private static string BuildSanitizedCSharpMultilineSignature(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int lastLineIndex,
+        int? lastLineExclusiveEndColumn)
+    {
         // Assemble the raw slice preserving '\n' between physical lines so multi-line raw
         // and verbatim string literals keep their newlines and leading indentation. The
         // dedicated sanitizer handles lex mode (Code / String / Verbatim / Raw / Char /
@@ -2890,8 +2906,7 @@ public static partial class SymbolExtractor
                 rawSlice.Append(line, from, to - from);
         }
 
-        var sanitized = SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
-        return NormalizeCSharpConstraintGenericWhitespace(sanitized);
+        return SanitizeCSharpMultilineSignatureSlice(rawSlice.ToString()).Trim();
     }
 
     private static string NormalizeCSharpConstraintGenericWhitespace(string signature)
@@ -3002,7 +3017,7 @@ public static partial class SymbolExtractor
         public bool EscapeNext;     // String / Char: true if a preceding backslash awaits its escaped char.
     }
 
-    // Sanitize a C# type header slice: strip `//` line comments and `/* ... */` block
+    // Sanitize a multiline C# declaration slice: strip `//` line comments and `/* ... */` block
     // comments, collapse runs of Code-mode whitespace (including '\n' between lines) to a
     // single space, preserve all String / Verbatim / Raw / Char literal contents verbatim
     // (including literal whitespace runs, line breaks inside raw / verbatim strings, and
@@ -3011,13 +3026,13 @@ public static partial class SymbolExtractor
     // whitespace inside holes is collapsed while literal content outside holes is not.
     // Closes #382.
     //
-    // C# 型ヘッダスライスのサニタイザ: `//` 行コメントと `/* ... */` ブロックコメントを
+    // C# 複数行宣言スライスのサニタイザ: `//` 行コメントと `/* ... */` ブロックコメントを
     // 除去し、Code モードの空白列（行間の `\n` も含む）を 1 つのスペースに畳み、String /
     // Verbatim / Raw / Char リテラルの中身（リテラル内の空白、raw / verbatim の行末改行、
     // エスケープ列）は verbatim に残し、補間ホール（`$"{expr}"`、`$@"{expr}"`、raw
     // `$"""{expr}"""` / `$$"""{{expr}}"""`）内部は Code モードとして分類してホール内の
     // 空白だけを畳み、ホール外のリテラル内容は畳まないようにする。Closes #382.
-    private static string SanitizeCSharpTypeHeaderSlice(string input)
+    private static string SanitizeCSharpMultilineSignatureSlice(string input)
     {
         if (string.IsNullOrEmpty(input))
             return string.Empty;

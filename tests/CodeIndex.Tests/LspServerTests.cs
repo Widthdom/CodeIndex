@@ -2473,6 +2473,56 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_NormalizedCSharpField_UsesLspFieldKinds_Issue4865()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_csharp_field_kind");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = """
+                public class App
+                {
+                    public int CountField = 1;
+                    public int Read() => CountField;
+                }
+                """;
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var documentResponse = HandleInitializedMessage(
+                server,
+                CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48650));
+            Assert.NotNull(documentResponse);
+            var roots = documentResponse!["result"]!.AsArray();
+            var app = Assert.Single(roots.Where(symbol => symbol?["name"]?.GetValue<string>() == "App"));
+            var field = Assert.Single(app!["children"]!.AsArray().Where(
+                symbol => symbol?["name"]?.GetValue<string>() == "CountField"));
+            Assert.Equal(8, field!["kind"]!.GetValue<int>());
+
+            var countFieldCharacter = CharacterOf(source, 3, "CountField");
+            var completionResponse = HandleInitializedMessage(
+                server,
+                CreatePositionRequest(
+                    "textDocument/completion",
+                    sourcePath,
+                    48651,
+                    3,
+                    countFieldCharacter + "CountF".Length));
+            Assert.NotNull(completionResponse);
+            var completionField = Assert.Single(completionResponse!["result"]!["items"]!.AsArray().Where(
+                item => item?["label"]?.GetValue<string>() == "CountField"));
+            Assert.Equal(5, completionField!["kind"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_DocumentSymbol_DoesNotNestSameRangeTopLevelSymbols_Issue3537()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_same_range");

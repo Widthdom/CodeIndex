@@ -1812,6 +1812,42 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithFieldReceiver_DoesNotEmitEnumCall_Issue4865()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready;
+            }
+
+            public sealed class UsesField
+            {
+                public Holder Status = new();
+
+                public int ReadField()
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "field" && symbol.Name == "Status");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Ready"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithIndentedShadowing_RespectsLexicalContainers()
     {
         const string content = """
