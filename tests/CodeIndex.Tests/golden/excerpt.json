@@ -68,7 +68,7 @@
       "start_column": 1,
       "end_line": 1,
       "end_column": 10,
-      "type": "variable",
+      "type": "keyword",
       "modifiers": []
     },
     {
@@ -76,7 +76,7 @@
       "start_column": 11,
       "end_line": 1,
       "end_column": 15,
-      "type": "type",
+      "type": "namespace",
       "modifiers": []
     },
     {
@@ -84,7 +84,7 @@
       "start_column": 1,
       "end_line": 3,
       "end_column": 7,
-      "type": "variable",
+      "type": "modifier",
       "modifiers": []
     },
     {
@@ -92,7 +92,7 @@
       "start_column": 8,
       "end_line": 3,
       "end_column": 14,
-      "type": "variable",
+      "type": "modifier",
       "modifiers": []
     },
     {
@@ -100,7 +100,7 @@
       "start_column": 15,
       "end_line": 3,
       "end_column": 20,
-      "type": "variable",
+      "type": "keyword",
       "modifiers": []
     },
     {
@@ -108,15 +108,17 @@
       "start_column": 21,
       "end_line": 3,
       "end_column": 24,
-      "type": "type",
-      "modifiers": []
+      "type": "class",
+      "modifiers": [
+        "declaration"
+      ]
     },
     {
       "start_line": 5,
       "start_column": 5,
       "end_line": 5,
       "end_column": 11,
-      "type": "variable",
+      "type": "modifier",
       "modifiers": []
     },
     {
@@ -124,7 +126,7 @@
       "start_column": 12,
       "end_line": 5,
       "end_column": 18,
-      "type": "variable",
+      "type": "modifier",
       "modifiers": []
     },
     {
@@ -132,7 +134,7 @@
       "start_column": 19,
       "end_line": 5,
       "end_column": 22,
-      "type": "variable",
+      "type": "keyword",
       "modifiers": []
     },
     {
@@ -140,15 +142,17 @@
       "start_column": 23,
       "end_line": 5,
       "end_column": 26,
-      "type": "type",
-      "modifiers": []
+      "type": "method",
+      "modifiers": [
+        "declaration"
+      ]
     },
     {
       "start_line": 5,
       "start_column": 27,
       "end_line": 5,
       "end_column": 30,
-      "type": "variable",
+      "type": "keyword",
       "modifiers": []
     },
     {
@@ -156,15 +160,17 @@
       "start_column": 31,
       "end_line": 5,
       "end_column": 32,
-      "type": "variable",
-      "modifiers": []
+      "type": "parameter",
+      "modifiers": [
+        "declaration"
+      ]
     },
     {
       "start_line": 5,
       "start_column": 34,
       "end_line": 5,
       "end_column": 37,
-      "type": "variable",
+      "type": "keyword",
       "modifiers": []
     },
     {
@@ -172,15 +178,17 @@
       "start_column": 38,
       "end_line": 5,
       "end_column": 39,
-      "type": "variable",
-      "modifiers": []
+      "type": "parameter",
+      "modifiers": [
+        "declaration"
+      ]
     },
     {
       "start_line": 5,
       "start_column": 44,
       "end_line": 5,
       "end_column": 45,
-      "type": "variable",
+      "type": "parameter",
       "modifiers": []
     },
     {
@@ -188,7 +196,7 @@
       "start_column": 48,
       "end_line": 5,
       "end_column": 49,
-      "type": "variable",
+      "type": "parameter",
       "modifiers": []
     }
   ],
