@@ -475,7 +475,11 @@ public partial class McpServer : IDisposable
     {
         PruneCompletedRequestTasks(tasks);
         var shutdownCancellationTask = GetShutdownCancellationTask();
-        var drainOperations = BuildDrainOperationsTask(tasks, terminalTransportWriteTask);
+        var rootsRefreshTask = GetClientRootsHandshakeRefreshTask();
+        if (rootsRefreshTask is not null && !tasks.Contains(rootsRefreshTask))
+            tasks.Add(rootsRefreshTask);
+        var drainOperations = IncludeClientRootsHandshakeRefreshAsync(
+            BuildDrainOperationsTask(tasks, terminalTransportWriteTask));
 
         // A shutdown notification may already have started cancellation before EOF reached this
         // method. In that case the post-cancel deadline begins immediately and includes callback
@@ -584,6 +588,24 @@ public partial class McpServer : IDisposable
             operations[operationIndex++] = task;
         operations[^1] = terminalTransportWriteTask;
         return Task.WhenAll(operations);
+    }
+
+    private async Task IncludeClientRootsHandshakeRefreshAsync(Task transportOperations)
+    {
+        try
+        {
+            await transportOperations.ConfigureAwait(false);
+        }
+        finally
+        {
+            // A notification task can publish the refresh after the first drain snapshot. Re-read
+            // it only after all accepted frames settle so teardown always observes that late task.
+            // notification task は最初の drain snapshot 後に refresh を公開し得る。accepted frame
+            // 完了後に再取得し、遅れて公開された task も teardown で必ず観測する。
+            var rootsRefreshTask = GetClientRootsHandshakeRefreshTask();
+            if (rootsRefreshTask is not null)
+                await rootsRefreshTask.ConfigureAwait(false);
+        }
     }
 
     private async Task AwaitPostCancellationDrainAsync(
@@ -925,6 +947,13 @@ public partial class McpServer : IDisposable
         }
         finally
         {
+            // Seal before taking the cleanup snapshot. A timed-out isolated initialize worker
+            // that registers later is rejected by TryRegister and releases its own claim, so it
+            // cannot strand the session in Initializing (#4848).
+            // cleanup snapshot の取得前に seal する。timeout 後に遅れて到着した initialize worker は
+            // TryRegister で拒否され、自身の claim を解放するため Initializing に残留しない (#4848)。
+            foreach (var state in deferredInitializeCommits.SealAndGetRegisteredStates())
+                ReleaseInitializeAttempt(state.InitializeAttemptId);
             frameCorrelationScope?.Dispose();
         }
     }

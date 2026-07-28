@@ -220,13 +220,12 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void Initialize_WithoutClientInfo_ClearsStaleCallerFields()
+    public void Initialize_DuplicateWithoutClientInfoRetainsAcceptedAuditCaller_Issue4848()
     {
-        // Regression for #1562 codex review: a reconnect that omits clientInfo must not
-        // inherit the previous client's name/version on subsequent audit records, since
-        // that mis-attributes activity to the wrong caller.
-        // #1562 codex レビュー回帰: clientInfo を省略した再 initialize は、以後の
-        // audit レコードを直前のクライアント名で記録してはならない。
+        // A duplicate initialize is rejected, so subsequent audit records retain the
+        // caller established by the one accepted handshake (#4848).
+        // 重複 initialize は拒否されるため、以後の audit record は受理済み handshake
+        // で確立した caller を保持する（#4848）。
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
 
@@ -234,16 +233,16 @@ public class McpAuditLogTests : IDisposable
         _ = server.HandleMessage(init1);
 
         var init2 = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}""")!;
-        _ = server.HandleMessage(init2);
+        var duplicate = server.HandleMessage(init2)!;
+        Assert.Equal(-32600, duplicate["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("duplicate_initialize", duplicate["error"]!["data"]!["reason"]!.GetValue<string>());
 
         var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
         _ = server.HandleMessage(ping);
 
         var record = ReadOnlyRecord();
-        Assert.False(record.TryGetProperty("caller", out _),
-            "caller must be cleared when subsequent initialize omits clientInfo");
-        Assert.False(record.TryGetProperty("caller_version", out _),
-            "caller_version must be cleared when subsequent initialize omits clientInfo");
+        Assert.Equal("claude-code", record.GetProperty("caller").GetString());
+        Assert.Equal("1.0.0", record.GetProperty("caller_version").GetString());
     }
 
     [Fact]

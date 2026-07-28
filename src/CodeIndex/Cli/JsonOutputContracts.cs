@@ -593,6 +593,22 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SelectionReason = null,
     [property: JsonPropertyName("selection_omitted_count")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SelectionOmittedCount = null,
+    [property: JsonPropertyName("source_total")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SourceTotal = null,
+    [property: JsonPropertyName("source_total_authoritative")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? SourceTotalAuthoritative = null,
+    [property: JsonPropertyName("source_total_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SourceTotalLowerBound = null,
+    [property: JsonPropertyName("selected_total")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SelectedTotal = null,
+    [property: JsonPropertyName("returned")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Returned = null,
+    [property: JsonPropertyName("selector_omitted_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SelectorOmittedCount = null,
+    [property: JsonPropertyName("limit_omitted_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? LimitOmittedCount = null,
+    [property: JsonPropertyName("selectors")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<SearchRowSelectorJsonResult>? Selectors = null,
     [property: JsonPropertyName("interruption_reason")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InterruptionReason = null,
     [property: JsonPropertyName("truncation_reason")]
