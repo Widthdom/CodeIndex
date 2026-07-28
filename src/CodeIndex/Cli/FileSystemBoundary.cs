@@ -17,7 +17,8 @@ internal readonly record struct DirectoryCleanupBoundaryOptions(
     string PrefixMismatchReason,
     string UnsafeDirectoryReason,
     string NotDirectoryReason = "target is not a directory",
-    string InvalidPathReason = "target path is invalid");
+    string InvalidPathReason = "target path is invalid",
+    StringComparison NameComparison = StringComparison.Ordinal);
 
 internal static class FileSystemBoundary
 {
@@ -112,7 +113,7 @@ internal static class FileSystemBoundary
                 return false;
             }
 
-            if (!Path.GetFileName(fullPath).StartsWith(options.ExpectedNamePrefix, StringComparison.Ordinal))
+            if (!Path.GetFileName(fullPath).StartsWith(options.ExpectedNamePrefix, options.NameComparison))
             {
                 failureReason = options.PrefixMismatchReason;
                 return false;

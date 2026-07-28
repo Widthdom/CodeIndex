@@ -210,17 +210,23 @@ internal static class ManagedRestoreBackupStore
         out ManagedRestoreBackupSummary summary)
     {
         summary = default;
-        var prefix = GetBackupDirectoryPrefix(fullDbPath);
-        var directoryName = Path.GetFileName(backupPath);
-        if (!directoryName.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-
-        var id = directoryName[prefix.Length..];
         try
         {
+            var nameComparison = ResolveDatabaseFileNameComparison(fullDbPath);
+            var prefix = GetBackupDirectoryPrefix(fullDbPath);
+            var directoryName = Path.GetFileName(backupPath);
+            if (!directoryName.StartsWith(prefix, nameComparison))
+                return false;
+
+            var id = directoryName[prefix.Length..];
             ValidateId(id);
             if (!TryReadManifest(backupPath, out var manifest, out _)
-                || !ValidateManifestHeader(manifest, id, Path.GetFileName(fullDbPath), out _))
+                || !ValidateManifestHeader(
+                    manifest,
+                    id,
+                    Path.GetFileName(fullDbPath),
+                    nameComparison,
+                    out _))
             {
                 return false;
             }
@@ -293,7 +299,26 @@ internal static class ManagedRestoreBackupStore
             return InvalidValidation(id, validatedPath, diagnostics);
         }
 
-        if (!ValidateManifestHeader(manifest, id, Path.GetFileName(fullDbPath), out manifestFailure))
+        StringComparison nameComparison;
+        try
+        {
+            nameComparison = ResolveDatabaseFileNameComparison(fullDbPath);
+        }
+        catch (Exception ex) when (IsRecoverableValidationException(ex))
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "restore_backup_path_case_unavailable",
+                $"Restore backup database filename comparison could not be determined ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+                ConsoleUi.FormatBoundedValue(fullDbPath)));
+            return InvalidValidation(id, validatedPath, diagnostics, manifest);
+        }
+
+        if (!ValidateManifestHeader(
+                manifest,
+                id,
+                Path.GetFileName(fullDbPath),
+                nameComparison,
+                out manifestFailure))
         {
             diagnostics.Add(new DbDiagnosticJsonResult(
                 "restore_backup_manifest_invalid",
@@ -628,6 +653,7 @@ internal static class ManagedRestoreBackupStore
         ManagedRestoreBackupManifest manifest,
         string id,
         string dbFileName,
+        StringComparison dbFileNameComparison,
         out string failure)
     {
         if (!string.Equals(manifest.Format, Format, StringComparison.Ordinal)
@@ -638,7 +664,7 @@ internal static class ManagedRestoreBackupStore
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.RoundtripKind,
                 out _)
-            || !string.Equals(manifest.DatabaseFile, dbFileName, StringComparison.Ordinal)
+            || !string.Equals(manifest.DatabaseFile, dbFileName, dbFileNameComparison)
             || !string.Equals(Path.GetFileName(manifest.DatabaseFile), manifest.DatabaseFile, StringComparison.Ordinal)
             || manifest.DatabaseBytes < 0
             || manifest.DatabaseBytes > ExportImportCommandRunner.MaxImportDatabaseBytes
@@ -699,17 +725,37 @@ internal static class ManagedRestoreBackupStore
         var parent = Path.GetDirectoryName(fullDbPath)
             ?? Path.GetPathRoot(fullDbPath)
             ?? Path.GetFullPath(".");
-        var options = new DirectoryCleanupBoundaryOptions(
-            GetBackupDirectoryPrefix(fullDbPath),
-            "target is outside the database directory",
-            "target name does not match the managed restore-backup prefix",
-            "target is not a regular managed restore-backup directory");
-        return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
-            backupPath,
-            parent,
-            options,
-            out validatedPath,
-            out failure);
+        try
+        {
+            var nameComparison = PathCasing.ComparisonFor(parent);
+            var options = new DirectoryCleanupBoundaryOptions(
+                GetBackupDirectoryPrefix(fullDbPath),
+                "target is outside the database directory",
+                "target name does not match the managed restore-backup prefix",
+                "target is not a regular managed restore-backup directory",
+                NameComparison: nameComparison);
+            return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
+                backupPath,
+                parent,
+                options,
+                out validatedPath,
+                out failure,
+                pathComparisonOverride: nameComparison);
+        }
+        catch (Exception ex) when (IsRecoverableValidationException(ex))
+        {
+            validatedPath = string.Empty;
+            failure = $"database filename comparison could not be determined ({CommandErrorWriter.FormatSanitizedException(ex)})";
+            return false;
+        }
+    }
+
+    private static StringComparison ResolveDatabaseFileNameComparison(string fullDbPath)
+    {
+        var parent = Path.GetDirectoryName(fullDbPath)
+            ?? Path.GetPathRoot(fullDbPath)
+            ?? Path.GetFullPath(".");
+        return PathCasing.ComparisonFor(parent);
     }
 
     private static bool TryGetRegularFile(string path, out string normalizedPath, out string failure)
@@ -831,6 +877,7 @@ internal static class ManagedRestoreBackupStore
             or InvalidOperationException
             or NotSupportedException
             or PathTooLongException
+            or CodeIndexException
             or SqliteException;
 }
 

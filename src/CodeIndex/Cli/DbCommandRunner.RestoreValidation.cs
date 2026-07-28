@@ -451,6 +451,9 @@ public static partial class DbCommandRunner
                 CommandErrorWriter.WriteStderr($"Warning [{rollbackFailure.Code}]: {rollbackFailure.Message} Backup: {rollbackFailure.Path}");
             }
 
+            if (primaryEx is OperationCanceledException)
+                throw;
+
             throw new DbRestoreOperationException(
                 primaryEx,
                 checkpointPath,

@@ -55,6 +55,10 @@ public static partial class DbCommandRunner
 
             return CommandExitCodes.Success;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (DbRestoreOperationException ex)
         {
             return WriteRestoreError(options, jsonOptions, fullDbPath, options.Name, checkpointPath, ex);

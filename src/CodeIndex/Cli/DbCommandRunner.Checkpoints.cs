@@ -258,7 +258,13 @@ public static partial class DbCommandRunner
         {
             if (dryRun)
             {
-                if (TryValidateTemporaryDirectoryCleanupTarget(entry.BackupPath, parent, prefix, out _, out var validationFailure))
+                if (TryValidateTemporaryDirectoryCleanupTarget(
+                        entry.BackupPath,
+                        parent,
+                        prefix,
+                        out _,
+                        out var validationFailure,
+                        filesystemAwarePrefix: true))
                     deletedPaths.Add(entry.BackupPath);
                 else
                 {
@@ -297,17 +303,18 @@ public static partial class DbCommandRunner
         var directories = new List<string>();
         try
         {
+            var nameComparison = PathCasing.ComparisonFor(parent);
             foreach (var directory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(parent, prefix + "*"))
             {
                 if (directories.Count >= limit)
                     return (directories, Truncated: true);
-                if (Path.GetFileName(directory).StartsWith(prefix, StringComparison.Ordinal))
+                if (Path.GetFileName(directory).StartsWith(prefix, nameComparison))
                     directories.Add(directory);
             }
 
             return (directories, Truncated: false);
         }
-        catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+        catch (Exception ex) when (IsRecoverableFilesystemException(ex) || ex is CodeIndexException)
         {
             diagnostics.Add(CreateCheckpointDiagnostic("restore_backup_directory_enumeration_failed", "Unable to enumerate every restore backup directory.", parent));
             return (directories, Truncated: true);
@@ -321,7 +328,13 @@ public static partial class DbCommandRunner
     {
         var parent = Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath(".");
         var prefix = GetRestoreBackupDirectoryPrefix(fullDbPath);
-        if (!TryValidateTemporaryDirectoryCleanupTarget(backupPath, parent, prefix, out var fullPath, out var validationFailure))
+        if (!TryValidateTemporaryDirectoryCleanupTarget(
+                backupPath,
+                parent,
+                prefix,
+                out var fullPath,
+                out var validationFailure,
+                filesystemAwarePrefix: true))
         {
             diagnostics.Add(new DbDiagnosticJsonResult(
                 "restore_backup_delete_skipped",

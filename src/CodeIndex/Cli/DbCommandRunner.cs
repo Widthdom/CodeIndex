@@ -112,7 +112,9 @@ public static partial class DbCommandRunner
                 "Pass a valid SQLite file URI whose full value and query string fit within the supported limits.",
                 CommandErrorCodes.DbError);
 
-        if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+        if (!isUri
+            && !options.RestoreBackups
+            && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
             return WriteCommandError(
                 options.Json,
                 jsonOptions,

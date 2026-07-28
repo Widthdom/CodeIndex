@@ -1552,6 +1552,41 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RestoreCancellationAfterBackup_RollsBackAndReturnsInterrupted_Issue4857()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_cancel");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            MutateValidDatabase(dbPath);
+            var changedBytes = File.ReadAllBytes(dbPath);
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+                throw new OperationCanceledException("injected restore cancellation");
+
+            var (restoreExit, stdout, stderr) = RunAndCaptureStreams(
+                ["restore", "saved", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, restoreExit);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(
+                CommandErrorCodes.Interrupted,
+                document.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal(changedBytes, File.ReadAllBytes(dbPath));
+            Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_RestoreRollbackFailurePreservesPrimaryFailure_Issue3514()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_rollback_fail");

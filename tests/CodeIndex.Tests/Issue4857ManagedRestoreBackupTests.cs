@@ -83,6 +83,106 @@ public sealed class Issue4857ManagedRestoreBackupTests
     }
 
     [Fact]
+    public void RestoreByIdRecoversWhenDestinationDatabaseIsMissing()
+    {
+        var fixture = CreateImportedFixture("cdidx_issue4857_missing_destination");
+        try
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(fixture.DestinationDb);
+
+            var (listExit, listJson) = RunDbJson(
+                ["restore-backups", "--list", "--db", fixture.DestinationDb, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, listExit);
+            Assert.Equal(
+                fixture.BackupId,
+                Assert.Single(listJson.GetProperty("backups").EnumerateArray())
+                    .GetProperty("id")
+                    .GetString());
+
+            var (restoreExit, restoreJson) = RunDbJson(
+                ["restore-backups", "--restore", fixture.BackupId, "--db", fixture.DestinationDb, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.True(restoreJson.GetProperty("restored").GetBoolean());
+            Assert.True(File.Exists(fixture.DestinationDb));
+            Assert.Equal("src/Original.cs", ReadFirstIndexedPath(fixture.DestinationDb));
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void ManagedBackupSummaryUsesFilesystemCaseSemanticsForDatabaseName()
+    {
+        var fixture = CreateImportedFixture("cdidx_issue4857_case_summary");
+        try
+        {
+            var backupPath = Assert.Single(EnumerateBackupDirectories(fixture.DestinationDb));
+            var alternateDbPath = Path.Combine(
+                Path.GetDirectoryName(fixture.DestinationDb)!,
+                Path.GetFileName(fixture.DestinationDb).ToUpperInvariant());
+
+            lock (PathCasingTestLock.Gate)
+            {
+                var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+                try
+                {
+                    PathCasing.ResetCacheForTests();
+                    PathCasing.IgnoreCaseProbeForTesting = _ => true;
+
+                    Assert.True(ManagedRestoreBackupStore.TryReadSummary(
+                        alternateDbPath,
+                        backupPath,
+                        out var summary));
+                    Assert.Equal(fixture.BackupId, summary.Id);
+                }
+                finally
+                {
+                    PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                    PathCasing.ResetCacheForTests();
+                }
+            }
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void RestoreByIdAcceptsEquivalentDatabaseCasingOnCaseInsensitiveFilesystem()
+    {
+        var fixture = CreateImportedFixture("cdidx_issue4857_case_restore");
+        try
+        {
+            if (PathCasing.ComparisonFor(fixture.Root) != StringComparison.OrdinalIgnoreCase)
+                return;
+
+            var alternateDbPath = Path.Combine(
+                Path.GetDirectoryName(fixture.DestinationDb)!,
+                Path.GetFileName(fixture.DestinationDb).ToUpperInvariant());
+            var (listExit, listJson) = RunDbJson(
+                ["restore-backups", "--list", "--db", alternateDbPath, "--json"]);
+            var (restoreExit, restoreJson) = RunDbJson(
+                ["restore-backups", "--restore", fixture.BackupId, "--dry-run", "--db", alternateDbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, listExit);
+            Assert.True(Assert.Single(listJson.GetProperty("backups").EnumerateArray())
+                .GetProperty("managed")
+                .GetBoolean());
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.True(restoreJson.GetProperty("ready").GetBoolean());
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
     public void ImportNoBackupExplicitlySkipsManagedRollbackMaterial()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_issue4857_import_no_backup");
