@@ -1091,6 +1091,45 @@ public partial class DbReader : IDisposable
     /// </summary>
     internal string? GetMetaString(string key) => TryGetMetaString(_conn, key);
 
+    /// <summary>
+    /// Read the latest indexed HEAD used by response metadata. A present
+    /// <c>indexed_head_sha</c> row is authoritative even when its value is NULL;
+    /// only databases without that key fall back to the legacy full-scan stamp.
+    /// response metadata 用の最新 indexed HEAD を読む。<c>indexed_head_sha</c> row が
+    /// 存在する場合は NULL 値でも優先し、その key がない legacy DB だけ full-scan stamp に fallback する。
+    /// </summary>
+    internal string? GetIndexedHeadForResponse()
+        => TryGetIndexedHeadForResponse(_conn);
+
+    internal static string? TryGetIndexedHeadForResponse(SqliteConnection conn)
+    {
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT value
+                FROM codeindex_meta
+                WHERE key = CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM codeindex_meta
+                        WHERE key = @latestHead
+                    )
+                    THEN @latestHead
+                    ELSE @legacyHead
+                END
+                LIMIT 1
+                """;
+            SqliteCommandPolicy.Add(cmd, "@latestHead", DbContext.IndexedHeadShaMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@legacyHead", DbContext.IndexedHeadCommitMetaKey);
+            return cmd.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
+
     private static string? TryGetMetaString(SqliteConnection conn, string key)
     {
         // Inline the codeindex_meta lookup to avoid creating a DbContext here.

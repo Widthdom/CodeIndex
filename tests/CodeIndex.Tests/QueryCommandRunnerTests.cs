@@ -2076,8 +2076,14 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, outlineStdErr);
             using (var outlineJson = JsonDocument.Parse(outlineStdOut))
             {
-                Assert.Equal("src/missing.cs", outlineJson.RootElement.GetProperty("path").GetString());
-                Assert.Equal("file not found in index", outlineJson.RootElement.GetProperty("error").GetString());
+                var error = outlineJson.RootElement;
+                Assert.Equal("1", error.GetProperty("api_version").GetString());
+                Assert.Equal("error", error.GetProperty("status").GetString());
+                Assert.Equal("src/missing.cs", error.GetProperty("path").GetString());
+                Assert.Equal(CommandErrorCodes.FileNotFound, error.GetProperty("error_code").GetString());
+                Assert.Equal("not_found", error.GetProperty("category").GetString());
+                Assert.Equal("outline", error.GetProperty("command").GetString());
+                Assert.Equal(CommandExitCodes.NotFound, error.GetProperty("exit_code").GetInt32());
             }
 
             foreach (var lang in new[] { "cshtml", "razor" })

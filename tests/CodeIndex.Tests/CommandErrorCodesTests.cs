@@ -69,7 +69,7 @@ public class CommandErrorCodesTests
             var (exitCode, _, stderr) = RunDbIntegrityCheckCapturingStreams(["--integrity-check", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains("[E023_DB_NOT_DATABASE]", stderr);
+            Assert.Contains("[E027_DB_NOT_DATABASE]", stderr);
         }
         finally
         {

@@ -261,8 +261,12 @@ internal static class MaintenanceDatabaseErrorClassifier
 
     private static bool IsAbsolutePathOrFileUri(string path)
     {
-        if (SqliteFileUri.StartsWithFileScheme(path) || Path.IsPathFullyQualified(path))
+        if (SqliteFileUri.StartsWithFileScheme(path)
+            || Path.IsPathFullyQualified(path)
+            || (path.Length > 0 && path[0] is '/' or '\\'))
+        {
             return true;
+        }
 
         if (path.Length >= 3
             && char.IsAsciiLetter(path[0])
@@ -272,8 +276,7 @@ internal static class MaintenanceDatabaseErrorClassifier
             return true;
         }
 
-        return path.StartsWith(@"\\", StringComparison.Ordinal)
-            || path.StartsWith("//", StringComparison.Ordinal);
+        return false;
     }
 
     private static IReadOnlyList<string>? FormatDetailsForOutput(

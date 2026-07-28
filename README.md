@@ -170,7 +170,7 @@ incomplete generation; JSON still reports `status: "partial"`.
 |---|---|
 | Search and navigation | `search`, `find`, `excerpt`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect`, `map`, `deps`, `impact`, `unused`, and `hotspots`. See the [command reference](USER_GUIDE.md#command-reference). |
 | AI integration | `cdidx mcp` exposes indexed search tools for Claude Code, Cursor, Windsurf, Copilot, Codex, and other MCP clients. See [AI Integration](USER_GUIDE.md#ai-integration). |
-| Editor lookup | `cdidx lsp --db .cdidx/codeindex.db` starts a read-only LSP shim for editors that can launch an LSP command. Large document/workspace symbol requests support bounded partial-result chunks, work-done progress, and request cancellation. Open-document symbols are re-extracted from the latest accepted full-text version, so hierarchy and ranges follow unsaved edits while stale document versions are ignored. References use indexed symbol identity, symbol locations select identifiers, and type hints omit explicitly declared types. C# semantic tokens distinguish keywords, modifiers, namespace components, types, fields, methods, and declarations. |
+| Editor lookup | `cdidx lsp --db .cdidx/codeindex.db` starts a read-only LSP shim for editors that can launch an LSP command. Large document/workspace symbol requests support bounded partial-result chunks, work-done progress, and request cancellation. Open-document symbols are re-extracted from the latest accepted full-text version, so hierarchy and ranges follow unsaved edits while stale document versions are ignored. References use indexed symbol identity, symbol locations select identifiers, and type hints omit explicitly declared types. LSP and `excerpt --json` share one C# semantic classifier that distinguishes keywords, modifiers, namespaces/types, methods/properties, parameters, variables/fields, and declarations. |
 | Freshness | `status --check`, `--files`, `--commits`, `--changed-between`, and `--watch` keep the DB aligned with the workspace. |
 | Validation | `cdidx validate` reports encoding and line-ending issues in indexed files. See [Validate indexed files](USER_GUIDE.md#validate-indexed-files). |
 | Language coverage | `cdidx languages --json` is the live capability probe; add `--format count`, `--summary-only`, `--capability <filter>`, `--language`, `--extension`, or `--alias` to narrow output. See [Supported languages](USER_GUIDE.md#supported-languages). |
@@ -198,6 +198,17 @@ incomplete generation; JSON still reports `status: "partial"`.
 versioned surfaces are the `cdidx` CLI, CLI JSON output, and `cdidx mcp`
 JSON-RPC interface. There is no public library / SDK API. See
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use).
+
+## CLI JSON Error Contract
+
+Recoverable non-database failures from commands such as `outline`, `hooks`,
+`doctor`, and `validate-config` use one versioned JSON envelope. The envelope
+includes `api_version`, `status`, `message`, `hint`, `error_code`, `category`,
+`command`, `exit_code`, and `usage`, plus only sanitized optional context such
+as `path`. JSON mode writes that envelope to stdout without human prose on
+stderr. Human mode keeps the corresponding `Error`, `Hint`, and `Usage` lines.
+See the [Developer Guide](DEVELOPER_GUIDE.md#cli-recoverable-error-format) for
+the stable code/category mapping.
 
 ## Status JSON Contract
 
@@ -583,7 +594,7 @@ commit し、構造化 `file_errors` を返して partial-result 終了コード
 |---|---|
 | 検索とナビゲーション | `search`、`find`、`excerpt`、`symbols`、`definition`、`references`、`callers`、`callees`、`inspect`、`map`、`deps`、`impact`、`unused`、`hotspots`。詳細は [コマンドリファレンス](USER_GUIDE.md#コマンドリファレンス)。 |
 | AI 連携 | `cdidx mcp` は Claude Code、Cursor、Windsurf、Copilot、Codex などの MCP client に indexed search tool を提供します。詳細は [AIとの連携](USER_GUIDE.md#aiとの連携)。 |
-| editor lookup | `cdidx lsp --db .cdidx/codeindex.db` は、LSP command を起動できる editor 向けの read-only LSP shim です。大きな document/workspace symbol request は上限付き partial-result chunk、work-done progress、request cancellation に対応します。open document の symbol は最後に受理した full-text version から再抽出するため、古い document version を無視しながら未保存の編集に hierarchy と range を追従させます。reference は indexed symbol identity を使い、symbol location は identifier を選択し、type hint は明示的に宣言された型を省略します。C# semantic token は keyword、modifier、namespace component、type、field、method、declaration を区別します。 |
+| editor lookup | `cdidx lsp --db .cdidx/codeindex.db` は、LSP command を起動できる editor 向けの read-only LSP shim です。大きな document/workspace symbol request は上限付き partial-result chunk、work-done progress、request cancellation に対応します。open document の symbol は最後に受理した full-text version から再抽出するため、古い document version を無視しながら未保存の編集に hierarchy と range を追従させます。reference は indexed symbol identity を使い、symbol location は identifier を選択し、type hint は明示的に宣言された型を省略します。LSP と `excerpt --json` は同じ C# semantic classifier を共有し、keyword、modifier、namespace/type、method/property、parameter、variable/field、declaration を区別します。 |
 | 鮮度管理 | `status --check`、`--files`、`--commits`、`--changed-between`、`--watch` で DB と workspace を揃えます。 |
 | validation | `cdidx validate` は indexed file の encoding / line-ending 問題を報告します。詳細は [Indexed files を validate する](USER_GUIDE.md#indexed-files-を-validate-する)。 |
 | 対応言語 | `cdidx languages --json` が live capability probe です。`--language`、`--extension`、`--alias` で 1 行を lookup できます。詳細は [対応言語](USER_GUIDE.md#対応言語)。 |
@@ -611,6 +622,18 @@ commit し、構造化 `file_errors` を返して partial-result 終了コード
 バージョニング契約の対象は、`cdidx` CLI、CLI JSON 出力、`cdidx mcp` の
 JSON-RPC interface です。公開 library / SDK API は提供していません。詳細は
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use) を参照してください。
+
+## CLI JSON エラー契約
+
+`outline`、`hooks`、`doctor`、`validate-config` などの回復可能な
+非データベース系失敗は、共通のバージョン付き JSON envelope を使います。
+envelope には `api_version`、`status`、`message`、`hint`、`error_code`、
+`category`、`command`、`exit_code`、`usage` を含め、`path` などの任意の
+context は sanitization 済みの値だけを追加します。JSON mode は human 向け
+prose を stderr に混ぜず、envelope を stdout に出力します。human mode は
+対応する `Error`、`Hint`、`Usage` の各行を維持します。安定した code /
+category 対応は
+[開発者ガイド](DEVELOPER_GUIDE.md#cli-の回復可能エラー形式) を参照してください。
 
 ## Status JSON 契約
 

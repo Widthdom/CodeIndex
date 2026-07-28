@@ -5383,7 +5383,7 @@ public sealed class Caller
             Assert.Equal("1", errorJson.GetProperty("database_error_classifier_version").GetString());
             Assert.Equal("<redacted>", errorJson.GetProperty("path").GetString());
             Assert.True(errorJson.GetProperty("path_redacted").GetBoolean());
-            Assert.Contains("Point `--db` at an existing `codeindex.db`", errorJson.GetProperty("hint").GetString());
+            Assert.Contains("Create or refresh the index", errorJson.GetProperty("hint").GetString());
         }
         finally
         {
@@ -6888,12 +6888,16 @@ public sealed class Caller
 
 
     [Fact]
-    public void Run_Rebuild_CancelledAfterReadinessDemotion_PreservesExistingIndex()
+    public void Run_Rebuild_CancelledAfterReadinessDemotion_PreservesExistingIndex_Issue4854()
     {
         var projectRoot = CreateTempProject();
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            var initialHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
@@ -6906,6 +6910,10 @@ public sealed class Caller
             Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
 
             File.WriteAllText(Path.Combine(projectRoot, "later.cs"), "public class Later { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "add later");
+            var laterHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            Assert.NotEqual(initialHead, laterHead);
             using var cancellation = new CancellationTokenSource();
             var hookInvoked = false;
             IndexCommandRunner.FullScanWritePhaseStartedForTesting = () =>
@@ -6937,6 +6945,7 @@ public sealed class Caller
             {
                 using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
                 Assert.Equal(initialReadiness, db.GetUserVersion());
+                Assert.Equal(initialHead, db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
             });
             Assert.DoesNotContain("Last batch did not complete", reopenWarning);
             Assert.DoesNotContain("later.cs", ReadIndexedPaths(dbPath));
@@ -7858,7 +7867,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void RunStatusCheck_AfterChangedBetweenRefreshAtHead_TreatsCurrentIndexedHeadShaAsFresh_2808()
+    public void RunStatusCheck_AfterChangedBetweenRefreshAtHead_TreatsCurrentIndexedHeadShaAsFresh_2808_Issue4854()
     {
         var projectRoot = CreateTempProject();
         try
@@ -7901,6 +7910,14 @@ public sealed class Caller
             Assert.Equal(initialHead, check.GetProperty("indexed_head_commit").GetString());
             Assert.Equal(currentHead, check.GetProperty("workspace_head_commit").GetString());
 
+            var (queryExitCode, queryEnvelope) = RunProgramAndCaptureJson(
+                ["search", "Run", "--db", dbPath, "--json-envelope"],
+                projectRoot);
+            Assert.Equal(CommandExitCodes.Success, queryExitCode);
+            Assert.Equal(
+                statusJson.GetProperty("indexed_head_sha").GetString(),
+                queryEnvelope.GetProperty("metadata").GetProperty("indexed_at_head_sha").GetString());
+
             var (dotExitCode, dotJson) = RunProgramAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, dotExitCode);
             Assert.Equal("success", dotJson.GetProperty("status").GetString());
@@ -7914,6 +7931,13 @@ public sealed class Caller
             var (postDotStatusExitCode, postDotStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
             Assert.Equal(CommandExitCodes.Success, postDotStatusExitCode);
             Assert.True(postDotStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+            var (postDotQueryExitCode, postDotQueryEnvelope) = RunProgramAndCaptureJson(
+                ["search", "Run", "--db", dbPath, "--json-envelope"],
+                projectRoot);
+            Assert.Equal(CommandExitCodes.Success, postDotQueryExitCode);
+            Assert.Equal(
+                postDotStatusJson.GetProperty("indexed_head_sha").GetString(),
+                postDotQueryEnvelope.GetProperty("metadata").GetProperty("indexed_at_head_sha").GetString());
         }
         finally
         {
@@ -7945,7 +7969,9 @@ public sealed class Caller
         }
     }
 
-    private (int ExitCode, JsonElement Json) RunProgramAndCaptureJson(string[] args)
+    private (int ExitCode, JsonElement Json) RunProgramAndCaptureJson(
+        string[] args,
+        string? configStartDirectory = null)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -7958,7 +7984,11 @@ public sealed class Caller
             {
                 Console.SetOut(stdout);
                 Console.SetError(stderr);
-                var exitCode = ProgramRunner.Run(args, _jsonOptions, appVersion: "1.0.0-test", configStartDirectory: args[0]);
+                var exitCode = ProgramRunner.Run(
+                    args,
+                    _jsonOptions,
+                    appVersion: "1.0.0-test",
+                    configStartDirectory: configStartDirectory ?? args[0]);
                 using var document = JsonDocument.Parse(stdout.ToString());
                 return (exitCode, document.RootElement.Clone());
             }

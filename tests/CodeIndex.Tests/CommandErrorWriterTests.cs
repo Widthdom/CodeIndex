@@ -115,6 +115,15 @@ public class CommandErrorWriterTests
     }
 
     [Fact]
+    public void ResolveMachineContract_NotFoundUsesGenericCodeWithoutDomainContext_Issue4855()
+    {
+        var (errorCode, category) = CommandErrorWriter.ResolveMachineContract(CommandExitCodes.NotFound);
+
+        Assert.Equal(CommandErrorCodes.CommandFailed, errorCode);
+        Assert.Equal("not_found", category);
+    }
+
+    [Fact]
     public void Write_DoesNotDuplicateExistingUsagePrefix_Issue4244()
     {
         lock (TestConsoleLock.Gate)

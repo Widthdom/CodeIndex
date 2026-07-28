@@ -29,7 +29,10 @@ public static partial class QueryCommandRunner
     private static bool IsPathLikeArgument(string value) =>
         value.Contains('/') || value.Contains('\\');
 
-    private static bool TryWriteUnexpectedPositionals(string commandName, QueryCommandOptions options)
+    private static bool TryWriteUnexpectedPositionals(
+        string commandName,
+        QueryCommandOptions options,
+        System.Text.Json.JsonSerializerOptions? jsonOptions = null)
     {
         var unexpected = new List<string>();
         if (!string.IsNullOrWhiteSpace(options.Query))
@@ -38,10 +41,30 @@ public static partial class QueryCommandRunner
         if (unexpected.Count == 0)
             return false;
 
-        CommandErrorWriter.Write(
-            $"{commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.",
-            "remove the extra positional arguments and use the documented flags only.",
-            GetUsageLineOrThrow(commandName));
+        var message = $"{commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.";
+        const string hint = "remove the extra positional arguments and use the documented flags only.";
+        if (options.Json && jsonOptions != null)
+        {
+            CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                message,
+                CommandExitCodes.UsageError,
+                hint,
+                GetUsageLineOrThrow(commandName),
+                CommandErrorCodes.UsageError,
+                command: commandName);
+        }
+        else
+        {
+            CommandErrorWriter.Write(
+                message,
+                hint,
+                GetUsageLineOrThrow(commandName),
+                string.Equals(commandName, "outline", StringComparison.Ordinal)
+                    ? CommandErrorCodes.UsageError
+                    : null);
+        }
         return true;
     }
 

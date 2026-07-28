@@ -81,6 +81,18 @@ internal static class CommandErrorCodes
     /// <summary>Indexing committed a usable but incomplete generation because one or more files failed.</summary>
     public const string IndexPartial = "E022_INDEX_PARTIAL";
 
+    /// <summary>A command failed without a more specific published error code.</summary>
+    public const string CommandFailed = "E023_COMMAND_FAILED";
+
+    /// <summary>A discovered cdidx configuration file failed validation.</summary>
+    public const string ConfigInvalid = "E024_CONFIG_INVALID";
+
+    /// <summary>A Git hook operation failed because its platform or filesystem contract was not satisfied.</summary>
+    public const string HookOperationFailed = "E025_HOOK_OPERATION_FAILED";
+
+    /// <summary>The requested Git hook operation did not target a Git repository.</summary>
+    public const string NotGitRepository = "E026_NOT_GIT_REPOSITORY";
+
     /// <summary>SQLite rejected the file as not being a database, or CodeIndex validation rejected its format.</summary>
-    public const string DbNotDatabase = "E023_DB_NOT_DATABASE";
+    public const string DbNotDatabase = "E027_DB_NOT_DATABASE";
 }
