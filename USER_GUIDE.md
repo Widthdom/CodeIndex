@@ -736,6 +736,16 @@ annotations, and type-position references are excluded from the symbol-level BFS
 so metadata cycles do not inflate caller counts; single-type queries may still
 return heuristic file-level dependency hints.
 
+On a current index, cycle detection follows the resolved source/target symbol IDs
+on real directed edges. Two distinct methods with the same display name are not a
+cycle, while direct recursion is reported as a singleton cycle. JSON caller rows
+include `caller_symbol_id` and, when the callee is uniquely resolved,
+`callee_symbol_id`; uniquely resolved `path_details` nodes include `symbol_id`;
+and each cycle can include `member_identities` alongside the compatibility
+`members` display-name list. Unresolved or ambiguous caller edges, including
+non-unique overload resolution groups, remain visible in traversal results but do
+not contribute canonical cycle edges.
+
 ## Performance tuning for large repositories
 
 Start by measuring before changing knobs:
@@ -1382,12 +1392,33 @@ names, aggregate counts, per-query counts, and query freshness. Recipe count
 aggregations support `--count-by path|file|symbol|origin|return-type|subsystem`,
 `--group-by file|symbol|origin|return-type|subsystem --count`, and
 `--unique path|file|symbol|origin|return-type|subsystem`.
-Row-producing recipe modes (text, aggregate JSON, compact JSON, NDJSON, and
-issue drafts) apply `--first-per-file` and deterministic `--sample <n>` before
+Row-producing search and recipe modes (text, aggregate JSON, compact JSON,
+NDJSON, JSON array envelopes, and issue drafts) apply `--first-per-file` and
+fixed-seed deterministic `--sample <n>` before
 the effective per-query `--limit` / cross-query `--total-limit`. Aggregate JSON
-and compact query objects report `selection_reason` and
-`selection_omitted_count` when selection removes rows; issue-draft `source`
-objects and NDJSON terminal records report the same fields. Selection-only
+and compact query objects, plain compact roots, run summaries, issue-draft
+`source` objects, NDJSON terminal records, and array-envelope
+`metadata.stream_terminal` objects distinguish `source_total`,
+`selected_total`, `returned`, `selector_omitted_count`, and
+`limit_omitted_count`. Their
+`selectors` array records each applied selector in execution order, including
+per-stage input/output/omission counts and the sample size, mode, and seed.
+Issue-draft roots also expose per-query `selection_accounting`, so selector
+accounting remains available when no draft is emitted or a cross-query total
+limit leaves a selected query with zero returned rows. For byte-bounded compact
+and array envelopes, `returned` reflects the rows that fit the final envelope;
+logical `limit_omitted_count` remains unchanged, while
+`metadata.byte_limit_omitted_count` reports rows removed by the hard byte cap.
+`source_total_authoritative` says whether the bounded fetch observed the whole
+source population; guard filters, origin/facet post-filters, bounded candidate
+windows, and recipe file-reject post-filters conservatively produce
+`source_total_authoritative=false` with `source_total_lower_bound`. The
+older `selection_reason` and `selection_omitted_count` fields remain as
+compatibility summaries. Search `query_context.row_selectors` exposes every
+applied selector with the same sample mode and seed. When a hard
+`--max-json-bytes` cap cannot fit the additive accounting fields in an NDJSON
+terminal, the writer omits those optional fields before failing the terminal
+budget; the compatibility selection fields remain. Selection-only
 omission contributes to matched and omitted counts but does not set `truncated`,
 `has_more`, or `next_cursor`. If a later limit also omits selected rows,
 `truncated` / `has_more` are set but `next_cursor` is suppressed because a raw
@@ -1396,8 +1427,12 @@ rerun instead. For the same reason, recipe row selectors reject an incoming
 `--cursor`. Generated compact and issue-draft replay commands retain the active
 selector. Count, aggregation,
 and summary-only compact recipe output reject row-selection controls because
-they cannot represent selected rows, and recipe execution rejects
-`--per-file-limit` because it does not produce grouped search output.
+they cannot represent selected rows. Plain count/aggregation, named-query and
+recipe-list modes, `--results-only`, metadata-free `--json=array`, and formatted
+row outputs without selector accounting also reject them instead of silently
+ignoring them. Add `--json-envelope` to an array request to retain selector
+accounting. Recipe execution rejects `--per-file-limit` because it does not
+produce grouped search output.
 Recipe SARIF emits one bounded finding per returned recipe result. Its rule IDs
 use `recipe/query`, result fingerprints are stable for the recipe/query/source
 location, and result/run properties preserve severity, confidence, scope,
@@ -3851,6 +3886,15 @@ metadata-only edges は symbol-level BFS から除外されるため、metadata 
 count が膨らむことはありません。ただし single-type query では heuristic file-level
 dependency hints が返る場合があります。
 
+current index では、cycle 判定は実在する有向辺の解決済み source/target symbol ID を
+辿ります。表示名が同じ別 method は cycle にせず、直接再帰は singleton cycle として
+報告します。JSON の caller row は `caller_symbol_id` と、callee を一意に解決できる場合は
+`callee_symbol_id` を含み、`path_details` node は node を一意に解決できる場合に
+`symbol_id` を含み、
+各 cycle は互換用の表示名 `members` に加えて `member_identities` を含む場合があります。
+一意でない overload の resolution group を含む未解決または曖昧な caller edge は
+traversal 結果には残りますが、正規 cycle edge には使用しません。
+
 ## 大規模リポジトリの performance tuning
 
 knob を変える前に、まず測定してください。
@@ -4507,19 +4551,40 @@ child query 全体の emitted row 数を制限でき、NDJSON では `--max-json
 recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
 aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin|return-type|subsystem`、
 `--group-by file|symbol|origin|return-type|subsystem --count`、`--unique path|file|symbol|origin|return-type|subsystem` に対応します。
-row を返す recipe mode（text、aggregate JSON、compact JSON、NDJSON、issue draft）は、
-`--first-per-file` と決定的な `--sample <n>` を、有効な query ごとの `--limit` /
+row を返す search / recipe mode（text、aggregate JSON、compact JSON、NDJSON、
+JSON array envelope、issue draft）は、`--first-per-file` と固定 seed の決定的な
+`--sample <n>` を、有効な query ごとの `--limit` /
 query 全体の `--total-limit` より先に適用します。aggregate JSON / compact の query object は
-selection で row が省略された場合に `selection_reason` と `selection_omitted_count` を返し、
-issue-draft の `source` object と NDJSON terminal record も同じ field を返します。
+plain compact の root、run summary、issue-draft の `source` object、NDJSON terminal record、
+array envelope の `metadata.stream_terminal` と同様に、`source_total`、`selected_total`、
+`returned`、`selector_omitted_count`、`limit_omitted_count` を分けて返します。
+`selectors` array は適用順の各 selector について、
+各段階の入力件数、出力件数、省略件数、および sample の size / mode / seed を記録します。
+issue-draft の root も query ごとの `selection_accounting` を公開するため、draft が 0 件の場合や
+query 全体の total limit により選択済み query の返却 row が 0 件になった場合も selector accounting
+を保持します。byte 上限付き compact / array envelope の `returned` は最終 envelope に収まった
+row 数を表します。論理的な `limit_omitted_count` は変更せず、hard byte cap で除外した row 数は
+`metadata.byte_limit_omitted_count` で別に報告します。
+bounded fetch が source population 全体を観測できたかは `source_total_authoritative` で示し、
+guard filter、origin / facet の後段 filter、bounded candidate window、recipe の file-reject
+後段 filter がある場合は保守的に `source_total_authoritative=false` と
+`source_total_lower_bound` を返します。従来の `selection_reason` と
+`selection_omitted_count` は互換用 summary として維持します。
+search の `query_context.row_selectors` も適用済み selector と同じ sample mode / seed を公開します。
+hard な `--max-json-bytes` cap で NDJSON terminal に追加 accounting field が収まらない場合、
+terminal budget 自体を失敗させる前にこれらの任意 field を省略し、互換用 selection field は維持します。
 selection だけによる省略は matched / omitted count に含まれますが、`truncated`、
 `has_more`、`next_cursor` は設定しません。後続の limit でも選択済み row が省略される場合は
 `truncated` / `has_more` を設定しますが、raw cursor では row-selection state を保持できないため
 `next_cursor` は抑止します。この場合は該当 limit を増やして再実行してください。同じ理由で、
 recipe の row selector は受け取った `--cursor` も拒否します。compact / issue-draft が生成する
 replay command は有効な selector を保持します。count、aggregation、summary-only compact の
-recipe output は選択済み row を表現できないため row-selection control を拒否し、recipe
-execution は grouped search output を生成しないため `--per-file-limit` を拒否します。
+recipe output は選択済み row を表現できないため row-selection control を拒否します。
+plain count / aggregation、named-query、recipe-list、`--results-only`、metadata を持たない
+`--json=array`、selector accounting を持たない formatted row output も、黙って無視せず
+row-selection control を拒否します。array request で accounting を保持するには
+`--json-envelope` を追加します。recipe execution は grouped search output を生成しないため
+`--per-file-limit` を拒否します。
 recipe SARIF は返却された recipe result ごとに上限付き finding を1件出力します。rule ID は
 `recipe/query` を使い、result fingerprint は recipe / query / source location に対して安定し、
 result / run properties は severity、confidence、scope、適用済み result limit、

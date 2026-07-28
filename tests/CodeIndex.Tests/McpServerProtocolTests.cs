@@ -110,6 +110,18 @@ public partial class McpServerTests
         Assert.Equal(protocolVersion, response["result"]!["protocolVersion"]!.GetValue<string>());
         Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
         Assert.Equal(ConsoleUi.LoadVersion(), response["result"]!["serverInfo"]!["version"]!.GetValue<string>());
+
+        var capabilities = response["result"]!["capabilities"]!.AsObject();
+        Assert.Equal(
+            ["logging", "prompts", "resources", "tools"],
+            capabilities.Select(static capability => capability.Key).Order(StringComparer.Ordinal).ToArray());
+        Assert.False(capabilities["tools"]!["listChanged"]!.GetValue<bool>());
+        Assert.False(capabilities["resources"]!["subscribe"]!.GetValue<bool>());
+        Assert.False(capabilities["resources"]!["listChanged"]!.GetValue<bool>());
+        Assert.False(capabilities["prompts"]!["listChanged"]!.GetValue<bool>());
+        Assert.NotNull(capabilities["logging"]);
+        Assert.False(capabilities.ContainsKey("roots"));
+        Assert.False(capabilities.ContainsKey("sampling"));
     }
 
     [Fact]
@@ -139,19 +151,217 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void Initialize_AdvertisesResourcesAndPrompts()
+    public async Task Initialize_SecondInitializeIsRejectedWithoutMutatingSession_Issue4848()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
-        var response = _server.HandleMessage(request)!;
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new QueueMcpTransport(
+            prependInitialize: false,
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"first-client","version":"1.0"},"capabilities":{}}}""",
+            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"second-client","version":"2.0"},"capabilities":{"roots":{}}}}"""
+        );
 
-        var capabilities = response["result"]!["capabilities"]!;
-        Assert.False(capabilities["tools"]!["listChanged"]!.GetValue<bool>());
-        Assert.False(capabilities["resources"]!["subscribe"]!.GetValue<bool>());
-        Assert.False(capabilities["resources"]!["listChanged"]!.GetValue<bool>());
-        Assert.False(capabilities["prompts"]!["listChanged"]!.GetValue<bool>());
-        Assert.NotNull(capabilities["logging"]);
-        Assert.True(capabilities["roots"]!["listChanged"]!.GetValue<bool>());
-        Assert.NotNull(capabilities["sampling"]);
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(2, transport.WrittenFrames.Count);
+        Assert.NotNull(JsonNode.Parse(transport.WrittenFrames[0])!["result"]);
+        var duplicate = JsonNode.Parse(transport.WrittenFrames[1])!;
+        Assert.Equal(-32600, duplicate["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_request", duplicate["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal("duplicate_initialize", duplicate["error"]!["data"]!["reason"]!.GetValue<string>());
+        Assert.Equal("initialized", duplicate["error"]!["data"]!["session_phase"]!.GetValue<string>());
+        Assert.Equal("first-client/1.0", server.CurrentCaller);
+        Assert.False(server.ClientSupportsRootsForTests);
+    }
+
+    [Fact]
+    public async Task Initialize_LateTimedOutWorkerReleasesClaimForRetry_Issue4848()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion())
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(20),
+        };
+        var delayStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDelay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTests = _ =>
+        {
+            delayStarted.TrySetResult();
+            return releaseDelay.Task;
+        };
+
+        var timedOutResponseTask = server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"late-client","version":"1.0"},"capabilities":{}}}""");
+        try
+        {
+            await delayStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            var timedOutResponse = JsonNode.Parse(
+                await timedOutResponseTask.WaitAsync(TestDeterminism.DefaultTimeout) ?? string.Empty)!;
+            Assert.Equal("timeout", timedOutResponse["error"]!["data"]!["reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            server.RequestDelayForTests = null;
+            releaseDelay.TrySetResult();
+        }
+
+        await TestDeterminism.WaitUntilAsync(
+            () => server.BuildRequestTimeoutDiagnosticsStatus()["isolated_action_draining_count"]!.GetValue<long>() == 0,
+            "the late initialize worker to drain and release its sealed-frame claim");
+
+        var retryResponse = JsonNode.Parse(
+            await server.ProcessFrameAsync(
+                """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"retry-client","version":"2.0"},"capabilities":{}}}""")
+            ?? string.Empty)!;
+        Assert.NotNull(retryResponse["result"]);
+        Assert.Equal("retry-client/2.0", server.CurrentCaller);
+    }
+
+    [Fact]
+    public async Task InitializedNotification_RequestsRootsOnlyWhenClientAdvertisesSupport_Issue4848()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new RootsNegotiationTranscriptTransport(advertiseRoots: true);
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        await transport.ReadyToCompleteInput.WaitAsync(TestDeterminism.DefaultTimeout);
+        await TestDeterminism.WaitUntilAsync(
+            () => server.ClientRootsForTests.SequenceEqual(["file:///negotiated-workspace"], StringComparer.Ordinal),
+            "the roots/list response to commit the negotiated client roots");
+        transport.CompleteInput();
+        await runTask;
+
+        var rootsRequest = JsonNode.Parse(Assert.Single(transport.OutOfBandFrames))!;
+        Assert.Equal("roots/list", rootsRequest["method"]!.GetValue<string>());
+        Assert.Equal(["file:///negotiated-workspace"], server.ClientRootsForTests);
+        Assert.False(server.ClientRootsStaleForTests);
+
+        var transcript = transport.Transcript;
+        var initializeResponseIndex = Array.FindIndex(
+            transcript,
+            static entry => entry.StartsWith("server:", StringComparison.Ordinal)
+                && entry.Contains("\"protocolVersion\":\"2025-06-18\"", StringComparison.Ordinal));
+        var initializedNotificationIndex = Array.FindIndex(
+            transcript,
+            static entry => entry.StartsWith("client:", StringComparison.Ordinal)
+                && entry.Contains("\"method\":\"notifications/initialized\"", StringComparison.Ordinal));
+        var rootsRequestIndex = Array.FindIndex(
+            transcript,
+            static entry => entry.StartsWith("server-oob:", StringComparison.Ordinal)
+                && entry.Contains("\"method\":\"roots/list\"", StringComparison.Ordinal));
+        Assert.True(initializeResponseIndex >= 0);
+        Assert.True(initializedNotificationIndex > initializeResponseIndex);
+        Assert.True(rootsRequestIndex > initializedNotificationIndex);
+    }
+
+    [Fact]
+    public async Task InitializedNotification_DoesNotRequestRootsWithoutClientCapability_Issue4848()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new RootsNegotiationTranscriptTransport(advertiseRoots: false);
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        await transport.ReadyToCompleteInput.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Empty(transport.OutOfBandFrames);
+        transport.CompleteInput();
+        await runTask;
+
+        Assert.Empty(transport.OutOfBandFrames);
+        Assert.Empty(server.ClientRootsForTests);
+    }
+
+    [Fact]
+    public async Task InitializedNotification_CoalescesAndDrainsRootsRefresh_Issue4848()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        Assert.NotNull(server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"roots":{}}}}""")!)?["result"]);
+
+        var rootsRequestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseRootsResponse = new ManualResetEventSlim(false);
+        var rootsRequestCount = 0;
+        string? requestedMethod = null;
+        server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            requestedMethod = method;
+            Interlocked.Increment(ref rootsRequestCount);
+            rootsRequestStarted.TrySetResult();
+            if (!releaseRootsResponse.Wait(TestDeterminism.DefaultTimeout))
+                throw new TimeoutException("Timed out waiting to release the coalesced roots response.");
+            return new JsonObject
+            {
+                ["roots"] = new JsonArray(new JsonObject { ["uri"] = "file:///coalesced-workspace" }),
+            };
+        };
+
+        Task? drainTask = null;
+        try
+        {
+            Assert.Null(server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","method":"notifications/initialized"}""")!));
+            await rootsRequestStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            for (var index = 0; index < 32; index++)
+            {
+                Assert.Null(server.HandleMessage(JsonNode.Parse(
+                    """{"jsonrpc":"2.0","method":"notifications/initialized"}""")!));
+            }
+
+            Assert.Equal(1, Volatile.Read(ref rootsRequestCount));
+            drainTask = server.DrainInFlightTasksAsync(
+                [],
+                TestDeterminism.DefaultTimeout,
+                TimeSpan.Zero);
+            Assert.False(drainTask.IsCompleted);
+        }
+        finally
+        {
+            releaseRootsResponse.Set();
+        }
+
+        Assert.NotNull(drainTask);
+        await drainTask!.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal("roots/list", requestedMethod);
+        Assert.Equal(["file:///coalesced-workspace"], server.ClientRootsForTests);
+        Assert.False(server.ClientRootsStaleForTests);
+    }
+
+    [Fact]
+    public async Task InitializedNotification_LateRootsRefreshRetainsStdioResourcesAfterBoundedDrain_Issue4848()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion())
+        {
+            InFlightDrainGracePeriod = TimeSpan.Zero,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        var inputPayload = Encoding.UTF8.GetBytes(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"roots":{}}}}"""
+            + "\n"
+            + """{"jsonrpc":"2.0","method":"notifications/initialized"}"""
+            + "\n");
+        var allowEof = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var input = new GatedEofReadStream(inputPayload, allowEof.Task);
+        var output = new BlockingSecondWriteStream();
+        var transport = new StdioMcpTransport(input, output, bufferSize: 1024 * 1024);
+
+        try
+        {
+            var runTask = server.RunAsync(transport, CancellationToken.None);
+            await output.SecondWriteStarted.WaitAsync(TestDeterminism.DefaultTimeout);
+            allowEof.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+
+            await transport.DisposeAsync();
+            Assert.False(output.IsDisposed);
+        }
+        finally
+        {
+            allowEof.TrySetResult();
+            output.ReleaseSecondWrite();
+            await transport.DisposeAsync();
+        }
+
+        await TestDeterminism.WaitUntilAsync(
+            () => output.IsDisposed,
+            "stdio output disposal after the late roots refresh released its writer",
+            TimeSpan.FromSeconds(15));
     }
 
     [Fact]
@@ -690,7 +900,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public async Task Initialize_ReinitializePublishesCoherentSnapshotToConcurrentStatus_Issue4540()
+    public async Task Initialize_DuplicateDoesNotReplaceConcurrentSessionSnapshot_Issue4848()
     {
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         var initialResponse = server.HandleMessage(JsonNode.Parse("""
@@ -714,11 +924,11 @@ public partial class McpServerTests
 
         var statusTask = Task.Run(() => server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!));
-        JsonNode reinitializeResponse;
+        JsonNode duplicateInitializeResponse;
         try
         {
             Assert.True(snapshotCaptured.Wait(TimeSpan.FromSeconds(10)), "Status did not capture its MCP session snapshot.");
-            reinitializeResponse = server.HandleMessage(JsonNode.Parse("""
+            duplicateInitializeResponse = server.HandleMessage(JsonNode.Parse("""
             {"jsonrpc":"2.0","id":3,"method":"initialize","params":{
               "protocolVersion":"2025-03-26",
               "clientInfo":{"name":"snapshot-new","version":"2.0"},
@@ -733,7 +943,10 @@ public partial class McpServerTests
             releaseSnapshotReader.Set();
         }
 
-        Assert.NotNull(reinitializeResponse["result"]);
+        Assert.Equal(-32600, duplicateInitializeResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(
+            "duplicate_initialize",
+            duplicateInitializeResponse["error"]!["data"]!["reason"]!.GetValue<string>());
         var concurrentStatus = await statusTask.WaitAsync(TimeSpan.FromSeconds(10));
         var oldSession = concurrentStatus!["result"]!["structuredContent"]!["mcp_session"]!;
         Assert.Equal("snapshot-old", oldSession["client_info"]!["name"]!.GetValue<string>());
@@ -744,16 +957,16 @@ public partial class McpServerTests
 
         var laterStatus = server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
-        var newSession = laterStatus["result"]!["structuredContent"]!["mcp_session"]!;
-        Assert.Equal("snapshot-new", newSession["client_info"]!["name"]!.GetValue<string>());
-        Assert.Equal("2.0", newSession["client_info"]!["version"]!.GetValue<string>());
-        Assert.Equal("file:///snapshot-new", Assert.Single(newSession["roots"]!.AsArray())!.GetValue<string>());
-        Assert.True(newSession["client_capabilities"]!["experimental"]!["new"]!.GetValue<bool>());
-        Assert.DoesNotContain("snapshot-old", laterStatus.ToJsonString(), StringComparison.Ordinal);
+        var retainedSession = laterStatus["result"]!["structuredContent"]!["mcp_session"]!;
+        Assert.Equal("snapshot-old", retainedSession["client_info"]!["name"]!.GetValue<string>());
+        Assert.Equal("1.0", retainedSession["client_info"]!["version"]!.GetValue<string>());
+        Assert.Equal("file:///snapshot-old", Assert.Single(retainedSession["roots"]!.AsArray())!.GetValue<string>());
+        Assert.True(retainedSession["client_capabilities"]!["experimental"]!["old"]!.GetValue<bool>());
+        Assert.DoesNotContain("snapshot-new", laterStatus.ToJsonString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Initialize_ReinitializeInvalidatesInFlightRootRefresh_Issue4540()
+    public async Task Initialize_DuplicateDoesNotReplaceInFlightRootNegotiation_Issue4848()
     {
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
         server.HandleMessage(JsonNode.Parse("""
@@ -779,12 +992,12 @@ public partial class McpServerTests
             };
         };
 
-        var indexTask = Task.Run(() => server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"index","arguments":{"path":"."}}}""")!));
+        var rootsNegotiationTask = Task.Run(() => server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","method":"notifications/initialized"}""")!));
         try
         {
             Assert.True(rootsRequestStarted.Wait(TimeSpan.FromSeconds(10)), "The roots/list request did not start.");
-            var reinitializeResponse = server.HandleMessage(JsonNode.Parse("""
+            var duplicateInitializeResponse = server.HandleMessage(JsonNode.Parse("""
             {"jsonrpc":"2.0","id":3,"method":"initialize","params":{
               "protocolVersion":"2025-03-26",
               "clientInfo":{"name":"root-refresh-new","version":"2.0"},
@@ -792,17 +1005,22 @@ public partial class McpServerTests
               "rootUri":"file:///root-refresh-new"
             }}
             """)!)!;
-            Assert.NotNull(reinitializeResponse["result"]);
+            Assert.Equal(-32600, duplicateInitializeResponse["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(
+                "duplicate_initialize",
+                duplicateInitializeResponse["error"]!["data"]!["reason"]!.GetValue<string>());
         }
         finally
         {
             releaseRootsResponse.Set();
         }
 
-        var indexResponse = await indexTask.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.True(indexResponse!["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal(["file:///root-refresh-new"], server.ClientRootsForTests);
-        Assert.DoesNotContain("stale-root-refresh", indexResponse.ToJsonString(), StringComparison.Ordinal);
+        Assert.Null(await rootsNegotiationTask.WaitAsync(TimeSpan.FromSeconds(10)));
+        await TestDeterminism.WaitUntilAsync(
+            () => server.ClientRootsForTests.SequenceEqual(["file:///stale-root-refresh"], StringComparer.Ordinal),
+            "the accepted handshake roots response to update the retained session");
+        Assert.Equal(["file:///stale-root-refresh"], server.ClientRootsForTests);
+        Assert.Equal("root-refresh-old/1.0", server.CurrentCaller);
     }
 
     [Fact]
@@ -1110,27 +1328,19 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void Initialize_NamedCallerIsSticky_RejectsReIdentifySwap()
+    public void Initialize_DuplicateKeepsOriginalCallerIdentity_Issue4848()
     {
-        // Once a named caller has been captured, re-initialize() under a *different* name
-        // is ignored so a networked MCP session cannot reset its rate-limit bucket simply
-        // by re-initializing under a fresh identity. The retained name continues to key
-        // all subsequent (tool, caller) buckets (#1560 DoS vector).
-        // 名前付き caller の取得後は、別名での再 initialize() を無視し、レート制限バケットを
-        // リセットする経路を塞ぐ（#1560 DoS）。
+        // A second initialize is a protocol error and cannot reset the rate-limit identity.
+        // 2 回目の initialize は protocol error となり、rate-limit identity を変更できない。
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"first-client"}}}""")!);
         Assert.Equal("first-client", _server.CurrentCaller);
 
-        // Re-init under a different name is ignored / 別名は無視
-        _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"second-client"}}}""")!);
-        Assert.Equal("first-client", _server.CurrentCaller);
+        var duplicate = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"second-client"}}}""")!)!;
 
-        // Re-init with empty clientInfo (resolves to "unknown") also cannot downgrade /
-        // 空の clientInfo（"unknown" に解決）でも降格しない。
-        _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}""")!);
+        Assert.Equal(-32600, duplicate["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("duplicate_initialize", duplicate["error"]!["data"]!["reason"]!.GetValue<string>());
         Assert.Equal("first-client", _server.CurrentCaller);
     }
 
@@ -1311,5 +1521,154 @@ public partial class McpServerTests
         Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
         Assert.Equal("invalid_request", response["error"]!["data"]!["category"]!.GetValue<string>());
         AssertJsonNullId(response);
+    }
+
+    private sealed class RootsNegotiationTranscriptTransport : IMcpTransport, IOutOfBandMcpTransport
+    {
+        private readonly bool _advertiseRoots;
+        private readonly object _transcriptGate = new();
+        private readonly List<string> _transcript = [];
+        private readonly TaskCompletionSource<JsonNode> _rootsRequest =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _readyToCompleteInput =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _completeInput =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _readCount;
+
+        internal RootsNegotiationTranscriptTransport(bool advertiseRoots)
+        {
+            _advertiseRoots = advertiseRoots;
+        }
+
+        public string Name => "roots-transcript";
+        public string Endpoint => "memory://roots-transcript";
+        internal List<string> OutOfBandFrames { get; } = [];
+        internal Task ReadyToCompleteInput => _readyToCompleteInput.Task;
+
+        internal string[] Transcript
+        {
+            get
+            {
+                lock (_transcriptGate)
+                    return _transcript.ToArray();
+            }
+        }
+
+        public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            string? frame;
+            switch (Interlocked.Increment(ref _readCount))
+            {
+                case 1:
+                    frame = _advertiseRoots
+                        ? """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"roots":{"listChanged":true}}}}"""
+                        : """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}""";
+                    break;
+                case 2:
+                    frame = """{"jsonrpc":"2.0","method":"notifications/initialized"}""";
+                    break;
+                case 3 when _advertiseRoots:
+                    var rootsRequest = await _rootsRequest.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    frame = new JsonObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = rootsRequest["id"]!.DeepClone(),
+                        ["result"] = new JsonObject
+                        {
+                            ["roots"] = new JsonArray(
+                                new JsonObject { ["uri"] = "file:///negotiated-workspace" }),
+                        },
+                    }.ToJsonString();
+                    break;
+                case 3:
+                case 4:
+                    _readyToCompleteInput.TrySetResult();
+                    await _completeInput.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    frame = null;
+                    break;
+                default:
+                    frame = null;
+                    break;
+            }
+
+            if (frame is not null)
+                Record("client:" + frame);
+            return frame;
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            if (frame is not null)
+                Record("server:" + frame);
+            return Task.CompletedTask;
+        }
+
+        public Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken)
+        {
+            lock (_transcriptGate)
+                OutOfBandFrames.Add(frame);
+            Record("server-oob:" + frame);
+            _rootsRequest.TrySetResult(JsonNode.Parse(frame)!);
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        internal void CompleteInput() => _completeInput.TrySetResult();
+
+        private void Record(string entry)
+        {
+            lock (_transcriptGate)
+                _transcript.Add(entry);
+        }
+    }
+
+    private sealed class GatedEofReadStream(byte[] payload, Task allowEof) : MemoryStream(payload)
+    {
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            var bytesRead = await base.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (bytesRead != 0)
+                return bytesRead;
+
+            await allowEof.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+    }
+
+    private sealed class BlockingSecondWriteStream : MemoryStream
+    {
+        private readonly TaskCompletionSource _secondWriteStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseSecondWrite =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _writeCount;
+
+        internal Task SecondWriteStarted => _secondWriteStarted.Task;
+        internal bool IsDisposed { get; private set; }
+
+        internal void ReleaseSecondWrite() => _releaseSecondWrite.TrySetResult();
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _writeCount) == 2)
+            {
+                _secondWriteStarted.TrySetResult();
+                await _releaseSecondWrite.Task.ConfigureAwait(false);
+            }
+
+            await base.WriteAsync(buffer, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
+        }
     }
 }

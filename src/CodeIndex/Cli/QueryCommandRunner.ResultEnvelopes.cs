@@ -258,6 +258,8 @@ public static partial class QueryCommandRunner
             query["since"] = options.Since.Value;
         if (options.CountOnly)
             query["count"] = true;
+        if (options.FirstPerFile || options.SampleSize.HasValue)
+            query["row_selectors"] = BuildSearchRowSelectorContextJson(options);
         if (options.All)
             query["all"] = true;
         if (options.RawFts)
@@ -307,6 +309,31 @@ public static partial class QueryCommandRunner
         if (options.ContextAfter > 0)
             query[options.ContextAfterExplicit ? "depth" : "after"] = options.ContextAfter;
         return query;
+    }
+
+    private static JsonArray BuildSearchRowSelectorContextJson(QueryCommandOptions options)
+    {
+        var selectors = new JsonArray();
+        if (options.FirstPerFile)
+        {
+            selectors.Add(new JsonObject
+            {
+                ["mode"] = "first_per_file",
+                ["applied"] = true,
+            });
+        }
+        if (options.SampleSize.HasValue)
+        {
+            selectors.Add(new JsonObject
+            {
+                ["mode"] = "sample",
+                ["applied"] = true,
+                ["sample_size"] = options.SampleSize.Value,
+                ["sample_mode"] = SearchSampleMode,
+                ["seed"] = SearchSampleSeed,
+            });
+        }
+        return selectors;
     }
 
     private static JsonArray BuildSearchGuardFiltersJson(IReadOnlyList<SearchGuardFilter> guardFilters)

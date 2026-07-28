@@ -147,6 +147,7 @@ public partial class McpServer : IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        MarkSessionClosed();
         CloseSharedDb();
         var shutdownCancellationTask = RequestShutdownCancellation();
         if (shutdownCancellationTask.IsCompleted)

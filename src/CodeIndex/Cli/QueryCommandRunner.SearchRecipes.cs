@@ -1094,6 +1094,8 @@ public static partial class QueryCommandRunner
         var selectionOmittedCount = queryResults
             .Where(query => query.SelectionOmittedCount.HasValue)
             .Sum(query => query.SelectionOmittedCount!.Value);
+        var selectors = AggregateSearchRowSelectors(queryResults.SelectMany(query => query.Selectors));
+        var hasSelectors = selectors.Count > 0;
         return WriteNdjsonStream(
             records,
             totalCount,
@@ -1106,8 +1108,32 @@ public static partial class QueryCommandRunner
             totalCountAuthoritative: false,
             truncationReason: limitTruncated ? "limit" : null,
             selectionReason: selectionReason,
-            selectionOmittedCount: selectionReason != null ? selectionOmittedCount : null);
+            selectionOmittedCount: selectionReason != null ? selectionOmittedCount : null,
+            sourceTotal: hasSelectors ? queryResults.Sum(query => query.SourceTotal) : null,
+            sourceTotalAuthoritative: hasSelectors
+                ? queryResults.All(query => query.SourceTotalAuthoritative)
+                : null,
+            selectedTotal: hasSelectors ? queryResults.Sum(query => query.SelectedTotal) : null,
+            selectorOmittedCount: hasSelectors ? queryResults.Sum(query => query.SelectorOmittedCount) : null,
+            limitOmittedCount: hasSelectors ? queryResults.Sum(query => query.LimitOmittedCount) : null,
+            selectors: hasSelectors ? selectors : null);
     }
+
+    private static List<SearchRowSelectorJsonResult> AggregateSearchRowSelectors(
+        IEnumerable<SearchRowSelectorJsonResult> selectors)
+        => selectors
+            .GroupBy(
+                selector => (selector.Mode, selector.SampleSize, selector.SampleMode, selector.Seed))
+            .Select(group => new SearchRowSelectorJsonResult(
+                group.Key.Mode,
+                group.All(selector => selector.Applied),
+                group.Sum(selector => selector.InputTotal),
+                group.Sum(selector => selector.OutputTotal),
+                group.Sum(selector => selector.OmittedCount),
+                group.Key.SampleSize,
+                group.Key.SampleMode,
+                group.Key.Seed))
+            .ToList();
 
     private static JsonObject BuildRecipeSearchResultRow(
         string recipeName,
@@ -1180,7 +1206,8 @@ public static partial class QueryCommandRunner
                         preflight.OpenIssueCount,
                         options.DuplicateConfidence,
                         options.DuplicateThreshold),
-                    drafts),
+                    drafts,
+                    BuildSearchIssueDraftSelectionAccounting(recipe.Name, queryResults)),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
             return WriteJsonObjectWithOptionalByteLimit(
                 json,
@@ -1294,7 +1321,8 @@ public static partial class QueryCommandRunner
         return WithDb(options, jsonOptions, reader =>
         {
             var resultLimit = GetAdHocIssueDraftResultLimit(options);
-            var sourceTotalCountAuthoritative = options.GuardFilters.Count == 0;
+            var sourceTotalCountAuthoritative = options.GuardFilters.Count == 0
+                                                && !HasSearchOriginFilters(options);
             var sourceFetchLimit = sourceTotalCountAuthoritative
                 ? int.MaxValue
                 : GetSearchRecipeFetchLimit(options, resultLimit);
@@ -1305,7 +1333,11 @@ public static partial class QueryCommandRunner
                 sourceFetchLimit,
                 guardRequestedLimit: resultLimit);
             var sourceRows = BuildSearchDisplayRows(results, options, exact);
-            var outputSelection = ApplySearchOutputSelection(sourceRows, options, resultLimit);
+            var outputSelection = ApplySearchOutputSelection(
+                sourceRows,
+                options,
+                resultLimit,
+                sourceTotalCountAuthoritative);
             var rows = outputSelection.Rows;
             var omittedCount = Math.Max(0, outputSelection.OriginalCount - rows.Count);
             var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
@@ -1340,7 +1372,15 @@ public static partial class QueryCommandRunner
                 BuildSearchRecipeTopFiles(rows),
                 outputSelection.Truncated || !sourceTotalCountAuthoritative,
                 null,
-                rows.Select(row => row.Compact).ToList());
+                rows.Select(row => row.Compact).ToList(),
+                outputSelection.SourceTotal,
+                outputSelection.SourceTotalAuthoritative,
+                outputSelection.SourceTotalAuthoritative ? null : outputSelection.SourceTotal,
+                outputSelection.SelectedTotal,
+                outputSelection.Returned,
+                outputSelection.SelectorOmittedCount,
+                outputSelection.LimitOmittedCount,
+                outputSelection.Selectors);
             var drafts = rows.Count == 0
                 ? []
                 : new List<SearchIssueDraftJsonResult>
@@ -1370,7 +1410,8 @@ public static partial class QueryCommandRunner
                         preflight.OpenIssueCount,
                         options.DuplicateConfidence,
                         options.DuplicateThreshold),
-                    drafts),
+                    drafts,
+                    BuildSearchIssueDraftSelectionAccounting(null, [queryResult])),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
             return WriteJsonObjectWithOptionalByteLimit(
                 json,
@@ -1378,6 +1419,28 @@ public static partial class QueryCommandRunner
                 "issue-draft",
                 "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
         });
+    }
+
+    private static List<SearchIssueDraftSelectionAccountingJsonResult>? BuildSearchIssueDraftSelectionAccounting(
+        string? recipeName,
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults)
+    {
+        var accounting = queryResults
+            .Where(query => query.Selectors.Count > 0)
+            .Select(query => new SearchIssueDraftSelectionAccountingJsonResult(
+                recipeName,
+                recipeName is null ? null : query.Name,
+                query.Query,
+                query.SourceTotal,
+                query.SourceTotalAuthoritative,
+                query.SourceTotalLowerBound,
+                query.SelectedTotal,
+                query.Returned,
+                query.SelectorOmittedCount,
+                query.LimitOmittedCount,
+                query.Selectors))
+            .ToList();
+        return accounting.Count == 0 ? null : accounting;
     }
 
     private static int GetAdHocIssueDraftResultLimit(QueryCommandOptions options)
@@ -1403,9 +1466,10 @@ public static partial class QueryCommandRunner
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
             var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
             var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
+            var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit);
             var results = reader.Search(
                 recipeQuery.Query,
-                GetSearchRecipeFetchLimit(options, resultLimit),
+                fetchLimit,
                 options.Lang,
                 false,
                 queryScope.PathPatterns,
@@ -1422,9 +1486,15 @@ public static partial class QueryCommandRunner
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
                 resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
+            var sourceTotalAuthoritative = IsSearchRecipeSourceTotalAuthoritative(
+                options,
+                recipeQuery,
+                guardFilters,
+                results.Count,
+                fetchLimit);
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
-            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit);
+            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
@@ -1467,7 +1537,15 @@ public static partial class QueryCommandRunner
                     && rows.Count > 0
                         ? FormatSearchCursor(rows[^1].Result)
                         : null,
-                rows.Select(row => row.Compact).ToList()));
+                rows.Select(row => row.Compact).ToList(),
+                outputSelection.SourceTotal,
+                outputSelection.SourceTotalAuthoritative,
+                outputSelection.SourceTotalAuthoritative ? null : outputSelection.SourceTotal,
+                outputSelection.SelectedTotal,
+                outputSelection.Returned,
+                outputSelection.SelectorOmittedCount,
+                outputSelection.LimitOmittedCount,
+                outputSelection.Selectors));
         }
 
         return queryResults;
@@ -1489,9 +1567,10 @@ public static partial class QueryCommandRunner
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
             var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
             var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
+            var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit);
             var results = reader.Search(
                 recipeQuery.Query,
-                GetSearchRecipeFetchLimit(options, resultLimit),
+                fetchLimit,
                 options.Lang,
                 false,
                 queryScope.PathPatterns,
@@ -1508,9 +1587,15 @@ public static partial class QueryCommandRunner
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
                 resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
+            var sourceTotalAuthoritative = IsSearchRecipeSourceTotalAuthoritative(
+                options,
+                recipeQuery,
+                guardFilters,
+                results.Count,
+                fetchLimit);
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
-            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit);
+            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
@@ -1557,7 +1642,15 @@ public static partial class QueryCommandRunner
                     row.Result.EndLine,
                     row.Compact.MatchLines,
                     row.Compact.EnclosingSymbolName,
-                    row.Compact.EnclosingSymbolKind)).ToList()));
+                    row.Compact.EnclosingSymbolKind)).ToList(),
+                outputSelection.SourceTotal,
+                outputSelection.SourceTotalAuthoritative,
+                outputSelection.SourceTotalAuthoritative ? null : outputSelection.SourceTotal,
+                outputSelection.SelectedTotal,
+                outputSelection.Returned,
+                outputSelection.SelectorOmittedCount,
+                outputSelection.LimitOmittedCount,
+                outputSelection.Selectors));
         }
 
         return queryResults;
@@ -1568,6 +1661,17 @@ public static partial class QueryCommandRunner
             && selection.TruncationReason is "first_per_file" or "sample"
                 ? selection.TruncationReason
                 : null;
+
+    private static bool IsSearchRecipeSourceTotalAuthoritative(
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery,
+        IReadOnlyCollection<SearchGuardFilter> guardFilters,
+        int resultCount,
+        int fetchLimit)
+        => guardFilters.Count == 0
+           && recipeQuery.RejectFileQueries.Count == 0
+           && !HasSearchOriginFilters(BuildSearchDisplayFacetFilters(options, recipeQuery))
+           && resultCount < fetchLimit;
 
     private static int GetSearchRecipeFetchLimit(QueryCommandOptions options, int resultLimit)
     {
@@ -1949,7 +2053,16 @@ public static partial class QueryCommandRunner
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             BuildSearchRecipeCursoringHint(
                 queryResults.Any(query => query.Truncated),
-                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor))));
+                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor))),
+            queryResults.Sum(query => query.SourceTotal),
+            queryResults.All(query => query.SourceTotalAuthoritative),
+            queryResults.All(query => query.SourceTotalAuthoritative)
+                ? null
+                : queryResults.Sum(query => query.SourceTotal),
+            queryResults.Sum(query => query.SelectedTotal),
+            queryResults.Sum(query => query.Returned),
+            queryResults.Sum(query => query.SelectorOmittedCount),
+            queryResults.Sum(query => query.LimitOmittedCount));
 
     private static SearchRecipeRunSummaryJsonResult BuildSearchRecipeRunSummary(
         IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults,
@@ -1966,7 +2079,16 @@ public static partial class QueryCommandRunner
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             BuildSearchRecipeCursoringHint(
                 queryResults.Any(query => query.Truncated),
-                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor))));
+                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor))),
+            queryResults.Sum(query => query.SourceTotal),
+            queryResults.All(query => query.SourceTotalAuthoritative),
+            queryResults.All(query => query.SourceTotalAuthoritative)
+                ? null
+                : queryResults.Sum(query => query.SourceTotal),
+            queryResults.Sum(query => query.SelectedTotal),
+            queryResults.Sum(query => query.Returned),
+            queryResults.Sum(query => query.SelectorOmittedCount),
+            queryResults.Sum(query => query.LimitOmittedCount));
 
     private static string BuildSearchRecipeCursoringHint(bool hasTruncatedQuery, bool cursoringAvailable)
         => cursoringAvailable
@@ -2343,7 +2465,15 @@ public static partial class QueryCommandRunner
                 queryResult.SelectionOmittedCount,
                 queryResult.MinimumOmittedResultCount,
                 queryResult.Truncated,
-                queryResult.NextCursor),
+                queryResult.NextCursor,
+                queryResult.SourceTotal,
+                queryResult.SourceTotalAuthoritative,
+                queryResult.SourceTotalLowerBound,
+                queryResult.SelectedTotal,
+                queryResult.Returned,
+                queryResult.SelectorOmittedCount,
+                queryResult.LimitOmittedCount,
+                queryResult.Selectors),
             new SuggestionIssueDraftDuplicatePreflightJsonResult(
                 preflight.Checked,
                 duplicateMatches.Count,
@@ -2417,6 +2547,14 @@ public static partial class QueryCommandRunner
                 queryResult.MinimumOmittedResultCount,
                 queryResult.Truncated,
                 queryResult.NextCursor,
+                queryResult.SourceTotal,
+                queryResult.SourceTotalAuthoritative,
+                queryResult.SourceTotalLowerBound,
+                queryResult.SelectedTotal,
+                queryResult.Returned,
+                queryResult.SelectorOmittedCount,
+                queryResult.LimitOmittedCount,
+                queryResult.Selectors,
                 sourceTotalCountAuthoritative ? queryResult.MinimumMatchedCount : null,
                 queryResult.Count,
                 options.Limit,

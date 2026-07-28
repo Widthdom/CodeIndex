@@ -81,6 +81,14 @@ public partial class McpServer : IDisposable
     // 処理されることがある。短命の tombstone を置き、登録時に cancel を消費する (#1418)。
     private readonly ConcurrentDictionary<string, DateTimeOffset> _pendingRequestCancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingClientRequests = new(StringComparer.Ordinal);
+    // The initialized notification is a one-shot protocol barrier. Keep its roots refresh
+    // coalesced and observable by transport teardown so repeated notifications cannot create
+    // unbounded detached client requests (#4848).
+    // initialized notification は一度限りの protocol barrier として扱う。roots refresh を集約し、
+    // transport teardown から追跡して、通知の再送で detached request が増殖しないようにする (#4848)。
+    private readonly object _clientRootsHandshakeRefreshGate = new();
+    private Task? _clientRootsHandshakeRefreshTask;
+    private bool _clientRootsHandshakeRefreshStarted;
     private readonly object _requestTimeoutDiagnosticsGate = new();
     private readonly object _healthStateGate = new();
     // Shared writer operations must not use the session DbContext concurrently. This gate is
@@ -121,6 +129,7 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<FrameInitializeState?> _frameInitializeState = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private readonly object _initializeStateGate = new();
+    private long _nextInitializeAttemptId;
     private volatile bool _running = true;
     private volatile bool _enforceInitializationLifecycle;
     // Zero outside a transport loop. HTTP publishes its configured body cap here so handlers
@@ -152,18 +161,18 @@ public partial class McpServer : IDisposable
     private DateTimeOffset _lastRequestAt;
     private readonly SemaphoreSlim _textWriterGate = new(1, 1);
     // `initialize.clientInfo` echoed into every audit record so the trail can answer
-    // "which client issued this call?" without a second log source. Updated on every
-    // `initialize` so a single-session reconnection picks up the new caller identity.
+    // "which client issued this call?" without a second log source. Captured by the one
+    // accepted `initialize`; reconnecting clients establish a new server session.
     // `initialize.clientInfo` を audit に転写し、別ログを引かなくても呼び出し元を辿れるよう
-    // にする。`initialize` 毎に上書きすることで再接続時に caller identity が追随する。
+    // にする。受理される唯一の `initialize` で確定し、再接続時は新しい server session を作る。
     // The same snapshot carries the sticky caller used by the per-(tool, caller) limiter.
     // 同じ snapshot に (tool, caller) 単位の limiter が使う sticky caller も保持する。
     // Publish negotiated initialize metadata through one immutable reference. Writers are
     // serialized by `_initializeStateGate`; readers capture this reference once so a draining
-    // request cannot combine fields from before and after a successful re-initialize (#4540).
+    // request cannot observe a partially committed initialization snapshot (#4540, #4848).
     // initialize で交渉した metadata は単一の immutable reference として公開する。writer は
     // `_initializeStateGate` で直列化し、reader は reference を一度だけ取得することで、drain 中の
-    // request が成功した re-initialize の前後の field を混在させない (#4540)。
+    // request が部分的に commit された initialization state を観測しない (#4540, #4848)。
     private InitializeSessionState _initializeState = InitializeSessionState.Empty;
     private string _mcpLogLevel = "info";
     // Opaque per-server-instance session id copied into suggestion attribution records (#1873).

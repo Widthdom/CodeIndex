@@ -369,47 +369,50 @@ public static partial class QueryCommandRunner
         => NormalizeSearchAggregationKey(value) is "file" or "symbol" or "origin" or "return_type" or "subsystem";
 
     private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
-        => ApplySearchOutputSelection(rows, options, options.Limit);
+        => ApplySearchOutputSelection(
+            rows,
+            options,
+            options.Limit,
+            options.GuardFilters.Count == 0
+            && !HasSearchOriginFilters(options)
+            && (!options.FirstPerFile && !options.SampleSize.HasValue
+                || rows.Count < SearchOriginFilterMaxCandidates));
 
     private static SearchOutputSelection ApplySearchOutputSelection(
         List<SearchDisplayRow> rows,
         QueryCommandOptions options,
-        int limit)
+        int limit,
+        bool sourceTotalAuthoritative = true)
     {
-        var originalCount = rows.Count;
-        rows = ApplySearchPostSelectors(
-            rows,
-            options,
-            out var firstPerFileTruncated,
-            out var sampleTruncated);
-        var postSelectionCount = rows.Count;
+        var sourceTotal = rows.Count;
+        var selectors = new List<SearchRowSelectorJsonResult>();
+        rows = ApplySearchPostSelectors(rows, options, selectors);
+        var selectedTotal = rows.Count;
         var limitTruncated = rows.Count > limit;
         if (limitTruncated)
             rows = rows.Take(limit).ToList();
 
-        var truncationReason = firstPerFileTruncated
-            ? "first_per_file"
-            : sampleTruncated
-                ? "sample"
-                : limitTruncated
-                    ? "limit"
-                    : null;
+        var selectionReason = selectors.FirstOrDefault(selector => selector.OmittedCount > 0)?.Mode;
+        var truncationReason = selectionReason ?? (limitTruncated ? "limit" : null);
         return new SearchOutputSelection(
             rows,
-            originalCount,
-            rows.Count < originalCount,
+            sourceTotal,
+            selectedTotal,
+            rows.Count,
+            Math.Max(0, sourceTotal - selectedTotal),
+            Math.Max(0, selectedTotal - rows.Count),
+            sourceTotalAuthoritative,
+            rows.Count < sourceTotal,
             limitTruncated,
             truncationReason,
-            Math.Max(0, originalCount - postSelectionCount));
+            selectors);
     }
 
     private static List<SearchDisplayRow> ApplySearchPostSelectors(
         List<SearchDisplayRow> rows,
         QueryCommandOptions options,
-        out bool firstPerFileTruncated,
-        out bool sampleTruncated)
+        List<SearchRowSelectorJsonResult> selectors)
     {
-        firstPerFileTruncated = false;
         if (options.FirstPerFile)
         {
             var beforeFirstPerFile = rows.Count;
@@ -417,14 +420,28 @@ public static partial class QueryCommandRunner
                 .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
                 .Select(group => group.First())
                 .ToList();
-            firstPerFileTruncated = rows.Count < beforeFirstPerFile;
+            selectors.Add(new SearchRowSelectorJsonResult(
+                "first_per_file",
+                true,
+                beforeFirstPerFile,
+                rows.Count,
+                Math.Max(0, beforeFirstPerFile - rows.Count)));
         }
 
-        sampleTruncated = false;
-        if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
+        if (options.SampleSize.HasValue)
         {
-            sampleTruncated = true;
-            rows = SampleSearchRows(rows, options.SampleSize.Value);
+            var beforeSample = rows.Count;
+            if (rows.Count > options.SampleSize.Value)
+                rows = SampleSearchRows(rows, options.SampleSize.Value);
+            selectors.Add(new SearchRowSelectorJsonResult(
+                "sample",
+                true,
+                beforeSample,
+                rows.Count,
+                Math.Max(0, beforeSample - rows.Count),
+                options.SampleSize.Value,
+                SearchSampleMode,
+                SearchSampleSeed));
         }
         return rows;
     }
@@ -436,14 +453,44 @@ public static partial class QueryCommandRunner
         if (sampleSize == 1)
             return [rows[0]];
 
-        var sampled = new List<SearchDisplayRow>(sampleSize);
-        var lastIndex = rows.Count - 1;
-        for (var i = 0; i < sampleSize; i++)
+        return rows
+            .Select((row, index) => new
+            {
+                Row = row,
+                Index = index,
+                Key = ComputeSearchSampleKey(row, index),
+            })
+            .OrderBy(candidate => candidate.Key)
+            .ThenBy(candidate => candidate.Index)
+            .Take(sampleSize)
+            .OrderBy(candidate => candidate.Index)
+            .Select(candidate => candidate.Row)
+            .ToList();
+    }
+
+    private static ulong ComputeSearchSampleKey(SearchDisplayRow row, int index)
+    {
+        const ulong offsetBasis = 14695981039346656037;
+        const ulong prime = 1099511628211;
+        var hash = offsetBasis ^ (uint)SearchSampleSeed;
+
+        Add(row.Result.Path);
+        Add(row.Result.ChunkId.ToString(CultureInfo.InvariantCulture));
+        Add(row.Result.StartLine.ToString(CultureInfo.InvariantCulture));
+        Add(row.Result.EndLine.ToString(CultureInfo.InvariantCulture));
+        Add(index.ToString(CultureInfo.InvariantCulture));
+        return hash;
+
+        void Add(string value)
         {
-            var index = (int)Math.Round(i * (lastIndex / (double)(sampleSize - 1)), MidpointRounding.AwayFromZero);
-            sampled.Add(rows[Math.Clamp(index, 0, lastIndex)]);
+            foreach (var character in value)
+            {
+                hash ^= character;
+                hash *= prime;
+            }
+            hash ^= 0xff;
+            hash *= prime;
         }
-        return sampled;
     }
 
     private static int WriteGroupedSearchResults(
@@ -582,6 +629,12 @@ public static partial class QueryCommandRunner
         string? truncationReason,
         string? selectionReason,
         int? selectionOmittedCount,
+        int sourceTotal,
+        bool sourceTotalAuthoritative,
+        int selectedTotal,
+        int selectorOmittedCount,
+        int limitOmittedCount,
+        List<SearchRowSelectorJsonResult> selectors,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         JsonSerializerOptions ndjsonOptions,
@@ -623,7 +676,13 @@ public static partial class QueryCommandRunner
             totalCountAuthoritative: false,
             truncationReason: truncationReason,
             selectionReason: selectionReason,
-            selectionOmittedCount: selectionOmittedCount);
+            selectionOmittedCount: selectionOmittedCount,
+            sourceTotal: selectors.Count > 0 ? sourceTotal : null,
+            sourceTotalAuthoritative: selectors.Count > 0 ? sourceTotalAuthoritative : null,
+            selectedTotal: selectors.Count > 0 ? selectedTotal : null,
+            selectorOmittedCount: selectors.Count > 0 ? selectorOmittedCount : null,
+            limitOmittedCount: selectors.Count > 0 ? limitOmittedCount : null,
+            selectors: selectors.Count > 0 ? selectors : null);
         terminalLine = stream.TerminalLine;
         return stream.ExitCode;
     }
@@ -690,6 +749,12 @@ public static partial class QueryCommandRunner
         string? truncationReason,
         string? selectionReason,
         int? selectionOmittedCount,
+        int sourceTotal,
+        bool sourceTotalAuthoritative,
+        int selectedTotal,
+        int selectorOmittedCount,
+        int limitOmittedCount,
+        List<SearchRowSelectorJsonResult> selectors,
         QueryCommandOptions options,
         JsonSerializerOptions ndjsonOptions,
         DbReader reader,
@@ -711,7 +776,13 @@ public static partial class QueryCommandRunner
             totalCountAuthoritative: false,
             truncationReason: truncationReason,
             selectionReason: selectionReason,
-            selectionOmittedCount: selectionOmittedCount);
+            selectionOmittedCount: selectionOmittedCount,
+            sourceTotal: selectors.Count > 0 ? sourceTotal : null,
+            sourceTotalAuthoritative: selectors.Count > 0 ? sourceTotalAuthoritative : null,
+            selectedTotal: selectors.Count > 0 ? selectedTotal : null,
+            selectorOmittedCount: selectors.Count > 0 ? selectorOmittedCount : null,
+            limitOmittedCount: selectors.Count > 0 ? limitOmittedCount : null,
+            selectors: selectors.Count > 0 ? selectors : null);
         terminalLine = stream.TerminalLine;
         return stream.ExitCode;
     }
@@ -782,11 +853,20 @@ public static partial class QueryCommandRunner
 
     private sealed record SearchOutputSelection(
         List<SearchDisplayRow> Rows,
-        int OriginalCount,
+        int SourceTotal,
+        int SelectedTotal,
+        int Returned,
+        int SelectorOmittedCount,
+        int LimitOmittedCount,
+        bool SourceTotalAuthoritative,
         bool Truncated,
         bool LimitTruncated,
         string? TruncationReason,
-        int SelectionOmittedCount);
+        List<SearchRowSelectorJsonResult> Selectors)
+    {
+        public int OriginalCount => SourceTotal;
+        public int SelectionOmittedCount => SelectorOmittedCount;
+    }
 
     private sealed record SearchGroupOutputSelection(
         List<SearchGroupedCountItemJsonResult> Groups,
@@ -1119,8 +1199,13 @@ public static partial class QueryCommandRunner
             .FirstOrDefault();
     }
 
-    private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
+    private static List<SearchDisplayRow> ReadSearchDisplayRows(
+        DbReader reader,
+        QueryCommandOptions options,
+        bool exact,
+        out SearchOutputSelection? boundedSelection)
     {
+        boundedSelection = null;
         var responseOffset = JsonEnvelopeWrapper.GetBoundedResponseOffset("search");
         var boundedPageLimit = JsonEnvelopeWrapper.GetBoundedResponseLimit("search");
         if (boundedPageLimit.HasValue
@@ -1148,22 +1233,34 @@ public static partial class QueryCommandRunner
                     SearchOriginFilterMaxCandidates);
             }
 
-            var rawWindowComplete = boundedRows.Count < SearchOriginFilterMaxCandidates;
-            var selectedRows = ApplySearchPostSelectors(
+            var sourceTotalAuthoritative = boundedRows.Count < SearchOriginFilterMaxCandidates
+                                           && options.GuardFilters.Count == 0
+                                           && !HasSearchOriginFilters(options);
+            var fullSelection = ApplySearchOutputSelection(
                 boundedRows,
                 options,
-                out _,
-                out _);
+                int.MaxValue,
+                sourceTotalAuthoritative);
+            var pageRows = fullSelection.Rows
+                .Skip(responseOffset)
+                .Take(boundedPageLimit.Value)
+                .ToList();
+            var limitOmittedCount = Math.Max(0, fullSelection.SelectedTotal - pageRows.Count);
+            var limitTruncated = limitOmittedCount > 0;
+            boundedSelection = fullSelection with
+            {
+                Rows = pageRows,
+                Returned = pageRows.Count,
+                LimitOmittedCount = limitOmittedCount,
+                Truncated = pageRows.Count < fullSelection.SourceTotal,
+                LimitTruncated = limitTruncated,
+                TruncationReason = fullSelection.TruncationReason ?? (limitTruncated ? "limit" : null),
+            };
             JsonEnvelopeWrapper.ReportBoundedResponseTotal(
                 "search",
-                selectedRows.Count,
-                rawWindowComplete);
-            return selectedRows
-                .Skip(responseOffset)
-                .Take(boundedPageLimit.Value == int.MaxValue
-                    ? int.MaxValue
-                    : boundedPageLimit.Value + 1)
-                .ToList();
+                fullSelection.SelectedTotal,
+                sourceTotalAuthoritative);
+            return pageRows;
         }
 
         var requestedLimit = GetSearchDisplayCandidateLimit(options);
@@ -1255,8 +1352,7 @@ public static partial class QueryCommandRunner
             return requested;
         if (!options.FirstPerFile && !options.SampleSize.HasValue)
             return requested == int.MaxValue ? requested : requested + 1;
-        var sampleTarget = Math.Max(requested, options.SampleSize ?? requested);
-        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(requested + 1, sampleTarget * SearchOriginFilterOverFetchFactor));
+        return SearchOriginFilterMaxCandidates;
     }
 
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
@@ -1606,7 +1702,13 @@ public static partial class QueryCommandRunner
         bool totalCountAuthoritative = true,
         string? truncationReason = null,
         string? selectionReason = null,
-        int? selectionOmittedCount = null)
+        int? selectionOmittedCount = null,
+        int? sourceTotal = null,
+        bool? sourceTotalAuthoritative = null,
+        int? selectedTotal = null,
+        int? selectorOmittedCount = null,
+        int? limitOmittedCount = null,
+        List<SearchRowSelectorJsonResult>? selectors = null)
     {
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         return JsonSerializer.Serialize(
@@ -1622,6 +1724,14 @@ public static partial class QueryCommandRunner
                 TotalCountLowerBound: totalCountAuthoritative ? null : totalCount,
                 SelectionReason: selectionReason,
                 SelectionOmittedCount: selectionOmittedCount,
+                SourceTotal: sourceTotal,
+                SourceTotalAuthoritative: sourceTotalAuthoritative,
+                SourceTotalLowerBound: sourceTotalAuthoritative == false ? sourceTotal : null,
+                SelectedTotal: selectedTotal,
+                Returned: sourceTotal.HasValue ? count : null,
+                SelectorOmittedCount: selectorOmittedCount,
+                LimitOmittedCount: limitOmittedCount,
+                Selectors: selectors,
                 InterruptionReason: interrupted ? "max_json_bytes_exceeded" : null,
                 TruncationReason: interrupted ? "max_json_bytes_exceeded" : truncated ? truncationReason ?? "limit" : null,
                 AppliedLimit: truncated ? appliedLimit : null,
@@ -1648,10 +1758,14 @@ public static partial class QueryCommandRunner
     private static JsonSerializerOptions GetCompactJsonOptions(JsonSerializerOptions jsonOptions)
         => jsonOptions.WriteIndented ? new JsonSerializerOptions(jsonOptions) { WriteIndented = false } : jsonOptions;
 
-    private static int WriteCompactSearchResults(IEnumerable<CompactSearchResult> results, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static int WriteCompactSearchResults(
+        IEnumerable<CompactSearchResult> results,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        SearchOutputSelection? selection = null)
     {
         using var writer = new StringWriter(CultureInfo.InvariantCulture);
-        WriteCompactSearchResults(writer, results, options, jsonOptions);
+        WriteCompactSearchResults(writer, results, options, jsonOptions, selection);
         return WriteJsonObjectWithOptionalByteLimit(
             writer.ToString().TrimEnd('\r', '\n'),
             options,
@@ -1659,12 +1773,53 @@ public static partial class QueryCommandRunner
             "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.");
     }
 
-    private static void WriteCompactSearchResults(TextWriter writer, IEnumerable<CompactSearchResult> results, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static void WriteCompactSearchResults(
+        TextWriter writer,
+        IEnumerable<CompactSearchResult> results,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        SearchOutputSelection? selection = null)
     {
         var locations = results.Select(result => new FormattedLocation(
             result.Path,
             result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine));
-        writer.WriteLine(BuildCompactLocationsPayload(locations, options, jsonOptions).ToJsonString(jsonOptions));
+        var payload = BuildCompactLocationsPayload(locations, options, jsonOptions);
+        if (selection is { Selectors.Count: > 0 })
+            AddSearchSelectionAccounting(payload, selection);
+        writer.WriteLine(payload.ToJsonString(jsonOptions));
+    }
+
+    private static void AddSearchSelectionAccounting(JsonObject payload, SearchOutputSelection selection)
+    {
+        payload["source_total"] = selection.SourceTotal;
+        payload["source_total_authoritative"] = selection.SourceTotalAuthoritative;
+        payload["source_total_lower_bound"] = selection.SourceTotalAuthoritative
+            ? null
+            : selection.SourceTotal;
+        payload["selected_total"] = selection.SelectedTotal;
+        payload["returned"] = selection.Returned;
+        payload["selector_omitted_count"] = selection.SelectorOmittedCount;
+        payload["limit_omitted_count"] = selection.LimitOmittedCount;
+        var selectors = new JsonArray();
+        foreach (var selector in selection.Selectors)
+        {
+            var selectorPayload = new JsonObject
+            {
+                ["mode"] = selector.Mode,
+                ["applied"] = selector.Applied,
+                ["input_total"] = selector.InputTotal,
+                ["output_total"] = selector.OutputTotal,
+                ["omitted_count"] = selector.OmittedCount,
+            };
+            if (selector.SampleSize.HasValue)
+                selectorPayload["sample_size"] = selector.SampleSize.Value;
+            if (selector.SampleMode is not null)
+                selectorPayload["sample_mode"] = selector.SampleMode;
+            if (selector.Seed.HasValue)
+                selectorPayload["seed"] = selector.Seed.Value;
+            selectors.Add(selectorPayload);
+        }
+        payload["selectors"] = selectors;
     }
 
     private static void WriteJsonArray<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, JsonSerializerOptions jsonOptions)

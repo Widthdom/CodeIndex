@@ -214,11 +214,21 @@ public partial class McpServer
         }
 
         if (method == "notifications/initialized")
+        {
+            if (CurrentInitializeState.Phase == McpSessionPhase.Initialized)
+                StartClientRootsRefreshAfterHandshake();
             return true;
+        }
         if (method == "notifications/roots/list_changed")
         {
-            MarkClientRootsStale();
-            _frameInitializeState.Value?.MarkRootsChangeAccepted();
+            var state = CurrentInitializeState;
+            if (state.Phase == McpSessionPhase.Initialized
+                && state.ClientSupportsRoots
+                && SupportsClientRootsNegotiation(state.NegotiatedProtocolVersion))
+            {
+                MarkClientRootsStale();
+                _frameInitializeState.Value?.MarkRootsChangeAccepted();
+            }
             return true;
         }
 
@@ -226,6 +236,7 @@ public partial class McpServer
             || string.Equals(method, "notifications/exit", StringComparison.Ordinal))
         {
             WriteMcpLogLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
+            MarkSessionShuttingDown();
             _running = false;
             _ = RequestShutdownCancellation();
             return true;
@@ -281,7 +292,29 @@ public partial class McpServer
         DeferredInitializeCommits? deferredInitializeCommits)
     {
         var method = request.Method!;
-        if (_enforceInitializationLifecycle && !CurrentInitializeState.Initialized && method != "initialize")
+        var phase = CurrentInitializeState.Phase;
+        if (phase is McpSessionPhase.ShuttingDown or McpSessionPhase.Closed)
+        {
+            return Task.FromResult<JsonNode>(CreateErrorResponse(
+                hasId: true,
+                id: request.Id,
+                code: -32002,
+                message: "Server is shutting down",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "Create a new MCP transport session and initialize it before retrying.",
+                retrySafe: true,
+                extraData: new JsonObject
+                {
+                    ["reason"] = phase == McpSessionPhase.Closed
+                        ? "session_closed"
+                        : "session_shutting_down",
+                    ["session_phase"] = FormatSessionPhase(phase),
+                }));
+        }
+
+        if (_enforceInitializationLifecycle
+            && phase is McpSessionPhase.PreInitialize or McpSessionPhase.Initializing
+            && method != "initialize")
         {
             return Task.FromResult<JsonNode>(CreateErrorResponse(
                 hasId: true,

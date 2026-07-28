@@ -676,6 +676,16 @@ public class CallerResult
     public string? CallerKind { get; set; }
     public string? CallerName { get; set; }
     public string CalleeName { get; set; } = string.Empty;
+    [JsonIgnore]
+    public long? CallerSymbolId { get; set; }
+    [JsonIgnore]
+    public long? CalleeSymbolId { get; set; }
+    // Canonical cycle analysis keeps every resolved target behind an aggregated caller row;
+    // CalleeSymbolId remains the output-safe scalar and is null when those targets differ.
+    // 集約 caller 行の全 resolved target は cycle 判定用に保持し、target が異なる場合は
+    // output 用 scalar の CalleeSymbolId を null にする。
+    [JsonIgnore]
+    public IReadOnlyList<long> CalleeSymbolIds { get; set; } = Array.Empty<long>();
     // Summary preferred reference_kind for the grouped row. Grouped caller rows can
     // collapse multiple underlying kinds into one label, so JSON/MCP consumers that
     // need the full picture should read ReferenceKinds + HasMixedReferenceKinds as
@@ -771,6 +781,10 @@ public class ImpactResult
     public string? CallerKind { get; set; }
     public string? CallerName { get; set; }
     public string CalleeName { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? CallerSymbolId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? CalleeSymbolId { get; set; }
     public int Depth { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
@@ -821,6 +835,8 @@ public class ImpactResult
 
 public class ImpactPathNode
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Kind { get; set; }
     public string? Lang { get; set; }
@@ -931,6 +947,15 @@ public static class ImpactTerminationReasons
 public class ImpactCycleResult
 {
     public List<string> Members { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ImpactCycleMemberResult>? MemberIdentities { get; set; }
+}
+
+public class ImpactCycleMemberResult
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolId { get; set; }
+    public string Name { get; set; } = string.Empty;
 }
 
 public sealed class StatusDatabasePermissionDiagnostic
