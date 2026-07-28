@@ -30,6 +30,9 @@ public static partial class DbCommandRunner
         private int checkpointsKeep = DefaultRestoreBackupKeepCount;
         private bool restoreBackupsList;
         private bool restoreBackupsPrune;
+        private bool restoreBackupsRestore;
+        private bool noBackup;
+        private bool keepOptionSeen;
         private int restoreBackupsKeep = DefaultRestoreBackupKeepCount;
         private bool schemaSummaryOnly;
         private int schemaEntryLimit = SchemaEntryLimit;
@@ -165,6 +168,23 @@ public static partial class DbCommandRunner
                 case "--dry-run":
                     pruneDryRun = true;
                     break;
+                case "--no-backup":
+                    noBackup = true;
+                    break;
+                case "--restore" when i + 1 < args.Length
+                    && !args[i + 1].StartsWith("-", StringComparison.Ordinal):
+                    if (!restoreBackups)
+                    {
+                        parseError = "--restore is only valid with `cdidx db restore-backups --restore <id>`";
+                        break;
+                    }
+
+                    restoreBackupsRestore = true;
+                    name = args[++i];
+                    break;
+                case "--restore":
+                    parseError = "--restore requires a managed restore backup ID";
+                    break;
                 case "--apply":
                     pruneApply = true;
                     break;
@@ -191,6 +211,7 @@ public static partial class DbCommandRunner
                     parseError = "--delete requires a checkpoint name";
                     break;
                 case "--keep" when i + 1 < args.Length:
+                    keepOptionSeen = true;
                     if (!restoreBackups && !checkpointsPrune)
                     {
                         parseError = "--keep is only valid with checkpoint or restore-backup pruning";
@@ -246,8 +267,10 @@ public static partial class DbCommandRunner
         {
             if (parseError is null && restoreBackups && pruneApply)
                 parseError = "--apply is not supported with `cdidx db restore-backups`; `--prune` is the explicit mutation opt-in.";
-            if (parseError is null && pruneDryRun && restoreBackups && !restoreBackupsPrune)
-                parseError = "--dry-run is only valid with `cdidx db restore-backups --prune`.";
+            if (parseError is null && pruneDryRun && restoreBackups && !restoreBackupsPrune && !restoreBackupsRestore)
+                parseError = "--dry-run is only valid with `cdidx db restore-backups --prune` or `--restore <id>`.";
+            if (parseError is null && keepOptionSeen && restoreBackups && !restoreBackupsPrune)
+                parseError = "--keep is only valid with `cdidx db restore-backups --prune`.";
             if (parseError is null && pruneDryRun && listCheckpoints && !checkpointsDelete && !checkpointsPrune)
                 parseError = "--dry-run is only valid with checkpoint deletion or pruning.";
             if (parseError is null && !schema && schemaSpecificOptionSeen)
@@ -256,6 +279,8 @@ public static partial class DbCommandRunner
                 parseError = "--dry-run is only valid with a supported preview operation.";
             if (parseError is null && pruneApply && !prune)
                 parseError = "--apply is only valid with `cdidx db prune --apply`.";
+            if (parseError is null && noBackup && !restore && !(restoreBackups && restoreBackupsRestore))
+                parseError = "--no-backup is only valid with `cdidx db restore <name>` or `cdidx db restore-backups --restore <id>`.";
             if (parseError is null
                 && showPaths
                 && (schema || prune || checkpoint || listCheckpoints || restore || restoreBackups))
@@ -288,8 +313,10 @@ public static partial class DbCommandRunner
                 RestoreBackups = restoreBackups,
                 RestoreBackupsList = restoreBackupsList,
                 RestoreBackupsPrune = restoreBackupsPrune,
+                RestoreBackupsRestore = restoreBackupsRestore,
                 RestoreBackupsKeep = restoreBackupsKeep,
                 RestoreBackupsDryRun = restoreBackups && pruneDryRun,
+                NoBackup = noBackup,
                 SchemaSummaryOnly = schemaSummaryOnly,
                 SchemaEntryLimit = schemaEntryLimit,
                 SchemaSqlTextLimit = schemaSqlTextLimit,

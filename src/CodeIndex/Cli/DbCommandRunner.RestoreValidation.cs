@@ -13,7 +13,9 @@ public static partial class DbCommandRunner
     private static DbRestorePreviewResult PreviewRestoreCheckpoint(
         string fullDbPath,
         string name,
-        string checkpointPath)
+        string checkpointPath,
+        bool backupEnabled,
+        CancellationToken cancellationToken)
     {
         ValidateCheckpointName(name);
         var diagnostics = new List<DbDiagnosticJsonResult>();
@@ -50,28 +52,47 @@ public static partial class DbCommandRunner
             pathsValid = payload.PathsValid;
         }
 
+        var backupPreview = ManagedRestoreBackupStore.PreviewCreation(
+            fullDbPath,
+            backupEnabled,
+            diagnostics,
+            cancellationToken);
+        long requiredSpace;
+        try
+        {
+            requiredSpace = checked(payload.Bytes + backupPreview.RequiredSpaceBytes);
+        }
+        catch (OverflowException)
+        {
+            requiredSpace = long.MaxValue;
+        }
+
         var availableSpace = TryGetAvailableFreeSpace(fullDbPath, diagnostics);
-        bool? spaceSufficient = availableSpace is long available ? available >= payload.Bytes : null;
+        bool? spaceSufficient = availableSpace is long available ? available >= requiredSpace : null;
         if (spaceSufficient == false)
         {
             diagnostics.Add(new DbDiagnosticJsonResult(
                 "checkpoint_space_insufficient",
-                "The destination filesystem does not have enough free space to stage the checkpoint payload.",
+                "The destination filesystem does not have enough free space to stage the checkpoint payload and verified rollback backup.",
                 ConsoleUi.FormatBoundedValue(Path.GetDirectoryName(fullDbPath) ?? fullDbPath)));
         }
 
-        var ready = manifestValid && pathsValid && spaceSufficient == true;
+        var ready = manifestValid
+            && pathsValid
+            && backupPreview.Ready
+            && spaceSufficient == true;
         return new DbRestorePreviewResult(
             ready,
             manifestValid,
             pathsValid,
             availableSpace.HasValue,
             spaceSufficient,
-            payload.Bytes,
+            requiredSpace,
             availableSpace,
             payload.Files,
             payload.Bytes,
-            diagnostics);
+            diagnostics,
+            backupPreview);
     }
 
     private static bool TryGetCheckpointRetentionTimestamp(
@@ -238,7 +259,7 @@ public static partial class DbCommandRunner
         }
     }
 
-    private static long? TryGetAvailableFreeSpace(
+    internal static long? TryGetAvailableFreeSpace(
         string fullDbPath,
         List<DbDiagnosticJsonResult> diagnostics)
     {
@@ -356,7 +377,12 @@ public static partial class DbCommandRunner
         out ulong totalNumberOfBytes,
         out ulong totalNumberOfFreeBytes);
 
-    private static string RestoreCheckpoint(string fullDbPath, string name, string checkpointPath)
+    private static string RestoreCheckpoint(
+        string fullDbPath,
+        string name,
+        string checkpointPath,
+        bool noBackup,
+        CancellationToken cancellationToken)
     {
         ValidateCheckpointName(name);
         if (!TryValidateCheckpointDirectoryTarget(
@@ -369,27 +395,40 @@ public static partial class DbCommandRunner
                 $"checkpoint path validation failed: {checkpointPathFailure}");
         }
 
-        SqliteConnection.ClearAllPools();
         var checkpointDbPath = Path.Combine(checkpointPath, Path.GetFileName(fullDbPath));
         if (!File.Exists(LongPath.EnsureWindowsPrefix(checkpointDbPath)))
             throw new InvalidOperationException($"checkpoint is incomplete: {FormatCheckpointNameForDiagnostic(name)}");
 
         var restorePathSuffix = MakeRestorePathSuffix();
         var restoreTempPath = fullDbPath + ".restore-tmp-" + restorePathSuffix;
-        var backupPath = fullDbPath + ".restore-backup-" + restorePathSuffix;
+        var rollbackPath = Path.Combine(restoreTempPath, "rollback");
+        ManagedRestoreBackupInfo? managedBackup = null;
+        var retainRestoreTemp = false;
         DataDirectorySecurity.CreateSensitiveDirectory(restoreTempPath);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             CopyIfExists(checkpointDbPath, Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)), privateDestination: true);
             CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-wal"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
             CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-shm"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
             if (!File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)))))
                 throw new InvalidOperationException($"checkpoint staging failed: {FormatCheckpointNameForDiagnostic(name)}");
 
-            DataDirectorySecurity.CreateSensitiveDirectory(backupPath);
-            MoveIfExists(fullDbPath, Path.Combine(backupPath, Path.GetFileName(fullDbPath)), privateDestination: true);
-            MoveIfExists(fullDbPath + "-wal", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
-            MoveIfExists(fullDbPath + "-shm", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
+            if (!noBackup)
+            {
+                managedBackup = ManagedRestoreBackupStore.Create(
+                    fullDbPath,
+                    ManagedRestoreBackupStore.PreCheckpointRestoreProvenance,
+                    name,
+                    cancellationToken);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            SqliteConnection.ClearAllPools();
+            DataDirectorySecurity.CreateSensitiveDirectory(rollbackPath);
+            MoveIfExists(fullDbPath, Path.Combine(rollbackPath, Path.GetFileName(fullDbPath)), privateDestination: true);
+            MoveIfExists(fullDbPath + "-wal", Path.Combine(rollbackPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
+            MoveIfExists(fullDbPath + "-shm", Path.Combine(rollbackPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
 
             RestoreFailureAfterBackupForTesting?.Invoke();
 
@@ -400,30 +439,42 @@ public static partial class DbCommandRunner
         catch (Exception primaryEx)
         {
             DbDiagnosticJsonResult? rollbackFailure = null;
+            retainRestoreTemp = true;
             try
             {
-                RestoreBackedUpFiles(fullDbPath, backupPath);
+                RestoreBackedUpFiles(fullDbPath, rollbackPath);
+                retainRestoreTemp = false;
             }
             catch (Exception rollbackEx) when (IsRecoverableRestoreException(rollbackEx))
             {
                 rollbackFailure = new DbDiagnosticJsonResult(
                     "restore_rollback_failed",
                     $"Failed to roll back database restore from backup ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).",
-                    ConsoleUi.FormatBoundedValue(backupPath));
+                    ConsoleUi.FormatBoundedValue(rollbackPath));
                 CommandErrorWriter.WriteStderr($"Warning [{rollbackFailure.Code}]: {rollbackFailure.Message} Backup: {rollbackFailure.Path}");
             }
 
-            throw new DbRestoreOperationException(primaryEx, checkpointPath, backupPath, rollbackFailure);
+            if (primaryEx is OperationCanceledException)
+                throw;
+
+            throw new DbRestoreOperationException(
+                primaryEx,
+                checkpointPath,
+                managedBackup?.BackupPath ?? string.Empty,
+                rollbackFailure);
         }
         finally
         {
-            TryDeleteTemporaryDirectory(
-                restoreTempPath,
-                "restore temporary directory",
-                Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath("."),
-                Path.GetFileName(fullDbPath) + ".restore-tmp-");
+            if (!retainRestoreTemp)
+            {
+                TryDeleteTemporaryDirectory(
+                    restoreTempPath,
+                    "restore temporary directory",
+                    Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath("."),
+                    Path.GetFileName(fullDbPath) + ".restore-tmp-");
+            }
         }
 
-        return backupPath;
+        return managedBackup?.BackupPath ?? string.Empty;
     }
 }
