@@ -340,6 +340,44 @@ public static partial class SymbolExtractor
             patternConfigsAlreadyLoaded: false,
             cancellationToken: cancellationToken);
 
+    internal static bool TryExtractBounded(
+        long fileId,
+        string? lang,
+        string content,
+        int maxSymbols,
+        string? filePath,
+        string? projectRoot,
+        CancellationToken cancellationToken,
+        out List<SymbolRecord> symbols)
+    {
+        if (maxSymbols <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxSymbols));
+
+        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+        var normalizedLanguage = NormalizeLanguage(lang);
+        if (normalizedLanguage == null
+            || normalizedLanguage is "commonlisp" or "racket" or "solidity" or "html" or "assembly"
+            || !PatternCache.ContainsKey(normalizedLanguage))
+        {
+            symbols = [];
+            return false;
+        }
+
+        symbols = ExtractCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            conflictMarkerLine: null,
+            filePath,
+            projectRoot,
+            patternConfigsAlreadyLoaded: true,
+            cancellationToken: cancellationToken,
+            maxSymbols: maxSymbols);
+        return true;
+    }
+
     internal static List<SymbolRecord> ExtractWithPatternConfigsLoaded(
         long fileId,
         string? lang,
@@ -782,6 +820,9 @@ public static partial class SymbolExtractor
         SymbolRecord symbol,
         string? rawLine = null)
     {
+        if (symbols is SymbolExtractionList extractionSymbols && extractionSymbols.IsAtCapacity)
+            return;
+
         if (string.IsNullOrWhiteSpace(symbol.Name))
             return;
 

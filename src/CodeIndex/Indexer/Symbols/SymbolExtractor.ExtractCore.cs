@@ -19,7 +19,8 @@ public static partial class SymbolExtractor
         string? filePath = null,
         string? projectRoot = null,
         bool patternConfigsAlreadyLoaded = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? maxSymbols = null)
     {
         var originalLang = lang;
         if (TryPrepareSymbolExtraction(
@@ -124,7 +125,7 @@ public static partial class SymbolExtractor
         var getCSharpSwitchExpressionLines = scanInputs.GetCSharpSwitchExpressionLines;
         var getCssQualifiedRuleAncestors = scanInputs.GetCssQualifiedRuleAncestors;
         var initialSymbolCapacity = EstimateSymbolListInitialCapacity(lines.Length);
-        var symbols = new SymbolExtractionList(initialSymbolCapacity);
+        var symbols = new SymbolExtractionList(initialSymbolCapacity, maxSymbols);
         var extractionState = symbols.ExtractionState;
         var scanState = new PatternScanState();
         List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents = null;
@@ -137,6 +138,9 @@ public static partial class SymbolExtractor
             : null;
         for (int i = 0; i < lines.Length; i++)
         {
+            if (symbols.IsAtCapacity)
+                break;
+
             if ((i & 0x3f) == 0)
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -1238,21 +1242,24 @@ public static partial class SymbolExtractor
             }
         }
 
-        AddSupplementalSymbols(
-            fileId,
-            originalLang,
-            lang,
-            content,
-            filePath,
-            lines,
-            structuralLines,
-            symbols,
-            extractionState,
-            getPrivateScopeColumns,
-            GetJavaScriptTypeScriptSanitizedLines,
-            csharpMatchLines,
-            pythonModulePrefix,
-            prologMultilineHeads);
+        if (!symbols.IsAtCapacity)
+        {
+            AddSupplementalSymbols(
+                fileId,
+                originalLang,
+                lang,
+                content,
+                filePath,
+                lines,
+                structuralLines,
+                symbols,
+                extractionState,
+                getPrivateScopeColumns,
+                GetJavaScriptTypeScriptSanitizedLines,
+                csharpMatchLines,
+                pythonModulePrefix,
+                prologMultilineHeads);
+        }
         FinalizePatternSymbols(
             fileId,
             lang,
