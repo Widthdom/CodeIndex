@@ -5242,8 +5242,10 @@ public sealed class Caller
                 var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb], _jsonOptions);
 
                 Assert.Equal(CommandExitCodes.NotFound, exitCode);
-                Assert.Contains("database not found", stderr.ToString());
-                Assert.Contains("Point `--db` at an existing `codeindex.db`", stderr.ToString());
+                Assert.Contains("database file was not found", stderr.ToString());
+                Assert.Contains("Create or refresh the index", stderr.ToString());
+                Assert.Contains("<redacted>", stderr.ToString());
+                Assert.DoesNotContain(missingDb, stderr.ToString(), StringComparison.Ordinal);
             }
             finally
             {
@@ -5270,8 +5272,13 @@ public sealed class Caller
 
                 Assert.Equal(CommandExitCodes.NotFound, exitCode);
                 Assert.Equal("error", json.GetProperty("status").GetString());
-                Assert.Contains("database not found", json.GetProperty("message").GetString());
-                Assert.Contains("Point `--db` at an existing `codeindex.db`", json.GetProperty("hint").GetString());
+                Assert.Equal(CommandErrorCodes.DbNotFound, json.GetProperty("error_code").GetString());
+                Assert.Equal("database_missing", json.GetProperty("category").GetString());
+                Assert.Equal("1", json.GetProperty("database_error_classifier_version").GetString());
+                Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+                Assert.True(json.GetProperty("path_redacted").GetBoolean());
+                Assert.Contains("database file was not found", json.GetProperty("message").GetString());
+                Assert.Contains("Create or refresh the index", json.GetProperty("hint").GetString());
             }
             finally
             {
@@ -5371,8 +5378,12 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.NotFound, errorExitCode);
             Assert.Equal("error", errorJson.GetProperty("status").GetString());
-            Assert.Contains("database not found", errorJson.GetProperty("message").GetString());
-            Assert.Contains("Point `--db` at an existing `codeindex.db`", errorJson.GetProperty("hint").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotFound, errorJson.GetProperty("error_code").GetString());
+            Assert.Equal("database_missing", errorJson.GetProperty("category").GetString());
+            Assert.Equal("1", errorJson.GetProperty("database_error_classifier_version").GetString());
+            Assert.Equal("<redacted>", errorJson.GetProperty("path").GetString());
+            Assert.True(errorJson.GetProperty("path_redacted").GetBoolean());
+            Assert.Contains("Create or refresh the index", errorJson.GetProperty("hint").GetString());
         }
         finally
         {
@@ -5875,8 +5886,7 @@ public sealed class Caller
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
 
-            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
-            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            using (var holder = IndexLock.Acquire(lockPath, Path.GetDirectoryName(dbPath)!))
             {
                 int previewExitCode;
                 JsonElement previewJson;
@@ -5920,11 +5930,17 @@ public sealed class Caller
                     }
                 }
 
-                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal(CommandExitCodes.TransientDatabaseError, exitCode);
                 Assert.Equal("error", json.GetProperty("status").GetString());
                 Assert.Equal(CommandErrorCodes.DbLocked, json.GetProperty("error_code").GetString());
-                Assert.Contains("another cdidx index is already running", json.GetProperty("message").GetString());
-                Assert.Contains("retry `cdidx optimize`", json.GetProperty("hint").GetString());
+                Assert.Equal("database_locked", json.GetProperty("category").GetString());
+                Assert.Equal("database is locked or busy", json.GetProperty("message").GetString());
+                Assert.Contains("retry with backoff", json.GetProperty("hint").GetString());
+                Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+                Assert.True(json.GetProperty("path_redacted").GetBoolean());
+                var detail = Assert.Single(json.GetProperty("details").EnumerateArray());
+                Assert.Contains($"PID {Environment.ProcessId}", detail.GetString());
+                Assert.DoesNotContain(dbPath, detail.GetString(), StringComparison.Ordinal);
             }
         }
         finally
@@ -5933,6 +5949,73 @@ public sealed class Caller
             DeleteFile(dbPath);
             DeleteFile(lockPath + ".info");
             DeleteFile(lockPath);
+        }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_MissingRelativePath_PreservesCallerSpelling_Issue4856()
+    {
+        var dbPath = $"cdidx_optimize_relative_missing_{Guid.NewGuid():N}.db";
+        try
+        {
+            int exitCode;
+            JsonElement json;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandErrorCodes.DbNotFound, json.GetProperty("error_code").GetString());
+            Assert.Equal(dbPath, json.GetProperty("path").GetString());
+            Assert.False(json.GetProperty("path_redacted").GetBoolean());
+        }
+        finally
+        {
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_IndexOptimizeMissingDatabase_RedactsHumanPreambleUnlessEnabled_Issue4856()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, "private", "missing.db");
+        try
+        {
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams(
+                [projectRoot, "--optimize", "--db", dbPath]);
+            var output = stdout + stderr;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("<redacted>", output);
+            Assert.Contains(CommandErrorCodes.DbNotFound, output);
+            Assert.DoesNotContain(projectRoot, output, StringComparison.Ordinal);
+            Assert.DoesNotContain(dbPath, output, StringComparison.Ordinal);
+
+            var (diagnosticExitCode, diagnosticStdout, diagnosticStderr) = RunAndCaptureStreams(
+                [projectRoot, "--optimize", "--db", dbPath, "--show-paths"]);
+            var diagnosticOutput = diagnosticStdout + diagnosticStderr;
+
+            Assert.Equal(CommandExitCodes.NotFound, diagnosticExitCode);
+            Assert.Contains(projectRoot, diagnosticOutput, StringComparison.Ordinal);
+            Assert.Contains(dbPath, diagnosticOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -5995,7 +6078,8 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
             Assert.Equal("error", json.GetProperty("status").GetString());
             Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
-            Assert.Contains("database must be writable for optimize", json.GetProperty("message").GetString());
+            Assert.Equal("database_not_writable", json.GetProperty("category").GetString());
+            Assert.Equal("database is not writable", json.GetProperty("message").GetString());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
@@ -6668,7 +6752,9 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
             Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Contains("not an existing CodeIndex DB", json.GetProperty("message").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotDatabase, json.GetProperty("error_code").GetString());
+            Assert.Equal("database_not_a_database", json.GetProperty("category").GetString());
+            Assert.Contains("not a valid SQLite CodeIndex database", json.GetProperty("message").GetString());
         }
         finally
         {
@@ -6704,7 +6790,9 @@ public sealed class Caller
 
         Assert.Equal(CommandExitCodes.NotFound, exitCode);
         Assert.Equal("error", json.GetProperty("status").GetString());
-        Assert.Contains("database not found", json.GetProperty("message").GetString());
+        Assert.Equal(CommandErrorCodes.DbNotFound, json.GetProperty("error_code").GetString());
+        Assert.Equal("database_missing", json.GetProperty("category").GetString());
+        Assert.Contains("database file was not found", json.GetProperty("message").GetString());
     }
 
     [Fact]

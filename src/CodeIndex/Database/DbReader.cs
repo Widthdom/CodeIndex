@@ -2280,8 +2280,11 @@ public partial class DbReader : IDisposable
         IReadOnlyList<string>? excludePathPatterns = null,
         bool excludeTests = false,
         int? limit = null,
-        string? severity = null)
+        string? severity = null,
+        int offset = 0)
     {
+        if (offset < 0)
+            throw new ArgumentOutOfRangeException(nameof(offset), offset, "Offset must be non-negative.");
         if (!_hasIssuesTable) return new List<Models.FileIssue>();
         using var cmd = _conn.CreateCommand();
         var originColumn = _issueColumns.Contains("origin") ? "i.origin" : "NULL";
@@ -2296,9 +2299,9 @@ public partial class DbReader : IDisposable
         if (severity != null)
             sql += " AND " + severityColumn + " = @severity";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += " ORDER BY f.path, i.line";
+        sql += " ORDER BY f.path, i.line, i.kind, i.message, i.rowid";
         if (limit.HasValue)
-            sql += " LIMIT @limit";
+            sql += " LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         if (kind != null)
@@ -2307,7 +2310,10 @@ public partial class DbReader : IDisposable
             SqliteCommandPolicy.Add(cmd, "@severity", severity);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         if (limit.HasValue)
+        {
             SqliteCommandPolicy.Add(cmd, "@limit", limit.Value);
+            SqliteCommandPolicy.Add(cmd, "@offset", offset);
+        }
 
         var results = new List<Models.FileIssue>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -2324,6 +2330,38 @@ public partial class DbReader : IDisposable
             });
         }
         return results;
+    }
+
+    public int CountIssues(
+        string? kind = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        string? severity = null)
+    {
+        if (!_hasIssuesTable)
+            return 0;
+
+        using var cmd = _conn.CreateCommand();
+        var severityColumn = _issueColumns.Contains("severity") ? "i.severity" : "NULL";
+        var sql = @"
+            SELECT COUNT(*)
+            FROM file_issues i
+            JOIN files f ON i.file_id = f.id
+            WHERE 1=1";
+        if (kind != null)
+            sql += " AND i.kind = @kind";
+        if (severity != null)
+            sql += " AND " + severityColumn + " = @severity";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+
+        cmd.CommandText = sql;
+        if (kind != null)
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
+        if (severity != null)
+            SqliteCommandPolicy.Add(cmd, "@severity", severity);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 }
 

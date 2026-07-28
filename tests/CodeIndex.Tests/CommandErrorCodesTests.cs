@@ -50,15 +50,15 @@ public class CommandErrorCodesTests
     }
 
     [Fact]
-    public void DbIntegrityCheck_CorruptDb_StderrIncludesIntegrityFailedCode()
+    public void DbIntegrityCheck_InvalidDatabase_StderrIncludesNotDatabaseCode_Issue4856()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_codes_corrupt_{Guid.NewGuid():N}.db");
         try
         {
-            // Write a file that opens as SQLite but fails `PRAGMA integrity_check` so the
-            // human-output corruption branch runs. The same fixture is used in
-            // DbCommandRunnerTests; we only assert the new bracketed-code prefix.
-            // SQLite として開けるが integrity_check で破損が出るファイルを作る fixture。
+            // Keep a valid SQLite magic header but an invalid page layout. SQLite reports
+            // primary result code 26, which the maintenance classifier maps without
+            // inspecting exception wording.
+            // SQLite magic header は保ちつつ page layout を不正にし、primary code 26 の分類を固定する。
             var header = System.Text.Encoding.ASCII.GetBytes("SQLite format 3\0");
             var bytes = new byte[4096];
             Array.Copy(header, bytes, header.Length);
@@ -69,12 +69,7 @@ public class CommandErrorCodesTests
             var (exitCode, _, stderr) = RunDbIntegrityCheckCapturingStreams(["--integrity-check", "--db", dbPath]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            // Either the integrity-failed branch (E005) or the open-failure branch (E008) ran;
-            // both must carry a bracketed code so scripts can classify the failure without
-            // substring-matching the prose.
-            Assert.True(
-                stderr.Contains("[E005_DB_INTEGRITY_FAILED]") || stderr.Contains("[E008_DB_ERROR]"),
-                $"expected bracketed integrity code in stderr, got: {stderr}");
+            Assert.Contains("[E027_DB_NOT_DATABASE]", stderr);
         }
         finally
         {

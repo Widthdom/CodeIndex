@@ -43,6 +43,9 @@ public static partial class QueryCommandRunner
                 case "--dry-run":
                     dryRun = true;
                     break;
+                case "--show-paths":
+                    showPaths = true;
+                    break;
                 case "--pretty":
                     break;
                 case "--compact":

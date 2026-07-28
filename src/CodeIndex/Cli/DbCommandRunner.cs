@@ -113,6 +113,19 @@ public static partial class DbCommandRunner
                 CommandErrorCodes.DbError);
 
         if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+        {
+            if (options.IntegrityCheck)
+            {
+                return MaintenanceDatabaseErrorWriter.Write(
+                    options.Json,
+                    jsonOptions,
+                    MaintenanceDatabaseErrorClassifier.Create(
+                        "db integrity",
+                        dbPath,
+                        options.ShowPaths,
+                        MaintenanceDatabaseFailureKind.Missing));
+            }
+
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
@@ -120,6 +133,7 @@ public static partial class DbCommandRunner
                 CommandExitCodes.NotFound,
                 "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.",
                 CommandErrorCodes.DbNotFound);
+        }
 
         try
         {
@@ -172,16 +186,29 @@ public static partial class DbCommandRunner
             var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
             var displayDbPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
 
+            if (!ok)
+            {
+                return MaintenanceDatabaseErrorWriter.Write(
+                    options.Json,
+                    jsonOptions,
+                    MaintenanceDatabaseErrorClassifier.Create(
+                        "db integrity",
+                        dbPath,
+                        options.ShowPaths,
+                        MaintenanceDatabaseFailureKind.Corrupt,
+                        details: issues,
+                        detailsTruncated: result.Truncated));
+            }
+
             if (options.Json)
             {
-                var severity = ok ? "ok" : "error";
                 Console.WriteLine(JsonSerializer.Serialize(
                     new DbIntegrityCheckJsonResult(
                         displayDbPath,
-                        ok,
-                        severity,
-                        ok ? "integrity_ok" : "integrity_failed",
-                        ok ? new List<string>() : issues,
+                        true,
+                        "ok",
+                        "integrity_ok",
+                        new List<string>(),
                         result.Truncated,
                         result.RowsTruncated,
                         result.TextTruncated,
@@ -193,21 +220,10 @@ public static partial class DbCommandRunner
             {
                 Console.WriteLine("Integrity check");
                 Console.WriteLine($"  database: {displayDbPath}");
-                Console.WriteLine($"  result  : {(ok ? "ok" : "corrupted")}");
-                if (!ok)
-                {
-                    Console.WriteLine($"  issues  : {ConsoleUi.Counted(issues.Count, "row")}{(result.RowsTruncated ? " (truncated)" : string.Empty)}");
-                    if (result.Truncated)
-                        Console.WriteLine($"  truncated: yes (row limit {IntegrityCheckRowLimit:N0}, text limit {IntegrityCheckTextLimit:N0} chars)");
-                    foreach (var line in issues)
-                        Console.WriteLine($"    - {line}");
-                    Console.WriteLine();
-                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbIntegrityFailed}]: SQLite reported integrity_check failures.");
-                    CommandErrorWriter.WriteStderr("Hint: rebuild with `cdidx index <projectPath> --rebuild` to discard the corrupted DB and start fresh.");
-                }
+                Console.WriteLine("  result  : ok");
             }
 
-            return ok ? CommandExitCodes.Success : CommandExitCodes.DatabaseError;
+            return CommandExitCodes.Success;
         }
         catch (OperationCanceledException)
         {
@@ -218,13 +234,14 @@ public static partial class DbCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
-            return WriteCommandError(
+            return MaintenanceDatabaseErrorWriter.Write(
                 options.Json,
                 jsonOptions,
-                $"failed to run integrity check: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
-                CommandExitCodes.DatabaseError,
-                "Retry `cdidx db --integrity-check`. If this persists, the DB may be unreadable; rebuild with `cdidx index <projectPath> --rebuild`.",
-                CommandErrorCodes.DbError);
+                MaintenanceDatabaseErrorClassifier.FromException(
+                    "db integrity",
+                    dbPath,
+                    options.ShowPaths,
+                    ex));
         }
     }
 
@@ -364,6 +381,7 @@ internal sealed class DbCommandOptions
     public string DbPath { get; init; } = string.Empty;
     public bool Json { get; init; }
     public bool ShowHelp { get; init; }
+    public bool ShowPaths { get; init; }
     public bool IntegrityCheck { get; init; }
     public bool Schema { get; init; }
     public bool Prune { get; init; }

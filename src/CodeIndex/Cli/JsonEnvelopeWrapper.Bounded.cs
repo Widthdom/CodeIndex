@@ -1253,7 +1253,7 @@ internal static partial class JsonEnvelopeWrapper
         }
     }
 
-    private static string FormatResponseCursor(
+    internal static string FormatResponseCursor(
         int offset,
         string queryFingerprint,
         string generationFingerprint,
@@ -1277,7 +1277,7 @@ internal static partial class JsonEnvelopeWrapper
         return ResponseCursorPrefix + encoded;
     }
 
-    private static bool TryParseResponseCursor(
+    internal static bool TryParseResponseCursor(
         string cursor,
         out int offset,
         out string? queryFingerprint,

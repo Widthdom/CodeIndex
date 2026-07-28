@@ -63,6 +63,7 @@ internal static class CliContractManifest
         new(nameof(CommandErrorCodes.ConfigInvalid), CommandErrorCodes.ConfigInvalid, null),
         new(nameof(CommandErrorCodes.HookOperationFailed), CommandErrorCodes.HookOperationFailed, null),
         new(nameof(CommandErrorCodes.NotGitRepository), CommandErrorCodes.NotGitRepository, null),
+        new(nameof(CommandErrorCodes.DbNotDatabase), CommandErrorCodes.DbNotDatabase, CommandExitCodes.DatabaseError),
     ];
 
     public static IReadOnlyList<Type> CliJsonRootTypes { get; } = LoadCliJsonRootTypes();

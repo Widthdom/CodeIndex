@@ -426,6 +426,7 @@ internal static class CliFlagSchema
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", PrimaryCommands = Set("index") },
             new() { Name = "--symbols-only", Description = "Build chunks and symbols while skipping reference graph extraction", PrimaryCommands = Set("index") },
             new() { Name = "--dry-run", Description = "Preview without writing", PrimaryCommands = Set("index", "backfill-fold", "optimize", "vacuum") },
+            new() { Name = "--show-paths", Description = "Show full database paths in maintenance diagnostics; paths are redacted by default", PrimaryCommands = Set("index", "backfill-fold", "optimize", "vacuum", "db") },
             new() { Name = "--dry-run-path-limit", ValuePlaceholder = "<n>", Description = "Dry run only: candidate path processing limit before truncated lower-bound estimates", PrimaryCommands = Set("index") },
             new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before maintenance", PrimaryCommands = Set("backfill-fold") },
             new() { Name = "--force", Description = "Bypass the per-database index lock", PrimaryCommands = Set("index") },

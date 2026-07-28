@@ -8,7 +8,7 @@ public partial class DbWriter
     private const string FoldBackfillPhaseMetaKey = "fold_backfill_phase";
     private const string FoldBackfillLastSymbolIdMetaKey = "fold_backfill_last_symbol_id";
     private const string FoldBackfillLastReferenceIdMetaKey = "fold_backfill_last_reference_id";
-    private const string FoldBackfillGraphRefreshPendingMetaKey = "fold_backfill_graph_refresh_pending";
+    internal const string FoldBackfillGraphRefreshPendingMetaKey = "fold_backfill_graph_refresh_pending";
 
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();

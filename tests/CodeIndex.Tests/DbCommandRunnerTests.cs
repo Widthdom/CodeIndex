@@ -121,6 +121,23 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ShowPathsEnablesDiagnosticPathDisclosure_Issue4856()
+    {
+        var options = DbCommandRunner.ParseArgs(["integrity", "--show-paths"]);
+
+        Assert.True(options.ShowPaths);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_ShowPathsRejectsUnrelatedDbModes_Issue4856()
+    {
+        var options = DbCommandRunner.ParseArgs(["schema", "--show-paths"]);
+
+        Assert.Contains("only valid with `cdidx db integrity`", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_UnknownOptionRecordsParseError()
     {
         var options = DbCommandRunner.ParseArgs(["--bogus"]);
@@ -264,7 +281,10 @@ public class DbCommandRunnerTests
         var (exitCode, _, stderr) = RunAndCaptureStreams(["--integrity-check", "--db", missingDb]);
 
         Assert.Equal(CommandExitCodes.NotFound, exitCode);
-        Assert.Contains("database not found", stderr);
+        Assert.Contains("database file was not found", stderr);
+        Assert.Contains("database_missing", stderr);
+        Assert.Contains("<redacted>", stderr);
+        Assert.DoesNotContain(missingDb, stderr, StringComparison.Ordinal);
         Assert.Contains("cdidx index <projectPath>", stderr);
     }
 
@@ -277,8 +297,9 @@ public class DbCommandRunnerTests
         {
             var (exitCode, _, stderr) = RunAndCaptureStreams(["--integrity-check", "--db", uri]);
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains("failed to run integrity check", stderr);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("database file was not found", stderr);
+            Assert.Contains("database_missing", stderr);
             Assert.False(File.Exists(missingDb));
         }
         finally
@@ -336,7 +357,12 @@ public class DbCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.NotFound, exitCode);
         Assert.Equal("error", json.GetProperty("status").GetString());
-        Assert.Contains("database not found", json.GetProperty("message").GetString());
+        Assert.Equal(CommandErrorCodes.DbNotFound, json.GetProperty("error_code").GetString());
+        Assert.Equal("database_missing", json.GetProperty("category").GetString());
+        Assert.Equal("1", json.GetProperty("database_error_classifier_version").GetString());
+        Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+        Assert.True(json.GetProperty("path_redacted").GetBoolean());
+        Assert.Contains("database file was not found", json.GetProperty("message").GetString());
         Assert.Contains("cdidx index <projectPath>", json.GetProperty("hint").GetString());
     }
 
@@ -432,7 +458,7 @@ public class DbCommandRunnerTests
     public void Run_IntegrityCheck_JsonReportsStableErrorSeverity()
     {
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_integrity_error_json");
-        DbCommandRunner.IntegrityCheckRowsForTesting = () => ["simulated corruption"];
+        DbCommandRunner.IntegrityCheckRowsForTesting = () => [$"simulated corruption at {dbPath}"];
         try
         {
             InitializeEmptyDb(dbPath);
@@ -440,10 +466,15 @@ public class DbCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbPath, "--json"]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.False(json.GetProperty("ok").GetBoolean());
-            Assert.Equal("error", json.GetProperty("severity").GetString());
-            Assert.Equal("integrity_failed", json.GetProperty("diagnostic_code").GetString());
-            Assert.Equal("simulated corruption", json.GetProperty("issues")[0].GetString());
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbIntegrityFailed, json.GetProperty("error_code").GetString());
+            Assert.Equal("database_corrupt", json.GetProperty("category").GetString());
+            Assert.Equal("1", json.GetProperty("database_error_classifier_version").GetString());
+            Assert.Contains("simulated corruption at <redacted>", json.GetProperty("details")[0].GetString());
+            Assert.DoesNotContain(dbPath, json.GetProperty("details")[0].GetString(), StringComparison.Ordinal);
+            Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+            Assert.True(json.GetProperty("path_redacted").GetBoolean());
+            Assert.DoesNotContain("locked", json.GetProperty("hint").GetString(), StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -2025,7 +2056,11 @@ public class DbCommandRunnerTests
             // non-"ok" rows; both paths must produce DatabaseError, never Success.
             // PRAGMA が例外を投げるか non-"ok" 行を返すかのいずれでも DatabaseError を返すべき。
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.NotEmpty(stderr);
+            Assert.Contains($"Error [{CommandErrorCodes.DbNotDatabase}]", stderr);
+            Assert.Contains("database_not_a_database", stderr);
+            Assert.Contains("<redacted>", stderr);
+            Assert.DoesNotContain(dbPath, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("retry with backoff", stderr, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -2049,14 +2084,12 @@ public class DbCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbPath, "--json"]);
 
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.True(json.GetProperty("truncated").GetBoolean());
-            Assert.True(json.GetProperty("rows_truncated").GetBoolean());
-            Assert.True(json.GetProperty("text_truncated").GetBoolean());
-            Assert.Equal(DbCommandRunner.IntegrityCheckRowLimit, json.GetProperty("row_limit").GetInt32());
-            Assert.Equal(DbCommandRunner.IntegrityCheckTextLimit, json.GetProperty("text_limit").GetInt32());
-            var issues = json.GetProperty("issues");
-            Assert.Equal(DbCommandRunner.IntegrityCheckRowLimit, issues.GetArrayLength());
-            Assert.EndsWith(" [truncated]", issues[0].GetString());
+            Assert.Equal(CommandErrorCodes.DbIntegrityFailed, json.GetProperty("error_code").GetString());
+            Assert.Equal("database_corrupt", json.GetProperty("category").GetString());
+            Assert.True(json.GetProperty("details_truncated").GetBoolean());
+            var details = json.GetProperty("details");
+            Assert.Equal(DbCommandRunner.IntegrityCheckRowLimit, details.GetArrayLength());
+            Assert.EndsWith(" [truncated]", details[0].GetString());
         }
         finally
         {

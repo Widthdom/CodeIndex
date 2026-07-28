@@ -756,7 +756,90 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.NotFound, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains(CommandErrorCodes.DbNotFound, stderr);
+        Assert.Contains("database_missing", stderr);
+        Assert.Contains("<redacted>", stderr);
+        Assert.DoesNotContain(project.Root, stderr, StringComparison.Ordinal);
         Assert.False(File.Exists(dbPath));
+
+        var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.NotFound, jsonExitCode);
+        Assert.Equal(string.Empty, jsonStderr);
+        using (var document = ParseJsonOutput(jsonStdout))
+        {
+            var json = document.RootElement;
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotFound, json.GetProperty("error_code").GetString());
+            Assert.Equal("database_missing", json.GetProperty("category").GetString());
+            Assert.Equal("1", json.GetProperty("database_error_classifier_version").GetString());
+            Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+            Assert.True(json.GetProperty("path_redacted").GetBoolean());
+        }
+
+        var (diagnosticExitCode, diagnosticStdout, diagnosticStderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--json", "--show-paths"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.NotFound, diagnosticExitCode);
+        Assert.Equal(string.Empty, diagnosticStderr);
+        using (var document = ParseJsonOutput(diagnosticStdout))
+        {
+            Assert.Equal(dbPath, document.RootElement.GetProperty("path").GetString());
+            Assert.False(document.RootElement.GetProperty("path_redacted").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_NewerSchemaJson_PreservesStructuredClassification_Issue4856()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_newer_schema");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var connection = new SqliteConnection(
+                   new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA user_version = {DbContext.CurrentSchemaVersion | (DbContext.CurrentSchemaVersion + 1)};";
+            command.ExecuteNonQuery();
+        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal(CommandErrorCodes.SchemaTooNew, json.GetProperty("error_code").GetString());
+        Assert.Equal("database_schema_too_new", json.GetProperty("category").GetString());
+        Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+        Assert.DoesNotContain(project.Root, stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunVacuum_DirectoryTargetJson_ReportsInaccessibleWithoutRebuildAdvice_Issue4856()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_directory_target");
+        var dbUri = new Uri(project.Root).AbsoluteUri;
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbUri, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal(CommandErrorCodes.DbError, json.GetProperty("error_code").GetString());
+        Assert.Equal("database_inaccessible", json.GetProperty("category").GetString());
+        Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+        Assert.True(json.GetProperty("path_redacted").GetBoolean());
+        Assert.Contains("readable regular database file", json.GetProperty("hint").GetString());
+        Assert.DoesNotContain("--rebuild", json.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(project.Root, stdout, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -778,8 +861,30 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains(CommandErrorCodes.DbError, stderr);
-        Assert.Contains("not an existing CodeIndex DB", stderr);
+        Assert.Contains(CommandErrorCodes.DbNotDatabase, stderr);
+        Assert.Contains("not a valid SQLite CodeIndex database", stderr);
+    }
+
+    [Fact]
+    public void RunVacuum_InvalidHeaderJson_ReportsNotDatabaseWithoutLeakingAbsolutePath_Issue4856()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_invalid_header");
+        var dbPath = Path.Combine(project.Root, "invalid-header.db");
+        File.WriteAllText(dbPath, "this is not sqlite");
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal(CommandErrorCodes.DbNotDatabase, json.GetProperty("error_code").GetString());
+        Assert.Equal("database_not_a_database", json.GetProperty("category").GetString());
+        Assert.Equal(26, json.GetProperty("sqlite_error_code").GetInt32());
+        Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+        Assert.DoesNotContain(project.Root, stdout, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -804,8 +909,8 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains(CommandErrorCodes.DbError, stderr);
-        Assert.Contains("not an existing CodeIndex DB", stderr);
+        Assert.Contains(CommandErrorCodes.DbNotDatabase, stderr);
+        Assert.Contains("not a valid SQLite CodeIndex database", stderr);
     }
 
     [Fact]
@@ -821,8 +926,8 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains(CommandErrorCodes.DbError, stderr);
-        Assert.Contains("database must be writable", stderr);
+        Assert.Contains(CommandErrorCodes.DbNotWritable, stderr);
+        Assert.Contains("database is not writable", stderr);
         Assert.DoesNotContain("backfill-fold", stderr);
     }
 

@@ -72,6 +72,7 @@ public sealed class QueryCommandOptions
     public bool DbPathExplicit { get; init; }
     public bool ReadOnly { get; init; }
     public bool DryRun { get; init; }
+    public bool ShowPaths { get; init; }
     public string? DataDir { get; init; }
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }

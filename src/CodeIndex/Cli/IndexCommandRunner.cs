@@ -198,16 +198,32 @@ public static partial class IndexCommandRunner
 
         if (!options.Json && !options.Quiet)
         {
+            var projectDisplayPath = options.OptimizeOnly
+                ? MaintenanceDatabaseErrorClassifier.FormatPathForOutput(
+                    Path.GetFullPath(options.ProjectPath!),
+                    options.ShowPaths)
+                : Path.GetFullPath(options.ProjectPath!);
+            var databaseDisplayPath = options.OptimizeOnly
+                ? MaintenanceDatabaseErrorClassifier.FormatPathForOutput(
+                    resolvedDbPath,
+                    options.ShowPaths)
+                : resolvedDbPath;
             ConsoleUi.PrintBanner();
             CommandOutputWriter.WriteLine();
-            CommandOutputWriter.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath!)}");
-            CommandOutputWriter.WriteLine($"  Output  : {resolvedDbPath}");
+            CommandOutputWriter.WriteLine($"  Project : {projectDisplayPath}");
+            CommandOutputWriter.WriteLine($"  Output  : {databaseDisplayPath}");
             CommandOutputWriter.WriteLine($"  Mode    : {(options.OptimizeOnly ? "optimize" : mode)}");
             CommandOutputWriter.WriteLine();
         }
 
         if (options.OptimizeOnly)
-            return RunOptimizeFtsForDb(resolvedDbPath, options.Json, jsonOptions, options.ProjectPath, options.DryRun);
+            return RunOptimizeFtsForDb(
+                resolvedDbPath,
+                options.Json,
+                jsonOptions,
+                options.ProjectPath,
+                options.DryRun,
+                showPaths: options.ShowPaths);
 
         bool ignoreCase;
         string ignoreRuleRoot;
@@ -597,6 +613,7 @@ public sealed class IndexCommandOptions
     public bool Yes { get; init; }
     public bool Watch { get; init; }
     public bool OptimizeOnly { get; init; }
+    public bool ShowPaths { get; init; }
     public bool SymbolsOnly { get; init; }
     public int? WatchDebounceMs { get; init; }
     public int WatchPendingPathLimit { get; init; } = IndexWatchRunner.DefaultWatchPendingPathLimit;
@@ -726,6 +743,7 @@ public sealed class BackfillFoldCommandOptions
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool Json { get; init; }
     public bool DryRun { get; init; }
+    public bool ShowPaths { get; init; }
     public bool NoCheckpoint { get; init; }
     public string? ParseError { get; init; }
 }
@@ -736,5 +754,6 @@ public sealed class OptimizeFtsCommandOptions
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool Json { get; init; }
     public bool DryRun { get; init; }
+    public bool ShowPaths { get; init; }
     public string? ParseError { get; init; }
 }
