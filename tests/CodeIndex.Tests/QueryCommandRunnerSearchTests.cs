@@ -10008,16 +10008,14 @@ jobs:
         }
     }
 
-    // `search --lang csarp` previously emitted "No results found." with no language hint
-    // — RunSearch never called WriteLangHint. Round-2 wires WriteLangHint into the zero-
-    // result branch and lets it fall back to ReferenceExtractor.GetSupportedLanguages()
-    // when the typo'd value matches no indexed language (#1582).
-    // 従来 `search --lang csarp` は "No results found." だけ表示し、RunSearch から
-    // WriteLangHint を呼んでいなかった。round-2 で zero-result 分岐に WriteLangHint を
-    // 配線し、index 済み言語にマッチしない場合は ReferenceExtractor.GetSupportedLanguages()
-    // にフォールバックして提案を出すようにした (#1582)。
+    // `search --lang csarp` originally gained a post-query hint in #1582. Query language
+    // validation now fails before execution and preserves the closest-language guidance
+    // without reporting a misleading successful zero-result search (#4842).
+    // `search --lang csarp` は #1582 で query 後の hint を得た。現在は query 実行前の
+    // language validation で失敗し、成功した 0 件検索と誤認させずに近い言語候補を
+    // 維持する (#4842)。
     [Fact]
-    public void RunSearch_LangTypo_SuggestsClosestLanguage_Issue1582()
+    public void RunSearch_LangTypo_FailsWithClosestLanguage_Issue1582_Issue4842()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_lang_typo");
         try
@@ -10033,10 +10031,11 @@ jobs:
                 ["nothing_matches_xyzzy", "--db", dbPath, "--lang", "csarp"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
-            Assert.Contains("No results found.", stderr);
-            Assert.Contains("Did you mean: --lang csharp?", stderr);
+            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", stderr);
+            Assert.Contains("unknown language identifier 'csarp'", stderr);
+            Assert.Contains("Did you mean 'csharp'", stderr);
         }
         finally
         {

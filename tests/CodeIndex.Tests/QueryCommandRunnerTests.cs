@@ -1517,12 +1517,72 @@ public partial class QueryCommandRunnerTests
     [InlineData("asm", "assembly")]
     [InlineData("assembler", "assembly")]
     [InlineData("GNU assembler", "assembly")]
+    [InlineData("CSharp", "csharp")]
+    [InlineData(".cs", "csharp")]
     public void ParseArgs_NormalizesCommonLangAliases(string input, string expected)
     {
         var options = QueryCommandRunner.ParseArgs(["RunSearch", "--lang", input], jsonDefault: false, allowNamedQuery: true);
 
         Assert.Equal("RunSearch", options.Query);
         Assert.Equal(expected, options.Lang);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_RejectsMisspelledLanguageAndSuggestsCanonicalValue_Issue4842()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", "--lang", "cshrap"],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains(CommandErrorCodes.UsageError, options.ParseError, StringComparison.Ordinal);
+        Assert.Contains("unknown language identifier 'cshrap'", options.ParseError, StringComparison.Ordinal);
+        Assert.Contains("Did you mean 'csharp'", options.ParseError, StringComparison.Ordinal);
+        Assert.Contains("--allow-unknown-lang", options.ParseError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseArgs_AllowUnknownLanguagePreservesExactPluginId_Issue4842()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", "--lang", "  Unregistered-Plugin.ID  ", "--allow-unknown-lang"],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Null(options.ParseError);
+        Assert.True(options.AllowUnknownLang);
+        Assert.Equal("Unregistered-Plugin.ID", options.Lang);
+    }
+
+    [Fact]
+    public void ParseArgs_AllowUnknownLanguageRequiresLanguageValue_Issue4842()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", "--allow-unknown-lang"],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains(CommandErrorCodes.UsageError, options.ParseError, StringComparison.Ordinal);
+        Assert.Contains("--allow-unknown-lang requires --lang <lang>", options.ParseError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LanguageValidationEscapeAppearsInSearchHelpAndCompletions_Issue4842()
+    {
+        Assert.Contains("--allow-unknown-lang", CliFlagSchema.GetAcceptedFlagNamesForCommand("search"));
+        Assert.DoesNotContain("--allow-unknown-lang", CliFlagSchema.GetAcceptedFlagNamesForCommand("status"));
+
+        var (printed, stdout, stderr) = CaptureConsole(() =>
+            ConsoleUi.PrintCommandUsage("search") ? 1 : 0);
+        Assert.Equal(1, printed);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("--allow-unknown-lang", stdout, StringComparison.Ordinal);
+
+        foreach (var shell in new[] { "bash", "zsh", "fish", "powershell" })
+            Assert.Contains("allow-unknown-lang", ConsoleCompletionRenderer.GetCompletionScript(shell), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1663,6 +1723,17 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));
         Assert.Equal(expected, QueryCommandRunner.NormalizeLangFilterValue(input));
         Assert.Equal(expected == "sql", DbReader.IsSqlLanguage(input));
+    }
+
+    [Fact]
+    public void NormalizeQueryLanguage_PreservesUnknownSpellingOnlyInsideExplicitScope_Issue4842()
+    {
+        Assert.Equal("toydsl", DbReader.NormalizeQueryLanguage("ToyDsl"));
+
+        using (DbReader.BeginExactQueryLanguageScope("ToyDsl"))
+            Assert.Equal("ToyDsl", DbReader.NormalizeQueryLanguage("ToyDsl"));
+
+        Assert.Equal("toydsl", DbReader.NormalizeQueryLanguage("ToyDsl"));
     }
 
     [Theory]
@@ -2576,6 +2647,180 @@ public partial class QueryCommandRunnerTests
 
         public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
             => [];
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunSearch_MisspelledLanguageFailsOnEmptyIndexInHumanAndJsonModes_Issue4842(bool json)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lang_typo_4842");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var args = new List<string> { "needle", "--db", dbPath, "--lang", "cshrap" };
+        if (json)
+            args.Add("--json");
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunSearch([.. args], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        if (!json)
+        {
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", stderr, StringComparison.Ordinal);
+            Assert.Contains("unknown language identifier 'cshrap'", stderr, StringComparison.Ordinal);
+            Assert.Contains("Did you mean 'csharp'", stderr, StringComparison.Ordinal);
+            return;
+        }
+
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var error = document.RootElement;
+        Assert.Equal("error", error.GetProperty("status").GetString());
+        Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+        Assert.Equal("usage", error.GetProperty("category").GetString());
+        Assert.Contains("unknown language identifier 'cshrap'", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Did you mean 'csharp'", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseArgs_LoadsWorkspacePatternRegistryForIdsAndExtensionSpellings_Issue4842()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lang_plugin_4842");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var patternDirectory = Path.Combine(project.Root, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        File.WriteAllText(
+            Path.Combine(patternDirectory, "plugin.yaml"),
+            "language: \"My-Plugin.ID\"\nextensions:\n  - extension: \".plugx\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+
+                var byId = QueryCommandRunner.ParseArgs(
+                    ["needle", "--db", dbPath, "--lang", "My-Plugin.ID"],
+                    jsonDefault: false,
+                    allowNamedQuery: true);
+                var byExtension = QueryCommandRunner.ParseArgs(
+                    ["needle", "--db", dbPath, "--lang", ".plugx"],
+                    jsonDefault: false,
+                    allowNamedQuery: true);
+
+                Assert.Null(byId.ParseError);
+                Assert.Equal("my-plugin.id", byId.Lang);
+                Assert.Null(byExtension.ParseError);
+                Assert.Equal("my-plugin.id", byExtension.Lang);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RegisteredExtensionPreservesPunctuatedCanonicalPluginId_Issue4842()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lang_plugin_collision_4842");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var patternDirectory = Path.Combine(project.Root, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        File.WriteAllText(
+            Path.Combine(patternDirectory, "plugin.yaml"),
+            "language: \"c-sharp\"\nextensions:\n  - extension: \".plugx\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/plugin.plugx", "c-sharp", "needle plugin\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/builtin.cs", "csharp", "needle builtin\n");
+
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    QueryCommandRunner.RunSearch(
+                        ["needle", "--db", dbPath, "--lang", ".plugx", "--json"],
+                        _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Contains("\"path\":\"src/plugin.plugx\"", stdout, StringComparison.Ordinal);
+                Assert.DoesNotContain("\"path\":\"src/builtin.cs\"", stdout, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void ParseArgs_LoadsLanguageRegistryFromWorkspaceDatabaseRoots_Issue4842()
+    {
+        using var primary = TestProjectHelper.CreateTempProjectScope("cdidx_lang_primary_4842");
+        using var member = TestProjectHelper.CreateTempProjectScope("cdidx_lang_member_4842");
+        var primaryDbPath = TestProjectHelper.CreateProjectDb(primary.Root);
+        var memberDbPath = TestProjectHelper.CreateProjectDb(member.Root);
+        var patternDirectory = Path.Combine(member.Root, ".cdidx", "patterns");
+        Directory.CreateDirectory(patternDirectory);
+        File.WriteAllText(
+            Path.Combine(patternDirectory, "member.yaml"),
+            "language: \"member-dsl\"\nextensions:\n  - extension: \".member\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+
+                var options = QueryCommandRunner.ParseArgs(
+                    [
+                        "needle",
+                        "--db", primaryDbPath,
+                        "--workspace-db", memberDbPath,
+                        "--lang", "member-dsl",
+                    ],
+                    jsonDefault: false,
+                    allowNamedQuery: true);
+
+                Assert.Null(options.ParseError);
+                Assert.Equal("member-dsl", options.Lang);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void RunSearch_AllowUnknownLanguageMatchesExactUnregisteredPluginId_Issue4842()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lang_escape_4842");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/example.custom",
+            "Unregistered-Plugin.ID",
+            "needle\n");
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunSearch(
+                [
+                    "needle",
+                    "--db", dbPath,
+                    "--lang", "Unregistered-Plugin.ID",
+                    "--allow-unknown-lang",
+                    "--json",
+                ],
+                _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("\"lang\":\"Unregistered-Plugin.ID\"", stdout, StringComparison.Ordinal);
+        Assert.Contains("\"path\":\"src/example.custom\"", stdout, StringComparison.Ordinal);
     }
 
     private static TestProjectHelper.TempProjectScope CreateSearchOnlyLanguageProject(

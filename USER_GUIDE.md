@@ -1261,6 +1261,14 @@ cdidx search "--open-reports" --path README.md --count  # quoted literal that st
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
 
+`--lang` validates built-in language names, recognized aliases, extension-like
+spellings such as `.cs`, and language IDs registered for the indexed workspace.
+A misspelling such as `cshrap` is a usage error (`E010_USAGE_ERROR`) and reports
+up to three nearby canonical IDs instead of silently returning zero results.
+Use `--allow-unknown-lang` only when querying an unregistered plugin language
+ID; that escape hatch trims surrounding whitespace but otherwise preserves the
+ID's case and punctuation exactly.
+
 Search normalizes literal FTS queries to Unicode NFC before matching. If every
 literal token exceeds SQLite FTS5 unicode61's 1000-character token cap,
 zero-result JSON includes `query_degraded_reason` and `tokens_dropped`. Index
@@ -4434,6 +4442,13 @@ cdidx search "Thread.Yield" --format issue-drafts --issue-title "Thread.Yield au
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
+
+`--lang` は組み込み言語名、認識済み alias、`.cs` のような拡張子形式の表記、
+および indexed workspace に登録された language ID を検証します。`cshrap` のような
+入力ミスは 0 件として黙って成功せず、usage error（`E010_USAGE_ERROR`）として近い
+canonical ID を最大3件報告します。未登録 plugin の language ID を検索する場合だけ
+`--allow-unknown-lang` を使ってください。この escape hatch は前後の空白のみを除去し、
+ID の大小文字と句読点はそれ以外そのまま保持します。
 
 literal FTS クエリは照合前に Unicode NFC へ正規化されます。すべての literal
 token が SQLite FTS5 unicode61 の 1000 文字 token 上限を超える場合、0 件

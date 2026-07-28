@@ -29,9 +29,11 @@ public static partial class QueryCommandRunner
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
         if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("hotspots")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "hotspots"))
+        if (TryWriteParseError(options, "hotspots", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "hotspots", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;

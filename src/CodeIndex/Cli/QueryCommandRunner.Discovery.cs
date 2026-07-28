@@ -24,6 +24,8 @@ public static partial class QueryCommandRunner
             allowNamedQuery: true,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
         if (TryWriteUnsupportedOptionError("symbols", effectiveCmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows, `--format compact` for bounded compact rows, `--format count` for symbol totals, or `--format lsp|qf|sarif` for editor/diagnostic locations."))
@@ -32,7 +34,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
-        if (TryWriteParseError(options, "symbols"))
+        if (TryWriteParseError(options, "symbols", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteBlankQueryError(options, "symbols"))
             return CommandExitCodes.UsageError;
@@ -413,13 +415,15 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false,
             positionalGlobAsPath: true);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
         if (TryWriteUnsupportedOptionError("files", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("files"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("files", options, FilesOutputFormats, "Use `--format json` for file rows, `--format compact` for bounded compact rows, or `--format count` for file totals."))
             return CommandExitCodes.UsageError;
         if (TryWriteDiscoveryOutputControlUsageError("files", options))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "files"))
+        if (TryWriteParseError(options, "files", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedExtraPositionals("files", options))
             return CommandExitCodes.UsageError;

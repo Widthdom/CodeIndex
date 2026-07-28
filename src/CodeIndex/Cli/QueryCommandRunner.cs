@@ -82,6 +82,8 @@ public sealed class QueryCommandOptions
     public int? TotalLimit { get; init; }
     public bool LimitExplicit { get; init; }
     public string? Lang { get; init; }
+    public bool AllowUnknownLang { get; init; }
+    public bool LanguageValidationError { get; init; }
     public string? Kind { get; init; }
     public string? UnusedBucket { get; init; }
     public string? MinUnusedConfidence { get; init; }

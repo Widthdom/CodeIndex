@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Indexer.Extensibility;
 
 namespace CodeIndex.Tests;
 
@@ -57,6 +58,55 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
             Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
             Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parentRoot);
+            TestProjectHelper.DeleteDirectory(childRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_ChildExplicitDbUsesChildLanguageRegistry_Issue4842()
+    {
+        var parentRoot = TestProjectHelper.CreateTempProject("cdidx_batch_lang_parent");
+        var childRoot = TestProjectHelper.CreateTempProject("cdidx_batch_lang_child");
+        try
+        {
+            var parentDbPath = TestProjectHelper.CreateProjectDb(parentRoot);
+            var childDbPath = TestProjectHelper.CreateProjectDb(childRoot);
+            var patternDirectory = Path.Combine(childRoot, ".cdidx", "patterns");
+            Directory.CreateDirectory(patternDirectory);
+            File.WriteAllText(
+                Path.Combine(patternDirectory, "child.yaml"),
+                "language: \"child-dsl\"\nextensions:\n  - extension: \".child\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+            TestProjectHelper.InsertIndexedFile(childDbPath, "src/example.child", "child-dsl", "needle\n");
+            var input = JsonSerializer.Serialize(
+                new[] { "search", "needle", "--db", childDbPath, "--lang", "child-dsl", "--json=array" }) + "\n";
+
+            lock (TestConsoleLock.Gate)
+            {
+                try
+                {
+                    ExtractorPluginRegistry.ResetForTests();
+
+                    var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                        input,
+                        () => QueryCommandRunner.RunBatch(["--db", parentDbPath, "--json-summary"], _jsonOptions));
+                    var lines = ParseJsonLines(stdout);
+
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Equal(string.Empty, stderr);
+                    Assert.Equal("ok", lines[0].RootElement.GetProperty("status").GetString());
+                    Assert.Equal(
+                        "src/example.child",
+                        lines[0].RootElement.GetProperty("result")[0].GetProperty("path").GetString());
+                }
+                finally
+                {
+                    ExtractorPluginRegistry.ResetForTests();
+                }
+            }
         }
         finally
         {
