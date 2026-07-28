@@ -658,7 +658,7 @@ fi
             var result = CommandErrorWriter.WriteJsonOrHuman(
                 json,
                 jsonOptions,
-                message,
+                json ? DiagnosticSanitizer.ForMessage(message) : message,
                 exitCode,
                 hint,
                 GetUsage(),
@@ -667,13 +667,6 @@ fi
                 "hooks",
                 DiagnosticSanitizer.ForPath(projectPath),
                 additionalJsonProperties);
-            if (!json && dryRun == true)
-            {
-                CommandErrorWriter.WriteStdout($"Planned action: {plannedAction}");
-                CommandErrorWriter.WriteStdout("Managed hook preview:");
-                CommandErrorWriter.WriteStdout(managedHookPreview ?? string.Empty);
-            }
-
             return result;
         }
 

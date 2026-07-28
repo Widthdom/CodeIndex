@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -106,17 +107,20 @@ public static partial class QueryCommandRunner
             var outline = reader.GetOutline(filePath, includeReferenceCounts: includeReferenceCounts);
             if (outline == null)
             {
+                var diagnosticFilePath = Path.IsPathRooted(filePath)
+                    ? DiagnosticSanitizer.ForPath(filePath)
+                    : ConsoleUi.FormatBoundedValue(filePath);
                 return CommandErrorWriter.WriteJsonOrHuman(
                     options.Json,
                     jsonOptions,
-                    $"'{filePath}' was not found in the active index.",
+                    $"'{(options.Json ? diagnosticFilePath : filePath)}' was not found in the active index.",
                     CommandExitCodes.NotFound,
                     "Check the indexed path spelling or refresh the index with `cdidx index <projectPath>`.",
                     usage,
                     CommandErrorCodes.FileNotFound,
                     "not_found",
                     "outline",
-                    filePath);
+                    diagnosticFilePath);
             }
 
             var filteredSymbols = ApplyOutlineKindFilters(outline.Symbols, kindFilters);

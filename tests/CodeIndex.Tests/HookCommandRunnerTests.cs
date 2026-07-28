@@ -238,6 +238,7 @@ public class HookCommandRunnerTests
                 ["install", "--project", projectRoot, "--dry-run", "--json"]);
 
             Assert.Equal(CommandExitCodes.UsageError, blockedPreview.ExitCode);
+            Assert.DoesNotContain(projectRoot, blockedPreview.StdOut, StringComparison.Ordinal);
             using (var document = JsonDocument.Parse(blockedPreview.StdOut))
             {
                 Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
@@ -255,10 +256,10 @@ public class HookCommandRunnerTests
                 ["install", "--project", projectRoot, "--dry-run"]);
 
             Assert.Equal(CommandExitCodes.UsageError, blockedHumanPreview.ExitCode);
+            Assert.Equal(string.Empty, blockedHumanPreview.StdOut);
             Assert.Contains("chained hook already exists", blockedHumanPreview.StdErr, StringComparison.Ordinal);
-            Assert.Contains("Planned action: blocked", blockedHumanPreview.StdOut, StringComparison.Ordinal);
-            Assert.Contains("Managed hook preview:", blockedHumanPreview.StdOut, StringComparison.Ordinal);
-            Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Hint:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
+            Assert.Contains("Usage:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
             Assert.Equal(customHook, File.ReadAllText(hookPath));
             Assert.Equal(existingChain, File.ReadAllText(chainedHookPath));
             TestProjectHelper.DeleteFile(chainedHookPath);

@@ -65,6 +65,32 @@ public sealed class CliNonDatabaseErrorContractTests
         Assert.DoesNotContain("does not point to an existing database", result.Stdout, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void OutlineAbsoluteMissingPath_RedactsJsonEnvelopeContext_Issue4855()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("outline_absolute_path_error");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var missingPath = Path.Combine(projectRoot, "private", "missing.cs");
+            var result = ConsoleCapture.Capture(() => QueryCommandRunner.RunOutline(
+                [missingPath, "--db", dbPath, "--json"],
+                ProgramRunner.CreateDefaultJsonOptions()));
+
+            Assert.Equal(CommandExitCodes.NotFound, result.ExitCode);
+            Assert.Equal(string.Empty, result.Stderr);
+            Assert.DoesNotContain(projectRoot, result.Stdout, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(result.Stdout);
+            Assert.Equal("private/missing.cs", document.RootElement.GetProperty("path").GetString());
+            Assert.Contains("missing.cs", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("empty", CommandExitCodes.UsageError, CommandErrorCodes.UsageError, "usage", "hooks")]
     [InlineData("not_found", CommandExitCodes.NotFound, CommandErrorCodes.FileNotFound, "not_found", "outline")]
