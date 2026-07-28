@@ -147,7 +147,7 @@ public static partial class QueryCommandRunner
             }
             if (options.Json)
             {
-                ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, options.DbPath);
+                ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, options.DbPath, options.RedactPaths ?? true);
                 if (!options.NoSemanticTokens)
                     excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt, reader);
             }

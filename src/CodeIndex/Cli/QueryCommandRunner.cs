@@ -174,6 +174,7 @@ public sealed class QueryCommandOptions
     public string? StatusExplainField { get; init; }
     public bool StatusLogPath { get; init; }
     public bool StatusConfig { get; init; }
+    public bool? RedactPaths { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public SymbolSortMode SymbolSortMode { get; init; } = SymbolSortMode.Name;
     public string? SortValue { get; init; }

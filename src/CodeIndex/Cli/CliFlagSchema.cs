@@ -291,6 +291,10 @@ internal static class CliFlagSchema
     private static readonly string[] BodyCommands = ["definition", "references", "callers", "callees", "impact", "inspect"];
     private static readonly string[] InspectFieldCommands = ["inspect"];
     private static readonly string[] InspectSourceExcerptCommands = ["inspect", "excerpt"];
+    private static readonly string[] RecoveryPathCommands =
+    [
+        "definition", "references", "callers", "callees", "excerpt", "inspect", "impact",
+    ];
 
     private static readonly string[] MaxLineWidthCommands =
     [
@@ -604,7 +608,7 @@ internal static class CliFlagSchema
                 },
                 Safety = CliOptionSafety.Preview,
             },
-            new() { Name = "--show-paths", Description = "Show full database paths in maintenance diagnostics; paths are redacted by default", PrimaryCommands = Set("index", "backfill-fold", "optimize", "vacuum", "db") },
+            new() { Name = "--show-paths", Description = "Show resolved local paths in maintenance diagnostics, recovery commands, or status --config output", PrimaryCommands = Set(RecoveryPathCommands.Concat(["index", "backfill-fold", "optimize", "vacuum", "db", "status"]).ToArray()) },
             new() { Name = "--dry-run-path-limit", ValuePlaceholder = "<n>", Description = "Dry run only: candidate path processing limit before truncated lower-bound estimates", PrimaryCommands = Set("index") },
             new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before maintenance", PrimaryCommands = Set("backfill-fold") },
             new()
@@ -635,7 +639,7 @@ internal static class CliFlagSchema
             new() { Name = "--debounce", ValuePlaceholder = "<ms>", Description = "Watch only: coalesce file events into one update after <ms> of quiet (default 500)", PrimaryCommands = Set("index") },
             new() { Name = "--watch-pending-path-limit", ValuePlaceholder = "<n>", Description = "Watch only: changed-path queue limit before full-rescan fallback", PrimaryCommands = Set("index") },
             new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", Description = "Report bundle or suggestions export output path", PrimaryCommands = Set("report", "suggestions") },
-            new() { Name = "--redact-paths", Description = "Report: accepted for doctor/report parity; report paths are redacted by default", PrimaryCommands = Set("report") },
+            new() { Name = "--redact-paths", Description = "Redact machine-specific paths (the default for recovery/config JSON and reports)", PrimaryCommands = Set(RecoveryPathCommands.Concat(["status", "report"]).ToArray()) },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", PrimaryCommands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", PrimaryCommands = Set("report") },
             new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle (clamped to 2000)", PrimaryCommands = Set("report") },
