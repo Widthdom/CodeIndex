@@ -313,12 +313,14 @@ internal sealed partial class LspServer : IDisposable
         Stream output,
         SemaphoreSlim outputGate,
         JsonObject response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? responsePublicationStarting = null)
     {
         await outputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var payload = response.ToJsonString(_jsonOptions);
+            responsePublicationStarting?.Invoke();
             if (await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
                 return;
 

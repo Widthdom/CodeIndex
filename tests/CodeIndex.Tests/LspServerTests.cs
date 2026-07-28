@@ -517,6 +517,8 @@ public class LspServerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_pipelined_lifecycle");
         using var pipelinedMessagesReserved = new CountdownEvent(2);
+        using var initializeDispatchEntered = new ManualResetEventSlim(false);
+        using var initializeDispatchRelease = new ManualResetEventSlim(false);
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -535,6 +537,14 @@ public class LspServerTests
                     {
                         pipelinedMessagesReserved.Signal();
                     }
+                },
+                BeforeSessionDispatchForTesting = method =>
+                {
+                    if (!string.Equals(method, "initialize", StringComparison.Ordinal))
+                        return;
+
+                    initializeDispatchEntered.Set();
+                    initializeDispatchRelease.Wait();
                 },
             };
             var didOpen = JsonSerializer.Serialize(new
@@ -556,15 +566,15 @@ public class LspServerTests
                 Encoding.UTF8.GetBytes(
                     Frame("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"Needle\"}}")
                     + Frame(didOpen)));
-            using var output = new FirstWriteGateMemoryStream();
+            using var output = new MemoryStream();
 
             try
             {
                 var runTask = server.RunAsync(input, output);
-                await output.WaitForBlockedWriteAsync().WaitAsync(TestDeterminism.DefaultTimeout);
+                Assert.True(initializeDispatchEntered.Wait(TestDeterminism.DefaultTimeout));
                 input.ReleaseSuffix();
                 Assert.True(pipelinedMessagesReserved.Wait(TestDeterminism.DefaultTimeout));
-                output.ReleaseWrites();
+                initializeDispatchRelease.Set();
 
                 Assert.Equal(
                     CommandExitCodes.Success,
@@ -573,7 +583,7 @@ public class LspServerTests
             finally
             {
                 input.ReleaseSuffix();
-                output.ReleaseWrites();
+                initializeDispatchRelease.Set();
             }
 
             var messages = ReadLspMessages(output);
@@ -585,6 +595,57 @@ public class LspServerTests
                 LspServer.LspServerNotInitializedCode,
                 preInitialize.Message["error"]!["code"]!.GetValue<int>());
             Assert.Equal(0, server.LiveDocumentBytesForTests);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_PostInitializeTrafficUsesPublishedRunningState_Issue4849()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_initialize_publication");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(
+                    Frame("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}")),
+                Encoding.UTF8.GetBytes(
+                    Frame("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}")
+                    + Frame("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"unknown\"}")));
+            using var output = new MarkerWriteGateMemoryStream("\"id\":1");
+
+            try
+            {
+                var runTask = server.RunAsync(input, output);
+                await output.WaitForMarkerAsync().WaitAsync(TestDeterminism.DefaultTimeout);
+                input.ReleaseSuffix();
+                output.ReleaseMarker();
+
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    await runTask.WaitAsync(TestDeterminism.DefaultTimeout));
+            }
+            finally
+            {
+                input.ReleaseSuffix();
+                output.ReleaseMarker();
+            }
+
+            var messages = ReadLspMessages(output);
+            Assert.Contains(messages, entry => entry.Message["id"]?.GetValue<int>() == 1);
+            var postInitialize = Assert.Single(
+                messages,
+                entry => entry.Message["id"]?.GetValue<int>() == 2);
+            Assert.Equal(-32601, postInitialize.Message["error"]!["code"]!.GetValue<int>());
         }
         finally
         {

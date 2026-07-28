@@ -567,19 +567,32 @@ internal sealed partial class LspServer : IDisposable
 
                     if (response != null)
                     {
+                        Action? responsePublicationStarting = null;
+                        if (inbound.SessionAction == SessionDispatchAction.Initialize)
+                        {
+                            var initializationSucceeded = response["error"] == null;
+                            responsePublicationStarting = () =>
+                            {
+                                if (initializationSucceeded)
+                                    CompleteInitialization();
+                                else
+                                    AbortInitialization();
+                                initializeStateSettled = true;
+                            };
+                        }
+
                         await WriteResponseMessageAsync(
                             output,
                             outputGate,
                             response,
-                            serverCancellation).ConfigureAwait(false);
+                            serverCancellation,
+                            responsePublicationStarting).ConfigureAwait(false);
                     }
 
-                    if (inbound.SessionAction == SessionDispatchAction.Initialize)
+                    if (inbound.SessionAction == SessionDispatchAction.Initialize
+                        && !initializeStateSettled)
                     {
-                        if (response?["error"] == null)
-                            CompleteInitialization();
-                        else
-                            AbortInitialization();
+                        AbortInitialization();
                         initializeStateSettled = true;
                     }
                 }

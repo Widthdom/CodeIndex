@@ -434,9 +434,11 @@ inventing language-server analysis.
 dispatch, the cancellation fast path, and queue-overload responses. Its phases
 are before-initialize, initializing, running, shutdown, and exited. Only the
 first `initialize` request can enter initialization. The transport reserves each
-frame's lifecycle action in receive order, and initialization becomes running
-only after the response is written. Shutdown changes phase before waiting for
-active dispatches, then disposes an owned query context and reader exactly once.
+frame's lifecycle action in receive order. Under the output gate, the serialized
+initialize response and the transition to running share one publication boundary:
+the state changes immediately before the frame write starts. Shutdown changes
+phase before waiting for active dispatches, then disposes an owned query context
+and reader exactly once.
 After shutdown, requests receive `-32600`, notifications are ignored, and only
 the `exit` notification completes the normal lifecycle.
 Disk-backed position-line caching must enforce its 4 MiB input limit while
@@ -3613,8 +3615,9 @@ analysis を作り上げず、空配列または null を返す。
 `LspServer` は通常 dispatch、cancellation fast path、queue-overload response の全経路で、
 1 つの lock 保護された lifecycle state machine を使う。phase は before-initialize、
 initializing、running、shutdown、exited である。最初の `initialize` request だけが初期化へ
-遷移できる。transport は各 frame の lifecycle action を受信順で予約し、initialize response の
-書き込み後にだけ running へ遷移する。shutdown は active dispatch の完了待ちより先に phase を
+遷移できる。transport は各 frame の lifecycle action を受信順で予約する。output gate の下で、
+serialize 済み initialize response と running への遷移は 1 つの公開境界を共有し、frame の
+書き込み開始直前に state を変更する。shutdown は active dispatch の完了待ちより先に phase を
 変更し、その後に所有する query context と reader を正確に 1 回だけ破棄する。shutdown 後の
 request は `-32600` を返し、notification は無視し、`exit` notification だけが正常な lifecycle を
 完了させる。
