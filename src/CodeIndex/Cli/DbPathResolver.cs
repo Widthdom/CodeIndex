@@ -334,6 +334,20 @@ public static class DbPathResolver
     public static string? TryReadIndexedHeadSha(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadShaMetaKey);
 
+    public static string? TryReadIndexedHeadForResponse(string dbPath)
+    {
+        try
+        {
+            using var connection = OpenMetadataConnection(dbPath);
+            connection.Open();
+            return CodeIndex.Database.DbReader.TryGetIndexedHeadForResponse(connection);
+        }
+        catch (Exception ex) when (IsMetadataProbeException(ex))
+        {
+            return null;
+        }
+    }
+
     public static DateTimeOffset? TryReadIndexedHeadTimestamp(string dbPath)
     {
         var raw = TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadTimestampMetaKey);
