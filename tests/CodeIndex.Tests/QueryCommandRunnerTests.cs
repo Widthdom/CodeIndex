@@ -664,11 +664,22 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.Success, showExitCode);
         Assert.Equal(string.Empty, showStderr);
-        Assert.Contains(missingDb, showStdout, StringComparison.Ordinal);
-        Assert.Contains("/Users/alice/private-cache", showStdout, StringComparison.Ordinal);
-        Assert.DoesNotContain("visible4860", showStdout, StringComparison.Ordinal);
-        Assert.DoesNotContain("encoded4860", showStdout, StringComparison.Ordinal);
-        Assert.Contains("token=\\u003Credacted\\u003E", showStdout, StringComparison.Ordinal);
+        using var showDocument = ParseJsonOutput(showStdout);
+        var shownDbPath = showDocument.RootElement
+            .GetProperty("effective_config")
+            .GetProperty("db_path")
+            .GetProperty("value")
+            .GetString();
+        Assert.NotNull(shownDbPath);
+        Assert.Contains(missingDb, shownDbPath, StringComparison.Ordinal);
+        Assert.Contains("/Users/alice/private-cache", shownDbPath, StringComparison.Ordinal);
+        Assert.Contains(
+            "aux2=%2FUsers%2Falice%2Fcache-token%3D<redacted>",
+            shownDbPath,
+            StringComparison.Ordinal);
+        Assert.EndsWith("&token=<redacted>", shownDbPath, StringComparison.Ordinal);
+        Assert.DoesNotContain("visible4860", shownDbPath, StringComparison.Ordinal);
+        Assert.DoesNotContain("encoded4860", shownDbPath, StringComparison.Ordinal);
     }
 
     [Fact]
