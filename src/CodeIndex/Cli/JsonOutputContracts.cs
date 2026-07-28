@@ -772,6 +772,8 @@ internal sealed class IndexWatchEventJsonResult : IVersionedJsonResult
     public int? Errors { get; init; }
     public string? SubRunParseStatus { get; init; }
     public string? SubRunParseReason { get; init; }
+    public string? Backend { get; init; }
+    public string? RecoveryReason { get; init; }
     public string? OverflowReason { get; init; }
     public IndexWatchRecoveryCommandJsonResult? RecoveryCommand { get; init; }
     public string? Reason { get; init; }

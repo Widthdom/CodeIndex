@@ -11,6 +11,8 @@ internal sealed class IndexWatchStartedJsonResult : IVersionedJsonResult
     public string? Db { get; init; }
     public int? DebounceMs { get; init; }
     public int? WatchPendingPathLimit { get; init; }
+    public string? Backend { get; init; }
+    public string? RecoveryReason { get; init; }
     public IndexWatchContractJsonResult? WatchContract { get; init; }
 }
 
@@ -26,6 +28,8 @@ internal sealed class IndexWatchContractJsonResult
     public string RenameEvents { get; init; } = string.Empty;
     public string OverflowRecovery { get; init; } = string.Empty;
     public string WatcherErrorRecovery { get; init; } = string.Empty;
+    public string BaselineScan { get; init; } = string.Empty;
+    public string BackendStartRecovery { get; init; } = string.Empty;
     public string Cancellation { get; init; } = string.Empty;
     public string SubRunOutput { get; init; } = string.Empty;
     public string McpWatchMode { get; init; } = string.Empty;
