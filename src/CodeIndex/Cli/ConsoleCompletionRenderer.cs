@@ -98,9 +98,6 @@ internal static class ConsoleCompletionRenderer
             sb.Append($"        {command}) COMPREPLY=($(compgen -W \"{candidates}\" -- \"$cur\")); return ;;\n");
         }
         sb.Append("        --db|--path|--exclude-path|--open-issues|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
-        sb.Append("        --color) COMPREPLY=($(compgen -W \"auto always never\" -- \"$cur\")) ;;\n");
-        sb.Append("        --palette) COMPREPLY=($(compgen -W \"basic 256 truecolor\" -- \"$cur\")) ;;\n");
-        sb.Append("        --log-format) COMPREPLY=($(compgen -W \"text json\" -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
         sb.Append($"        --kind) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
         foreach (var (flag, values) in GetEnumValueCompletions().Where(item => item.Flag != "--format"))
@@ -296,7 +293,8 @@ internal static class ConsoleCompletionRenderer
         if (!flag.IsValueBearing)
             return $"'{name}[{desc}]'";
 
-        var valueSpec = flag.ValuePlaceholder switch
+        var valuePlaceholder = flag.GetValuePlaceholder(command ?? string.Empty);
+        var valueSpec = valuePlaceholder switch
         {
             "<path>" => "file:_files",
             "<glob>" => "pattern",
@@ -314,7 +312,7 @@ internal static class ConsoleCompletionRenderer
             "<host:port>" => "address",
             "<stdio|http>" => "transport:(stdio http)",
             _ when flag.Name == "--format" && command is not null && GetFormatValues(command) is { } formats => $"value:({string.Join(' ', formats)})",
-            _ when GetEnumValues(flag) is { } values => $"value:({string.Join(' ', values)})",
+            _ when GetEnumValues(flag, command) is { } values => $"value:({string.Join(' ', values)})",
             _ => "value",
         };
         return $"'{name}[{desc}]:{valueSpec}'";
@@ -352,11 +350,9 @@ internal static class ConsoleCompletionRenderer
             var name = flag.Name.TrimStart('-');
             var shortName = flag.ShortName is null ? "" : $" -s {flag.ShortName.TrimStart('-')}";
             var requiresArg = flag.IsValueBearing ? " -r" : "";
-            var argSpec = flag.ValuePlaceholder switch
+            var valuePlaceholder = flag.GetValuePlaceholder(string.Empty);
+            var argSpec = valuePlaceholder switch
             {
-                "<auto|always|never>" => " -a 'auto always never'",
-                "<basic|256|truecolor>" => " -a 'basic 256 truecolor'",
-                "<text|json>" => " -a 'text json'",
                 _ when GetEnumValues(flag) is { } values => $" -a '{string.Join(' ', values)}'",
                 _ => "",
             };
@@ -397,11 +393,11 @@ internal static class ConsoleCompletionRenderer
                 "group-by-name" => "Collapse same-name rows across files",
                 _ => flag.Description,
             };
-            var argSpec = flag.ValuePlaceholder switch
+            var valuePlaceholder = flag.GetValuePlaceholder(string.Empty);
+            var argSpec = valuePlaceholder switch
             {
                 "<lang>" => $" -a '{langs}'",
                 "<kind>" => $" -a '{kinds}'",
-                "<stdio|http>" => " -a 'stdio http'",
                 _ when GetEnumValues(flag) is { } values => $" -a '{string.Join(' ', values)}'",
                 _ => "",
             };
@@ -425,9 +421,6 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine($"    $commands = @({cmds})");
         sb.AppendLine($"    $langs = @({langs})");
         sb.AppendLine($"    $kinds = @({kinds})");
-        sb.AppendLine("    $colorModes = @('auto', 'always', 'never')");
-        sb.AppendLine("    $palettes = @('basic', '256', 'truecolor')");
-        sb.AppendLine("    $logFormats = @('text', 'json')");
         sb.AppendLine("    $enumValues = @{");
         foreach (var (flag, values) in GetEnumValueCompletions().Where(item => item.Flag != "--format"))
             sb.AppendLine($"        '{EscapePowerShellSingleQuoted(flag)}' = @({FormatPowerShellArray(values)})");
@@ -459,9 +452,6 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("            Get-ChildItem -Name \"$wordToComplete*\" -ErrorAction SilentlyContinue | ForEach-Object { New-CdidxCompletion $_ 'ProviderItem' }");
         sb.AppendLine("            return");
         sb.AppendLine("        }");
-        sb.AppendLine("        '--color' { $colorModes | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
-        sb.AppendLine("        '--palette' { $palettes | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
-        sb.AppendLine("        '--log-format' { $logFormats | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--lang' { $langs | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--kind' { $kinds | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--format' { if ($formatValues.ContainsKey($subcmd)) { $formatValues[$subcmd] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ } }; return }");
@@ -546,37 +536,39 @@ internal static class ConsoleCompletionRenderer
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
 
-    private static string[]? GetEnumValues(CliFlag flag)
+    private static string[]? GetEnumValues(CliFlag flag, string? command = null)
     {
-        var placeholder = flag.ValuePlaceholder;
-        if (placeholder is null || placeholder.Length < 3 || placeholder[0] != '<' || placeholder[^1] != '>' || !placeholder.Contains('|'))
-            return null;
-        return placeholder[1..^1].Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var domain = flag.GetValueDomain(command ?? string.Empty);
+        return domain?.CanonicalValues.ToArray();
     }
 
     private static IEnumerable<(string Flag, string[] Values)> GetEnumValueCompletions() =>
         CliFlagSchema.All
-            .Select(flag => (Flag: flag.Name, Values: GetEnumValues(flag)))
+            .Where(flag => flag.Name != "--format")
+            .Select(flag => (
+                Flag: flag.Name,
+                Values: flag.CommandValueDomains.Count == 0
+                    ? GetEnumValues(flag)
+                    : flag.CommandValueDomains.Values
+                        .SelectMany(domain => domain.CanonicalValues)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()))
             .Where(item => item.Values is not null)
             .GroupBy(item => item.Flag, StringComparer.Ordinal)
             .Select(group => (group.Key, group.SelectMany(item => item.Values!).Distinct(StringComparer.Ordinal).ToArray()));
 
     private static IEnumerable<(string Command, string[] Values)> GetFormatValueCompletions()
     {
-        yield return ("search", ["text", "json", "count", "compact", "grouped", "csv", "tsv", "lsp", "qf", "sarif", "issue-drafts"]);
-        yield return ("recipes", ["text", "json", "compact"]);
-        yield return ("audit", ["text", "json", "count", "compact", "issue-drafts"]);
-        foreach (var command in new[] { "definition", "references", "callers", "callees", "find", "validate" })
-            yield return (command, ["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"]);
-        yield return ("symbols", ["text", "json", "count", "compact", "lsp", "qf", "sarif"]);
-        yield return ("files", ["text", "json", "count", "compact"]);
-        yield return ("map", ["text", "json", "compact", "issue-drafts"]);
-        yield return ("inspect", ["text", "json", "compact"]);
-        yield return ("deps", ["dot", "graphml", "json-graph", "edgelist"]);
-        yield return ("suggestions", ["json", "markdown", "issue-drafts"]);
-        yield return ("languages", ["text", "json", "count"]);
+        foreach (var command in CliFlagSchema.AllCommands)
+        {
+            var values = CliFlagSchema.GetCanonicalValuesForCommand(command, "--format");
+            if (values.Count > 0)
+                yield return (command, values.ToArray());
+        }
     }
 
     private static string[]? GetFormatValues(string command) =>
-        GetFormatValueCompletions().FirstOrDefault(item => item.Command == command).Values;
+        CliFlagSchema.GetCanonicalValuesForCommand(command, "--format") is { Count: > 0 } values
+            ? values.ToArray()
+            : null;
 }

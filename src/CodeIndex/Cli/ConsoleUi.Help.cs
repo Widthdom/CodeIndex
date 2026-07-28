@@ -64,7 +64,7 @@ public static partial class ConsoleUi
             if (HiddenCommandUsageNames.Contains(name))
                 continue;
 
-            WriteHelpLine($"  {usage}");
+            WriteHelpLine($"  {RenderUsageLineFromSchema(name, usage)}");
         }
         Console.WriteLine();
         PrintCommandSummary();
@@ -155,131 +155,56 @@ public static partial class ConsoleUi
 
     private static void PrintFlagReference(Action<string> WriteHelpLine)
     {
+        foreach (var (heading, flags) in CliFlagSchema.GetSharedHelpSections())
+        {
+            if (flags.Count == 0)
+                continue;
+
+            Console.WriteLine();
+            Console.WriteLine(heading);
+            foreach (var flag in flags)
+            {
+                WriteHelpLine($"  {FormatSharedFlagToken(flag)}");
+                WriteHelpLine($"      {flag.Description}");
+            }
+
+            if (string.Equals(heading, "Index and update options:", StringComparison.Ordinal))
+                WriteHelpLine("  .cdidxignore  Optional project-local ignore file; loaded after .gitignore in each directory");
+            if (string.Equals(heading, "Query options:", StringComparison.Ordinal))
+                WriteHelpLine($"  {FormatRelatedOptionTokens("search", "--limit", "--top", "--max-results")}  Equivalent result-limit options");
+        }
+
         Console.WriteLine();
-        Console.WriteLine("Index and update options:");
-        Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
-        WriteHelpLine("  .cdidxignore               Optional project-local ignore file; loaded after .gitignore in each directory");
-        Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
-        Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
-        Console.WriteLine("  --dry-run                  Scan files without writing to the database");
-        WriteHelpLine($"  --dry-run-path-limit <n>  Dry run only: process at most <n> candidate paths before returning truncated lower-bound estimates (default: {IndexCommandRunner.DefaultDryRunPathLimit}, max: {IndexCommandRunner.MaxDryRunPathLimit})");
-        Console.WriteLine("  --force                    Bypass the per-database index lock; only use when no other cdidx index is active");
-        WriteHelpLine("  --symbols-only             Build chunks and symbols but skip reference extraction; graph queries stay degraded until a normal index run");
-        Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
-        Console.WriteLine("  --memory-trace             Include phase memory samples in index JSON output");
-        Console.WriteLine("  --quiet, -q, --silent      Suppress informational stderr output; errors still print (also honors CDIDX_QUIET=1)");
-        Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
-        WriteHelpLine("  --notify <mode>           Long index completion signal: auto, bell, osc9, desktop, or none (also honors CDIDX_NOTIFY; quiet/json suppress it)");
-        WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
-        WriteHelpLine("  --max-symbols-per-file <n> Skip file content, symbols, and references when one file emits too many symbols (default: 5000; max: 50000)");
-        WriteHelpLine("  --max-references-per-file <n> Skip references when one file emits too many references (default: 100000; max: 1000000)");
-        WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 8; explicit max: 16; also honors CDIDX_INDEX_PARALLELISM)");
-        WriteHelpLine("  --follow-symlinks <mode>  Symlink policy for directories and files: none (default), internal, or all");
-        WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
-        WriteHelpLine("  --exclude-symbol-kind <kind>[,<kind>]  Drop matching symbol kinds during indexing");
-        Console.WriteLine("  --commits <commit-ref> [commit-ref ...]");
-        Console.WriteLine($"                              Update only files changed in the specified git commits (preferred after commits; max {IndexCommandRunner.MaxCommitRefCount} refs, {IndexCommandRunner.MaxCommitRefLength} chars each)");
-        Console.WriteLine("  --changed-between <old-ref> <new-ref>");
-        Console.WriteLine("                              Update only files changed between two git refs (useful after branch switches)");
-        Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
-        WriteHelpLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --changed-between / --files / --dry-run");
-        Console.WriteLine($"  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: {IndexWatchRunner.DefaultDebounceMs}, max {IndexWatchRunner.MaxDebounceMs})");
-        WriteHelpLine($"  --watch-pending-path-limit <n>  Watch only: pending changed-path queue limit before falling back to a full rescan (default: {IndexWatchRunner.DefaultWatchPendingPathLimit}, max: {IndexWatchRunner.MaxWatchPendingPathLimit}; also honors {IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable})");
-        Console.WriteLine("  --optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files");
-        WriteHelpLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
-        WriteHelpLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
-        WriteHelpLine("  --ascii                    Use ASCII spinner/progress glyphs instead of Unicode glyphs (also honors CDIDX_ASCII=1, NO_UNICODE, TERM=dumb, accessibility env hints, and non-UTF-8 locales)");
-        WriteHelpLine("  --no-progress              Disable animated progress/spinner output (also honors CDIDX_DISABLE_PROGRESS=1 and PREFERS_REDUCED_MOTION)");
-        Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
-        Console.WriteLine("  --log-format <text|json>   Persistent stderr log format (also honors CDIDX_LOG_FORMAT)");
-        Console.WriteLine("  --log-retain-count <n>     Persistent stderr log file retention count (also honors CDIDX_LOG_RETAIN)");
-        Console.WriteLine("  --log-max-size-mb <n>      Persistent stderr log rotation size cap in MiB (also honors CDIDX_LOG_MAX_SIZE_MB)");
-        WriteHelpLine("  --debug-unsafe             Allow raw debug dumps only when CDIDX_DEBUG=unsafe is also set; local troubleshooting only");
-        WriteHelpLine("  --strict-version           Treat workspace version pin mismatches as exit code 64 instead of warnings");
-        Console.WriteLine("  --help, -h                 Show this help message");
-        Console.WriteLine("  --version, -V              Show version information");
-        Console.WriteLine("  --license                  Show licensing, trademark, and commercial-use summary");
-        Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish, powershell)");
+        Console.WriteLine("Built-in help options:");
+        WriteHelpLine("  --help, -h  Show help");
+        WriteHelpLine("  --help-all  Show every command, usage form, and shared option");
+        WriteHelpLine("  --help-flags  Show shared options");
+        WriteHelpLine("  --version, -V  Show version information");
+        WriteHelpLine("  --license  Show licensing, trademark, and commercial-use summary");
+        WriteHelpLine("  --completions <bash|zsh|fish|powershell>  Generate a shell completion script");
+
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
-        Console.WriteLine("  Use --commits with a project path after normal commits; git diff sees rename/delete paths too.");
-        Console.WriteLine("  Use --changed-between <old-ref> <new-ref> after switching branches to refresh only changed files.");
-        Console.WriteLine("  Use --files only for known in-place edits or new files; old rename/delete paths stay indexed unless also listed.");
-        Console.WriteLine("  Incremental writes optimize FTS5 opportunistically after a small maintenance threshold; run `cdidx optimize` for manual maintenance.");
+        WriteHelpLine("  Use --commits with a project path after normal commits; git diff sees rename/delete paths too.");
+        WriteHelpLine("  Use --changed-between <old-ref> <new-ref> after switching branches to refresh only changed files.");
+        WriteHelpLine("  Use --files only for known in-place edits or new files; old rename/delete paths stay indexed unless also listed.");
+        WriteHelpLine("  Incremental writes optimize FTS5 opportunistically after a small maintenance threshold; run `cdidx optimize` for manual maintenance.");
         Console.WriteLine();
-        Console.WriteLine("Query options:");
-        Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
-        WriteHelpLine("  --json                     Output as JSON (search/symbols/files stream ndjson by default; search/symbols/files/validate accept --json=array for one array)");
-        WriteHelpLine("  --verbose                  Query commands: emit debug diagnostics to stderr; with --json, append an _debug JSON object");
-        WriteHelpLine("  --quiet, -q, --silent      Query commands: suppress informational stderr output, including zero-result hints and summaries; errors still print. Overrides --verbose stderr text.");
-        WriteHelpLine("  --profile                  Read commands: append SQL timing, row-count, and EXPLAIN QUERY PLAN JSON after the normal result");
-        WriteHelpLine("  --slow-query-ms <n>        Read commands: log profiled SQL statements that take at least <n> ms (use 0 to log every statement)");
-        Console.WriteLine("  --limit <n>, --top <n>, --max-results <n>");
-        Console.WriteLine("                              Max results to return (default: 20)");
-        Console.WriteLine("  --lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)");
-        Console.WriteLine("  --allow-unknown-lang       Allow an unregistered plugin language ID and preserve its exact spelling");
-        Console.WriteLine("  --path <glob>              Restrict matches to glob-style path patterns (* and ?)");
-        WriteHelpLine($"  --query <query>            Pass a query literal, useful when the query starts with '-' (`search`/`find` max {QueryLimits.MaxQueryLength} chars)");
-        WriteHelpLine("  --named-query <name>=<query>  search only: add a named ad hoc batch query; repeat to run related searches with grouped compact results");
-        Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
-        Console.WriteLine("  --exclude-tests            Exclude likely test files");
-        WriteHelpLine("  --audit-scope <source|all> search/unused: source uses production-code cleanup defaults; all disables source-scope defaults");
-        Console.WriteLine("  --source-only              search only: shorthand for --audit-scope source on ad hoc and named searches");
-        Console.WriteLine("  --exclude-comments         search only: suppress comment-only matches");
-        Console.WriteLine("  --exclude-strings          search only: suppress string, regex, and help-text matches");
-        Console.WriteLine("  --exclude-fixtures         search only: suppress fixture-only matches in tests");
-        WriteHelpLine("  --origin/--match-origin <origin> search only: keep only matches from selected origins (code, comment, string_literal, regex_literal, help_text, unknown; repeatable or comma-separated)");
-        WriteHelpLine("  --exclude-origin <origin>  search only: drop matches from selected origins while keeping other origins in the same result");
-        Console.WriteLine("  --include-generated        Include generated files in query results");
-        Console.WriteLine("  --snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)");
-        Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
-        WriteHelpLine($"  --max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
-        WriteHelpLine("  --focus-line <line>        find/excerpt: focus a line; excerpt keeps the leading window when no column is supplied");
-        Console.WriteLine("  --focus-column <n>         find/excerpt: focus a specific 1-based column");
-        Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
-        Console.WriteLine("  --no-semantic-tokens       excerpt JSON: omit semantic_tokens for compact line/window payloads");
-        WriteHelpLine($"  --fts                      Use raw FTS5 query syntax for search (content:term, NEAR(a b, 5), OR, NOT, groups, prefix*, \"phrase\"; search query max {QueryLimits.MaxQueryLength} chars; raw FTS parser max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
-        Console.WriteLine("  --exact                    Backward-compatible shorthand.");
-        Console.WriteLine("                              Prefer --exact-substring for search,");
-        Console.WriteLine("                              --exact for find,");
-        Console.WriteLine("                              and --exact-name for symbol/graph lookups.");
-        Console.WriteLine("                              Combining exact-match flags is rejected.");
-        Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring");
-        Console.WriteLine("                              (no FTS5)");
-        Console.WriteLine("  --token-boundary           Search only: exact substring plus code-token");
-        Console.WriteLine("                              boundaries; excludes longer identifiers.");
-        Console.WriteLine("  --exact-name               Exact name match for symbols, definition,");
-        Console.WriteLine("                              references, callers, callees, and inspect.");
-        Console.WriteLine("                              Uses NFKC + Unicode CaseFold when ready.");
-        Console.WriteLine("                              Legacy/stale-fold DBs fall back to ASCII NOCASE;");
-        Console.WriteLine("                              run `cdidx backfill-fold` or check fold_ready.");
-        WriteHelpLine("  --kind <kind>              definition/symbols/outline/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation/type_tag/bcl_regex_without_timeout); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
-        WriteHelpLine("  --sort <mode>              Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, references, size, complexity, path, and name");
-        Console.WriteLine("  --severity <s>             validate only: filter issues by severity: info, warning, error");
-        Console.WriteLine("  --visibility <v[,v]>       Filter symbols/definitions/unused/hotspots by visibility: public, protected, internal, private");
-        WriteHelpLine("  --exclude-visibility <v[,v]> Exclude symbols/definitions/unused/hotspots by visibility");
-        WriteHelpLine("  --count                    Count only; result limits are ignored by count modes, but scan caps can still mark approximate counts as degraded");
-        WriteHelpLine("  --group-partials           definition/symbols/inspect symbol mode: collapse partial type declarations into logical families while preserving physical counts and definition_sites");
-        WriteHelpLine("  --bucket <bucket>          unused only: filter one unused confidence bucket");
-        WriteHelpLine("  --min-confidence <s>       unused only: filter medium or low confidence candidates; --confidence is an alias");
-        WriteHelpLine("  --all                     unused only: include low-confidence contract-domain candidates suppressed by default");
-        WriteHelpLine("  --actionable               unused only: preset for private medium-confidence cleanup candidates");
-        Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
-        Console.WriteLine("  --no-dedup                 search only: return every raw overlapping chunk hit (debug/density)");
-        WriteHelpLine($"  --require-before/--require-after <query>  search only: keep primary matches only when the guard query appears within --guard-window lines before/after the match (default {DbReader.DefaultSearchGuardWindow}, max {DbReader.MaxSearchGuardWindow})");
-        WriteHelpLine("  --reject-before/--reject-after <query>    search only: drop primary matches when the guard query appears within the same before/after window; useful for finding API calls missing nearby checks");
-        WriteHelpLine("  --guard-scope <window|same-line> search only: evaluate guards in the line window (default) or only on the same line before/after the primary match");
-        WriteHelpLine("  --bytes                    files: sort by size and show raw byte counts in human output; map: show raw byte counts; JSON always keeps raw integer bytes");
-        Console.WriteLine("  --min-entrypoint-confidence <n>  map only: omit entrypoint candidates below this 0.0..1.0 confidence");
-        WriteHelpLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
-        Console.WriteLine("  --depth <n>                Deprecated alias for --max-hops");
-        Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
-        WriteHelpLine("  --group-by <unit>          search: with --count, group rows by file, symbol, origin, return-type, or subsystem; hotspots: group by symbol or file, or by statement only with --lang sql");
-        WriteHelpLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON keeps capped paths plus full definition_site_details");
-        WriteHelpLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
-        WriteHelpLine("  unused reflection note     C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed; dynamically constructed reflection names may need manual review");
         WriteHelpLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
     }
+
+    private static string FormatSharedFlagToken(CliFlag flag)
+    {
+        var names = flag.ShortName is null ? flag.Name : $"{flag.Name}, {flag.ShortName}";
+        var placeholder = flag.CommandValueDomains.Count > 0
+            ? "<command-specific-value>"
+            : flag.GetValuePlaceholder(string.Empty);
+        return placeholder is null ? names : $"{names} {placeholder}";
+    }
+
+    private static string FormatRelatedOptionTokens(string command, params string[] flagNames) =>
+        string.Join(", ", flagNames.Select(flagName =>
+            CliFlagSchema.GetUsageTokenForCommand(command, flagName)));
 
     private static void PrintExamples()
     {
@@ -446,7 +371,7 @@ public static partial class ConsoleUi
         foreach (var (name, usage) in CommandUsageLines)
         {
             if (string.Equals(name, command, StringComparison.Ordinal))
-                return usage;
+                return RenderUsageLineFromSchema(command, usage);
         }
 
         return null;
@@ -478,7 +403,7 @@ public static partial class ConsoleUi
                                        && ProjectionFieldRegistry.SupportsCommand(schemaCommand);
                 var valuePlaceholder = projectionFields
                     ? ProjectionFieldRegistry.GetHelpValuePlaceholder(schemaCommand)
-                    : flag.ValuePlaceholder;
+                    : flag.GetValuePlaceholder(schemaCommand);
                 var description = projectionFields
                     ? ProjectionFieldRegistry.GetHelpDescription(schemaCommand)
                     : flag.Description;
@@ -509,11 +434,59 @@ public static partial class ConsoleUi
             if (string.Equals(name, command, StringComparison.Ordinal)
                 || string.Equals(command, "index", StringComparison.Ordinal) && name.StartsWith("index-", StringComparison.Ordinal))
             {
-                usages.Add(usage);
+                usages.Add(RenderUsageLineFromSchema(command, usage));
             }
         }
 
         return usages;
+    }
+
+    private static string RenderUsageLineFromSchema(string command, string usage)
+    {
+        var schemaCommand = GetFlagSchemaCommandName(command);
+        foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(schemaCommand))
+        {
+            if (flag.ValueDomain is null
+                && flag.CommandValueDomains.Count == 0
+                && flag.CommandValuePlaceholders.Count == 0)
+                continue;
+
+            var placeholder = flag.GetValuePlaceholder(schemaCommand);
+            if (placeholder is null)
+                continue;
+
+            usage = ReplaceUsagePlaceholder(usage, flag.Name, placeholder);
+        }
+
+        return usage;
+    }
+
+    private static string ReplaceUsagePlaceholder(string usage, string flagName, string replacement)
+    {
+        var searchStart = 0;
+        var prefix = $"{flagName} ";
+        while (searchStart < usage.Length)
+        {
+            var flagStart = usage.IndexOf(prefix, searchStart, StringComparison.Ordinal);
+            if (flagStart < 0)
+                break;
+
+            var valueStart = flagStart + prefix.Length;
+            if (valueStart >= usage.Length || usage[valueStart] != '<')
+            {
+                searchStart = valueStart;
+                continue;
+            }
+
+            var valueEnd = usage.IndexOf('>', valueStart);
+            if (valueEnd < 0)
+                break;
+
+            usage = usage[..valueStart] + replacement + usage[(valueEnd + 1)..];
+            searchStart = valueStart + replacement.Length;
+        }
+
+        return usage;
     }
 
     private static IReadOnlyList<string> GetCommandUsageNotes(string command)

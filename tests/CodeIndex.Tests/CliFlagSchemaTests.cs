@@ -357,6 +357,85 @@ public class CliFlagSchemaTests
         }
     }
 
+    [Fact]
+    public void CanonicalValueRegistry_DrivesHelpValidationAndCompletions_Issue4861()
+    {
+        var auditFormats = CliFlagSchema.GetCanonicalValuesForCommand("audit", "--format");
+        Assert.Contains("sarif", auditFormats);
+        Assert.DoesNotContain("lsp", auditFormats);
+        foreach (var command in CliFlagSchema.AllCommands)
+        {
+            foreach (var format in CliFlagSchema.GetCanonicalValuesForCommand(command, "--format"))
+                Assert.True(CliOutputFormatCapabilities.TryGet(format, out _), $"{command} registers unknown format {format}.");
+        }
+
+        var origins = CliFlagSchema.GetCanonicalValuesForCommand("search", "--origin");
+        Assert.Equal(
+            ["code", "comment", "string_literal", "regex_literal", "help_text", "schema_description", "unknown"],
+            origins);
+        var resultKinds = CliFlagSchema.GetCanonicalValuesForCommand("search", "--result-kind");
+        Assert.Equal(
+            ["call_site", "declaration", "identifier", "code", "comment", "string_literal", "regex_literal", "help_text", "schema_description", "unknown"],
+            resultKinds);
+        Assert.True(CliFlagSchema.TryNormalizeOptionValue("search", "--origin", "schema", out var normalizedOrigin));
+        Assert.Equal("schema_description", normalizedOrigin);
+        Assert.True(CliFlagSchema.TryNormalizeOptionValue("search", "--result-kind", "callsite", out var normalizedKind));
+        Assert.Equal("call_site", normalizedKind);
+
+        Assert.Contains("--format <text|json|count|compact|sarif|issue-drafts>", ConsoleUi.GetUsageLine("audit"));
+        var searchUsage = ConsoleUi.GetUsageLine("search");
+        Assert.NotNull(searchUsage);
+        Assert.Contains("--origin <code|comment|string_literal|regex_literal|help_text|schema_description|unknown>", searchUsage);
+        Assert.Contains("--result-kind <call_site|declaration|identifier|code|comment|string_literal|regex_literal|help_text|schema_description|unknown>", searchUsage);
+
+        var acceptsFormat = typeof(ProgramRunner).GetMethod(
+            "CommandAcceptsOutputFormat",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(acceptsFormat);
+        Assert.Equal(true, acceptsFormat!.Invoke(null, ["audit", "sarif"]));
+        Assert.Equal(false, acceptsFormat.Invoke(null, ["audit", "lsp"]));
+
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        Assert.Contains("audit) COMPREPLY=($(compgen -W \"text json count compact sarif issue-drafts\"", bash);
+        Assert.Contains("--origin) COMPREPLY=($(compgen -W \"code comment string_literal regex_literal help_text schema_description unknown\"", bash);
+
+        var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
+        Assert.Contains("__fish_seen_subcommand_from audit' -l format -r -a 'text json count compact sarif issue-drafts'", fish);
+        Assert.Contains("__fish_seen_subcommand_from search' -l result-kind -r -a 'call_site declaration identifier code comment string_literal regex_literal help_text schema_description unknown'", fish);
+    }
+
+    [Fact]
+    public void RegistrySurfacesSafetyAndAcceptedOptionsWithoutAdvertisingRejectedGotoExact_Issue4861()
+    {
+        var hookFlags = CliFlagSchema.GetAcceptedFlagNamesForCommand("hooks");
+        Assert.Contains("--dry-run", hookFlags);
+        Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks"), flag => flag.Name == "--dry-run");
+
+        var gotoFlags = CliFlagSchema.GetAcceptedFlagNamesForCommand("goto");
+        Assert.DoesNotContain("--exact", gotoFlags);
+        Assert.Contains("--exact-name", gotoFlags);
+        Assert.DoesNotContain("--exact|--exact-name", ConsoleUi.GetUsageLine("goto"), StringComparison.Ordinal);
+
+        var (_, hookHelp, _) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("hooks") ? 1 : 0);
+        Assert.Contains("--dry-run", hookHelp, StringComparison.Ordinal);
+        Assert.Contains("--project <path>", hookHelp, StringComparison.Ordinal);
+        Assert.DoesNotContain("--pretty", hookHelp, StringComparison.Ordinal);
+
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        ConsoleUi.PrintFlagUsage(showBanner: false);
+        var flagHelp = capture.Out!.ToString();
+        Assert.Contains("Safety and scope options:", flagHelp, StringComparison.Ordinal);
+        foreach (var flag in new[]
+                 {
+                     "--read-only", "--immutable", "--data-dir", "--trace",
+                     "--strict-not-found", "--project", "--solution",
+                 })
+        {
+            Assert.Contains(flag, flagHelp, StringComparison.Ordinal);
+        }
+    }
+
     // Mirrors the EnumeratedCompletionCommands list inside ConsoleCompletionRenderer - the only commands
     // that get their own bash/zsh branch (everything else falls into the generic else branch).
     // ConsoleCompletionRenderer 側の EnumeratedCompletionCommands に対応する一覧。

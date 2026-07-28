@@ -177,6 +177,10 @@ The generated scripts complete subcommands, flags, and common flag values.
 `--lang` suggests supported languages, `--kind` suggests symbol/reference kinds,
 and path-like options such as `--db`, `--path`, and `--output` use shell file
 completion.
+Command-specific `--format` values, search origin filters, and `--result-kind`
+values come from the same registry as command help and runtime validation. For
+example, audit completion includes `sarif`, and search completion includes
+`schema_description` and `unknown`.
 
 Install the script in the startup file or completion directory for your shell:
 
@@ -303,7 +307,9 @@ the same filtered file set.
 
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
-Run `cdidx --help` for the full syntax line for every command. For focused help,
+Run `cdidx --help-all` for the full syntax line for every command and
+`cdidx --help-flags` for global, safety/scope, index/update, and shared query
+options. For focused help,
 `cdidx help <command> [subcommand]` is equivalent to the existing
 `cdidx <command> [subcommand] --help` form and never executes that command.
 Known public command targets and supported command or nested aliases exit `0`;
@@ -3410,6 +3416,9 @@ read-write で mount してください。read-only query container では、fre
 生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
 `--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
 `--path`、`--output` など path 系 option は shell の file completion を使います。
+command 固有の `--format` 値、search origin filter、`--result-kind` 値は command
+help と runtime validation と同じ registry から生成されます。たとえば audit の補完には
+`sarif`、search の補完には `schema_description` と `unknown` が含まれます。
 
 利用中の shell の startup file または completion directory にスクリプトを
 インストールしてください。
@@ -3524,8 +3533,10 @@ cdidx index . --quiet
 filter 済み file 集合を表します。
 
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
-release changelog を source of truth とします。完全な syntax line は `cdidx --help`
-を参照してください。個別の help は `cdidx help <command> [subcommand]` を使え、既存の
+release changelog を source of truth とします。全 command の完全な syntax line は
+`cdidx --help-all`、global、safety / scope、index / update、共有 query option は
+`cdidx --help-flags` を参照してください。個別の help は
+`cdidx help <command> [subcommand]` を使え、既存の
 `cdidx <command> [subcommand] --help` と同じ内容を command を実行せずに表示します。
 既知の公開 command target と対応する command / nested alias は終了コード `0` を返し、
 内部 usage key は help target として受理しません。target の欠落・未検出は bounded な
@@ -4245,6 +4256,9 @@ Bash、Zsh、Fish、PowerShell です。生成されたスクリプトは subcom
 よく使う flag value を補完し、`--lang` は対応言語、`--kind` は symbol/reference
 kind、`--db` / `--path` / `--output` のような path 系 option は shell の file
 completion を使います。
+command 固有の `--format` 値、search origin filter、`--result-kind` 値は command
+help と runtime validation と同じ registry から生成されます。たとえば audit の補完には
+`sarif`、search の補完には `schema_description` と `unknown` が含まれます。
 
 使っている shell の startup file または completion directory に保存してください:
 

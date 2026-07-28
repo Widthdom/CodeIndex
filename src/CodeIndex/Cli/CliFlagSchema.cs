@@ -3,6 +3,49 @@ using System.Linq;
 
 namespace CodeIndex.Cli;
 
+internal enum CliOptionSafety
+{
+    None = 0,
+    ReadOnly,
+    Preview,
+    Destructive,
+    Override,
+    Scope,
+    Diagnostics,
+    StrictFailure,
+}
+
+internal sealed record CliOptionValueDomain
+{
+    public required IReadOnlyList<string> CanonicalValues { get; init; }
+    public IReadOnlyDictionary<string, string> Aliases { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public string ValuePlaceholder => $"<{string.Join('|', CanonicalValues)}>";
+
+    public bool TryNormalize(string rawValue, out string normalizedValue)
+    {
+        var lookup = NormalizeLookup(rawValue);
+        foreach (var canonicalValue in CanonicalValues)
+        {
+            if (string.Equals(NormalizeLookup(canonicalValue), lookup, StringComparison.Ordinal))
+            {
+                normalizedValue = canonicalValue;
+                return true;
+            }
+        }
+
+        if (Aliases.TryGetValue(lookup, out normalizedValue!))
+            return true;
+
+        normalizedValue = string.Empty;
+        return false;
+    }
+
+    private static string NormalizeLookup(string value) =>
+        value.Trim().ToLowerInvariant().Replace("-", "_", StringComparison.Ordinal);
+}
+
 /// <summary>
 /// Single source of truth for cdidx CLI flags. Drives the unsupported-option allowlists
 /// (`TryWriteUnsupportedOptionError`, `ValidateFindArgs`) and the generated shell
@@ -22,6 +65,12 @@ internal sealed record CliFlag
     public string? ShortName { get; init; }
     public string? ValuePlaceholder { get; init; }
     public required string Description { get; init; }
+    public CliOptionSafety Safety { get; init; }
+    public CliOptionValueDomain? ValueDomain { get; init; }
+    public IReadOnlyDictionary<string, CliOptionValueDomain> CommandValueDomains { get; init; } =
+        new Dictionary<string, CliOptionValueDomain>(StringComparer.Ordinal);
+    public IReadOnlyDictionary<string, string> CommandValuePlaceholders { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>
     /// Commands for which this flag is "primary" — accepted by the parser AND surfaced
@@ -48,9 +97,49 @@ internal sealed record CliFlag
     /// </summary>
     public IReadOnlySet<string> AlsoAcceptedBy { get; init; } = new HashSet<string>(StringComparer.Ordinal);
 
-    public bool IsValueBearing => ValuePlaceholder is not null;
+    public bool IsValueBearing =>
+        ValuePlaceholder is not null
+        || ValueDomain is not null
+        || CommandValueDomains.Count > 0
+        || CommandValuePlaceholders.Count > 0;
     public bool AppliesTo(string command) => PrimaryCommands.Contains(command);
     public bool IsAcceptedBy(string command) => AppliesTo(command) || AlsoAcceptedBy.Contains(command);
+
+    public CliOptionValueDomain? GetValueDomain(string command)
+    {
+        if (CommandValueDomains.TryGetValue(command, out var commandDomain))
+            return commandDomain;
+        if (CommandValuePlaceholders.TryGetValue(command, out var commandPlaceholder))
+            return TryBuildPlaceholderDomain(commandPlaceholder);
+        if (ValueDomain is not null)
+            return ValueDomain;
+        return TryBuildPlaceholderDomain(ValuePlaceholder);
+    }
+
+    public string? GetValuePlaceholder(string command)
+    {
+        if (CommandValuePlaceholders.TryGetValue(command, out var commandPlaceholder))
+            return commandPlaceholder;
+        return GetValueDomain(command)?.ValuePlaceholder ?? ValuePlaceholder;
+    }
+
+    private static CliOptionValueDomain? TryBuildPlaceholderDomain(string? placeholder)
+    {
+        if (placeholder is null
+            || placeholder.Length < 3
+            || placeholder[0] != '<'
+            || placeholder[^1] != '>'
+            || !placeholder.Contains('|'))
+        {
+            return null;
+        }
+
+        return new CliOptionValueDomain
+        {
+            CanonicalValues = placeholder[1..^1]
+                .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+        };
+    }
 }
 
 internal static class CliFlagSchema
@@ -67,7 +156,7 @@ internal static class CliFlagSchema
     // 専用 parser / nested parser を持つ command family は subcommand metadata が揃うまで
     // CommandUsageLines の正確な構文を使い、誤解を招く不完全な親 command の一覧は出さない。
     private static readonly IReadOnlySet<string> AuthoritativeHelpOptionCommands = Set(
-        "index", "backfill-fold", "optimize", "vacuum",
+        "index", "hooks", "backfill-fold", "optimize", "vacuum",
         "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "languages");
@@ -230,6 +319,48 @@ internal static class CliFlagSchema
     private static readonly string[] VerboseQueryCommands = ProfileCommands;
     private static readonly string[] TraceCommands = ProfileCommands;
 
+    private static readonly CliOptionValueDomain SearchOriginValueDomain = Values(
+        ["code", "comment", "string_literal", "regex_literal", "help_text", "schema_description", "unknown"],
+        ("string", "string_literal"),
+        ("regex", "regex_literal"),
+        ("help", "help_text"),
+        ("schema", "schema_description"));
+
+    private static readonly CliOptionValueDomain SearchResultKindValueDomain = Values(
+        ["call_site", "declaration", "identifier", "code", "comment", "string_literal", "regex_literal", "help_text", "schema_description", "unknown"],
+        ("call", "call_site"),
+        ("callsite", "call_site"),
+        ("decl", "declaration"),
+        ("ident", "identifier"),
+        ("string", "string_literal"),
+        ("regex", "regex_literal"),
+        ("help", "help_text"),
+        ("schema", "schema_description"));
+
+    private static readonly IReadOnlyDictionary<string, CliOptionValueDomain> OutputFormatValueDomains =
+        new Dictionary<string, CliOptionValueDomain>(StringComparer.Ordinal)
+        {
+            ["search"] = Values(["text", "json", "count", "compact", "grouped", "csv", "tsv", "lsp", "qf", "sarif", "issue-drafts"]),
+            ["recipes"] = Values(["text", "json", "compact"]),
+            ["audit"] = Values(["text", "json", "count", "compact", "sarif", "issue-drafts"]),
+            ["definition"] = Values(["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"]),
+            ["references"] = Values(["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"]),
+            ["callers"] = Values(["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"]),
+            ["callees"] = Values(["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"]),
+            ["find"] = Values(["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"]),
+            ["validate"] = Values(["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"]),
+            ["symbols"] = Values(["text", "json", "count", "compact", "lsp", "qf", "sarif"]),
+            ["files"] = Values(["text", "json", "count", "compact"]),
+            ["map"] = Values(["text", "json", "compact", "issue-drafts"]),
+            ["inspect"] = Values(["text", "json", "compact"]),
+            ["status"] = Values(["text", "json", "compact"]),
+            ["deps"] = Values(["dot", "graphml", "json-graph", "edgelist"]),
+            ["impact"] = Values(["text", "json", "compact"]),
+            ["hotspots"] = Values(["text", "json", "count", "compact"]),
+            ["suggestions"] = Values(["json", "markdown", "issue-drafts"]),
+            ["languages"] = Values(["text", "json", "count"]),
+        };
+
     public static IReadOnlyList<CliFlag> All { get; } = BuildAll();
 
     private static IReadOnlyList<CliFlag> BuildAll()
@@ -237,22 +368,22 @@ internal static class CliFlagSchema
         return new List<CliFlag>
         {
             new() { Name = "--db", ValuePlaceholder = "<path>", Description = "Database path", PrimaryCommands = Set(DbPathCommands) },
-            new() { Name = "--read-only", Description = "Open the query database as immutable read-only storage", PrimaryCommands = Set(ReadOnlyDbCommands) },
-            new() { Name = "--immutable", Description = "Alias for --read-only", PrimaryCommands = Set(ReadOnlyDbCommands) },
+            new() { Name = "--read-only", Description = "Open the query database as immutable read-only storage", PrimaryCommands = Set(ReadOnlyDbCommands), Safety = CliOptionSafety.ReadOnly },
+            new() { Name = "--immutable", Description = "Alias for --read-only", PrimaryCommands = Set(ReadOnlyDbCommands), Safety = CliOptionSafety.ReadOnly },
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation; repeat up to 7 distinct additional DBs", PrimaryCommands = Set(WorkspaceDbCommands) },
-            new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", PrimaryCommands = Set(DataDirCommands) },
-            new() { Name = "--json", Description = "JSON output; search/symbols/files/validate also accept --json=array for a single JSON array", PrimaryCommands = Set(JsonCommands) },
+            new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", PrimaryCommands = Set(DataDirCommands), Safety = CliOptionSafety.Scope },
+            new() { Name = "--json", Description = "JSON output; search/symbols/files/validate also accept --json=array for a single JSON array", PrimaryCommands = Set(JsonCommands.Concat(["hooks"]).ToArray()) },
             new() { Name = "--json-summary", Description = "Batch: emit one typed result/error record per input plus a final summary", PrimaryCommands = Set("batch") },
             new() { Name = "--max-input-lines", ValuePlaceholder = "<n>", Description = $"Batch: input-line budget (default {QueryCommandRunner.BatchDefaultInputLines}, max {QueryCommandRunner.BatchMaxInputLines})", PrimaryCommands = Set("batch") },
             new() { Name = "--max-output-chars", ValuePlaceholder = "<n>", Description = $"Batch JSON-summary output budget (default {QueryCommandRunner.BatchDefaultTotalOutputChars}, max {QueryCommandRunner.BatchMaxTotalOutputChars})", PrimaryCommands = Set("batch") },
             new() { Name = "--parallel", ValuePlaceholder = "<n>", Description = $"Batch JSON-summary worker count (default 1, max {QueryCommandRunner.BatchMaxParallelism}); results retain input order", PrimaryCommands = Set("batch") },
             new() { Name = "--pretty", Description = CliOutputFormatCapabilities.PrettyDescription, PrimaryCommands = Set(JsonCommands), TopLevel = true },
             new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", PrimaryCommands = Set(CompactJsonCommands) },
-            new() { Name = "--format", ValuePlaceholder = CliOutputFormatCapabilities.FormatValuePlaceholder, Description = CliOutputFormatCapabilities.FormatDescription, PrimaryCommands = Set(FormatCommands) },
+            new() { Name = "--format", Description = CliOutputFormatCapabilities.FormatDescription, PrimaryCommands = Set(FormatCommands), CommandValueDomains = OutputFormatValueDomains },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", PrimaryCommands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--silent", Description = "Alias for --quiet", PrimaryCommands = Set(AllCommands.ToArray()), TopLevel = true },
-            new() { Name = "--color", ValuePlaceholder = "<auto|always|never>", Description = "Color output mode", PrimaryCommands = Set(), TopLevel = true },
-            new() { Name = "--palette", ValuePlaceholder = "<basic|256|truecolor>", Description = "ANSI color palette", PrimaryCommands = Set(), TopLevel = true },
+            new() { Name = "--color", ValuePlaceholder = "<auto|always|never>", Description = "Color output: `auto` (default), `always`, or `never`; the flag overrides CLICOLOR_FORCE / NO_COLOR / CLICOLOR and TTY detection", PrimaryCommands = Set(), TopLevel = true },
+            new() { Name = "--palette", ValuePlaceholder = "<basic|256|truecolor>", Description = "ANSI palette: `basic`, `256`, or `truecolor`; the flag overrides CDIDX_COLOR_PALETTE and COLORTERM / TERM detection", PrimaryCommands = Set(), TopLevel = true },
             new() { Name = "--ascii", Description = "Use ASCII progress glyphs", PrimaryCommands = Set(), TopLevel = true },
             new() { Name = "--metrics", ValuePlaceholder = "<path>", Description = "Append command metrics JSONL to a file", PrimaryCommands = Set(), TopLevel = true },
             new() { Name = "--debug-unsafe", Description = "Allow raw debug dumps when CDIDX_DEBUG=unsafe is also set", PrimaryCommands = Set(), TopLevel = true },
@@ -264,7 +395,7 @@ internal static class CliFlagSchema
             new() { Name = "--verbose", Description = "Emit query debug diagnostics to stderr, or _debug JSON when combined with --json", PrimaryCommands = Set(VerboseQueryCommands.Concat(new[] { "index" }).ToArray()) },
             new() { Name = "--notify", ValuePlaceholder = "<auto|bell|osc9|desktop|none>", Description = "Signal long index completion; desktop currently emits OSC 9 terminal notification", PrimaryCommands = Set("index") },
             new() { Name = "--slow-query-ms", ValuePlaceholder = "<n>", Description = "Log profiled SQL statements at or above this millisecond threshold", PrimaryCommands = Set(ProfileCommands) },
-            new() { Name = "--trace", ValuePlaceholder = "<none|stderr|file>", Description = "Emit one structured JSON query trace line to stderr or a daily log file", PrimaryCommands = Set(TraceCommands) },
+            new() { Name = "--trace", ValuePlaceholder = "<none|stderr|file>", Description = "Emit one structured JSON query trace line to stderr or a daily log file", PrimaryCommands = Set(TraceCommands), Safety = CliOptionSafety.Diagnostics },
             new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", PrimaryCommands = Set(LimitCapableCommands.Concat(new[] { "suggestions" }).ToArray()) },
             new() { Name = "--max-results", ValuePlaceholder = "<n>", Description = "Search alias for --limit", PrimaryCommands = Set("search") },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", PrimaryCommands = Set(LimitCapableCommands) },
@@ -275,8 +406,19 @@ internal static class CliFlagSchema
             new() { Name = "--extension", ValuePlaceholder = "<ext>", Description = "Languages: look up language support by extension or recognized filename pattern", PrimaryCommands = Set(LanguagesFilterCommands) },
             new() { Name = "--alias", ValuePlaceholder = "<alias>", Description = "Languages: look up language support by display alias", PrimaryCommands = Set(LanguagesFilterCommands) },
             new() { Name = "--path", ValuePlaceholder = "<glob>", Description = "Path filter", PrimaryCommands = Set(PathFilterCommands) },
-            new() { Name = "--project", ValuePlaceholder = "<name|path>", Description = "Filter to a .sln/.csproj project", PrimaryCommands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()) },
-            new() { Name = "--solution", ValuePlaceholder = "<path>", Description = "Solution file used to resolve --project", PrimaryCommands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()) },
+            new()
+            {
+                Name = "--project",
+                ValuePlaceholder = "<name|path>",
+                Description = "Filter to a .sln/.csproj project",
+                PrimaryCommands = Set(PathFilterCommands.Concat(new[] { "index", "hooks" }).ToArray()),
+                CommandValuePlaceholders = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["hooks"] = "<path>",
+                },
+                Safety = CliOptionSafety.Scope,
+            },
+            new() { Name = "--solution", ValuePlaceholder = "<path>", Description = "Solution file used to resolve --project", PrimaryCommands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()), Safety = CliOptionSafety.Scope },
             new() { Name = "--exclude-path", ValuePlaceholder = "<glob>", Description = "Exclude path", PrimaryCommands = Set(ExcludeFilterCommands) },
             new() { Name = "--exclude-tests", Description = "Exclude tests", PrimaryCommands = Set(ExcludeFilterCommands) },
             new() { Name = "--include-generated", Description = "Include generated files", PrimaryCommands = Set(ExcludeFilterCommands) },
@@ -297,7 +439,7 @@ internal static class CliFlagSchema
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", PrimaryCommands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only; result limits are ignored by count modes, but scan caps can still mark approximate counts as degraded", PrimaryCommands = Set(CountCommands) },
             new() { Name = "--group-partials", Description = "Definition/Symbols/Inspect: collapse C# partial-type declarations into logical families", PrimaryCommands = Set("definition", "symbols", "inspect") },
-            new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", PrimaryCommands = Set(StrictNotFoundCommands) },
+            new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", PrimaryCommands = Set(StrictNotFoundCommands), Safety = CliOptionSafety.StrictFailure },
             new() { Name = "--allow-partial", Description = "Return exit code 0 instead of 11 for accepted partial query output or an incomplete index generation", PrimaryCommands = Set(AllowPartialCommands) },
             new() { Name = "--strict", Description = "Return exit code 4 when impact preconditions are unmet", PrimaryCommands = Set("impact") },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", PrimaryCommands = Set(SinceCommands) },
@@ -360,10 +502,10 @@ internal static class CliFlagSchema
             new() { Name = "--guard-scope", ValuePlaceholder = "<window|same-line>", Description = "Search: evaluate guard queries in the line window or on the same line as the primary match", PrimaryCommands = Set("search") },
             new() { Name = "--unique", ValuePlaceholder = "<path|file|symbol|origin|return-type|subsystem>", Description = "Search/Audit recipes: emit unique aggregation rows", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--count-by", ValuePlaceholder = "<path|file|symbol|origin|return-type|subsystem>", Description = "Search/Audit recipes: count matches grouped by path/file, symbol, origin, enclosing return type, or subsystem", PrimaryCommands = Set("search", "audit") },
-            new() { Name = "--origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: alias for --match-origin; keep only matches from selected origins", PrimaryCommands = Set("search") },
-            new() { Name = "--match-origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: keep only matches from selected origins; repeat or comma-separate values", PrimaryCommands = Set("search") },
-            new() { Name = "--exclude-origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: drop matches from selected origins; repeat or comma-separate values", PrimaryCommands = Set("search") },
-            new() { Name = "--result-kind", ValuePlaceholder = "<call_site|declaration|identifier|comment|string_literal>", Description = "Search: keep only projected result kinds; repeat or comma-separate values", PrimaryCommands = Set("search") },
+            new() { Name = "--origin", Description = "Search: alias for --match-origin; keep only matches from selected origins", PrimaryCommands = Set("search"), ValueDomain = SearchOriginValueDomain },
+            new() { Name = "--match-origin", Description = "Search: keep only matches from selected origins; repeat or comma-separate values", PrimaryCommands = Set("search"), ValueDomain = SearchOriginValueDomain },
+            new() { Name = "--exclude-origin", Description = "Search: drop matches from selected origins; repeat or comma-separate values", PrimaryCommands = Set("search"), ValueDomain = SearchOriginValueDomain },
+            new() { Name = "--result-kind", Description = "Search: keep only projected result kinds; repeat or comma-separate values", PrimaryCommands = Set("search"), ValueDomain = SearchResultKindValueDomain },
             new() { Name = "--search-fields", ValuePlaceholder = "<path,line,column,symbol,origin,kind,score,snippet,query_name,recipe>", Description = "Search/Audit: project JSON/NDJSON result fields for audit pipelines", PrimaryCommands = Set("search", "audit") },
             new() { Name = "--outline-fields", ValuePlaceholder = "<kind,name,path,line,signature,...>", Description = "Outline JSON: project symbol fields for audit pipelines", PrimaryCommands = Set("outline") },
             new() { Name = "--results-only", Description = "Search/Symbols/Files/Audit: emit result-only NDJSON without stream terminal records", PrimaryCommands = Set("search", "symbols", "files", "audit") },
@@ -417,14 +559,14 @@ internal static class CliFlagSchema
             new() { Name = "--prerelease", Description = "Upgrade: select the newest prerelease", PrimaryCommands = Set("upgrade") },
             new() { Name = "--version", ValuePlaceholder = "<tag>", Description = "Upgrade: install a specific release tag", PrimaryCommands = Set("upgrade") },
             new() { Name = "--integrity-check", Description = "Run PRAGMA integrity_check on the database", PrimaryCommands = Set("db") },
-            new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", PrimaryCommands = Set("index") },
+            new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", PrimaryCommands = Set("index"), Safety = CliOptionSafety.Destructive },
             new() { Name = "--yes", Description = "Confirm --rebuild when stdin is redirected; interactive terminals prompt instead", PrimaryCommands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", PrimaryCommands = Set("index") },
             new() { Name = "--symbols-only", Description = "Build chunks and symbols while skipping reference graph extraction", PrimaryCommands = Set("index") },
-            new() { Name = "--dry-run", Description = "Preview without writing", PrimaryCommands = Set("index", "backfill-fold", "optimize", "vacuum") },
+            new() { Name = "--dry-run", Description = "Preview without writing; hooks supports it only for install", PrimaryCommands = Set("index", "hooks", "backfill-fold", "optimize", "vacuum"), Safety = CliOptionSafety.Preview },
             new() { Name = "--dry-run-path-limit", ValuePlaceholder = "<n>", Description = "Dry run only: candidate path processing limit before truncated lower-bound estimates", PrimaryCommands = Set("index") },
             new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before maintenance", PrimaryCommands = Set("backfill-fold") },
-            new() { Name = "--force", Description = "Bypass the per-database index lock", PrimaryCommands = Set("index") },
+            new() { Name = "--force", Description = "Bypass the normal safety guard for index or hook installation", PrimaryCommands = Set("index", "hooks"), Safety = CliOptionSafety.Override },
             new() { Name = "--duration-format", ValuePlaceholder = "<auto|seconds|hms>", Description = "Index elapsed time display format", PrimaryCommands = Set("index") },
             new() { Name = "--max-file-bytes", ValuePlaceholder = "<bytes>", Description = "Override the per-file indexing size limit", PrimaryCommands = Set("index") },
             new() { Name = "--max-symbols-per-file", ValuePlaceholder = "<n>", Description = "Skip file content, symbols, and references when one file emits too many symbols (max 50000)", PrimaryCommands = Set("index") },
@@ -477,6 +619,72 @@ internal static class CliFlagSchema
         return All.Where(f => f.AppliesTo(command)).ToList();
     }
 
+    public static IReadOnlyList<(string Heading, IReadOnlyList<CliFlag> Flags)> GetSharedHelpSections()
+    {
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        IReadOnlyList<CliFlag> Select(Func<CliFlag, bool> predicate) =>
+            All.Where(flag => predicate(flag) && emitted.Add(flag.Name)).ToList();
+
+        return
+        [
+            ("Global options:", Select(flag => flag.TopLevel)),
+            ("Safety and scope options:", Select(flag => flag.Safety != CliOptionSafety.None)),
+            ("Index and update options:", Select(flag => flag.AppliesTo("index"))),
+            ("Query options:", Select(flag =>
+                flag.PrimaryCommands.Count > 1
+                && flag.PrimaryCommands.Any(command => QueryCommands.Contains(command, StringComparer.Ordinal)))),
+        ];
+    }
+
+    public static CliFlag? GetFlag(string command, string flagName) =>
+        All.FirstOrDefault(flag =>
+            string.Equals(flag.Name, flagName, StringComparison.Ordinal)
+            && flag.IsAcceptedBy(command));
+
+    public static IReadOnlyList<string> GetCanonicalValuesForCommand(string command, string flagName) =>
+        GetFlag(command, flagName)?.GetValueDomain(command)?.CanonicalValues ?? [];
+
+    public static string? GetValuePlaceholderForCommand(string command, string flagName) =>
+        GetFlag(command, flagName)?.GetValuePlaceholder(command);
+
+    public static bool TryNormalizeOptionValue(
+        string command,
+        string flagName,
+        string rawValue,
+        out string normalizedValue)
+    {
+        var domain = GetFlag(command, flagName)?.GetValueDomain(command);
+        if (domain is not null)
+            return domain.TryNormalize(rawValue, out normalizedValue);
+
+        normalizedValue = string.Empty;
+        return false;
+    }
+
+    public static HashSet<string> GetAllValueTakingOptionNames()
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var flag in All.Where(flag => flag.IsValueBearing))
+        {
+            names.Add(flag.Name);
+            if (flag.ShortName is not null)
+                names.Add(flag.ShortName);
+        }
+        return names;
+    }
+
+    public static HashSet<string> GetAllFlagOnlyOptionNames()
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var flag in All.Where(flag => !flag.IsValueBearing))
+        {
+            names.Add(flag.Name);
+            if (flag.ShortName is not null)
+                names.Add(flag.ShortName);
+        }
+        return names;
+    }
+
     /// <summary>
     /// Render a next-step/help token from the same flag metadata used by parsing and
     /// completion. Callers may narrow a generic placeholder for their recovery context.
@@ -494,7 +702,7 @@ internal static class CliFlagSchema
         if (flag is null)
             throw new ArgumentException($"{flagName} is not a documented option for {command}.", nameof(flagName));
 
-        var placeholder = valuePlaceholderOverride ?? flag.ValuePlaceholder;
+        var placeholder = valuePlaceholderOverride ?? flag.GetValuePlaceholder(command);
         return placeholder is null ? flag.Name : $"{flag.Name} {placeholder}";
     }
 
@@ -559,4 +767,18 @@ internal static class CliFlagSchema
 
     private static HashSet<string> Set(params string[] items) =>
         new(items, StringComparer.Ordinal);
+
+    private static CliOptionValueDomain Values(
+        IReadOnlyList<string> canonicalValues,
+        params (string Alias, string Canonical)[] aliases)
+    {
+        var aliasMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (alias, canonical) in aliases)
+            aliasMap[alias.ToLowerInvariant().Replace("-", "_", StringComparison.Ordinal)] = canonical;
+        return new CliOptionValueDomain
+        {
+            CanonicalValues = canonicalValues,
+            Aliases = aliasMap,
+        };
+    }
 }

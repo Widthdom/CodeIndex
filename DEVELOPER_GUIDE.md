@@ -201,13 +201,16 @@ git status --short -- '**/packages.lock.json'
 
 `CliCommandCatalog` owns command and nested-subcommand names, including whether
 a nested verb is optional and parent flags must remain available, while
-`CliFlagSchema` owns primary flags, aliases, placeholders, descriptions, and
-command applicability. Every shell completion renderer consumes those shared
-definitions, and `ConsoleUi.PrintCommandUsage` uses them when the shared parser is
-the authoritative option inventory. Dedicated or nested parsers retain exact
-usage-specific syntax until their subcommand metadata is complete. Add new CLI
-metadata there first so parser validation, help, completion, and generated
-next-step flags stay aligned without emitting partial option lists. Every verb
+`CliFlagSchema` owns primary flags, aliases, placeholders, descriptions, command
+applicability, canonical value domains and value aliases, and safety/scope
+classification. Command usage placeholders, command and shared flag help,
+output-format validation, search origin/result-kind validation, and every shell
+completion renderer consume those shared definitions. Dedicated or nested
+parsers retain exact usage-specific syntax until their subcommand metadata is
+complete. Add or change CLI options and accepted values in the schema first;
+do not add parallel help, validation, or completion value lists. This keeps
+runtime validation, help, completion, and generated next-step flags aligned
+without emitting partial option lists. Every verb
 listed by `CliCommandCatalog.CommandSubcommands` must also resolve to a hidden,
 verb-specific `ConsoleUi` usage entry with its constraints, side effects, and
 an example; aggregate usage lines must enumerate accepted public flags.
@@ -3413,12 +3416,15 @@ git status --short -- '**/packages.lock.json'
 
 command と nested subcommand の名前、および nested verb が optional で親 command の
 flag も維持するかは `CliCommandCatalog`、primary flag、alias、
-placeholder、description、command applicability は `CliFlagSchema` が管理します。
-全 shell completion renderer はこの共有定義を参照し、共有 parser が option 一覧の
-正本である場合は `ConsoleUi.PrintCommandUsage` も参照します。専用 parser / nested parser
-は subcommand metadata が揃うまで usage 固有の正確な構文を維持します。新しい CLI
-metadata はまず共有定義へ追加し、不完全な option 一覧を出さずに parser validation、
-help、completion、生成される next-step flag の同期を維持してください。
+placeholder、description、command applicability、canonical value domain と value alias、
+safety / scope 分類は `CliFlagSchema` が管理します。command usage の placeholder、
+command / shared flag help、output-format validation、search の origin / result-kind
+validation、全 shell completion renderer はこの共有定義を参照します。専用 parser /
+nested parser は subcommand metadata が揃うまで usage 固有の正確な構文を維持します。
+CLI option や受理値を追加・変更するときは、まず schema を更新し、help、validation、
+completion に並行した value list を追加しないでください。これにより、不完全な option
+一覧を出さずに runtime validation、help、completion、生成される next-step flag の同期を
+維持します。
 `CliCommandCatalog.CommandSubcommands` に掲載するすべての verb は、制約、副作用、例を
 記載した hidden な verb 固有 `ConsoleUi` usage entry に解決させ、aggregate usage line
 には受理する公開 flag を漏れなく列挙してください。

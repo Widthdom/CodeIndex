@@ -539,53 +539,14 @@ internal static partial class ProgramRunner
     }
 
     private static readonly HashSet<string> SearchValueTakingOptions =
-    [
-        "--db",
-        "--color",
-        "--data-dir",
-        "--metrics",
-        "--palette",
-        "--trace",
-        "--limit",
-        "--top",
-        "--lang",
-        "--kind",
-        "--visibility",
-        "--exclude-visibility",
-        "--since",
-        "--start",
-        "--end",
-        "--before",
-        "--after",
-        "--name",
-        "--snippet-lines",
-        "--snippet-focus",
-        "--path",
-        "--require-before",
-        "--require-after",
-        "--reject-before",
-        "--reject-after",
-        "--guard-window",
-        "--guard-scope",
-        "--project",
-        "--solution",
-        "--exclude-path",
-        "--max-hops",
-        "--depth",
-        "--query",
-        "--group-by",
-        "--focus-line",
-        "--focus-column",
-        "--focus-length",
-        "--max-line-width",
-        "--stale-after",
-        "--explain",
-        "--rank-by",
-        "--slow-query-ms",
-        "--format",
-        "--min-entrypoint-confidence",
-        "--sections",
-    ];
+        BuildSearchValueTakingOptions();
+
+    private static HashSet<string> BuildSearchValueTakingOptions()
+    {
+        var (commandValues, _) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("search");
+        commandValues.UnionWith(CliFlagSchema.GetTopLevelValueOptionNames());
+        return commandValues;
+    }
 
     private static bool TryConsumeValueFlag(string[] args, ref int index, string arg, string flag, out string value)
     {
