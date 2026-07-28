@@ -72,7 +72,8 @@ internal static partial class IndexWatchRunner
         string projectRoot,
         string ignoreRuleRoot,
         bool ignoreCase,
-        Action<string> enqueue)
+        Action<string> enqueue,
+        Action<Exception?> reportError)
     {
         var watchers = new List<FileSystemWatcher>();
         var fullProjectRoot = Path.GetFullPath(projectRoot);
@@ -111,6 +112,7 @@ internal static partial class IndexWatchRunner
                     enqueue(e.OldFullPath);
                     enqueue(e.FullPath);
                 };
+                ancestorWatcher.Error += (_, e) => reportError(e.GetException());
                 ancestorWatcher.EnableRaisingEvents = true;
 
                 if (string.Equals(directory.FullName, fullIgnoreRuleRoot, comparison))
@@ -363,7 +365,8 @@ internal static partial class IndexWatchRunner
                 _projectRoot,
                 _ignoreRuleRoot,
                 _ignoreCase,
-                enqueue);
+                enqueue,
+                reportError);
 
             // FileSystemWatcher can report a fatal EventStream startup error asynchronously
             // just after EnableRaisingEvents succeeds. Keep startup provisional long enough for
