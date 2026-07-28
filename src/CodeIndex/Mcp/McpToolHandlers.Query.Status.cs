@@ -141,6 +141,7 @@ public partial class McpServer
                     ["batch_query_max_response_bytes"] = MaxBatchQueryResponseByteLimit,
                     ["batch_query_max_queries"] = MaxBatchQuerySize,
                     ["max_pagination_offset"] = MaxMcpPaginationOffset,
+                    ["max_query_cursor_characters"] = MaxMcpQueryCursorCharacters,
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
                     ["json_rpc_batch_max_requests"] = MaxBatchRequestCount,
