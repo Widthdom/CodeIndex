@@ -66,6 +66,7 @@ public static partial class DbCommandRunner
             if (!stagedValidation.Ready)
                 throw new ManagedRestoreBackupException("staged restore backup validation failed", stagedValidation.Diagnostics);
 
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (!options.NoBackup)
             {
                 preRestoreBackup = ManagedRestoreBackupStore.Create(
