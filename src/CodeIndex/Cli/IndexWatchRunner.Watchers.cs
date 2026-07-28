@@ -11,6 +11,31 @@ namespace CodeIndex.Cli;
 
 internal static partial class IndexWatchRunner
 {
+    internal interface IWatchBackend : IDisposable
+    {
+        string Name { get; }
+
+        void Start(Action<string> enqueue, Action<Exception?> reportError);
+    }
+
+    internal static Func<string, string, bool, IWatchBackend>? WatchBackendFactoryForTesting { get; set; }
+
+    private static IWatchBackend CreateWatchBackend(
+        string projectRoot,
+        string ignoreRuleRoot,
+        bool ignoreCase)
+        => WatchBackendFactoryForTesting?.Invoke(projectRoot, ignoreRuleRoot, ignoreCase)
+            ?? new FileSystemWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase);
+
+    private static string ResolveWatchBackendName()
+        => OperatingSystem.IsMacOS()
+            ? "fsevents"
+            : OperatingSystem.IsLinux()
+                ? "inotify"
+                : OperatingSystem.IsWindows()
+                    ? "read_directory_changes_w"
+                    : "filesystem_watcher";
+
     private static List<FileSystemWatcher> CreateAncestorIgnoreWatchers(
         string projectRoot,
         string ignoreRuleRoot,
@@ -252,4 +277,77 @@ internal static partial class IndexWatchRunner
             : trimmed;
     }
 
+    private sealed class FileSystemWatchBackend : IWatchBackend
+    {
+        private readonly string _projectRoot;
+        private readonly string _ignoreRuleRoot;
+        private readonly bool _ignoreCase;
+        private FileSystemWatcher? _watcher;
+        private List<FileSystemWatcher>? _ancestorIgnoreWatchers;
+
+        internal FileSystemWatchBackend(
+            string projectRoot,
+            string ignoreRuleRoot,
+            bool ignoreCase)
+        {
+            _projectRoot = projectRoot;
+            _ignoreRuleRoot = ignoreRuleRoot;
+            _ignoreCase = ignoreCase;
+        }
+
+        public string Name => ResolveWatchBackendName();
+
+        public void Start(Action<string> enqueue, Action<Exception?> reportError)
+        {
+            ObjectDisposedException.ThrowIf(_watcher != null, this);
+
+            var watcher = new FileSystemWatcher(_projectRoot)
+            {
+                IncludeSubdirectories = true,
+                InternalBufferSize = InternalBufferSize,
+                NotifyFilter = NotifyFilters.FileName
+                    | NotifyFilters.DirectoryName
+                    | NotifyFilters.LastWrite
+                    | NotifyFilters.Size,
+            };
+            _watcher = watcher;
+
+            watcher.Created += (_, e) => enqueue(e.FullPath);
+            watcher.Changed += (_, e) => enqueue(e.FullPath);
+            watcher.Deleted += (_, e) => enqueue(e.FullPath);
+            watcher.Renamed += (_, e) =>
+            {
+                enqueue(e.OldFullPath);
+                enqueue(e.FullPath);
+            };
+            watcher.Error += (_, e) => reportError(e.GetException());
+
+            watcher.EnableRaisingEvents = true;
+            _ancestorIgnoreWatchers = CreateAncestorIgnoreWatchers(
+                _projectRoot,
+                _ignoreRuleRoot,
+                _ignoreCase,
+                enqueue);
+        }
+
+        public void Dispose()
+        {
+            if (_ancestorIgnoreWatchers != null)
+            {
+                foreach (var ancestorWatcher in _ancestorIgnoreWatchers)
+                {
+                    try { ancestorWatcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
+                    ancestorWatcher.Dispose();
+                }
+                _ancestorIgnoreWatchers = null;
+            }
+
+            if (_watcher != null)
+            {
+                try { _watcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
+                _watcher.Dispose();
+                _watcher = null;
+            }
+        }
+    }
 }

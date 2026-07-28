@@ -26,6 +26,7 @@ internal sealed class FileChangeBatcher
     private bool _hasLastEventTimestamp;
     private bool _overflowRequested;
     private string? _overflowReason;
+    private string? _recoveryReason;
     private readonly TimeSpan _debounce;
     private readonly TimeProvider _timeProvider;
     private readonly int _maxPendingPaths;
@@ -65,7 +66,8 @@ internal sealed class FileChangeBatcher
                 if (_pending.Count >= _maxPendingPaths)
                 {
                     RequestFullRescanLocked(
-                        $"pending path limit exceeded ({_maxPendingPaths.ToString("N0", CultureInfo.InvariantCulture)} paths)");
+                        $"pending path limit exceeded ({_maxPendingPaths.ToString("N0", CultureInfo.InvariantCulture)} paths)",
+                        "pending_path_limit_exceeded");
                     return;
                 }
 
@@ -76,24 +78,39 @@ internal sealed class FileChangeBatcher
         }
     }
 
-    public void RequestFullRescan(string? reason = null)
+    public void RequestFullRescan(string? reason = null, string recoveryReason = "watcher_error")
     {
         lock (_gate)
         {
-            RequestFullRescanLocked(reason);
+            RequestFullRescanLocked(reason, recoveryReason);
         }
     }
 
     public bool TryDrain(out IReadOnlyList<string> batch, out bool fullRescan, out string? overflowReason)
-        => TryDrainCore(requireDebounce: true, out batch, out fullRescan, out overflowReason);
+        => TryDrainCore(requireDebounce: true, out batch, out fullRescan, out _, out overflowReason);
+
+    internal bool TryDrain(
+        out IReadOnlyList<string> batch,
+        out bool fullRescan,
+        out string? recoveryReason,
+        out string? overflowReason)
+        => TryDrainCore(requireDebounce: true, out batch, out fullRescan, out recoveryReason, out overflowReason);
 
     public bool TryDrainImmediately(out IReadOnlyList<string> batch, out bool fullRescan, out string? overflowReason)
-        => TryDrainCore(requireDebounce: false, out batch, out fullRescan, out overflowReason);
+        => TryDrainCore(requireDebounce: false, out batch, out fullRescan, out _, out overflowReason);
+
+    internal bool TryDrainImmediately(
+        out IReadOnlyList<string> batch,
+        out bool fullRescan,
+        out string? recoveryReason,
+        out string? overflowReason)
+        => TryDrainCore(requireDebounce: false, out batch, out fullRescan, out recoveryReason, out overflowReason);
 
     private bool TryDrainCore(
         bool requireDebounce,
         out IReadOnlyList<string> batch,
         out bool fullRescan,
+        out string? recoveryReason,
         out string? overflowReason)
     {
         lock (_gate)
@@ -102,6 +119,7 @@ internal sealed class FileChangeBatcher
             {
                 batch = Array.Empty<string>();
                 fullRescan = false;
+                recoveryReason = null;
                 overflowReason = null;
                 return false;
             }
@@ -112,6 +130,7 @@ internal sealed class FileChangeBatcher
             {
                 batch = Array.Empty<string>();
                 fullRescan = false;
+                recoveryReason = null;
                 overflowReason = null;
                 return false;
             }
@@ -121,18 +140,23 @@ internal sealed class FileChangeBatcher
                 snapshot.Add(path);
             batch = snapshot;
             fullRescan = _overflowRequested;
+            recoveryReason = _recoveryReason;
             overflowReason = _overflowReason;
             _pending.Clear();
             _overflowRequested = false;
+            _recoveryReason = null;
             _overflowReason = null;
             return true;
         }
     }
 
-    private void RequestFullRescanLocked(string? reason)
+    private void RequestFullRescanLocked(string? reason, string recoveryReason)
     {
         _pending.Clear();
         _overflowRequested = true;
+        _recoveryReason = string.IsNullOrWhiteSpace(recoveryReason)
+            ? "watcher_error"
+            : recoveryReason;
         if (!string.IsNullOrEmpty(reason))
             _overflowReason = IndexWatchRunner.FormatWatchDiagnosticText(reason);
         RecordEventTimestampLocked();

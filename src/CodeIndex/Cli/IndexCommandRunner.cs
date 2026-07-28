@@ -234,7 +234,7 @@ public static partial class IndexCommandRunner
             return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null, mode, progressPersisted);
         }
 
-        var initialExitCode = RunInitialIndex(new IndexRunExecutionContext(
+        var executionContext = new IndexRunExecutionContext(
             options,
             jsonOptions,
             jsonContext,
@@ -249,23 +249,24 @@ public static partial class IndexCommandRunner
             spinnerFrames,
             databaseExistedBeforeIndex,
             ignoreCase,
-            ignoreRuleRoot));
+            ignoreRuleRoot);
 
+        if (!options.Watch)
+            return RunInitialIndex(executionContext);
 
-        if (!options.Watch || initialExitCode != CommandExitCodes.Success)
-            return initialExitCode;
-
-        // Release the index lock before entering the watch loop so concurrent
-        // `cdidx index` invocations between batches can still acquire it. Each
-        // partial-update batch re-acquires the lock through IndexCommandRunner.Run.
-        // watch ループ突入前にロックを解放し、バッチ間に別プロセスの `cdidx index` が
-        // 取得できる状態にする。各バッチ更新はサブ実行で再取得する。
+        // Subscribe the watch backend before the one required baseline scan. This closes the
+        // old initial-scan/subscription gap without paying for an unconditional second scan.
+        // Recovery scans are reserved for event loss after the backend becomes active.
+        // 必要な baseline scan 1 回より先に watch backend を subscribe する。これにより従来の
+        // initial-scan / subscribe 間の gap を閉じ、無条件の 2 回目 scan を避ける。recovery scan は
+        // backend 有効化後に event loss が発生した場合だけ実行する。
         return IndexWatchRunner.Run(
             options,
             jsonOptions,
             Path.GetFullPath(options.ProjectPath!),
             Path.GetFullPath(dbPath),
-            indexCancellation.Token);
+            indexCancellation.Token,
+            () => RunInitialIndex(executionContext));
     }
 
     private sealed record IndexRunExecutionContext(

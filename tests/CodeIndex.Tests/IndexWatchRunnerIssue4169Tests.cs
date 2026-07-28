@@ -68,6 +68,8 @@ public class IndexWatchRunnerIssue4169Tests
         Assert.Equal("old_and_new_paths", contract.RenameEvents);
         Assert.Equal("full_rescan_after_debounce", contract.OverflowRecovery);
         Assert.Equal("full_rescan_after_debounce", contract.WatcherErrorRecovery);
+        Assert.Equal("single_after_backend_start", contract.BaselineScan);
+        Assert.Equal("retry_before_baseline", contract.BackendStartRecovery);
         Assert.Equal("cancel_active_sub_run_then_emit_stopped", contract.Cancellation);
         Assert.Equal("json_quiet_sub_runs", contract.SubRunOutput);
         Assert.Equal("unsupported", contract.McpWatchMode);
@@ -88,6 +90,8 @@ public class IndexWatchRunnerIssue4169Tests
             Db = "[redacted]",
             DebounceMs = 50,
             WatchPendingPathLimit = 123,
+            Backend = "fsevents",
+            RecoveryReason = "backend_start_failed",
             WatchContract = IndexWatchRunner.BuildWatchContractForTesting(
                 TimeSpan.FromMilliseconds(50),
                 maxPendingPaths: 123,
@@ -106,6 +110,8 @@ public class IndexWatchRunnerIssue4169Tests
         Assert.Equal("[redacted]", watchStarted.RootElement.GetProperty("db").GetString());
         Assert.Equal(50, watchStarted.RootElement.GetProperty("debounce_ms").GetInt32());
         Assert.Equal(123, watchStarted.RootElement.GetProperty("watch_pending_path_limit").GetInt32());
+        Assert.Equal("fsevents", watchStarted.RootElement.GetProperty("backend").GetString());
+        Assert.Equal("backend_start_failed", watchStarted.RootElement.GetProperty("recovery_reason").GetString());
 
         var contract = watchStarted.RootElement.GetProperty("watch_contract");
         Assert.Equal("quiet_window", contract.GetProperty("debounce").GetString());
@@ -118,6 +124,8 @@ public class IndexWatchRunnerIssue4169Tests
         Assert.Equal("old_and_new_paths", contract.GetProperty("rename_events").GetString());
         Assert.Equal("full_rescan_after_debounce", contract.GetProperty("overflow_recovery").GetString());
         Assert.Equal("full_rescan_after_debounce", contract.GetProperty("watcher_error_recovery").GetString());
+        Assert.Equal("single_after_backend_start", contract.GetProperty("baseline_scan").GetString());
+        Assert.Equal("retry_before_baseline", contract.GetProperty("backend_start_recovery").GetString());
         Assert.Equal("cancel_active_sub_run_then_emit_stopped", contract.GetProperty("cancellation").GetString());
         Assert.Equal("json_quiet_sub_runs", contract.GetProperty("sub_run_output").GetString());
         Assert.Equal("unsupported", contract.GetProperty("mcp_watch_mode").GetString());
