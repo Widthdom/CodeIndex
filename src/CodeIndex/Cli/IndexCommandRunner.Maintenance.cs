@@ -11,7 +11,7 @@ public static partial class IndexCommandRunner
     private static readonly string[] AcceptedBackfillFoldFlags =
     [
         "--db", "--json", "--dry-run", "--help",
-        "--no-checkpoint",
+        "--no-checkpoint", "--show-paths",
     ];
     private static readonly (string Name, string[] Columns)[] OptimizeObjectDefinitions =
     [
@@ -72,13 +72,14 @@ public static partial class IndexCommandRunner
             return dbUriValidationExitCode.Value;
 
         if (!options.DryRun && DbPathResolver.UriRequestsReadOnly(options.DbPath))
-            return WriteCommandError(
+            return MaintenanceDatabaseErrorWriter.Write(
                 options.Json,
                 jsonOptions,
-                $"database must be writable for optimize: {options.DbPath}",
-                CommandExitCodes.DatabaseError,
-                "Point `--db` at a writable filesystem path, or omit read-only URI parameters such as `immutable=1` / `mode=ro`.",
-                CommandErrorCodes.DbNotWritable);
+                MaintenanceDatabaseErrorClassifier.Create(
+                    "optimize",
+                    options.DbPath,
+                    options.ShowPaths,
+                    MaintenanceDatabaseFailureKind.NotWritable));
 
         return RunOptimizeFtsForDb(
             Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath)),
@@ -86,7 +87,9 @@ public static partial class IndexCommandRunner
             jsonOptions,
             projectPath: null,
             options.DryRun,
-            forceLogicalObjectSizeFallbackForTesting);
+            forceLogicalObjectSizeFallbackForTesting,
+            options.ShowPaths,
+            diagnosticDbPath: options.DbPath);
     }
 
     private static int RunOptimizeFtsForDb(
@@ -95,25 +98,38 @@ public static partial class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         string? projectPath,
         bool dryRun = false,
-        bool forceLogicalObjectSizeFallbackForTesting = false)
+        bool forceLogicalObjectSizeFallbackForTesting = false,
+        bool showPaths = false,
+        string? diagnosticDbPath = null)
     {
+        var errorDbPath = diagnosticDbPath ?? dbPath;
         if (dryRun)
             return RunOptimizeFtsPreviewForDb(
                 dbPath,
                 json,
                 jsonOptions,
-                forceLogicalObjectSizeFallbackForTesting);
+                forceLogicalObjectSizeFallbackForTesting,
+                showPaths,
+                errorDbPath);
 
-        if (!DbContext.TryValidateExistingCodeIndexDb(dbPath, out var validationMessage, out var isNotFound))
-            return WriteCommandError(
+        if (!DbContext.TryValidateExistingCodeIndexDb(
+                dbPath,
+                requireWritable: true,
+                requireSupportedUserVersion: false,
+                out _,
+                out _,
+                out _,
+                out var validationFailure,
+                out var validationException))
+            return MaintenanceDatabaseErrorWriter.Write(
                 json,
                 jsonOptions,
-                validationMessage,
-                isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError,
-                isNotFound
-                    ? "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one."
-                    : "Point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx optimize`.",
-                isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError);
+                MaintenanceDatabaseErrorClassifier.FromValidation(
+                    "optimize",
+                    errorDbPath,
+                    showPaths,
+                    validationFailure,
+                    validationException));
 
         var stopwatch = Stopwatch.StartNew();
         try
@@ -149,29 +165,31 @@ public static partial class IndexCommandRunner
         catch (IndexLockConflictException ex)
         {
             var holderDescription = DescribeLockHolder(ex.Holder);
-            var message = string.IsNullOrEmpty(holderDescription)
-                ? "another cdidx index is already running on this database"
-                : $"another cdidx index is already running on this database ({holderDescription})";
-            return WriteCommandError(
+            return MaintenanceDatabaseErrorWriter.Write(
                 json,
                 jsonOptions,
-                message,
-                CommandExitCodes.DatabaseError,
-                "Wait for the running index to finish, then retry `cdidx optimize`.",
-                CommandErrorCodes.DbLocked);
+                MaintenanceDatabaseErrorClassifier.Create(
+                    "optimize",
+                    errorDbPath,
+                    showPaths,
+                    MaintenanceDatabaseFailureKind.Locked,
+                    details: string.IsNullOrEmpty(holderDescription)
+                        ? null
+                        : [holderDescription]));
         }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
-            return WriteCommandError(
+            return MaintenanceDatabaseErrorWriter.Write(
                 json,
                 jsonOptions,
-                $"failed to optimize FTS5 index: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
-                CommandExitCodes.DatabaseError,
-                "Ensure no other writer is holding the database lock, then retry `cdidx optimize`.",
-                CommandErrorCodes.DbError);
+                MaintenanceDatabaseErrorClassifier.FromException(
+                    "optimize",
+                    errorDbPath,
+                    showPaths,
+                    ex));
         }
     }
 
@@ -179,35 +197,37 @@ public static partial class IndexCommandRunner
         string dbPath,
         bool json,
         JsonSerializerOptions jsonOptions,
-        bool forceLogicalObjectSizeFallbackForTesting)
+        bool forceLogicalObjectSizeFallbackForTesting,
+        bool showPaths,
+        string errorDbPath)
     {
         var stopwatch = Stopwatch.StartNew();
         if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
         {
-            return WriteCommandError(
+            return MaintenanceDatabaseErrorWriter.Write(
                 json,
                 jsonOptions,
-                $"database not found: {dbPath}",
-                CommandExitCodes.NotFound,
-                "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.",
-                CommandErrorCodes.DbNotFound);
+                MaintenanceDatabaseErrorClassifier.Create(
+                    "optimize",
+                    errorDbPath,
+                    showPaths,
+                    MaintenanceDatabaseFailureKind.Missing));
         }
 
         try
         {
             var (lockState, lockHolder) = IndexLock.ProbeReadOnly(IndexLock.GetLockPath(dbPath));
             using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
-            if (!db.TryValidateIsCodeIndexDb(out var validationReason))
+            if (!db.TryValidateIsCodeIndexDb(out _))
             {
-                return WriteCommandError(
+                return MaintenanceDatabaseErrorWriter.Write(
                     json,
                     jsonOptions,
-                    $"database is not an existing CodeIndex DB: {dbPath}",
-                    CommandExitCodes.DatabaseError,
-                    string.IsNullOrWhiteSpace(validationReason)
-                        ? "Point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx optimize --dry-run`."
-                        : "The database failed CodeIndex validation; rebuild it with `cdidx index <projectPath> --rebuild` before optimizing.",
-                    CommandErrorCodes.DbError);
+                    MaintenanceDatabaseErrorClassifier.Create(
+                        "optimize",
+                        errorDbPath,
+                        showPaths,
+                        MaintenanceDatabaseFailureKind.NotDatabase));
             }
 
             var status = new DbReader(db).GetStatus();
@@ -329,13 +349,14 @@ public static partial class IndexCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
-            return WriteCommandError(
+            return MaintenanceDatabaseErrorWriter.Write(
                 json,
                 jsonOptions,
-                $"failed to preview FTS5 optimization: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
-                CommandExitCodes.DatabaseError,
-                "Ensure the database and temporary snapshot storage are readable, then retry `cdidx optimize --dry-run`.",
-                CommandErrorCodes.DbError);
+                MaintenanceDatabaseErrorClassifier.FromException(
+                    "optimize",
+                    errorDbPath,
+                    showPaths,
+                    ex));
         }
     }
 
@@ -510,22 +531,36 @@ public static partial class IndexCommandRunner
                 "Run `cdidx backfill-fold --help` to see the supported command shape.",
                 CommandErrorCodes.UsageError);
 
+        if (!options.DryRun && DbPathResolver.UriRequestsReadOnly(options.DbPath))
+        {
+            return MaintenanceDatabaseErrorWriter.Write(
+                options.Json,
+                jsonOptions,
+                MaintenanceDatabaseErrorClassifier.Create(
+                    "backfill-fold",
+                    options.DbPath,
+                    options.ShowPaths,
+                    MaintenanceDatabaseFailureKind.NotWritable));
+        }
+
         if (!DbContext.TryValidateExistingCodeIndexDb(
                 options.DbPath,
                 requireWritable: !options.DryRun,
                 requireSupportedUserVersion: false,
-                out var validationMessage,
-                out var isNotFound,
-                out _))
-            return WriteCommandError(
+                out _,
+                out _,
+                out _,
+                out var validationFailure,
+                out var validationException))
+            return MaintenanceDatabaseErrorWriter.Write(
                 options.Json,
                 jsonOptions,
-                validationMessage,
-                isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError,
-                isNotFound
-                    ? "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one."
-                    : "Point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx backfill-fold`.",
-                isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError);
+                MaintenanceDatabaseErrorClassifier.FromValidation(
+                    "backfill-fold",
+                    options.DbPath,
+                    options.ShowPaths,
+                    validationFailure,
+                    validationException));
 
         try
         {
@@ -644,13 +679,14 @@ public static partial class IndexCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
-            return WriteCommandError(
+            return MaintenanceDatabaseErrorWriter.Write(
                 options.Json,
                 jsonOptions,
-                $"failed to backfill folded-name columns: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
-                CommandExitCodes.DatabaseError,
-                "Retry `cdidx backfill-fold`. If this persists, rebuild the index with `cdidx index <projectPath> --rebuild`.",
-                CommandErrorCodes.DbError);
+                MaintenanceDatabaseErrorClassifier.FromException(
+                    "backfill-fold",
+                    options.DbPath,
+                    options.ShowPaths,
+                    ex));
         }
     }
 
@@ -659,6 +695,7 @@ public static partial class IndexCommandRunner
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
         bool json = false;
         bool dryRun = false;
+        bool showPaths = false;
         string? parseError = null;
 
         for (int i = 0; i < args.Length; i++)
@@ -673,6 +710,9 @@ public static partial class IndexCommandRunner
                     break;
                 case "--dry-run":
                     dryRun = true;
+                    break;
+                case "--show-paths":
+                    showPaths = true;
                     break;
                 case "--help" or "-h":
                     return new OptimizeFtsCommandOptions { ShowHelp = true };
@@ -690,6 +730,7 @@ public static partial class IndexCommandRunner
             DbPath = dbPath,
             Json = json,
             DryRun = dryRun,
+            ShowPaths = showPaths,
             ParseError = parseError,
         };
     }
@@ -700,6 +741,7 @@ public static partial class IndexCommandRunner
         var json = false;
         var dryRun = false;
         var noCheckpoint = false;
+        var showPaths = false;
         string? parseError = null;
 
         for (int i = 0; i < args.Length; i++)
@@ -718,8 +760,11 @@ public static partial class IndexCommandRunner
                 case "--no-checkpoint":
                     noCheckpoint = true;
                     break;
+                case "--show-paths":
+                    showPaths = true;
+                    break;
                 case "--help" or "-h":
-                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun, NoCheckpoint = noCheckpoint };
+                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun, NoCheckpoint = noCheckpoint, ShowPaths = showPaths };
                 default:
                     if (args[i].StartsWith("-", StringComparison.Ordinal))
                     {
@@ -739,6 +784,7 @@ public static partial class IndexCommandRunner
             Json = json,
             DryRun = dryRun,
             NoCheckpoint = noCheckpoint,
+            ShowPaths = showPaths,
             ParseError = parseError,
         };
     }

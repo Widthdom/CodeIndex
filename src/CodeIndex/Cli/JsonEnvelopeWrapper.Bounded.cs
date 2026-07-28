@@ -22,6 +22,7 @@ internal static partial class JsonEnvelopeWrapper
     private const string LegacyResponseCursorPrefix = "response:v1:";
     private const string ResponseCursorPrefix = "response:v2:";
     private static readonly AsyncLocal<BoundedExecutionContext?> BoundedExecution = new();
+    internal static Action? ResponseSnapshotValidatedForTesting { get; set; }
 
     private static readonly HashSet<string> BoundedResponseCommands =
         ProjectionFieldRegistry.SupportedCommands.ToHashSet(StringComparer.Ordinal);
@@ -274,6 +275,7 @@ internal static partial class JsonEnvelopeWrapper
                 "The index generation changed while this page was being read.",
                 "Restart pagination without --cursor after the active index refresh completes.");
         }
+        ResponseSnapshotValidatedForTesting?.Invoke();
         var envelope = BuildBoundedEnvelopeWithinBudget(
             command,
             queryNormalized,
@@ -351,7 +353,8 @@ internal static partial class JsonEnvelopeWrapper
                 exitCode,
                 error: commandError is null ? null : (JsonObject)commandError.DeepClone(),
                 streamTerminal: adjustedStreamTerminal,
-                streamControlRecords: streamControlRecords);
+                streamControlRecords: streamControlRecords,
+                responseSnapshot: snapshot);
             var metadata = (JsonObject)envelope["metadata"]!;
             metadata["result_stable_at"] = snapshot.ResultStableAt;
             if (commandError is not null)
@@ -1250,7 +1253,7 @@ internal static partial class JsonEnvelopeWrapper
         }
     }
 
-    private static string FormatResponseCursor(
+    internal static string FormatResponseCursor(
         int offset,
         string queryFingerprint,
         string generationFingerprint,
@@ -1274,7 +1277,7 @@ internal static partial class JsonEnvelopeWrapper
         return ResponseCursorPrefix + encoded;
     }
 
-    private static bool TryParseResponseCursor(
+    internal static bool TryParseResponseCursor(
         string cursor,
         out int offset,
         out string? queryFingerprint,
@@ -1454,7 +1457,8 @@ internal static partial class JsonEnvelopeWrapper
 
     private readonly record struct ResponseSnapshot(
         string GenerationFingerprint,
-        string? ResultStableAt);
+        string? ResultStableAt,
+        string? IndexedHead);
 
     private static ResponseSnapshot SafeReadResponseSnapshot(
         string dbPath,
@@ -1486,11 +1490,12 @@ internal static partial class JsonEnvelopeWrapper
         var generation = reader.GetPaginationGeneration();
         return new(
             BuildResponseValueFingerprint(generation.Identity),
-            generation.StableAt);
+            generation.StableAt,
+            reader.GetIndexedHeadForResponse());
     }
 
     private static ResponseSnapshot BuildFallbackResponseSnapshot(string appVersion)
-        => new(BuildResponseValueFingerprint("catalog\0" + appVersion), null);
+        => new(BuildResponseValueFingerprint("catalog\0" + appVersion), null, null);
 
     private static string BuildResponseValueFingerprint(string value)
     {

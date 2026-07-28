@@ -1028,6 +1028,179 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_SemanticTokens_SharesCSharpDeclarationAndUsageKinds_Issue4852()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_semantic_tokens_4852");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = string.Join('\n',
+            [
+                "using System.Collections.Generic;",
+                "namespace Sample.Tools;",
+                "internal interface IFoo { void Execute(); string Label { get; } }",
+                "internal enum Color { Red, Blue = 2 }",
+                "internal readonly record struct Point(int X);",
+                "internal sealed record App<T>(T Value) : IFoo",
+                "{",
+                "    private const int Count = 1;",
+                "    private int value;",
+                "    public string Name { get; init; } = string.Empty;",
+                "    public event Action Changed;",
+                "    public void Run<TArg>(TArg input) where TArg : notnull",
+                "    {",
+                "        int first = 0, second = 1;",
+                "        this.value = input.GetHashCode();",
+                "        var local = new List<TArg>();",
+                "        var text = $\"{input}\";",
+                "        Changed?.Invoke();",
+                "        Helper(input);",
+                "    }",
+                "    void IFoo.Execute() { }",
+                "    string IFoo.Label => Name;",
+                "    private void Helper(T value) { _ = $\"{value}\"; }",
+                "    [Obsolete()]",
+                "    private void ReviewCases()",
+                "    {",
+                "        int record = 0, @class = 1;",
+                "        using var stream = Open();",
+                "        var text = 1.ToString();",
+                "        _ = @class;",
+                "        async();",
+                "    }",
+                "    private IDisposable Open() => null!;",
+                "    public int Size { get { int nested = 1; return nested; } }",
+                "    private void async() { }",
+                "}",
+            ]);
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+
+            var response = HandleInitializedMessage(
+                server,
+                CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 4852));
+
+            Assert.NotNull(response);
+            var tokens = DecodeSemanticTokens(response!["result"]!["data"]!.AsArray(), source);
+            AssertSemanticToken(tokens, 0, "using", 15, 0);
+            AssertSemanticToken(tokens, 0, "System", 0, 0);
+            AssertSemanticToken(tokens, 0, "Collections", 0, 0);
+            AssertSemanticToken(tokens, 0, "Generic", 0, 0);
+            AssertSemanticToken(tokens, 1, "namespace", 15, 0);
+            AssertSemanticToken(tokens, 1, "Sample", 0, 0);
+            AssertSemanticToken(tokens, 2, "internal", 16, 0);
+            AssertSemanticToken(tokens, 2, "IFoo", 4, 1);
+            AssertSemanticToken(tokens, 3, "Color", 3, 1);
+            AssertSemanticToken(tokens, 3, "Red", 10, 1);
+            AssertSemanticToken(tokens, 3, "Blue", 10, 1);
+            AssertSemanticToken(tokens, 4, "Point", 5, 1);
+            AssertSemanticToken(tokens, 5, "sealed", 16, 0);
+            AssertSemanticToken(tokens, 5, "record", 15, 0);
+            AssertSemanticToken(tokens, 5, "App", 2, 1);
+            AssertSemanticToken(tokens, 5, "T", 6, 1);
+            AssertSemanticToken(tokens, 5, "Value", 7, 1);
+            AssertSemanticToken(tokens, 7, "private", 16, 0);
+            AssertSemanticToken(tokens, 7, "Count", 23, 1);
+            AssertSemanticToken(tokens, 8, "value", 23, 1);
+            AssertSemanticToken(tokens, 9, "Name", 9, 1);
+            AssertSemanticToken(tokens, 9, "get", 15, 0);
+            AssertSemanticToken(tokens, 9, "init", 15, 0);
+            AssertSemanticToken(tokens, 10, "Changed", 11, 1);
+            AssertSemanticToken(tokens, 11, "Run", 13, 1);
+            AssertSemanticToken(tokens, 11, "TArg", 6, 1);
+            AssertSemanticToken(tokens, 11, "input", 7, 1);
+            AssertSemanticToken(tokens, 11, "where", 15, 0);
+            AssertSemanticToken(tokens, 13, "first", 8, 1);
+            AssertSemanticToken(tokens, 13, "second", 8, 1);
+            AssertSemanticToken(tokens, 14, "value", 23, 0);
+            AssertSemanticToken(tokens, 14, "input", 7, 0);
+            AssertSemanticToken(tokens, 15, "local", 8, 1);
+            AssertSemanticToken(tokens, 16, "input", 7, 0);
+            AssertSemanticToken(tokens, 17, "Changed", 11, 0);
+            AssertSemanticToken(tokens, 18, "Helper", 13, 0);
+            AssertSemanticToken(tokens, 20, "Execute", 13, 1);
+            AssertSemanticToken(tokens, 21, "Label", 9, 1);
+            AssertSemanticToken(tokens, 22, "value", 7, 1);
+            AssertSemanticToken(tokens, 22, "value", 7, 0);
+            AssertSemanticToken(tokens, 23, "Obsolete", 1, 0);
+            AssertSemanticToken(tokens, 24, "ReviewCases", 13, 1);
+            AssertSemanticToken(tokens, 26, "record", 8, 1);
+            AssertSemanticToken(tokens, 26, "@class", 8, 1);
+            AssertSemanticToken(tokens, 27, "stream", 8, 1);
+            AssertSemanticToken(tokens, 27, "Open", 13, 0);
+            AssertSemanticToken(tokens, 28, "1", 19, 0);
+            AssertSemanticToken(tokens, 28, "ToString", 13, 0);
+            AssertSemanticToken(tokens, 29, "@class", 8, 0);
+            AssertSemanticToken(tokens, 30, "async", 13, 0);
+            AssertSemanticToken(tokens, 32, "Open", 13, 1);
+            AssertSemanticToken(tokens, 33, "nested", 8, 1);
+            AssertSemanticToken(tokens, 33, "nested", 8, 0);
+            AssertSemanticToken(tokens, 34, "async", 13, 1);
+            Assert.DoesNotContain(
+                tokens.SelectMany((left, index) => tokens.Skip(index + 1).Select(right => (left, right))),
+                pair =>
+                    pair.left.Line == pair.right.Line &&
+                    pair.left.Character < pair.right.Character + pair.right.Text.Length &&
+                    pair.right.Character < pair.left.Character + pair.left.Text.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_SemanticTokens_FallsBackToIndexedCSharpSymbolsWhenSourceReadFails_Issue4852()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_semantic_tokens_fallback_4852");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            const string source = "internal sealed class App { public void Run() { } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+
+            JsonObject? response;
+            try
+            {
+                LspServer.PositionFileLengthCheckedForTesting = _ =>
+                    throw new IOException("Injected semantic-token source read failure.");
+                response = HandleInitializedMessage(
+                    server,
+                    CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 48521));
+            }
+            finally
+            {
+                LspServer.PositionFileLengthCheckedForTesting = null;
+            }
+
+            Assert.NotNull(response);
+            var tokens = DecodeSemanticTokens(response!["result"]!["data"]!.AsArray(), source);
+            AssertSemanticToken(tokens, 0, "App", 2, 1);
+            AssertSemanticToken(tokens, 0, "Run", 13, 1);
+        }
+        finally
+        {
+            LspServer.PositionFileLengthCheckedForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_InlayHint_HonorsRangeAndSuppressesExplicitTypes_Issue4418()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_inlay_hint_range");

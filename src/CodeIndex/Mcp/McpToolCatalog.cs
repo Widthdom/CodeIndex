@@ -170,7 +170,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "symbols",
-                "Use this when discovering candidate symbols before `definition`, `references`, `callers`, or `callees`. Prefer `exactName:true` when the name must match exactly. Search for code symbols (functions, classes, interfaces, imports) by name pattern. `exact` is the legacy alias documented in USER_GUIDE.md's flag compatibility table. Examples: `symbols {\"query\":\"Service\"}`; `symbols {\"query\":\"Run\",\"kind\":\"function\",\"lang\":\"csharp\",\"exactName\":true}`. / `definition` / `references` / `callers` / `callees` の前に候補シンボルを探すときに使う。名前を厳密一致させるなら `exactName:true` を優先する。シンボル（関数、クラス、インターフェース、import）を名前パターンで検索。例: `symbols {\"query\":\"Service\"}`; `symbols {\"query\":\"Run\",\"kind\":\"function\",\"lang\":\"csharp\",\"exactName\":true}`。",
+                "Use this when discovering candidate symbols before `definition`, `references`, `callers`, or `callees`. Prefer `exactName:true` when the name must match exactly. Search for code symbols (functions, classes, interfaces, imports) by name pattern. Page metadata includes authoritative totals, `result_stable_at`, and an opaque generation-bound `next_cursor`; pass it back unchanged with the same filters, format, and limit. `exact` is the legacy alias documented in USER_GUIDE.md's flag compatibility table. Examples: `symbols {\"query\":\"Service\"}`; `symbols {\"query\":\"Run\",\"kind\":\"function\",\"lang\":\"csharp\",\"exactName\":true}`. / `definition` / `references` / `callers` / `callees` の前に候補シンボルを探すときに使う。名前を厳密一致させるなら `exactName:true` を優先する。シンボル（関数、クラス、インターフェース、import）を名前パターンで検索。ページ metadata は authoritative total、`result_stable_at`、generation-bound な opaque `next_cursor` を含む。同じ filter / format / limit で cursor を変更せず渡す。例: `symbols {\"query\":\"Service\"}`; `symbols {\"query\":\"Run\",\"kind\":\"function\",\"lang\":\"csharp\",\"exactName\":true}`。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -183,6 +183,7 @@ public partial class McpServer
                         ["visibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter symbol visibility. Accepts a value, comma-separated string, or array." },
                         ["excludeVisibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Exclude symbol visibility values. Accepts a value, comma-separated string, or array." },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
+                        ["cursor"] = new JsonObject { ["type"] = "string", ["maxLength"] = MaxMcpQueryCursorCharacters, ["description"] = "Opaque generation-bound next_cursor returned by a previous symbols page. Keep filters, format, and limit unchanged." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
@@ -197,7 +198,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "files",
-                "Use this when you need to locate indexed files by path, language, or recent-change scope before reading content. Prefer `outline` or `excerpt` as the next step after choosing a file. List indexed files, optionally filtered by name pattern and language. / 内容を読む前に path、言語、最近の変更範囲でインデックス済みファイルを探すときに使う。ファイルを選んだ後は `outline` または `excerpt` を優先する。インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。",
+                "Use this when you need to locate indexed files by path, language, or recent-change scope before reading content. Prefer `outline` or `excerpt` as the next step after choosing a file. List indexed files, optionally filtered by name pattern and language. Page metadata includes authoritative totals, `result_stable_at`, and an opaque generation-bound `next_cursor`; pass it back unchanged with the same filters and limit. / 内容を読む前に path、言語、最近の変更範囲でインデックス済みファイルを探すときに使う。ファイルを選んだ後は `outline` または `excerpt` を優先する。インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。ページ metadata は authoritative total、`result_stable_at`、generation-bound な opaque `next_cursor` を含む。同じ filter / limit で cursor を変更せず渡す。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -206,6 +207,7 @@ public partial class McpServer
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "File path pattern to filter by" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
+                        ["cursor"] = new JsonObject { ["type"] = "string", ["maxLength"] = MaxMcpQueryCursorCharacters, ["description"] = "Opaque generation-bound next_cursor returned by a previous files page. Keep filters and limit unchanged." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Additional path filter text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
@@ -419,7 +421,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "validate",
-                "Report encoding issues found during indexing: U+FFFD replacement chars, BOM markers, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings. replacement_char rows include origin/severity metadata so agents can separate source literals from decoder replacements. / インデックス時に検出したエンコーディング問題を報告。replacement_char 行は source literal と decoder replacement を分ける origin/severity metadata を含む。",
+                "Report encoding issues found during indexing: U+FFFD replacement chars, BOM markers, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings. replacement_char rows include origin/severity metadata so agents can separate source literals from decoder replacements. Page metadata includes totals that are authoritative only while `file_issues_data_current` is true, plus `result_stable_at` and an opaque generation-bound `next_cursor`; pass it back unchanged with the same filters, format, and limit. / インデックス時に検出したエンコーディング問題を報告。replacement_char 行は source literal と decoder replacement を分ける origin/severity metadata を含む。ページ metadata は `file_issues_data_current` が true の間だけ authoritative な total、`result_stable_at`、generation-bound な opaque `next_cursor` を含む。同じ filter / format / limit で cursor を変更せず渡す。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -428,6 +430,7 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by issue kind (replacement_char, bom, null_byte, mixed_line_endings, mixed_line_endings_three_way, cr_only_line_endings, utf16_bom, non_utf8_likely, line_too_long)" },
                         ["severity"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "error", "warning", "info" }, ["description"] = "Filter by issue severity." },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max issues to return (default: 20).", ["default"] = QueryCommandRunner.DefaultQueryLimit },
+                        ["cursor"] = new JsonObject { ["type"] = "string", ["maxLength"] = MaxMcpQueryCursorCharacters, ["description"] = "Opaque generation-bound next_cursor returned by a previous validate page. Keep filters, format, and limit unchanged." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },

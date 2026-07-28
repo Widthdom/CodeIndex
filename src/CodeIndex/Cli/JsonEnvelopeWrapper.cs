@@ -102,6 +102,7 @@ internal static partial class JsonEnvelopeWrapper
         var innerArgs = PrepareInnerArgs(args);
         var queryNormalized = ExtractQueryArg(args);
         var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
+        var responseSnapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
 
         using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
         var stopwatch = Stopwatch.StartNew();
@@ -143,7 +144,8 @@ internal static partial class JsonEnvelopeWrapper
                 stopwatch.Elapsed.TotalMilliseconds,
                 new JsonArray(),
                 exitCode,
-                envelopeError);
+                envelopeError,
+                responseSnapshot: responseSnapshot);
 
             Console.WriteLine(overflowEnvelope.ToJsonString(jsonOptions));
             return exitCode;
@@ -190,6 +192,24 @@ internal static partial class JsonEnvelopeWrapper
             };
             results = [];
         }
+
+        var completedSnapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
+        if (!string.Equals(
+                responseSnapshot.GenerationFingerprint,
+                completedSnapshot.GenerationFingerprint,
+                StringComparison.Ordinal))
+        {
+            return WriteResponseSnapshotChangedError(
+                command,
+                queryNormalized,
+                resolvedDbPath,
+                dbPathExplicit,
+                appVersion,
+                stopwatch.Elapsed.TotalMilliseconds,
+                jsonOptions,
+                responseSnapshot);
+        }
+        ResponseSnapshotValidatedForTesting?.Invoke();
         var envelope = BuildEnvelope(
             command,
             queryNormalized,
@@ -201,10 +221,46 @@ internal static partial class JsonEnvelopeWrapper
             exitCode,
             parseError,
             streamTerminal,
-            streamControlRecords);
+            streamControlRecords,
+            responseSnapshot);
 
         Console.WriteLine(envelope.ToJsonString(jsonOptions));
         return exitCode;
+    }
+
+    private static int WriteResponseSnapshotChangedError(
+        string command,
+        string? queryNormalized,
+        string dbPath,
+        bool dbPathExplicit,
+        string appVersion,
+        double elapsedMs,
+        JsonSerializerOptions jsonOptions,
+        ResponseSnapshot responseSnapshot)
+    {
+        const string message = "The index generation changed while this response was being read.";
+        const string hint = "Restart the command after the active index refresh completes.";
+        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {message}");
+        CommandErrorWriter.WriteStderr($"Hint: {hint}");
+        var error = new JsonObject
+        {
+            ["message"] = message,
+            ["hint"] = hint,
+            ["error_code"] = CommandErrorCodes.UsageError,
+        };
+        var envelope = BuildEnvelope(
+            command,
+            queryNormalized,
+            dbPath,
+            dbPathExplicit,
+            appVersion,
+            elapsedMs,
+            [],
+            CommandExitCodes.UsageError,
+            error,
+            responseSnapshot: responseSnapshot);
+        Console.WriteLine(envelope.ToJsonString(jsonOptions));
+        return CommandExitCodes.UsageError;
     }
 
     private static bool HasArgument(string[] args, string option)
@@ -222,7 +278,8 @@ internal static partial class JsonEnvelopeWrapper
         int exitCode,
         JsonObject? error = null,
         JsonObject? streamTerminal = null,
-        JsonArray? streamControlRecords = null)
+        JsonArray? streamControlRecords = null,
+        ResponseSnapshot? responseSnapshot = null)
     {
         var metadata = new JsonObject
         {
@@ -244,7 +301,9 @@ internal static partial class JsonEnvelopeWrapper
         if (streamControlRecords is { Count: > 0 })
             metadata["stream_control_records"] = streamControlRecords.DeepClone();
 
-        var indexedHead = SafeReadIndexedHead(dbPath, dbPathExplicit);
+        var indexedHead = responseSnapshot.HasValue
+            ? responseSnapshot.Value.IndexedHead
+            : SafeReadIndexedHead(dbPath, dbPathExplicit);
         if (!string.IsNullOrEmpty(indexedHead))
             metadata["indexed_at_head_sha"] = indexedHead;
 
@@ -262,7 +321,8 @@ internal static partial class JsonEnvelopeWrapper
             var resolvedPath = dbPath;
             if (!dbPathExplicit && !File.Exists(LongPath.EnsureWindowsPrefix(resolvedPath)))
                 return null;
-            return DbPathResolver.TryReadIndexedHeadCommit(DbPathResolver.NormalizeDbPath(resolvedPath));
+            var normalizedPath = DbPathResolver.NormalizeDbPath(resolvedPath);
+            return DbPathResolver.TryReadIndexedHeadForResponse(normalizedPath);
         }
         catch
         {
