@@ -3843,6 +3843,8 @@ internal static class SearchAuditRecipes
             AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{name}' has no valid queries and was ignored.");
             return false;
         }
+        if (!TryNormalizeRecipeQuerySelectors(queries, sourceLabel, name, diagnostics))
+            return false;
 
         recipe = new SearchAuditRecipe(name, description, queries)
         {
@@ -4140,6 +4142,93 @@ internal static class SearchAuditRecipes
         if (aliasArray.Count > MaxExternalQueryAliasCount)
             AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' has more than {MaxExternalQueryAliasCount} {fieldDescription}; extra entries are ignored.");
         return aliases;
+    }
+
+    private static bool TryNormalizeRecipeQuerySelectors(
+        IReadOnlyList<SearchAuditRecipeQuery> queries,
+        string sourceLabel,
+        string recipeName,
+        List<string> diagnostics)
+    {
+        var canonicalOwners = new Dictionary<string, SearchAuditRecipeQuery>(StringComparer.OrdinalIgnoreCase);
+        foreach (var query in queries)
+        {
+            if (canonicalOwners.TryAdd(query.Name, query))
+                continue;
+
+            AddDiagnostic(
+                diagnostics,
+                $"{sourceLabel} recipe '{recipeName}' defines duplicate canonical query name '{query.Name}' and was ignored.");
+            return false;
+        }
+
+        var aliasClaims = new Dictionary<string, List<(SearchAuditRecipeQuery Query, bool Deprecated)>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var query in queries)
+        {
+            AddClaims(query, query.Aliases, deprecated: false);
+            AddClaims(query, query.DeprecatedAliases, deprecated: true);
+        }
+
+        foreach (var (selector, claims) in aliasClaims)
+        {
+            if (canonicalOwners.TryGetValue(selector, out var canonicalOwner))
+            {
+                foreach (var claim in claims)
+                    RemoveSelector(claim, selector);
+                AddDiagnostic(
+                    diagnostics,
+                    $"{sourceLabel} recipe '{recipeName}' alias '{selector}' conflicts with canonical query '{canonicalOwner.Name}' and was ignored.");
+                continue;
+            }
+
+            var distinctOwners = claims
+                .Select(claim => claim.Query)
+                .Distinct()
+                .ToList();
+            if (distinctOwners.Count > 1)
+            {
+                foreach (var claim in claims)
+                    RemoveSelector(claim, selector);
+                AddDiagnostic(
+                    diagnostics,
+                    $"{sourceLabel} recipe '{recipeName}' alias '{selector}' is shared by multiple queries and was ignored.");
+                continue;
+            }
+
+            if (claims.Any(claim => !claim.Deprecated) && claims.Any(claim => claim.Deprecated))
+            {
+                foreach (var claim in claims.Where(claim => claim.Deprecated))
+                    RemoveSelector(claim, selector);
+                AddDiagnostic(
+                    diagnostics,
+                    $"{sourceLabel} recipe '{recipeName}' query '{distinctOwners[0].Name}' declares alias '{selector}' as both current and deprecated; the deprecated entry was ignored.");
+            }
+        }
+
+        return true;
+
+        void AddClaims(SearchAuditRecipeQuery query, IEnumerable<string> selectors, bool deprecated)
+        {
+            foreach (var selector in selectors)
+            {
+                if (!aliasClaims.TryGetValue(selector, out var claims))
+                {
+                    claims = [];
+                    aliasClaims.Add(selector, claims);
+                }
+                claims.Add((query, deprecated));
+            }
+        }
+
+        static void RemoveSelector(
+            (SearchAuditRecipeQuery Query, bool Deprecated) claim,
+            string selector)
+        {
+            var target = claim.Deprecated
+                ? claim.Query.DeprecatedAliases
+                : claim.Query.Aliases;
+            target.RemoveAll(value => string.Equals(value, selector, StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     private static void AddDiagnostic(List<string> diagnostics, string message)

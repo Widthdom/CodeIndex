@@ -285,8 +285,17 @@ public static partial class QueryCommandRunner
                 options.IncludeRecipeQueries,
                 "--include-query",
                 out var invalidSelector,
-                out var selectorError)
-            || !TryValidateRecipeQuerySelectors(
+                out var selectorError))
+        {
+            error = BuildUnknownRecipeQueryError(
+                recipe,
+                invalidSelector!,
+                selectorError!,
+                options,
+                SearchRecipeQuerySelectorMode.Include);
+            return false;
+        }
+        if (!TryValidateRecipeQuerySelectors(
                 queryBySelector,
                 availableQueries,
                 recipe.Name,
@@ -295,7 +304,12 @@ public static partial class QueryCommandRunner
                 out invalidSelector,
                 out selectorError))
         {
-            error = BuildUnknownRecipeQueryError(recipe, invalidSelector!, selectorError!, options);
+            error = BuildUnknownRecipeQueryError(
+                recipe,
+                invalidSelector!,
+                selectorError!,
+                options,
+                SearchRecipeQuerySelectorMode.Exclude);
             return false;
         }
         if (directQueryName != null && !queryBySelector.ContainsKey(directQueryName))
@@ -304,7 +318,8 @@ public static partial class QueryCommandRunner
                 recipe,
                 directQueryName,
                 $"unknown recipe query '{directQueryName}' for recipe '{recipe.Name}'. Available queries: {availableQueries}.",
-                options);
+                options,
+                SearchRecipeQuerySelectorMode.Direct);
             return false;
         }
 
@@ -390,17 +405,25 @@ public static partial class QueryCommandRunner
         SearchAuditRecipe recipe,
         string rawSelector,
         string message,
-        QueryCommandOptions options)
+        QueryCommandOptions options,
+        SearchRecipeQuerySelectorMode selectorMode)
     {
         var suggestions = BuildSearchRecipeQuerySuggestions(recipe, rawSelector);
         var suggestionText = suggestions.Count > 0
             ? $" Did you mean: {string.Join(", ", suggestions.Select(candidate => $"'{candidate}'"))}?"
             : string.Empty;
-        var replaySelector = suggestions.Count > 0
+        var suggestedQueryName = suggestions.FirstOrDefault();
+        var replaySelector = selectorMode == SearchRecipeQuerySelectorMode.Direct && suggestedQueryName != null
             ? $"{recipe.Name}/{suggestions[0]}"
             : recipe.Name;
         var hint = recipe.Queries.Count > 0
-            ? $"Retry with `{BuildSearchRecipeSelectionReplayCommand(replaySelector, options)}`."
+            ? $"Retry with `{BuildSearchRecipeSelectionReplayCommand(
+                replaySelector,
+                options,
+                recipe,
+                selectorMode,
+                rawSelector,
+                suggestedQueryName)}`."
             : $"Recipe '{recipe.Name}' has no runnable queries; run `cdidx search --list-recipes` to choose another recipe.";
         return new(message + suggestionText, hint);
     }
@@ -421,7 +444,13 @@ public static partial class QueryCommandRunner
             .ToList();
     }
 
-    private static string BuildSearchRecipeSelectionReplayCommand(string recipeSelector, QueryCommandOptions options)
+    private static string BuildSearchRecipeSelectionReplayCommand(
+        string recipeSelector,
+        QueryCommandOptions options,
+        SearchAuditRecipe? recipe = null,
+        SearchRecipeQuerySelectorMode selectorMode = SearchRecipeQuerySelectorMode.Direct,
+        string? invalidSelector = null,
+        string? suggestedQueryName = null)
     {
         var args = new List<string>
         {
@@ -434,7 +463,63 @@ public static partial class QueryCommandRunner
         };
         AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
         AddSearchRecipeCompactReplayOptions(args, options, includeRecipeQuerySelectors: false);
+        if (recipe != null && selectorMode != SearchRecipeQuerySelectorMode.Direct)
+        {
+            AddNormalizedRecipeQueryReplaySelectors(
+                args,
+                recipe,
+                options,
+                selectorMode,
+                invalidSelector!,
+                suggestedQueryName);
+        }
         return string.Join(" ", args.Select(QuoteReplayShellArg));
+    }
+
+    private static void AddNormalizedRecipeQueryReplaySelectors(
+        List<string> args,
+        SearchAuditRecipe recipe,
+        QueryCommandOptions options,
+        SearchRecipeQuerySelectorMode invalidSelectorMode,
+        string invalidSelector,
+        string? suggestedQueryName)
+    {
+        var queryBySelector = BuildRecipeQuerySelectorMap(recipe);
+        AddSelectors("--include-query", options.IncludeRecipeQueries, SearchRecipeQuerySelectorMode.Include);
+        AddSelectors("--exclude-query", options.ExcludeRecipeQueries, SearchRecipeQuerySelectorMode.Exclude);
+
+        void AddSelectors(
+            string optionName,
+            IReadOnlyList<string> selectors,
+            SearchRecipeQuerySelectorMode selectorMode)
+        {
+            var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var selector in selectors)
+            {
+                string? canonicalName;
+                if (selectorMode == invalidSelectorMode
+                    && string.Equals(selector, invalidSelector, StringComparison.OrdinalIgnoreCase))
+                {
+                    canonicalName = suggestedQueryName;
+                }
+                else
+                {
+                    canonicalName = queryBySelector.TryGetValue(selector, out var query)
+                        ? query.Name
+                        : null;
+                }
+
+                if (canonicalName != null && emitted.Add(canonicalName))
+                    AddReplayValueOption(args, optionName, canonicalName);
+            }
+        }
+    }
+
+    private enum SearchRecipeQuerySelectorMode
+    {
+        Direct,
+        Include,
+        Exclude,
     }
 
     private sealed record SearchRecipeSelectionError(

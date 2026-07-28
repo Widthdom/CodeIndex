@@ -1470,7 +1470,8 @@ recipe-level `default_scope`, `default_path_patterns`, and
 External queries may also declare `aliases` and `deprecated_aliases`; both
 forms select the canonical query name, appear in full recipe discovery JSON,
 and participate in active-recipe typo correction without becoming the replay
-selector.
+selector. Aliases that collide with a canonical name or span multiple queries
+are ignored and reported through bounded recipe-source diagnostics.
 For triage automation, `--format issue-drafts` emits draft issue objects with
 titles, labels, evidence paths, severity/confidence/evidence-count triage
 metadata, Markdown bodies, and duplicate-preflight metadata. `--open-issues <path>` accepts an open-issue JSON list such as
@@ -4667,7 +4668,8 @@ recipe array または `{ "recipes": [...] }` を受け付け、不正な source
 とは独立して query ごとの対象を狭められます。
 外部 query は `aliases` と `deprecated_aliases` も宣言できます。どちらも canonical query 名へ
 解決され、完全な recipe discovery JSON に表示され、active recipe 内の typo correction 候補に
-使われますが、再実行 selector には canonical query 名が使われます。
+使われますが、再実行 selector には canonical query 名が使われます。canonical 名と衝突する alias、
+または複数 query にまたがる alias は無視され、上限付きの recipe-source diagnostic で報告されます。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
 severity / confidence / evidence-count の triage metadata、Markdown body、
 duplicate-preflight metadata を持つ issue draft object を出力します。

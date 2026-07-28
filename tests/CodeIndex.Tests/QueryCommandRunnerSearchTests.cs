@@ -3692,6 +3692,39 @@ public partial class QueryCommandRunnerTests
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
             [.. args],
             _jsonOptions));
+        var includeArgs = new List<string>
+        {
+            "--recipe",
+            "xml-parser-security",
+            "--include-query",
+            "dtd-processing",
+            "--include-query",
+            "xml-readr-settings",
+            "--exclude-query",
+            "xml-resolver",
+            "--limit",
+            "7",
+        };
+        var excludeArgs = new List<string>
+        {
+            "--recipe",
+            "xml-parser-security",
+            "--exclude-query",
+            "xml-resovler",
+            "--limit",
+            "7",
+        };
+        if (json)
+        {
+            includeArgs.Add("--json");
+            excludeArgs.Add("--json");
+        }
+        var (includeExitCode, includeStdout, includeStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            [.. includeArgs],
+            _jsonOptions));
+        var (excludeExitCode, excludeStdout, excludeStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            [.. excludeArgs],
+            _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
@@ -3702,6 +3735,21 @@ public partial class QueryCommandRunnerTests
             stderr);
         Assert.DoesNotContain("risky-code/raw-diagnostic-echo", stderr);
         Assert.DoesNotContain("Suggestions across all recipes", stderr);
+
+        Assert.Equal(CommandExitCodes.UsageError, includeExitCode);
+        Assert.Equal(string.Empty, includeStdout);
+        Assert.Contains(
+            "cdidx search --recipe xml-parser-security --format compact --limit 7"
+            + " --include-query dtd-processing --include-query xml-reader-settings --exclude-query xml-resolver",
+            includeStderr);
+        Assert.DoesNotContain("--recipe xml-parser-security/xml-reader-settings", includeStderr);
+
+        Assert.Equal(CommandExitCodes.UsageError, excludeExitCode);
+        Assert.Equal(string.Empty, excludeStdout);
+        Assert.Contains(
+            "cdidx search --recipe xml-parser-security --format compact --limit 7 --exclude-query xml-resolver",
+            excludeStderr);
+        Assert.DoesNotContain("--recipe xml-parser-security/xml-resolver", excludeStderr);
     }
 
     [Fact]
@@ -4586,18 +4634,20 @@ public partial class QueryCommandRunnerTests
                     "queries": [
                       {
                         "name": "current-query",
-                        "aliases": ["short-query"],
+                        "aliases": ["short-query", "neighbor-query", "shared-query"],
                         "deprecated_aliases": ["old-query"],
                         "query": "CurrentNeedle",
                         "description": "Find the current marker."
                       },
                       {
                         "name": "neighbor-query",
+                        "aliases": ["shared-query"],
                         "query": "NeighborNeedle",
                         "description": "Find a neighboring marker."
                       },
                       {
                         "name": "other-query",
+                        "deprecated_aliases": ["current-query"],
                         "query": "OtherNeedle",
                         "description": "Find another marker."
                       }
@@ -4613,6 +4663,7 @@ public partial class QueryCommandRunnerTests
 
             using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
             env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+            var registry = SearchAuditRecipes.Load();
 
             var (listExitCode, listStdout, listStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--list-recipes", "--json"],
@@ -4626,6 +4677,13 @@ public partial class QueryCommandRunnerTests
             var (typoExitCode, typoStdout, typoStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "local-selector-audit/short-qurey", "--db", quotedDbPath, "--json"],
                 _jsonOptions));
+            var (collisionExitCode, collisionStdout, collisionStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "local-selector-audit/shared-query", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Contains(registry.Diagnostics, diagnostic => diagnostic.Contains("alias 'neighbor-query' conflicts with canonical query", StringComparison.Ordinal));
+            Assert.Contains(registry.Diagnostics, diagnostic => diagnostic.Contains("alias 'shared-query' is shared by multiple queries", StringComparison.Ordinal));
+            Assert.Contains(registry.Diagnostics, diagnostic => diagnostic.Contains("alias 'current-query' conflicts with canonical query", StringComparison.Ordinal));
 
             Assert.Equal(CommandExitCodes.Success, listExitCode);
             Assert.Equal(string.Empty, listStderr);
@@ -4659,6 +4717,11 @@ public partial class QueryCommandRunnerTests
             Assert.Contains($"--db '{quotedDbPath}'", typoStderr);
             Assert.DoesNotContain("short-query --format", typoStderr);
             Assert.DoesNotContain("risky-code/raw-diagnostic-echo", typoStderr);
+
+            Assert.Equal(CommandExitCodes.UsageError, collisionExitCode);
+            Assert.Equal(string.Empty, collisionStdout);
+            Assert.Contains("unknown recipe query 'shared-query'", collisionStderr);
+            Assert.Contains("Did you mean: 'current-query'?", collisionStderr);
         }
         finally
         {
