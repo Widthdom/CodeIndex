@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 
@@ -118,6 +119,45 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
     }
 
     [Fact]
+    public void FindAll_HighOrdinalUnicodeCursorResumesWithoutWalkingUtf8Prefixes_Issue4863()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("find_high_ordinal_cursor_4863");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const int resumeMatchOrdinal = 10_000;
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/HighOrdinal.txt",
+                "text",
+                string.Join(' ', Enumerable.Repeat("猫", resumeMatchOrdinal + 2)));
+
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var reader = new DbReader(db);
+            var page = reader.FindInFiles(
+                "猫",
+                limit: 1,
+                exact: true,
+                resumePath: "src/HighOrdinal.txt",
+                resumeLine: 1,
+                resumeFileOrdinal: 0,
+                resumeMatchOrdinal: resumeMatchOrdinal,
+                resumeByteOffset: resumeMatchOrdinal * 4,
+                captureContinuation: true);
+
+            var row = Assert.Single(page.Results);
+            Assert.Equal(1, row.Line);
+            Assert.Equal((resumeMatchOrdinal * 2) + 1, row.Column);
+            Assert.Equal(resumeMatchOrdinal + 1, page.Scan.NextMatchOrdinal);
+            Assert.Equal((resumeMatchOrdinal + 1) * 4, page.Scan.NextByteOffset);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void FindAll_CursorFailuresAreTypedForMalformedMismatchAndStaleState_Issue4863()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("find_cursor_errors_4863");
@@ -138,6 +178,22 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
 
             AssertCursorFailure(
                 args.Concat(["--cursor", "response:v2:not-base64"]).ToArray(),
+                "cursor_malformed");
+            AssertCursorFailure(
+                args.Concat([
+                    "--cursor",
+                    MutateCursor(cursor, payload => payload["resume_line"] = 999_999),
+                ]).ToArray(),
+                "cursor_malformed");
+            AssertCursorFailure(
+                args.Concat([
+                    "--cursor",
+                    MutateCursor(cursor, payload =>
+                    {
+                        payload.Remove("resume_match_ordinal");
+                        payload["resume_byte_offset"] = 123;
+                    }),
+                ]).ToArray(),
                 "cursor_malformed");
             AssertCursorFailure(
                 args.Select(value => value == "Needle" ? "Different" : value)
@@ -261,6 +317,50 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
     }
 
     [Fact]
+    public void FindAll_MidScanCancellationReturnsSignalExitWithoutCursor_Issue4863()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("find_mid_scan_cancel_4863");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Cancelled.txt",
+                "text",
+                "Needle one\nNeedle two\n");
+            using var cancellation = new CancellationTokenSource();
+
+            (int ExitCode, string StdOut, string StdErr) result;
+            try
+            {
+                DbReader.FindLineScannedForTesting = cancellation.Cancel;
+                result = ConsoleCapture.Capture(() =>
+                    ProgramRunner.Run(
+                        [
+                            "find", "Needle", "--db", dbPath, "--all", "--exact",
+                            "--json=ndjson", "--limit", "1",
+                        ],
+                        _jsonOptions,
+                        "1.0.0-test",
+                        cancellationToken: cancellation.Token));
+            }
+            finally
+            {
+                DbReader.FindLineScannedForTesting = null;
+            }
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, result.ExitCode);
+            Assert.Equal(string.Empty, result.StdOut);
+            Assert.Contains("cancelled", result.StdErr, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("next_cursor", result.StdErr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void FindAll_RegexTimeoutDoesNotIssueContinuationCursor_Issue4863()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("find_timeout_cursor_4863");
@@ -350,6 +450,53 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
     }
 
     [Fact]
+    public void FindAll_CountCursorRejectsLineBeyondSelectedFile_Issue4863()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("find_count_line_boundary_4863");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Count.txt",
+                "text",
+                "Needle\nNeedle\nNeedle\n");
+            var args = new[]
+            {
+                "find", "Needle", "--db", dbPath, "--all", "--exact", "--count",
+                "--json", "--line-scan-limit", "1", "--allow-partial",
+            };
+            var (firstExitCode, firstStdout, firstStderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, firstExitCode);
+            Assert.Equal(string.Empty, firstStderr);
+            using var firstDocument = JsonDocument.Parse(firstStdout);
+            var cursor = Assert.IsType<string>(
+                firstDocument.RootElement.GetProperty("next_cursor").GetString());
+            var malformedCursor = MutateCursor(
+                cursor,
+                payload => payload["resume_line"] = 999_999);
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    args.Concat(["--cursor", malformedCursor]).ToArray(),
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(
+                "cursor_malformed",
+                document.RootElement.GetProperty("category").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void FindAll_CountMissingCursorValuePreservesCountModeAndReturnsTypedError_Issue4863()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("find_count_missing_cursor_4863");
@@ -419,8 +566,47 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
             ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains(expectedCategory, stderr, StringComparison.Ordinal);
+        if (string.IsNullOrEmpty(stdout))
+        {
+            Assert.Contains(expectedCategory, stderr, StringComparison.Ordinal);
+            return;
+        }
+
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal(
+            expectedCategory,
+            document.RootElement
+                .GetProperty("metadata")
+                .GetProperty("error")
+                .GetProperty("category")
+                .GetString());
+    }
+
+    private static string MutateCursor(
+        string cursor,
+        Action<JsonObject> mutate)
+    {
+        const string prefix = "response:v2:";
+        Assert.StartsWith(prefix, cursor, StringComparison.Ordinal);
+        var encoded = cursor[prefix.Length..]
+            .Replace('-', '+')
+            .Replace('_', '/');
+        encoded = (encoded.Length % 4) switch
+        {
+            2 => encoded + "==",
+            3 => encoded + "=",
+            _ => encoded,
+        };
+        var payload = Assert.IsType<JsonObject>(
+            JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded))));
+        mutate(payload);
+        var mutated = Convert.ToBase64String(
+                Encoding.UTF8.GetBytes(payload.ToJsonString()))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return prefix + mutated;
     }
 
     private sealed record FindPage(

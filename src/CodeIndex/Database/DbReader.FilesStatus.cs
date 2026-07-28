@@ -40,6 +40,7 @@ public partial class DbReader
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     private static readonly AsyncLocal<TimeSpan?> FindRegexMatchTimeoutOverride = new();
+    private static readonly AsyncLocal<Action?> FindLineScannedOverride = new();
     private static readonly AsyncLocal<int?> BoundedFileReadScanByteLimitOverride = new();
     private static readonly AsyncLocal<int?> LegacyResourceReadSqliteVmStepLimitOverride = new();
 
@@ -111,6 +112,12 @@ public partial class DbReader
         set => FindRegexMatchTimeoutOverride.Value = value;
     }
 
+    internal static Action? FindLineScannedForTesting
+    {
+        get => FindLineScannedOverride.Value;
+        set => FindLineScannedOverride.Value = value;
+    }
+
     internal static int? BoundedFileReadScanByteLimitForTesting
     {
         get => BoundedFileReadScanByteLimitOverride.Value;
@@ -123,7 +130,7 @@ public partial class DbReader
         set => LegacyResourceReadSqliteVmStepLimitOverride.Value = value;
     }
 
-    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0, bool useIndexedLiteralCandidates = false, string? resumePath = null, int? resumeLine = null, int? resumeFileOrdinal = null, int? resumeMatchOrdinal = null, int? resumeByteOffset = null, CancellationToken cancellationToken = default)
+    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0, bool useIndexedLiteralCandidates = false, string? resumePath = null, int? resumeLine = null, int? resumeFileOrdinal = null, int? resumeMatchOrdinal = null, int? resumeByteOffset = null, bool captureContinuation = false, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
@@ -172,6 +179,8 @@ public partial class DbReader
         while (fileReader.TrackedRead())
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!captureContinuation && results.Count >= limit)
+                break;
             candidateFileOrdinal++;
             var fileId = fileReader.GetInt64(0);
             var path = fileReader.GetString(1);
@@ -194,6 +203,12 @@ public partial class DbReader
                 else if (!string.Equals(path, resumePath, StringComparison.Ordinal))
                 {
                     continue;
+                }
+                if (resumeLine > Math.Max(1, totalLines))
+                {
+                    throw new FindContinuationException(
+                        "cursor_malformed",
+                        "find cursor line position exceeds the selected file.");
                 }
                 resumePending = false;
             }
@@ -246,12 +261,18 @@ public partial class DbReader
                     break;
                 }
                 if (eligibleForMatch)
+                {
                     linesScanned++;
+                    FindLineScannedForTesting?.Invoke();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
 
                 AddLineToFindWindow(indexedLine, snippetWindow, snippetLinesByNumber);
 
                 if (!resultLimitReached
-                    && (matchesSkipped < offset || acceptedMatches <= limit)
+                    && (matchesSkipped < offset
+                        || captureContinuation && acceptedMatches <= limit
+                        || !captureContinuation && acceptedMatches < limit)
                     && eligibleForMatch
                     && (!focusLine.HasValue || indexedLine.Number == focusLine.Value))
                 {
@@ -265,8 +286,6 @@ public partial class DbReader
                         exact && !regex,
                         focusColumn))
                     {
-                        var byteOffset = Encoding.UTF8.GetByteCount(
-                            indexedLine.Text.AsSpan(0, lineMatch.Column));
                         if (resumeMatchPending
                             && indexedLine.Number == firstEligibleLine)
                         {
@@ -275,8 +294,10 @@ public partial class DbReader
                                 matchOrdinal++;
                                 continue;
                             }
+                            var resumeBoundaryByteOffset = Encoding.UTF8.GetByteCount(
+                                indexedLine.Text.AsSpan(0, lineMatch.Column));
                             if (matchOrdinal != resumeMatchOrdinal.Value
-                                || byteOffset != resumeByteOffset)
+                                || resumeBoundaryByteOffset != resumeByteOffset)
                             {
                                 throw new FindContinuationException(
                                     "cursor_malformed",
@@ -293,6 +314,8 @@ public partial class DbReader
                         }
                         if (acceptedMatches >= limit)
                         {
+                            var byteOffset = Encoding.UTF8.GetByteCount(
+                                indexedLine.Text.AsSpan(0, lineMatch.Column));
                             nextPath = path;
                             nextLine = indexedLine.Number;
                             nextFileOrdinal = candidateFileOrdinal;
@@ -324,7 +347,8 @@ public partial class DbReader
                     indexedLine.Number);
                 PruneFindWindow(indexedLine.Number, before, pendingMatches, snippetWindow, snippetLinesByNumber);
 
-                if (stopScanning && pendingMatches.Count == 0)
+                if ((stopScanning || !captureContinuation && results.Count >= limit)
+                    && pendingMatches.Count == 0)
                     break;
             }
 
@@ -336,7 +360,7 @@ public partial class DbReader
                 results,
                 maxLineWidth,
                 int.MaxValue);
-            if (stopScanning)
+            if (stopScanning || !captureContinuation && results.Count >= limit)
                 break;
         }
         if (resumePending || resumeMatchPending)
@@ -395,7 +419,8 @@ public partial class DbReader
             || resumeFileOrdinal is < 0
             || resumeMatchOrdinal is < 0
             || resumeByteOffset is < 0
-            || resumeMatchOrdinal.HasValue && !resumeByteOffset.HasValue)
+            || resumeMatchOrdinal.HasValue && !resumeByteOffset.HasValue
+            || !resumeMatchOrdinal.HasValue && resumeByteOffset is not (null or 0))
         {
             throw new FindContinuationException(
                 "cursor_malformed",
@@ -483,6 +508,12 @@ public partial class DbReader
                 else if (!string.Equals(path, resumePath, StringComparison.Ordinal))
                 {
                     continue;
+                }
+                if (resumeLine > Math.Max(1, fileReader.GetInt32(3)))
+                {
+                    throw new FindContinuationException(
+                        "cursor_malformed",
+                        "find count cursor line position exceeds the selected file.");
                 }
                 resumePending = false;
             }

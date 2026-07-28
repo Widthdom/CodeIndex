@@ -231,6 +231,7 @@ public static partial class QueryCommandRunner
                     resumeFileOrdinal: resumeFileOrdinal,
                     resumeMatchOrdinal: resumeMatchOrdinal,
                     resumeByteOffset: resumeByteOffset,
+                    captureContinuation: true,
                     cancellationToken: cancellationToken);
             }
             catch (FindContinuationException ex)
@@ -374,7 +375,7 @@ public static partial class QueryCommandRunner
         {
             if (findTerminalLine != null)
                 Console.WriteLine(findTerminalLine);
-        });
+        }, cancellationToken: cancellationToken);
     }
 
     private static int WriteFindInvalidRegexError(Exception ex, JsonSerializerOptions jsonOptions, bool json)
