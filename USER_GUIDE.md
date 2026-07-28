@@ -1208,13 +1208,16 @@ cdidx db integrity                                      # run PRAGMA integrity_c
 cdidx db --integrity-check                              # same legacy spelling
 cdidx db integrity --db ./.cdidx/codeindex.db           # point at a specific DB
 cdidx db integrity --json                               # machine-readable result
+cdidx db integrity --json --show-paths                  # explicitly retain the DB path in an error diagnostic
 cdidx db schema --summary-only --json                   # counts without full SQL payloads
 cdidx db schema --type table --name files --json         # exact schema object projection
 cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
 cdidx db checkpoint before-prune --dry-run --json        # preview snapshot files and bytes
 ```
 
-This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and prints whether the file is `ok` or lists the failures. Exit codes are stable for scripting: `0` clean, `2` (NotFound) when the file does not exist, `3` (DatabaseError) when corruption is detected. SQLite does not offer a general-purpose repair primitive — if the check fails, recover by rebuilding with `cdidx index <projectPath> --rebuild`.
+This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and prints whether the file is `ok` or lists the failures. Exit codes are stable for scripting: `0` clean, `2` (NotFound) when the file does not exist, `3` (DatabaseError) when corruption or an invalid database is detected, and the transient-database exit code for lock/busy contention. SQLite does not offer a general-purpose repair primitive — if the check fails, recover by rebuilding with `cdidx index <projectPath> --rebuild`.
+
+Failures from `vacuum`, `backfill-fold`, `optimize` (including `index --optimize`), and `db integrity` share database-error classifier version `1`. The classifier uses SQLite primary result codes for locked/busy, read-only, corrupt, and not-a-database failures rather than exception wording, and emits stable `error_code`, `category`, `hint`, `path`, `path_redacted`, and optional SQLite result-code fields in JSON. Absolute database paths and file URIs are replaced wholesale with `<redacted>` by default, while relative paths retain the caller's spelling; pass `--show-paths` only when an explicit diagnostic needs the full path. Directory or inaccessible preflight targets use `E008_DB_ERROR` / `database_inaccessible` with regular-file and permission guidance instead of being guessed as missing or invalid databases. Optimize lock failures include bounded holder PID/start-time details when lock metadata is available. A successful `db integrity --json` response keeps the existing `integrity_ok` shape, while failures use this shared error response. Recovery hints are category-specific, so corruption does not recommend lock retries and lock contention does not recommend rebuilding a healthy database.
 
 `db schema` keeps the current full schema dump by default for support bundles. Add `--summary-only` to return only object counts, combine `--type <table|index|trigger|view>` and `--name <object>` for an exact projection, and use `--limit`, `--max-sql-chars`, and `--exclude-internal` to keep schema diagnostics bounded.
 
@@ -2116,6 +2119,7 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E024_CONFIG_INVALID` | `validate-config` discovered a configuration file that failed validation |
 | `E025_HOOK_OPERATION_FAILED` | A Git hook operation failed at a platform or filesystem boundary |
 | `E026_NOT_GIT_REPOSITORY` | `hooks` was run outside a Git worktree and no valid `--project` was supplied |
+| `E027_DB_NOT_DATABASE` | SQLite rejected the target as not being a database, or maintenance validation rejected it as not being a CodeIndex database |
 
 ### Debugging reader errors
 
@@ -4428,13 +4432,16 @@ cdidx db integrity                                      # PRAGMA integrity_check
 cdidx db --integrity-check                              # 従来の同義表記
 cdidx db integrity --db ./.cdidx/codeindex.db           # 特定 DB を指定
 cdidx db integrity --json                               # 機械可読な結果
+cdidx db integrity --json --show-paths                  # error diagnostic に DB path を明示的に残す
 cdidx db schema --summary-only --json                   # SQL 本文なしで件数だけ確認
 cdidx db schema --type table --name files --json         # schema object を exact に絞り込み
 cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
 cdidx db checkpoint before-prune --dry-run --json        # snapshot 対象 file と byte 数を preview
 ```
 
-DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損検出です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
+DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損または不正な database、lock / busy 競合は transient-database exit code です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
+
+`vacuum`、`backfill-fold`、`optimize` (`index --optimize` を含む)、`db integrity` の失敗は database-error classifier version `1` を共有します。classifier は例外 message ではなく SQLite primary result code から locked / busy、read-only、corrupt、not-a-database を分類し、JSON では安定した `error_code`、`category`、`hint`、`path`、`path_redacted` と任意の SQLite result-code field を返します。absolute database path と file URI は既定で値全体を `<redacted>` に置換し、relative path は呼び出し側の表記を維持します。明示的な diagnostic で full path が必要な場合だけ `--show-paths` を指定してください。directory またはアクセス不能な preflight target は missing / invalid database と推測せず、regular file と permission の案内を伴う `E008_DB_ERROR` / `database_inaccessible` として扱います。lock metadata が利用できる場合、optimize の lock failure には上限付きの holder PID / start-time detail も含まれます。成功した `db integrity --json` は従来の `integrity_ok` shape を維持し、失敗時はこの共有 error response を使います。recovery hint は category ごとに選ばれるため、corruption に lock retry を案内したり、lock 競合で健全な database の rebuild を案内したりしません。
 
 `db schema` は support bundle 向けに、既定では従来どおり full schema dump を維持します。`--summary-only` を付けると object 件数だけを返し、`--type <table|index|trigger|view>` と `--name <object>` を組み合わせると exact projection を適用できます。schema diagnostics を小さく保つには `--limit`、`--max-sql-chars`、`--exclude-internal` を使います。
 
@@ -4442,7 +4449,7 @@ DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し�
 
 `cdidx optimize --dry-run --json` は index lock を取得せず、source DB/WAL/SHM file も変更せずに FTS5 maintenance を preview します。結果には DB/core table/FTS の size、page と freelist の指標、incremental write に基づく推奨、現在の lock/readiness 状態、利用可能な場合は前回所要時間に基づく見積もり、repair mode での schema 初期化または migration の確認を含む、実際の optimize が行う操作が含まれます。`object_sizes_measurement` は、正確な `dbstat` page byte と、SQLite が `dbstat` を提供しない場合の logical-payload fallback を区別します。
 
-`--json` の診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` は `integrity_ok` / `integrity_failed` を返し、`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
+成功時の `--json` 診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` の成功時は `integrity_ok` を返し、失敗時は上記の共有 database-error response を返します。`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
 
 DB / WAL の肥大や空き page を確認したい場合は `status --json` の `maintenance_guidance` を見ます。既定では WAL が 64 MiB 以上で `checkpoint_recommended`、`freelist_count / page_count` が 0.20 以上で `vacuum_recommended` になり、`recommended_command` と `post_maintenance_follow_up` が返ります。しきい値は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` と `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` で調整できます。
 
@@ -5297,6 +5304,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E024_CONFIG_INVALID` | `validate-config` が検出した設定 file の validation に失敗した |
 | `E025_HOOK_OPERATION_FAILED` | Git hook 操作が platform または filesystem boundary で失敗した |
 | `E026_NOT_GIT_REPOSITORY` | Git worktree 外で `hooks` を実行し、有効な `--project` も指定されていなかった |
+| `E027_DB_NOT_DATABASE` | SQLite が対象を database ではないと拒否した、または maintenance validation が CodeIndex database ではないと判定した |
 
 ### reader エラーのデバッグ
 

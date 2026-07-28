@@ -92,6 +92,22 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("usage")] string? Usage = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
+internal sealed record MaintenanceDatabaseErrorJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("message")] string Message,
+    [property: JsonPropertyName("hint")] string Hint,
+    [property: JsonPropertyName("error_code")] string ErrorCode,
+    [property: JsonPropertyName("category")] string Category,
+    [property: JsonPropertyName("database_error_classifier_version")] string DatabaseErrorClassifierVersion,
+    [property: JsonPropertyName("operation")] string Operation,
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("path_redacted")] bool PathRedacted,
+    [property: JsonPropertyName("sqlite_error_code")] int? SqliteErrorCode,
+    [property: JsonPropertyName("sqlite_extended_error_code")] int? SqliteExtendedErrorCode,
+    [property: JsonPropertyName("details")] IReadOnlyList<string>? Details,
+    [property: JsonPropertyName("details_truncated")] bool? DetailsTruncated,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+
 internal sealed record DoctorJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("version")] string Version,
@@ -1051,6 +1067,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(CompactSearchResult))]
 [JsonSerializable(typeof(CompactSearchResult[]))]
 [JsonSerializable(typeof(CommandErrorJsonResult))]
+[JsonSerializable(typeof(MaintenanceDatabaseErrorJsonResult))]
 [JsonSerializable(typeof(ActiveWorkspaceStatusJsonResult))]
 [JsonSerializable(typeof(ConfigShowJsonResult))]
 [JsonSerializable(typeof(ConfigFileStatusJsonResult))]
