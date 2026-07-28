@@ -230,25 +230,11 @@ internal static partial class ProgramRunner
     }
 
     private static bool CommandAcceptsOutputFormat(string commandName, string outputFormat)
-    {
-        var usage = ConsoleUi.GetUsageLine(commandName);
-        if (usage == null)
-            return false;
-
-        const string formatPrefix = "--format <";
-        var formatStart = usage.IndexOf(formatPrefix, StringComparison.Ordinal);
-        if (formatStart < 0)
-            return false;
-
-        formatStart += formatPrefix.Length;
-        var formatEnd = usage.IndexOf('>', formatStart);
-        if (formatEnd < 0)
-            return false;
-
-        return usage[formatStart..formatEnd]
-            .Split('|', StringSplitOptions.RemoveEmptyEntries)
-            .Contains(outputFormat, StringComparer.Ordinal);
-    }
+        => CliFlagSchema.TryNormalizeOptionValue(
+            commandName,
+            "--format",
+            outputFormat,
+            out _);
 
     private static bool TryResolveOutputValidationCommand(
         string[] args,

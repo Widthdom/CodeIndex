@@ -31,9 +31,6 @@ internal static class CliOutputFormatCapabilities
     private static readonly IReadOnlyDictionary<string, CliOutputFormatCapability> ByName =
         Ordered.ToDictionary(capability => capability.Name, StringComparer.OrdinalIgnoreCase);
 
-    internal static string FormatValuePlaceholder { get; } =
-        $"<{string.Join('|', Ordered.Select(capability => capability.Name))}>";
-
     internal static string FormatDescription { get; } =
         $"Standard output format for token budgets, editor integrations, and CI; JSON contracts: {string.Join(", ", Ordered.Where(capability => capability.IsJsonContract).Select(capability => capability.Name))}; supported values vary by command";
 

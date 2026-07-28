@@ -347,6 +347,9 @@ internal sealed record DbRestoreDryRunJsonResult(
     [property: JsonPropertyName("available_space_bytes")] long? AvailableSpaceBytes,
     [property: JsonPropertyName("files")] List<string> Files,
     [property: JsonPropertyName("bytes")] long Bytes,
+    [property: JsonPropertyName("backup_policy")] string BackupPolicy,
+    [property: JsonPropertyName("pre_restore_backup_would_be_created")] bool PreRestoreBackupWouldBeCreated,
+    [property: JsonPropertyName("backup_required_space_bytes")] long BackupRequiredSpaceBytes,
     [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult> Diagnostics,
     [property: JsonPropertyName("message")] string? Message = null,
     [property: JsonPropertyName("error_code")] string? ErrorCode = null,
@@ -358,7 +361,12 @@ internal sealed record DbRestoreBackupEntryJsonResult(
     [property: JsonPropertyName("backup_path")] string BackupPath,
     [property: JsonPropertyName("created_at_utc")] string CreatedAtUtc,
     [property: JsonPropertyName("bytes")] long Bytes,
-    [property: JsonPropertyName("files_truncated")] bool FilesTruncated = false);
+    [property: JsonPropertyName("files_truncated")] bool FilesTruncated = false,
+    [property: JsonPropertyName("id")] string? Id = null,
+    [property: JsonPropertyName("managed")] bool Managed = false,
+    [property: JsonPropertyName("provenance")] string? Provenance = null,
+    [property: JsonPropertyName("source_id")] string? SourceId = null,
+    [property: JsonPropertyName("user_version")] int? UserVersion = null);
 
 internal sealed record DbRestoreBackupListJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
@@ -381,6 +389,31 @@ internal sealed record DbRestoreBackupPruneJsonResult(
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("backup_limit")] int BackupLimit = 0,
     [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+
+internal sealed record DbRestoreBackupRestoreJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("backup_id")] string BackupId,
+    [property: JsonPropertyName("backup_path")] string BackupPath,
+    [property: JsonPropertyName("dry_run")] bool DryRun,
+    [property: JsonPropertyName("restored")] bool Restored,
+    [property: JsonPropertyName("ready")] bool Ready,
+    [property: JsonPropertyName("manifest_valid")] bool ManifestValid,
+    [property: JsonPropertyName("hash_valid")] bool HashValid,
+    [property: JsonPropertyName("schema_valid")] bool SchemaValid,
+    [property: JsonPropertyName("backup_policy")] string BackupPolicy,
+    [property: JsonPropertyName("pre_restore_backup_id")] string? PreRestoreBackupId,
+    [property: JsonPropertyName("pre_restore_backup_would_be_created")] bool PreRestoreBackupWouldBeCreated,
+    [property: JsonPropertyName("required_space_bytes")] long RequiredSpaceBytes,
+    [property: JsonPropertyName("available_space_bytes")] long? AvailableSpaceBytes,
+    [property: JsonPropertyName("space_sufficient")] bool SpaceSufficient,
+    [property: JsonPropertyName("provenance")] string? Provenance,
+    [property: JsonPropertyName("source_id")] string? SourceId,
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult> Diagnostics,
+    [property: JsonPropertyName("message")] string? Message = null,
+    [property: JsonPropertyName("error_code")] string? ErrorCode = null,
+    [property: JsonPropertyName("hint")] string? Hint = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbSchemaEntryJsonResult(
@@ -1084,6 +1117,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(DbRestoreBackupEntryJsonResult))]
 [JsonSerializable(typeof(DbRestoreBackupListJsonResult))]
 [JsonSerializable(typeof(DbRestoreBackupPruneJsonResult))]
+[JsonSerializable(typeof(DbRestoreBackupRestoreJsonResult))]
 [JsonSerializable(typeof(DbRestoreDryRunJsonResult))]
 [JsonSerializable(typeof(DbRestoreJsonResult))]
 [JsonSerializable(typeof(DbSchemaEntryJsonResult))]
@@ -1130,6 +1164,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(IndexFullScanSummaryJsonResult))]
 [JsonSerializable(typeof(StatusIndexFileError))]
 [JsonSerializable(typeof(List<StatusIndexFileError>))]
+[JsonSerializable(typeof(ManagedRestoreBackupManifest))]
 [JsonSerializable(typeof(IndexMemorySampleJsonResult))]
 [JsonSerializable(typeof(IndexMemoryTimelineJsonResult))]
 [JsonSerializable(typeof(IndexUpdateJsonResult))]

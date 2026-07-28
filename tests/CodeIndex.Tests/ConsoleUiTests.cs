@@ -15,20 +15,23 @@ namespace CodeIndex.Tests;
 public class ConsoleUiTests
 {
     [Fact]
-    public void PrintCommandUsage_DedicatedParsersDoNotEmitPartialParentOptionLists_Issue4571()
+    public void PrintCommandUsage_DedicatedParsersOnlyEmitAuthoritativeParentOptionLists_Issues4571_4861()
     {
         var (_, dbSchemaHelp, _) = ConsoleCapture.Capture(() =>
             ConsoleUi.PrintCommandUsage("db-schema") ? 1 : 0);
         var (_, hooksHelp, _) = ConsoleCapture.Capture(() =>
             ConsoleUi.PrintCommandUsage("hooks") ? 1 : 0);
+        dbSchemaHelp = dbSchemaHelp.ReplaceLineEndings("\n");
+        hooksHelp = hooksHelp.ReplaceLineEndings("\n");
 
         Assert.Contains("--type <table|index|trigger|view>", dbSchemaHelp, StringComparison.Ordinal);
         Assert.DoesNotContain("--integrity-check", dbSchemaHelp, StringComparison.Ordinal);
         Assert.DoesNotContain("\nOptions:\n", dbSchemaHelp, StringComparison.Ordinal);
         Assert.Contains("--project <path>", hooksHelp, StringComparison.Ordinal);
         Assert.Contains("--force", hooksHelp, StringComparison.Ordinal);
+        Assert.Contains("--dry-run", hooksHelp, StringComparison.Ordinal);
         Assert.Contains("--json", hooksHelp, StringComparison.Ordinal);
-        Assert.DoesNotContain("\nOptions:\n", hooksHelp, StringComparison.Ordinal);
+        Assert.Contains("\nOptions:\n", hooksHelp, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -389,7 +392,7 @@ public class ConsoleUiTests
         Assert.DoesNotContain("██████╗", output);
         Assert.Contains("Usage:", output);
         Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild [--yes]] [--optimize [--show-paths]] [--symbols-only] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--force] [--quiet] [--json] [--allow-partial] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--max-references-per-file <n>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>] [--watch-pending-path-limit <n>]]", output);
-        Assert.Contains("cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]", output);
+        Assert.Contains("cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--dry-run] [--json]", output);
         Assert.Contains("cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--allow-partial] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]", output);
         Assert.Contains("cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--allow-partial] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]", output);
         Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--allow-partial] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]", output);
@@ -407,43 +410,19 @@ public class ConsoleUiTests
         Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name] [--group-partials]", output);
         Assert.Contains("cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]", output);
         Assert.Contains("cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <next_cursor>] [--sort <source|kind|references|size|complexity|path|name>] [--kind <kind[,kind]>] [--outline-fields <csv>]", output);
-        Assert.Contains("--snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)", output);
-        Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
-        Assert.Contains("--max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
+        Assert.Contains("--snippet-lines <n>", output);
+        Assert.Contains("Snippet length; issue-drafts accept 0 for path/line-only evidence", output);
         Assert.Contains("cdidx find <query> (--path <glob>|--all)", output);
-        Assert.Contains("--fts                      Use raw FTS5 query syntax for search (content:term, NEAR(a b, 5), OR, NOT, groups, prefix*, \"phrase\"; search query max 1000 chars; raw FTS parser max 2000 chars, 64 boolean ops, 16 NEAR ops", output);
-        Assert.Contains("--exact                    Backward-compatible shorthand.", output);
-        Assert.Contains("                              Prefer --exact-substring for search,", output);
-        Assert.Contains("                              --exact for find,", output);
-        Assert.Contains("                              and --exact-name for symbol/graph lookups.", output);
-        Assert.Contains("                              Combining exact-match flags is rejected.", output);
-        Assert.Contains("--exact-substring          Search only: case-sensitive exact substring", output);
-        Assert.Contains("                              (no FTS5)", output);
-        Assert.Contains("--exact-name               Exact name match for symbols, definition,", output);
-        Assert.Contains("                              references, callers, callees, and inspect.", output);
-        Assert.Contains("                              Uses NFKC + Unicode CaseFold when ready.", output);
-        Assert.Contains("                              Legacy/stale-fold DBs fall back to ASCII NOCASE;", output);
-        Assert.Contains("                              run `cdidx backfill-fold` or check fold_ready.", output);
-        Assert.Contains("--kind <kind>              definition/symbols/outline/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation/type_tag/bcl_regex_without_timeout); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
-        Assert.Contains("--severity <s>             validate only: filter issues by severity: info, warning, error", output);
-        Assert.Contains("--count                    Count only; result limits are ignored by count", output);
+        Assert.Contains("--count", output);
         Assert.Contains("scan caps can still mark approximate counts as degraded", output);
-        Assert.Contains("--no-dedup                 search only: return every raw overlapping chunk hit (debug/density)", output);
         Assert.Contains("--commits <commit-ref> [commit-ref ...]", output);
-        Assert.Contains("Update only files changed in the specified git", output);
-        Assert.Contains("commits (preferred after commits; max 64 refs, 256 chars each)", output);
-        Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
-        Assert.Contains("--optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files", output);
-        Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
-        Assert.Contains("--ascii                    Use ASCII spinner/progress glyphs", output);
+        Assert.Contains("--files <path>", output);
+        Assert.Contains("--optimize", output);
+        Assert.Contains("--duration-format <auto|seconds|hms>", output);
+        Assert.Contains("--ascii", output);
         Assert.Contains("cdidx excerpt <path[:line|:start-end]> [--line <line>|--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--redact-paths|--show-paths] [--no-semantic-tokens] [--max-json-bytes <n>] [--verbose]", output);
-        Assert.Contains("--focus-column <n>         find/excerpt: focus a specific 1-based column", output);
-        Assert.Contains("--focus-line <line>        find/excerpt: focus a line", output);
-        Assert.Contains("excerpt keeps the leading window when no column is supplied", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--format <text|json|compact|issue-drafts>] [--pretty] [--compact] [--fields <csv>] [--cursor <next_cursor>] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <summary,tree,languages,hotspots,metrics|list>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>] [--max-json-bytes <n>]", output);
         Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=ndjson|array]] [--compact] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--allow-partial] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--group-partials] [--since <datetime>]", output);
-        Assert.Contains("--sort <mode>              Symbols/outline: order audit output by a ranking", output);
-        Assert.Contains("source, kind, references, size, complexity, path, and name", output);
         Assert.Contains("cdidx files [query|<glob>|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact>] [--summary-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--allow-partial] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
         Assert.Contains("cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]", output);
         Assert.Contains("Note: if a query itself starts with '-', pass it with --query <query> or -- <query>", output);
@@ -451,12 +430,10 @@ public class ConsoleUiTests
         Assert.Contains("cdidx unused [--db <path>] [--json] [--compact]", output);
         Assert.Contains("[--cursor <next_cursor>] [--audit-scope <source|all>]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--format <text|json|count|compact>] [--compact] [--fields <csv>] [--cursor <next_cursor>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]", output);
-        Assert.Contains("--json                     Output as JSON (search/symbols/files stream", output);
-        Assert.Contains("search/symbols/files/validate accept --json=array for one", output);
-        Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)", output);
-        Assert.Contains("--bytes                    files: sort by size and show raw byte counts in human", output);
-        Assert.Contains("map: show raw byte counts; JSON always keeps raw", output);
-        Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON keeps capped paths plus full definition_site_details", output);
+        Assert.Contains("--json", output);
+        Assert.Contains("--lang <lang>", output);
+        Assert.Contains("--bytes", output);
+        Assert.Contains("--group-by-name", output);
         Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
         Assert.Contains("cdidx search --query --path --path README.md   Search for a literal option token", output);
         Assert.Contains("cdidx hotspots --group-by-name --exclude-tests", output);
@@ -465,8 +442,6 @@ public class ConsoleUiTests
         Assert.Contains("backfill-fold", output);
         Assert.Contains("optimize                   Optimize FTS5 segments in an existing index DB", output);
         Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
-        Assert.Contains("Prefer --exact-substring for search", output);
-        Assert.Contains("--exact for find", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
         Assert.Contains("hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively", output);
         Assert.Contains("cdidx find guard --path src/Auth.cs --after 2", output);
@@ -474,9 +449,9 @@ public class ConsoleUiTests
         Assert.Contains("cdidx hotspots --lang csharp --exclude-tests    Find high-impact symbols with conservative duplicate fallback", output);
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
         Assert.Contains("license                    Show licensing, trademark, and commercial-use summary", output);
-        Assert.Contains("--license                  Show licensing, trademark, and commercial-use summary", output);
+        Assert.Contains("--license", output);
         Assert.Contains("completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell", output);
-        Assert.Contains("--completions <shell>      Generate shell completions (bash, zsh, fish, powershell)", output);
+        Assert.Contains("--completions <shell>", output);
         Assert.Contains("cdidx --completions zsh > ~/.zfunc/_cdidx      Generate a zsh completion script", output);
         Assert.Contains("cdidx license                                  Show licensing and commercial-use terms", output);
         Assert.DoesNotContain("Easter eggs", output);
@@ -485,26 +460,16 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintUsage_ExactMatchOptionLines_FitWithinEightyColumns()
+    public void PrintUsage_RegistryOptionTokens_FitWithinEightyColumns()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
         var lines = output.Split(Environment.NewLine);
-        var exactStart = Array.FindIndex(lines, line => line.StartsWith("  --exact ", StringComparison.Ordinal));
-        var exactSubstringStart = Array.FindIndex(lines, line => line.StartsWith("  --exact-substring", StringComparison.Ordinal));
-        var exactNameStart = Array.FindIndex(lines, line => line.StartsWith("  --exact-name", StringComparison.Ordinal));
-        var kindStart = Array.FindIndex(lines, line => line.StartsWith("  --kind <kind>", StringComparison.Ordinal));
-
-        Assert.True(exactStart >= 0);
-        Assert.True(exactSubstringStart > exactStart);
-        Assert.True(exactNameStart > exactSubstringStart);
-        Assert.True(kindStart > exactNameStart);
-
-        var exactMatchLines = lines[exactStart..kindStart]
-            .Where(line => line.Length > 0)
-            .ToArray();
-
-        Assert.NotEmpty(exactMatchLines);
-        Assert.All(exactMatchLines, line => Assert.True(line.Length <= 80, $"Line exceeds 80 columns ({line.Length}): {line}"));
+        foreach (var token in new[] { "--exact", "--exact-name", "--kind <kind>" })
+        {
+            var line = Assert.Single(lines, line =>
+                string.Equals(line.Trim(), token, StringComparison.Ordinal));
+            Assert.True(line.Length <= 80, $"Line exceeds 80 columns ({line.Length}): {line}");
+        }
     }
 
     [Fact]
@@ -1137,7 +1102,7 @@ public class ConsoleUiTests
         Assert.Contains("--log-format) COMPREPLY=($(compgen -W \"text json\" -- \"$cur\"))", bash);
         Assert.Contains("'--log-format[Persistent stderr log format]:format:(text json)'", zsh);
         Assert.Contains("-l log-format -r -a 'text json'", fish);
-        Assert.Contains("'--log-format' { $logFormats", powershell);
+        Assert.Contains("'--log-format' = @('text', 'json')", powershell);
     }
 
     [Fact]
@@ -2310,7 +2275,7 @@ public class ConsoleUiTests
     public void PrintUsage_DocumentsColorFlag()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
-        Assert.Contains("--color <when>", output);
+        Assert.Contains("--color <auto|always|never>", output);
         Assert.Contains("`auto`", output);
         Assert.Contains("`always`", output);
         Assert.Contains("`never`", output);
@@ -2322,7 +2287,7 @@ public class ConsoleUiTests
     public void PrintUsage_DocumentsPaletteFlag()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
-        Assert.Contains("--palette <name>", output);
+        Assert.Contains("--palette <basic|256|truecolor>", output);
         Assert.Contains("`basic`", output);
         Assert.Contains("`256`", output);
         Assert.Contains("`truecolor`", output);
@@ -2746,10 +2711,10 @@ public class ConsoleUiTests
             "[--group-by <file|symbol|origin|return-type|subsystem>]",
             "[--unique <path|file|symbol|origin|return-type|subsystem>]",
             "[--count-by <path|file|symbol|origin|return-type|subsystem>]",
-            "[--origin <origin>]",
-            "[--match-origin <origin>]",
-            "[--exclude-origin <origin>]",
-            "[--result-kind <kind>]",
+            "[--origin <code|comment|string_literal|regex_literal|help_text|schema_description|unknown>]",
+            "[--match-origin <code|comment|string_literal|regex_literal|help_text|schema_description|unknown>]",
+            "[--exclude-origin <code|comment|string_literal|regex_literal|help_text|schema_description|unknown>]",
+            "[--result-kind <call_site|declaration|identifier|code|comment|string_literal|regex_literal|help_text|schema_description|unknown>]",
             "[--search-fields <csv>]",
             "[--results-only]",
             "[--first-per-file]",

@@ -177,6 +177,10 @@ The generated scripts complete subcommands, flags, and common flag values.
 `--lang` suggests supported languages, `--kind` suggests symbol/reference kinds,
 and path-like options such as `--db`, `--path`, and `--output` use shell file
 completion.
+Command-specific `--format` values, search origin filters, and `--result-kind`
+values come from the same registry as command help and runtime validation. For
+example, audit completion includes `sarif`, and search completion includes
+`schema_description` and `unknown`.
 
 Install the script in the startup file or completion directory for your shell:
 
@@ -303,7 +307,9 @@ the same filtered file set.
 
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
-Run `cdidx --help` for the full syntax line for every command. For focused help,
+Run `cdidx --help-all` for the full syntax line for every command and
+`cdidx --help-flags` for global, safety/scope, index/update, and shared query
+options. For focused help,
 `cdidx help <command> [subcommand]` is equivalent to the existing
 `cdidx <command> [subcommand] --help` form and never executes that command.
 Known public command targets and supported command or nested aliases exit `0`;
@@ -1213,6 +1219,8 @@ cdidx db schema --summary-only --json                   # counts without full SQ
 cdidx db schema --type table --name files --json         # exact schema object projection
 cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
 cdidx db checkpoint before-prune --dry-run --json        # preview snapshot files and bytes
+cdidx db restore-backups --list --json                   # list managed backup IDs and provenance
+cdidx db restore-backups --restore <id> --dry-run --json # validate a selected backup without mutation
 ```
 
 This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and prints whether the file is `ok` or lists the failures. Exit codes are stable for scripting: `0` clean, `2` (NotFound) when the file does not exist, `3` (DatabaseError) when corruption or an invalid database is detected, and the transient-database exit code for lock/busy contention. SQLite does not offer a general-purpose repair primitive — if the check fails, recover by rebuilding with `cdidx index <projectPath> --rebuild`.
@@ -1221,7 +1229,7 @@ Failures from `vacuum`, `backfill-fold`, `optimize` (including `index --optimize
 
 `db schema` keeps the current full schema dump by default for support bundles. Add `--summary-only` to return only object counts, combine `--type <table|index|trigger|view>` and `--name <object>` for an exact projection, and use `--limit`, `--max-sql-chars`, and `--exclude-internal` to keep schema diagnostics bounded.
 
-`db checkpoint --dry-run` reports the DB/WAL/SHM files and total bytes that would be copied without creating the checkpoint directory. Running `db checkpoint` without `--dry-run` creates the snapshot next to the DB; `db restore <name>` replaces the DB and keeps a pre-restore backup directory. A checkpoint name must be a non-blank single file name of at most 128 characters: it cannot be `.` or `..`, contain a directory separator, or contain characters that the operating system rejects in file names. Invalid names are input errors (`E010_USAGE_ERROR`), not database or storage failures.
+`db checkpoint --dry-run` reports the DB/WAL/SHM files and total bytes that would be copied without creating the checkpoint directory. Import, checkpoint restore, and managed-backup restore create a verified standalone rollback snapshot before replacing an existing DB. `db restore-backups --list` returns each managed ID and provenance; `--restore <id>` validates its bounded manifest, SHA-256, supported schema stamp, and free space before an atomic replacement that rolls back on failure. Add `--dry-run` to perform the same validations and preview the pre-restore backup without mutation. `--no-backup` is an explicit opt-out from creating rollback material and should be reserved for cases where losing the current DB is acceptable. A checkpoint name must be a non-blank single file name of at most 128 characters: it cannot be `.` or `..`, contain a directory separator, or contain characters that the operating system rejects in file names. Invalid names are input errors (`E010_USAGE_ERROR`), not database or storage failures.
 
 `cdidx optimize --dry-run --json` previews FTS5 maintenance without acquiring the index lock or changing the source DB/WAL/SHM files. The result includes DB/core-table/FTS sizes, page and freelist indicators, the incremental-write recommendation, current lock and readiness state, a previous-duration estimate when available, and the operations a real optimize would perform, including its repair-mode schema initialization or migration check. `object_sizes_measurement` distinguishes exact `dbstat` page bytes from the logical-payload fallback used when SQLite does not provide `dbstat`.
 
@@ -3441,6 +3449,9 @@ read-write で mount してください。read-only query container では、fre
 生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
 `--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
 `--path`、`--output` など path 系 option は shell の file completion を使います。
+command 固有の `--format` 値、search origin filter、`--result-kind` 値は command
+help と runtime validation と同じ registry から生成されます。たとえば audit の補完には
+`sarif`、search の補完には `schema_description` と `unknown` が含まれます。
 
 利用中の shell の startup file または completion directory にスクリプトを
 インストールしてください。
@@ -3555,8 +3566,10 @@ cdidx index . --quiet
 filter 済み file 集合を表します。
 
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
-release changelog を source of truth とします。完全な syntax line は `cdidx --help`
-を参照してください。個別の help は `cdidx help <command> [subcommand]` を使え、既存の
+release changelog を source of truth とします。全 command の完全な syntax line は
+`cdidx --help-all`、global、safety / scope、index / update、共有 query option は
+`cdidx --help-flags` を参照してください。個別の help は
+`cdidx help <command> [subcommand]` を使え、既存の
 `cdidx <command> [subcommand] --help` と同じ内容を command を実行せずに表示します。
 既知の公開 command target と対応する command / nested alias は終了コード `0` を返し、
 内部 usage key は help target として受理しません。target の欠落・未検出は bounded な
@@ -4292,6 +4305,9 @@ Bash、Zsh、Fish、PowerShell です。生成されたスクリプトは subcom
 よく使う flag value を補完し、`--lang` は対応言語、`--kind` は symbol/reference
 kind、`--db` / `--path` / `--output` のような path 系 option は shell の file
 completion を使います。
+command 固有の `--format` 値、search origin filter、`--result-kind` 値は command
+help と runtime validation と同じ registry から生成されます。たとえば audit の補完には
+`sarif`、search の補完には `schema_description` と `unknown` が含まれます。
 
 使っている shell の startup file または completion directory に保存してください:
 
@@ -4448,6 +4464,8 @@ cdidx db schema --summary-only --json                   # SQL 本文なしで件
 cdidx db schema --type table --name files --json         # schema object を exact に絞り込み
 cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
 cdidx db checkpoint before-prune --dry-run --json        # snapshot 対象 file と byte 数を preview
+cdidx db restore-backups --list --json                   # managed backup の ID と provenance を一覧表示
+cdidx db restore-backups --restore <id> --dry-run --json # 選択した backup を変更せず検証
 ```
 
 DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損または不正な database、lock / busy 競合は transient-database exit code です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
@@ -4456,7 +4474,7 @@ DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し�
 
 `db schema` は support bundle 向けに、既定では従来どおり full schema dump を維持します。`--summary-only` を付けると object 件数だけを返し、`--type <table|index|trigger|view>` と `--name <object>` を組み合わせると exact projection を適用できます。schema diagnostics を小さく保つには `--limit`、`--max-sql-chars`、`--exclude-internal` を使います。
 
-`db checkpoint --dry-run` は checkpoint directory を作らずに、コピー対象になる DB/WAL/SHM file と合計 byte 数を報告します。`--dry-run` なしの `db checkpoint` は DB の隣に snapshot を作り、`db restore <name>` は DB を置き換えて pre-restore backup directory を保持します。checkpoint 名は空白だけではない 128 文字以下の単一 file 名でなければならず、`.`、`..`、directory separator、または OS が file 名で拒否する文字は使用できません。不正な名前は database / storage 障害ではなく入力エラー (`E010_USAGE_ERROR`) として扱われます。
+`db checkpoint --dry-run` は checkpoint directory を作らずに、コピー対象になる DB/WAL/SHM file と合計 byte 数を報告します。import、checkpoint restore、managed-backup restore は既存 DB の置換前に検証済み standalone rollback snapshot を作成します。`db restore-backups --list` は managed ID と provenance を返し、`--restore <id>` は bounded manifest、SHA-256、対応する schema stamp、free space を検証してから、失敗時に rollback する atomic replacement を実行します。`--dry-run` を付けると、同じ検証と pre-restore backup の予定を DB 無変更で確認できます。`--no-backup` は rollback material 作成の明示的な opt-out であり、現在の DB を失ってもよい場合にだけ使用してください。checkpoint 名は空白だけではない 128 文字以下の単一 file 名でなければならず、`.`、`..`、directory separator、または OS が file 名で拒否する文字は使用できません。不正な名前は database / storage 障害ではなく入力エラー (`E010_USAGE_ERROR`) として扱われます。
 
 `cdidx optimize --dry-run --json` は index lock を取得せず、source DB/WAL/SHM file も変更せずに FTS5 maintenance を preview します。結果には DB/core table/FTS の size、page と freelist の指標、incremental write に基づく推奨、現在の lock/readiness 状態、利用可能な場合は前回所要時間に基づく見積もり、repair mode での schema 初期化または migration の確認を含む、実際の optimize が行う操作が含まれます。`object_sizes_measurement` は、正確な `dbstat` page byte と、SQLite が `dbstat` を提供しない場合の logical-payload fallback を区別します。
 
