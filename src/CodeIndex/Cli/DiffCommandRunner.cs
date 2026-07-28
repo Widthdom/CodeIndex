@@ -28,6 +28,10 @@ public static class DiffCommandRunner
     public static int Run(string[] args, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var options = ParseArgs(args);
+        var errorJsonByteBudget = options.MaxJsonBytes
+            ?? (options.Json && options.Detailed && !options.SummaryOnly
+                ? DefaultDiffJsonBytes
+                : null);
         if (options.ShowHelp)
         {
             ConsoleUi.PrintUsage();
@@ -42,14 +46,14 @@ public static class DiffCommandRunner
                 CommandExitCodes.UsageError,
                 "Run `cdidx diff <db1> <db2> --help` to see the supported command shape.",
                 CommandErrorCodes.UsageError,
-                options.MaxJsonBytes);
+                errorJsonByteBudget);
 
         var json = options.Json || options.SummaryOnly;
         var leftUriValidationExitCode = ValidateReadableDbFileUri(
             options.LeftDb!,
             json,
             jsonOptions,
-            options.MaxJsonBytes);
+            errorJsonByteBudget);
         if (leftUriValidationExitCode != null)
             return leftUriValidationExitCode.Value;
 
@@ -57,7 +61,7 @@ public static class DiffCommandRunner
             options.RightDb!,
             json,
             jsonOptions,
-            options.MaxJsonBytes);
+            errorJsonByteBudget);
         if (rightUriValidationExitCode != null)
             return rightUriValidationExitCode.Value;
 
@@ -77,7 +81,7 @@ public static class DiffCommandRunner
                     CommandExitCodes.UsageError,
                     "Rerun the detailed diff without --cursor to start from the current deterministic record sequence.",
                     CommandErrorCodes.UsageError,
-                    options.MaxJsonBytes);
+                    errorJsonByteBudget);
             }
 
             var outputExitCode = DiffResultWriter.WriteResult(result, options, jsonOptions);
@@ -97,7 +101,7 @@ public static class DiffCommandRunner
                 CommandExitCodes.CancelledBySignal,
                 "Retry the diff with a smaller database pair or after the cancelling operation completes.",
                 CommandErrorCodes.Interrupted,
-                options.MaxJsonBytes);
+                errorJsonByteBudget);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
         {
@@ -108,7 +112,7 @@ public static class DiffCommandRunner
                 UnreadableExitCode,
                 "Pass two readable CodeIndex SQLite database paths.",
                 CommandErrorCodes.DbError,
-                options.MaxJsonBytes);
+                errorJsonByteBudget);
         }
     }
 

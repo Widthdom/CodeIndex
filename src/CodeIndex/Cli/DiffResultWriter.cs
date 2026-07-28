@@ -85,8 +85,24 @@ internal static class DiffResultWriter
         var budget = options.MaxJsonBytes ?? DiffCommandRunner.DefaultDiffJsonBytes;
         var context = CliJsonSerializerContextFactory.Create(jsonOptions);
         var sourceRecords = result.Records ?? [];
+        var maximumCandidate = BuildBoundedCandidate(
+            result,
+            options,
+            sourceRecords,
+            sourceRecords.Count,
+            budget,
+            context);
+        var maximumJson = JsonSerializer.Serialize(maximumCandidate, context.DiffJsonResult);
+        if (FitsJsonLine(maximumJson, budget))
+        {
+            Console.WriteLine(maximumJson);
+            return null;
+        }
+
         var low = 0;
-        var high = GetSerializedRecordCeiling(sourceRecords, budget, context);
+        var high = Math.Min(
+            GetSerializedRecordCeiling(sourceRecords, budget, context),
+            sourceRecords.Count - 1);
         DiffJsonResult? bestResult = null;
         string? bestJson = null;
         while (low <= high)

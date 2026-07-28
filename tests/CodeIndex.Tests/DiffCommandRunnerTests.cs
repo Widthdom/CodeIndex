@@ -547,19 +547,34 @@ public class DiffCommandRunnerTests
                 [db, db, "--json", "--max-json-bytes", $"{byteBudget}"]);
             var (summaryExitCode, summaryOutput) = RunWithCapturedOut(
                 [db, db, "--summary-only", "--max-json-bytes", $"{byteBudget}"]);
+            var oversizedUnsupportedOption = "--" + new string('x', byteBudget * 2);
+            var (parseErrorExitCode, parseErrorOutput) = RunWithCapturedOut(
+                [
+                    db,
+                    db,
+                    "--json",
+                    oversizedUnsupportedOption,
+                    "--max-json-bytes",
+                    $"{byteBudget}",
+                ]);
 
             Assert.Equal(0, detailedExitCode);
             Assert.Equal(0, sampleExitCode);
             Assert.Equal(0, summaryExitCode);
+            Assert.Equal(CommandExitCodes.UsageError, parseErrorExitCode);
             Assert.InRange(Encoding.UTF8.GetByteCount(detailedOutput), 1, byteBudget);
             Assert.InRange(Encoding.UTF8.GetByteCount(sampleOutput), 1, byteBudget);
             Assert.InRange(Encoding.UTF8.GetByteCount(summaryOutput), 1, byteBudget);
+            Assert.InRange(Encoding.UTF8.GetByteCount(parseErrorOutput), 1, byteBudget);
             using var detailedDocument = JsonDocument.Parse(detailedOutput);
             using var sampleDocument = JsonDocument.Parse(sampleOutput);
             using var summaryDocument = JsonDocument.Parse(summaryOutput);
+            using var parseErrorDocument = JsonDocument.Parse(parseErrorOutput);
             Assert.Equal("identical", detailedDocument.RootElement.GetProperty("status").GetString());
             Assert.Equal("identical", sampleDocument.RootElement.GetProperty("status").GetString());
             Assert.Equal("identical", summaryDocument.RootElement.GetProperty("status").GetString());
+            Assert.Equal("error", parseErrorDocument.RootElement.GetProperty("status").GetString());
+            Assert.DoesNotContain(oversizedUnsupportedOption, parseErrorOutput, StringComparison.Ordinal);
         }
         finally
         {
@@ -749,6 +764,45 @@ public class DiffCommandRunnerTests
             Assert.True(GetField(drift, "right_value").GetProperty("redacted").GetBoolean());
             Assert.DoesNotContain(Path.GetFullPath(leftRoot), output, StringComparison.Ordinal);
             Assert.DoesNotContain(Path.GetFullPath(rightRoot), output, StringComparison.Ordinal);
+
+            var additionalOperationalKeys = new[]
+            {
+                "indexed_follow_symlinks_policy",
+                "indexed_head_commit",
+                "indexed_head_commit_branch",
+                "indexed_head_sha",
+                "indexed_head_branch",
+                "indexed_head_timestamp",
+                "commit_scoped_fresh_head_sha",
+                "workspace_path_case_sensitive",
+                DbContext.CdidxWriterVersionMetaKey,
+            };
+            foreach (var key in additionalOperationalKeys)
+            {
+                SetMeta(leftDb, key, $"left-{key}");
+                SetMeta(rightDb, key, $"right-{key}");
+            }
+
+            const int completePageBudget = 7_500;
+            var (boundedExitCode, boundedOutput) = RunWithCapturedOut(
+                [
+                    leftDb,
+                    rightDb,
+                    "--json",
+                    "--detailed",
+                    "--limit",
+                    "100",
+                    "--max-json-bytes",
+                    $"{completePageBudget}",
+                ]);
+
+            Assert.Equal(0, boundedExitCode);
+            Assert.InRange(Encoding.UTF8.GetByteCount(boundedOutput), 1, completePageBudget);
+            using var boundedDocument = JsonDocument.Parse(boundedOutput);
+            var boundedRoot = boundedDocument.RootElement;
+            Assert.Equal(10, boundedRoot.GetProperty("total_count").GetInt64());
+            Assert.Equal(10, boundedRoot.GetProperty("returned_count").GetInt32());
+            Assert.False(boundedRoot.GetProperty("truncated").GetBoolean());
         }
         finally
         {

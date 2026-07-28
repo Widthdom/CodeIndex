@@ -42,11 +42,11 @@ internal static class DiffCommandOptionsParser
                     if (!int.TryParse(args[++i], out var parsedMaxJsonBytes)
                         || parsedMaxJsonBytes < DiffCommandRunner.MinDiffJsonBytes)
                     {
-                        parseError = $"--max-json-bytes must be at least {DiffCommandRunner.MinDiffJsonBytes}";
+                        parseError ??= $"--max-json-bytes must be at least {DiffCommandRunner.MinDiffJsonBytes}";
                     }
                     else if (parsedMaxJsonBytes > DiffCommandRunner.MaxDiffJsonBytes)
                     {
-                        parseError = $"--max-json-bytes must be less than or equal to {DiffCommandRunner.MaxDiffJsonBytes}";
+                        parseError ??= $"--max-json-bytes must be less than or equal to {DiffCommandRunner.MaxDiffJsonBytes}";
                     }
                     else
                     {
@@ -54,48 +54,45 @@ internal static class DiffCommandOptionsParser
                     }
                     break;
                 case "--max-json-bytes":
-                    parseError = "--max-json-bytes requires a value";
+                    parseError ??= "--max-json-bytes requires a value";
                     break;
                 case "--cursor" when i + 1 < args.Length:
                     cursor = args[++i];
                     if (cursor.Length > DiffCursorCodec.MaxCursorLength)
-                        parseError = $"--cursor must not exceed {DiffCursorCodec.MaxCursorLength} characters";
+                        parseError ??= $"--cursor must not exceed {DiffCursorCodec.MaxCursorLength} characters";
                     break;
                 case "--cursor":
-                    parseError = "--cursor requires a value";
+                    parseError ??= "--cursor requires a value";
                     break;
                 case "--limit" when i + 1 < args.Length:
                     if (!int.TryParse(args[++i], out limit) || limit < 0)
-                        parseError = "--limit requires a non-negative integer";
+                        parseError ??= "--limit requires a non-negative integer";
                     else if (limit > maxLimit)
                     {
-                        parseError = $"--limit must be less than or equal to {maxLimit}";
+                        parseError ??= $"--limit must be less than or equal to {maxLimit}";
                         limit = DefaultLimit;
                     }
                     break;
                 case "--limit":
-                    parseError = "--limit requires a value";
+                    parseError ??= "--limit requires a value";
                     break;
                 case "--offset" when i + 1 < args.Length:
                     offsetExplicit = true;
                     if (!int.TryParse(args[++i], out offset) || offset < 0)
-                        parseError = "--offset requires a non-negative integer";
+                        parseError ??= "--offset requires a non-negative integer";
                     break;
                 case "--offset":
-                    parseError = "--offset requires a value";
+                    parseError ??= "--offset requires a value";
                     break;
                 default:
                     if (arg.StartsWith('-'))
-                        parseError = $"diff does not support option: '{arg}'";
+                        parseError ??= $"diff does not support option: '{arg}'";
                     else if (dbs.Count >= 2)
-                        parseError = $"diff accepts exactly two database paths; unexpected argument: '{arg}'";
+                        parseError ??= $"diff accepts exactly two database paths; unexpected argument: '{arg}'";
                     else
                         dbs.Add(arg);
                     break;
             }
-
-            if (parseError is not null)
-                break;
         }
 
         if (parseError is null && dbs.Count != 2)
