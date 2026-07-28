@@ -458,6 +458,20 @@ across live-text eviction and are cleared by `didClose`, so an evicted newer
 version cannot be replaced by a stale change. Other providers return empty
 arrays or null when the database cannot answer safely instead of inventing
 language-server analysis.
+Before URI/path resolution, live-document access, or query-snapshot refresh,
+one shared coordinate validator checks every supported position/range-bearing
+method. `definition`, `declaration`, `references`, `hover`, `completion`, and
+`documentHighlight` require one position; `inlayHint` requires an ordered range;
+and each optional range supplied by `didChange` is validated before live text
+can change. Lines and characters must be JSON integers in the LSP `uinteger`
+domain (0 through 2,147,483,647), and range starts must not follow range ends.
+Malformed, missing, negative, or overflowing request coordinates return
+`-32602` (`Invalid params`); invalid notification coordinates are ignored
+without mutating document state. Structural validation does not turn a valid
+document no-match into a protocol error: provider lookup retains UTF-16
+coordinates and its existing end-of-line/EOF policy, while missing, unreadable,
+or out-of-range documents still produce the provider's conservative empty/null
+result.
 `LspServer` uses one lock-protected lifecycle state machine across ordinary
 dispatch, the cancellation fast path, and queue-overload responses. Its phases
 are before-initialize, initializing, running, shutdown, and exited. Only the
@@ -3720,6 +3734,18 @@ indexed symbol に fallback する。numeric document-version tombstone は live
 後も上限付きで保持し、`didClose` で消去するため、evict 済みの新しい version を stale change が
 置き換えることはない。それ以外の provider は database が安全に答えられない場合、
 language-server analysis を作り上げず、空配列または null を返す。
+URI / path 解決、live document へのアクセス、query snapshot の refresh より前に、1つの共通
+coordinate validator ですべての対応済み position / range method を検証する。
+`definition`、`declaration`、`references`、`hover`、`completion`、
+`documentHighlight` は1つの position を必須とし、`inlayHint` は順序どおりの range を必須とする。
+また、`didChange` に任意の range が指定された場合は、live text を変更する前に各 range を検証する。
+line と character は LSP の `uinteger` 範囲（0〜2,147,483,647）の JSON integer でなければならず、
+range の start が end より後であってはならない。request の coordinate が malformed、欠落、負数、
+overflow の場合は `-32602`（`Invalid params`）を返す。notification の coordinate が不正な場合は
+document state を変更せず無視する。構造検証によって、正当な document の no-match を protocol
+error に変えてはならない。provider lookup は UTF-16 coordinate と既存の行末 / EOF policy を維持し、
+document が欠落、読み取り不能、または範囲外の場合は、引き続き各 provider の保守的な空 / null
+result を返す。
 `LspServer` は通常 dispatch、cancellation fast path、queue-overload response の全経路で、
 1 つの lock 保護された lifecycle state machine を使う。phase は before-initialize、
 initializing、running、shutdown、exited である。最初の `initialize` request だけが初期化へ

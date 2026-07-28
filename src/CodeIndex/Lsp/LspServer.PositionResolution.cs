@@ -310,13 +310,9 @@ internal sealed partial class LspServer : IDisposable
         context = default;
         failureReason = null;
         var path = GetDocumentPath(root);
-        var line = GetInt32(root, "params", "position", "line");
-        var character = GetInt32(root, "params", "position", "character");
-        if (line < 0 || character < 0)
-        {
-            failureReason = FailureInvalidPosition;
-            return false;
-        }
+        var position = ReadRequiredLspPosition(root, "params", "position");
+        var line = position.Line;
+        var character = position.Character;
 
         if (!TryResolveDocumentPath(path, out var resolvedPath, out var projectRelativePath, out var workspaceRoot, out failureReason))
             return false;
