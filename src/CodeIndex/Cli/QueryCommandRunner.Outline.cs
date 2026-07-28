@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -8,20 +9,36 @@ public static partial class QueryCommandRunner
 {
     public static int RunOutline(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var wantsJson = cmdArgs.Any(static arg =>
+            arg == "--compact"
+            || arg == "--json"
+            || arg.StartsWith("--json=", StringComparison.Ordinal));
+        var usage = GetUsageLineOrThrow("outline");
         if (cmdArgs.Length == 0 || cmdArgs[0].StartsWith('-'))
         {
-            WriteUsageError(
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
                 "outline requires a file path.",
-                GetUsageLineOrThrow("outline"),
-                "Pass the indexed file path, for example: `cdidx outline src/CodeIndex/Program.cs`.");
-            return CommandExitCodes.UsageError;
+                CommandExitCodes.UsageError,
+                "Pass the indexed file path, for example: `cdidx outline src/CodeIndex/Program.cs`.",
+                usage,
+                CommandErrorCodes.UsageError,
+                command: "outline");
         }
 
         var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
-            CommandErrorWriter.WriteStderr(previewOptionError);
-            return CommandExitCodes.UsageError;
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                previewOptionError,
+                CommandExitCodes.UsageError,
+                "Remove the unsupported preview option and rerun outline.",
+                usage,
+                CommandErrorCodes.UsageError,
+                command: "outline");
         }
         var options = ParseArgs(
             cmdArgs[1..],
@@ -30,23 +47,31 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false,
             allowOutlineSort: true);
-        if (TryWriteUnsupportedOptionError("outline", cmdArgs[1..], CliFlagSchema.GetAcceptedFlagNamesForCommand("outline")))
+        if (TryWriteUnsupportedOptionError(
+                "outline",
+                cmdArgs[1..],
+                CliFlagSchema.GetAcceptedFlagNamesForCommand("outline"),
+                jsonOptions: jsonOptions))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "outline"))
+        if (TryWriteParseError(options, "outline", jsonOptions))
             return CommandExitCodes.UsageError;
-        if (TryWriteInvalidOutlineKindFilterError(options))
+        if (TryWriteInvalidOutlineKindFilterError(options, jsonOptions))
             return CommandExitCodes.InvalidArgument;
-        if (TryWriteUnexpectedPositionals("outline", options))
+        if (TryWriteUnexpectedPositionals("outline", options, jsonOptions))
             return CommandExitCodes.UsageError;
         if (options.SearchCursor.HasValue
             || options.UnusedCursorOffset.HasValue
             || options.DependencyCycleCursor.HasValue)
         {
-            WriteUsageError(
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
                 "outline --cursor must use an outline pagination cursor.",
-                GetUsageLineOrThrow("outline"),
-                "Use the `next_cursor` value returned by `cdidx outline <path> --json --limit <n>`.");
-            return CommandExitCodes.UsageError;
+                CommandExitCodes.UsageError,
+                "Use the `next_cursor` value returned by `cdidx outline <path> --json --limit <n>`.",
+                usage,
+                CommandErrorCodes.UsageError,
+                command: "outline");
         }
 
         var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, cmdArgs[0], options.DbPathExplicit);
@@ -68,21 +93,34 @@ public static partial class QueryCommandRunner
             var cursorValidationError = ValidateScopedOffsetCursor(options, "outline", cursorContext);
             if (cursorValidationError != null)
             {
-                WriteUsageError(
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
                     cursorValidationError,
-                    GetUsageLineOrThrow("outline"),
-                    "Restart outline pagination without --cursor and use the new next_cursor value.");
-                return CommandExitCodes.UsageError;
+                    CommandExitCodes.UsageError,
+                    "Restart outline pagination without --cursor and use the new next_cursor value.",
+                    usage,
+                    CommandErrorCodes.UsageError,
+                    command: "outline");
             }
 
             var outline = reader.GetOutline(filePath, includeReferenceCounts: includeReferenceCounts);
             if (outline == null)
             {
-                if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(new QueryPathErrorJsonResult(filePath, "file not found in index"), CliJsonSerializerContextFactory.Create(jsonOptions).QueryPathErrorJsonResult));
-                else
-                    CommandErrorWriter.WriteStderr($"Error: '{filePath}' not found in index.");
-                return CommandExitCodes.NotFound;
+                var diagnosticFilePath = Path.IsPathRooted(filePath)
+                    ? DiagnosticSanitizer.ForPath(filePath)
+                    : ConsoleUi.FormatBoundedValue(filePath);
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    $"'{(options.Json ? diagnosticFilePath : filePath)}' was not found in the active index.",
+                    CommandExitCodes.NotFound,
+                    "Check the indexed path spelling or refresh the index with `cdidx index <projectPath>`.",
+                    usage,
+                    CommandErrorCodes.FileNotFound,
+                    "not_found",
+                    "outline",
+                    diagnosticFilePath);
             }
 
             var filteredSymbols = ApplyOutlineKindFilters(outline.Symbols, kindFilters);

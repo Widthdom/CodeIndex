@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
@@ -20,61 +21,108 @@ public static class HookCommandRunner
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(args);
-        if (options.ShowHelp || (options.Command == null && options.ParseError == null))
+        var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
+        if (wantsJson && !options.Json)
+            options = options with { Json = true };
+        if (options.ShowHelp)
         {
             PrintUsage();
-            return options.ShowHelp ? CommandExitCodes.Success : CommandExitCodes.UsageError;
+            return CommandExitCodes.Success;
+        }
+
+        string projectPath;
+        try
+        {
+            projectPath = Path.GetFullPath(options.ProjectPath ?? Environment.CurrentDirectory);
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex))
+        {
+            return WriteResult(
+                options.Json,
+                jsonOptions,
+                "error",
+                $"invalid hooks project path ({CommandErrorWriter.FormatSanitizedException(ex)})",
+                DiagnosticSanitizer.ForPath(options.ProjectPath ?? Environment.CurrentDirectory),
+                null,
+                null,
+                CommandExitCodes.InvalidArgument);
+        }
+
+        if (options.Command == null && options.ParseError == null)
+        {
+            return WriteResult(
+                options.Json,
+                jsonOptions,
+                "error",
+                "hooks requires an install, uninstall, or status command",
+                projectPath,
+                null,
+                null,
+                CommandExitCodes.UsageError);
         }
 
         if (options.ParseError != null)
         {
-            var errorProjectPath = Path.GetFullPath(options.ProjectPath ?? Environment.CurrentDirectory);
             if (!options.Json)
                 PrintUsage();
-            return WriteResult(options.Json, jsonOptions, "error", options.ParseError, errorProjectPath, null, null, CommandExitCodes.UsageError);
+            return WriteResult(options.Json, jsonOptions, "error", options.ParseError, projectPath, null, null, CommandExitCodes.UsageError);
         }
 
-        var projectPath = Path.GetFullPath(options.ProjectPath ?? Environment.CurrentDirectory);
-        var gitDir = GitHelper.ResolveGitCommonDir(projectPath);
-        if (gitDir == null)
-            return WriteResult(options.Json, jsonOptions, "error", "not a git repository", projectPath, null, null, CommandExitCodes.NotFound);
-
-        if (!GitHelper.TryResolveGitMetadataChildPath(
-                gitDir,
-                "hooks",
-                expectDirectory: true,
-                allowMissing: true,
-                out var hooksDir))
+        try
         {
-            return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hooks metadata path", projectPath, null, null, CommandExitCodes.InstallError);
-        }
+            var gitDir = GitHelper.ResolveGitCommonDir(projectPath);
+            if (gitDir == null)
+                return WriteResult(options.Json, jsonOptions, "error", "not a git repository", projectPath, null, null, CommandExitCodes.NotFound);
 
-        var hookPath = Path.Combine(hooksDir, HookName);
-        var chainedHookPath = Path.Combine(hooksDir, ChainedHookName);
-        if (Directory.Exists(LongPath.EnsureWindowsPrefix(hooksDir))
-            && (!GitHelper.TryResolveGitMetadataChildPath(
-                    hooksDir,
-                    HookName,
-                    expectDirectory: false,
+            if (!GitHelper.TryResolveGitMetadataChildPath(
+                    gitDir,
+                    "hooks",
+                    expectDirectory: true,
                     allowMissing: true,
-                    out hookPath)
-                || !GitHelper.TryResolveGitMetadataChildPath(
-                    hooksDir,
-                    ChainedHookName,
-                    expectDirectory: false,
-                    allowMissing: true,
-                    out chainedHookPath)))
-        {
-            return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
-        }
+                    out var hooksDir))
+            {
+                return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hooks metadata path", projectPath, null, null, CommandExitCodes.InstallError);
+            }
 
-        return options.Command switch
+            var hookPath = Path.Combine(hooksDir, HookName);
+            var chainedHookPath = Path.Combine(hooksDir, ChainedHookName);
+            if (Directory.Exists(LongPath.EnsureWindowsPrefix(hooksDir))
+                && (!GitHelper.TryResolveGitMetadataChildPath(
+                        hooksDir,
+                        HookName,
+                        expectDirectory: false,
+                        allowMissing: true,
+                        out hookPath)
+                    || !GitHelper.TryResolveGitMetadataChildPath(
+                        hooksDir,
+                        ChainedHookName,
+                        expectDirectory: false,
+                        allowMissing: true,
+                        out chainedHookPath)))
+            {
+                return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
+            }
+
+            return options.Command switch
+            {
+                "install" => Install(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
+                "uninstall" => Uninstall(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
+                "status" => Status(options, jsonOptions, projectPath, hookPath, chainedHookPath),
+                _ => UnknownCommand(options, jsonOptions, projectPath)
+            };
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex))
         {
-            "install" => Install(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
-            "uninstall" => Uninstall(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
-            "status" => Status(options, jsonOptions, projectPath, hookPath, chainedHookPath),
-            _ => UnknownCommand(options, jsonOptions, projectPath)
-        };
+            return WriteResult(
+                options.Json,
+                jsonOptions,
+                "error",
+                $"hook operation failed ({CommandErrorWriter.FormatSanitizedException(ex)})",
+                projectPath,
+                null,
+                null,
+                CommandExitCodes.InstallError);
+        }
     }
 
     internal static HookCommandOptions ParseArgs(string[] args)
@@ -557,6 +605,71 @@ fi
         string? managedHookPreview = null)
     {
         var hasWarnings = warnings is { Count: > 0 };
+        if (exitCode != CommandExitCodes.Success)
+        {
+            if (!json && hasWarnings)
+            {
+                foreach (var warning in warnings!)
+                    CommandErrorWriter.WriteWarning(warning.Message);
+            }
+
+            JsonObject? additionalJsonProperties = null;
+            if (json)
+            {
+                var diagnosticProjectPath = DiagnosticSanitizer.ForPath(projectPath);
+                var diagnosticHookPath = hookPath == null ? null : DiagnosticSanitizer.ForPath(hookPath);
+                var diagnosticChainedHookPath = chainedHookPath == null ? null : DiagnosticSanitizer.ForPath(chainedHookPath);
+                var safeWarnings = hasWarnings
+                    ? warnings!
+                        .Select(static warning => new HookCommandWarningJsonResult(
+                            warning.Category,
+                            warning.DiagnosticPath,
+                            warning.DiagnosticPath,
+                            DiagnosticSanitizer.ForMessage(warning.Message)))
+                        .ToArray()
+                    : null;
+                additionalJsonProperties = JsonSerializer.SerializeToNode(
+                    new HookCommandJsonResult(
+                        status,
+                        message,
+                        diagnosticProjectPath,
+                        diagnosticHookPath,
+                        diagnosticChainedHookPath,
+                        diagnosticProjectPath,
+                        diagnosticHookPath,
+                        diagnosticChainedHookPath,
+                        safeWarnings,
+                        dryRun,
+                        plannedAction,
+                        managedHookPreview == null
+                            ? null
+                            : DiagnosticRedactor.RedactSensitiveText(managedHookPreview, "[redacted]", redactPaths: true)),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).HookCommandJsonResult)!.AsObject();
+            }
+
+            var (errorCode, category, hint) = exitCode switch
+            {
+                CommandExitCodes.UsageError or CommandExitCodes.InvalidArgument
+                    => (CommandErrorCodes.UsageError, "usage", "Use `cdidx hooks <install|uninstall|status> --help` and correct the command arguments."),
+                CommandExitCodes.NotFound
+                    => (CommandErrorCodes.NotGitRepository, "not_found", "Run from a Git worktree or pass `--project <path>` for one."),
+                _ => (CommandErrorCodes.HookOperationFailed, "platform", "Inspect the Git metadata path and filesystem permissions, then retry the hook operation."),
+            };
+            var result = CommandErrorWriter.WriteJsonOrHuman(
+                json,
+                jsonOptions,
+                json ? DiagnosticSanitizer.ForMessage(message) : message,
+                exitCode,
+                hint,
+                GetUsage(),
+                errorCode,
+                category,
+                "hooks",
+                DiagnosticSanitizer.ForPath(projectPath),
+                additionalJsonProperties);
+            return result;
+        }
+
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
@@ -607,8 +720,11 @@ fi
         return exitCode;
     }
 
+    private static string GetUsage()
+        => "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--dry-run] [--json]";
+
     private static void PrintUsage()
-        => CommandErrorWriter.WriteStderr("Usage: cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--dry-run] [--json]");
+        => CommandErrorWriter.WriteStderr($"Usage: {GetUsage()}");
 }
 
 public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool DryRun, bool ShowHelp, string? ParseError);
