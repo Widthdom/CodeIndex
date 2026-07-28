@@ -198,6 +198,77 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_NoOpRepairsPriorReferenceIdentityContract_Issue4845()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Caller.cs"),
+                "public class Caller { public void Run() { Target.Execute(); } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Target.cs"),
+                "public static class Target { public static void Execute() { } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM symbol_reference_candidates;
+                    UPDATE symbol_references
+                    SET target_symbol_id = NULL,
+                        target_symbol_key = NULL,
+                        resolution_state = NULL,
+                        resolution_candidate_count = 0;
+                    UPDATE codeindex_meta
+                    SET value = @priorVersion
+                    WHERE key = @key;
+                    """;
+                command.Parameters.AddWithValue(
+                    "@priorVersion",
+                    (DbContext.ReferenceIdentityContractVersion - 1).ToString(CultureInfo.InvariantCulture));
+                command.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
+                command.ExecuteNonQuery();
+            }
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "Caller.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+
+            using var verification = new SqliteConnection($"Data Source={dbPath}");
+            verification.Open();
+            using var markerCommand = verification.CreateCommand();
+            markerCommand.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            markerCommand.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
+            Assert.Equal(
+                DbContext.ReferenceIdentityContractVersion.ToString(CultureInfo.InvariantCulture),
+                Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+
+            using var candidateCommand = verification.CreateCommand();
+            candidateCommand.CommandText = """
+                SELECT COUNT(*)
+                FROM symbol_reference_candidates candidate
+                JOIN symbol_references reference ON reference.id = candidate.reference_id
+                WHERE reference.resolution_state IN ('resolved', 'resolved_group')
+                """;
+            Assert.True(Convert.ToInt32(candidateCommand.ExecuteScalar(), CultureInfo.InvariantCulture) > 0);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_RefreshesMutualRecursionOncePerBatchIncludingDeleteOnly()
     {
         var projectRoot = CreateTempProject();

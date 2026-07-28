@@ -117,6 +117,7 @@ internal static class PostExtractionHookMutationMaterializer
             ReferenceKind = reference.ReferenceKind,
             Line = reference.Line,
             Column = reference.Column,
+            SpanLength = reference.SpanLength,
             Context = reference.Context,
             ContainerKind = reference.ContainerKind,
             ContainerName = reference.ContainerName,

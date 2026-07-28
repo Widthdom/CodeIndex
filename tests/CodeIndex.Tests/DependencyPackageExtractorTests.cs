@@ -185,25 +185,31 @@ public class DependencyPackageExtractorTests
         var symbols = SymbolExtractor.Extract(10, "dependency_lock", content, filePath: "packages.lock.json");
         var references = ReferenceExtractor.Extract(10, "dependency_lock", content, symbols, path: "packages.lock.json");
 
-        Assert.Contains(symbols, symbol =>
-            symbol.Kind == "package"
-            && symbol.SubKind == "lock_direct_dependency"
-            && symbol.Name == "Newtonsoft.Json"
-            && symbol.ContainerName == "net8.0"
-            && symbol.Signature?.Contains("role=direct", StringComparison.Ordinal) == true
-            && symbol.Signature?.Contains("resolved=13.0.3", StringComparison.Ordinal) == true
-            && symbol.Signature?.Contains("requested=[13.0.3, )", StringComparison.Ordinal) == true);
-        Assert.Contains(symbols, symbol =>
-            symbol.Kind == "package"
-            && symbol.SubKind == "lock_transitive_dependency"
-            && symbol.Name == "Serilog"
-            && symbol.Signature?.Contains("role=transitive", StringComparison.Ordinal) == true);
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Serilog"
-            && reference.ReferenceKind == "dependency"
-            && reference.ContainerKind == "package"
-            && reference.ContainerName == "Newtonsoft.Json"
-            && reference.Context.Contains("Serilog", StringComparison.Ordinal));
+        var directPackage = Assert.Single(symbols, symbol => symbol.Name == "Newtonsoft.Json");
+        Assert.Equal("package", directPackage.Kind);
+        Assert.Equal("lock_direct_dependency", directPackage.SubKind);
+        Assert.Equal("net8.0", directPackage.ContainerName);
+        Assert.Equal(5, directPackage.Line);
+        Assert.Equal(12, directPackage.EndLine);
+        var directSignature = Assert.IsType<string>(directPackage.Signature);
+        Assert.Contains("role=direct", directSignature);
+        Assert.Contains("resolved=13.0.3", directSignature);
+        Assert.Contains("requested=[13.0.3, )", directSignature);
+
+        var transitivePackage = Assert.Single(symbols, symbol => symbol.Name == "Serilog");
+        Assert.Equal("lock_transitive_dependency", transitivePackage.SubKind);
+        Assert.Equal(13, transitivePackage.Line);
+        Assert.Equal(16, transitivePackage.EndLine);
+        Assert.Contains("role=transitive", Assert.IsType<string>(transitivePackage.Signature));
+
+        var dependencyReference = Assert.Single(references);
+        Assert.Equal("Serilog", dependencyReference.SymbolName);
+        Assert.Equal("dependency", dependencyReference.ReferenceKind);
+        Assert.Equal("package", dependencyReference.ContainerKind);
+        Assert.Equal("Newtonsoft.Json", dependencyReference.ContainerName);
+        Assert.Equal("net8.0", dependencyReference.TargetQualifier);
+        Assert.Equal(10, dependencyReference.Line);
+        Assert.Contains("Serilog", dependencyReference.Context, StringComparison.Ordinal);
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Newtonsoft.Json");
     }
 

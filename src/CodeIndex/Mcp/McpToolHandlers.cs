@@ -679,6 +679,8 @@ public partial class McpServer
             {
                 ["file"] = result.Path,
                 ["line"] = result.FirstLine,
+                ["column"] = result.FirstColumn,
+                ["length"] = result.FirstLength,
                 ["caller_kind"] = result.CallerKind,
                 ["caller"] = result.CallerName,
                 ["callee"] = result.CalleeName,

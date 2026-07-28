@@ -369,7 +369,7 @@ public static partial class QueryCommandRunner
             {
                 if (TryWriteFormattedLocations(
                     options,
-                    results.Select(r => new FormattedLocation(r.Path, r.FirstLine, null, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")),
+                    results.Select(r => new FormattedLocation(r.Path, r.FirstLine, r.FirstColumn, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")),
                     jsonOptions))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
@@ -379,12 +379,22 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatQf)
                 {
-                    WriteQuickfix(results.Select(r => (r.Path, r.FirstLine, 1, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")));
+                    WriteQuickfix(results.Select(r => (r.Path, r.FirstLine, r.FirstColumn ?? 0, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")));
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(results.Select(r => (r.Path, r.FirstLine, 1, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}", r.ReferenceKind)), jsonOptions);
+                    WriteSarif(
+                        results.Select(r => new SarifLocation(
+                            r.Path,
+                            r.FirstLine,
+                            r.FirstColumn ?? 1,
+                            r.FirstColumn.HasValue && r.FirstLength.HasValue
+                                ? r.FirstColumn.Value + Math.Max(1, r.FirstLength.Value)
+                                : null,
+                            $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}",
+                            r.ReferenceKind)),
+                        jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 foreach (var r in results)

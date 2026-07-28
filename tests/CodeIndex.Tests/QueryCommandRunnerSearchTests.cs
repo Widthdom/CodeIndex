@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using CodeIndex.Cli;
@@ -1677,7 +1678,7 @@ public partial class QueryCommandRunnerTests
                 .GetProperty("properties")
                 .GetProperty("replay_command")
                 .GetString();
-            Assert.Contains("search -- -TODO", dashReplayCommand, StringComparison.Ordinal);
+            Assert.Contains("search --query -TODO", dashReplayCommand, StringComparison.Ordinal);
 
             for (var i = 0; i <= DbReader.MaxGuardedSearchCandidates; i++)
             {
@@ -8135,6 +8136,185 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_AdHocIssueDraftsPreserveSourceTotalsSelectorsAndReplay_Issue4838()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_draft_replay_4838");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 126; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/replay's/match{i:D3}.cs",
+                    "csharp",
+                    $"public sealed class Issue4838Needle{i:D3} {{ }}\n",
+                    isGenerated: true);
+            }
+
+            var args = new[]
+            {
+                "--query", "Issue4838Needle",
+                "--db", dbPath,
+                "--format", "issue-drafts",
+                "--exact-substring",
+                "--path", "src/replay's/**",
+                "--exclude-path", "src/replay's/ignored/**",
+                "--exclude-tests",
+                "--include-generated",
+                "--no-dedup",
+                "--no-visibility-rank",
+                "--first-per-file",
+                "--sample", "3",
+                "--limit", "20",
+                "--total-limit", "1",
+                "--snippet-lines", "0",
+                "--snippet-focus", "leftmost",
+                "--max-line-width", "80",
+                "--issue-title", "Owner's replay probe",
+                "--issue-label", "bug",
+                "--max-json-bytes", "200000"
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var draft = Assert.Single(root.GetProperty("drafts").EnumerateArray());
+            var source = draft.GetProperty("source");
+            var body = draft.GetProperty("body").GetString()!;
+            var replayCommand = ExtractIssueDraftReplayCommand(body.ReplaceLineEndings("\r\n"));
+            var replayWords = ParseReplayShellCommand(replayCommand);
+
+            Assert.Equal(1, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(126, source.GetProperty("source_total_count").GetInt32());
+            Assert.Equal(126, source.GetProperty("source_minimum_count").GetInt32());
+            Assert.True(source.GetProperty("source_total_count_authoritative").GetBoolean());
+            Assert.False(source.TryGetProperty("source_fetch_limit", out _));
+            Assert.Equal(1, source.GetProperty("returned_count").GetInt32());
+            Assert.Equal(20, source.GetProperty("limit_per_query").GetInt32());
+            Assert.Equal(1, source.GetProperty("total_limit").GetInt32());
+            Assert.True(source.GetProperty("first_per_file").GetBoolean());
+            Assert.Equal(3, source.GetProperty("sample").GetInt32());
+            Assert.Equal(1, source.GetProperty("result_limit").GetInt32());
+            Assert.Equal(125, source.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(125, source.GetProperty("minimum_omitted_result_count").GetInt32());
+            Assert.Equal("sample", source.GetProperty("selection_reason").GetString());
+            Assert.Equal(123, source.GetProperty("selection_omitted_count").GetInt32());
+            Assert.True(source.GetProperty("truncated").GetBoolean());
+            Assert.Contains("- source_total_count: `126`", body, StringComparison.Ordinal);
+            Assert.Contains("- returned_count: `1`", body, StringComparison.Ordinal);
+            Assert.Contains("- total_limit: `1`", body, StringComparison.Ordinal);
+            Assert.Contains("- sample: `3`", body, StringComparison.Ordinal);
+            Assert.Equal("cdidx", replayWords[0]);
+            Assert.Equal("search", replayWords[1]);
+            Assert.Contains("--query", replayWords);
+            Assert.Contains("--total-limit", replayWords);
+            Assert.Contains("--include-generated", replayWords);
+            Assert.Contains("--first-per-file", replayWords);
+            Assert.Contains("--sample", replayWords);
+            Assert.Contains("src/replay's/**", replayWords);
+            Assert.Contains("Owner's replay probe", replayWords);
+
+            var (replayExitCode, replayStdout, replayStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(replayWords.Skip(2).ToArray(), _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, replayExitCode);
+            Assert.Equal(string.Empty, replayStderr);
+            using var replayDocument = ParseJsonOutput(replayStdout);
+            var replayDraft = Assert.Single(replayDocument.RootElement.GetProperty("drafts").EnumerateArray());
+            Assert.Equal(source.GetRawText(), replayDraft.GetProperty("source").GetRawText());
+            Assert.Equal(
+                draft.GetProperty("evidence_paths").GetRawText(),
+                replayDraft.GetProperty("evidence_paths").GetRawText());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_AdHocIssueDraftGuardsUseBoundedSourcePopulation_Issue4838()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_draft_guard_4838");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/guarded.cs",
+                "csharp",
+                "Issue4838GuardNeedle return;\n");
+            var chunks = Enumerable.Range(0, 1001)
+                .Select(index => new ChunkRecord
+                {
+                    ChunkIndex = index,
+                    StartLine = (index * 2) + 1,
+                    EndLine = index == 0 ? 2 : (index * 2) + 1,
+                    Content = index == 0
+                        ? "Issue4838GuardNeedle\nreturn;\n"
+                        : $"Issue4838GuardNeedle candidate {index};\n"
+                })
+                .ToArray();
+            ReplaceIndexedChunks(dbPath, "src/guarded.cs", chunks);
+
+            var args = new[]
+            {
+                "--query", "Issue4838GuardNeedle",
+                "--db", dbPath,
+                "--format", "issue-drafts",
+                "--exact-substring",
+                "--require-after", "return",
+                "--guard-window", "1",
+                "--limit", "1",
+                "--snippet-lines", "0",
+                "--max-json-bytes", "200000"
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var draft = Assert.Single(document.RootElement.GetProperty("drafts").EnumerateArray());
+            var source = draft.GetProperty("source");
+            var body = draft.GetProperty("body").GetString()!;
+            var replayWords = ParseReplayShellCommand(ExtractIssueDraftReplayCommand(body));
+
+            Assert.False(source.TryGetProperty("source_total_count", out _));
+            Assert.Equal(1, source.GetProperty("source_minimum_count").GetInt32());
+            Assert.False(source.GetProperty("source_total_count_authoritative").GetBoolean());
+            Assert.Equal(200, source.GetProperty("source_fetch_limit").GetInt32());
+            Assert.Equal(1, source.GetProperty("returned_count").GetInt32());
+            Assert.Equal(0, source.GetProperty("omitted_count").GetInt32());
+            Assert.True(source.GetProperty("truncated").GetBoolean());
+            Assert.Contains("- source_total_count: `unknown`", body, StringComparison.Ordinal);
+            Assert.Contains("- source_minimum_count: `1`", body, StringComparison.Ordinal);
+            Assert.Contains("--require-after", replayWords);
+            Assert.Contains("return", replayWords);
+
+            var (replayExitCode, replayStdout, replayStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(replayWords.Skip(2).ToArray(), _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, replayExitCode);
+            Assert.Equal(string.Empty, replayStderr);
+            using var replayDocument = ParseJsonOutput(replayStdout);
+            var replayDraft = Assert.Single(replayDocument.RootElement.GetProperty("drafts").EnumerateArray());
+            Assert.Equal(source.GetRawText(), replayDraft.GetProperty("source").GetRawText());
+            Assert.Equal(
+                draft.GetProperty("evidence_paths").GetRawText(),
+                replayDraft.GetProperty("evidence_paths").GetRawText());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_AdHocIssueDraftDuplicateThresholdFiltersMatches_Issue3827()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_draft_threshold_3827");
@@ -13039,6 +13219,64 @@ jobs:
         if (arg.Length > 0 && arg.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/' or ':' or '='))
             return arg;
         return "'" + arg.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
+
+    private static string ExtractIssueDraftReplayCommand(string body)
+    {
+        const string startMarker = "## Replay command\n```sh\n";
+        const string endMarker = "\n```";
+        var normalizedBody = body.ReplaceLineEndings("\n");
+        var start = normalizedBody.IndexOf(startMarker, StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        start += startMarker.Length;
+        var end = normalizedBody.IndexOf(endMarker, start, StringComparison.Ordinal);
+        Assert.True(end > start);
+        return normalizedBody[start..end];
+    }
+
+    private static List<string> ParseReplayShellCommand(string command)
+    {
+        var words = new List<string>();
+        var current = new StringBuilder();
+        var inSingleQuotes = false;
+        var tokenStarted = false;
+
+        for (var i = 0; i < command.Length; i++)
+        {
+            var ch = command[i];
+            if (!inSingleQuotes && char.IsWhiteSpace(ch))
+            {
+                if (tokenStarted)
+                {
+                    words.Add(current.ToString());
+                    current.Clear();
+                    tokenStarted = false;
+                }
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuotes = !inSingleQuotes;
+                tokenStarted = true;
+                continue;
+            }
+
+            if (!inSingleQuotes && ch == '\\' && i + 1 < command.Length)
+            {
+                current.Append(command[++i]);
+                tokenStarted = true;
+                continue;
+            }
+
+            current.Append(ch);
+            tokenStarted = true;
+        }
+
+        Assert.False(inSingleQuotes);
+        if (tokenStarted)
+            words.Add(current.ToString());
+        return words;
     }
 
     private static string BuildOverlappingChunkContent(int startLine, int endLine, string targetLine)

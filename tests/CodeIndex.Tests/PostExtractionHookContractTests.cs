@@ -151,6 +151,7 @@ public class PostExtractionHookContractTests
                 ReferenceKind = "call",
                 Line = 2,
                 Column = 1,
+                SpanLength = 4,
                 ContainerName = "Run_Graph",
                 IdentityContainerNameFolded = "stale",
                 TargetQualifier = "pkg",
@@ -166,6 +167,7 @@ public class PostExtractionHookContractTests
         var clonedReference = Assert.Single(clonedReferences);
         Assert.Equal("pkg", clonedReference.TargetQualifier);
         Assert.True(clonedReference.SuppressInferredTargetQualifier);
+        Assert.Equal(4, clonedReference.SpanLength);
 
         PostExtractionHookMutationMaterializer.RefreshLanguageIdentity("nim", symbols);
         PostExtractionHookMutationMaterializer.RefreshLanguageIdentity("nim", clonedReferences);

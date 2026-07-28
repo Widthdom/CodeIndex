@@ -36,7 +36,7 @@ public static partial class ReferenceExtractor
         private HashSet<(string Container, string Name)>? csharpProperties;
         private bool csharpPropertiesResolved;
         private Dictionary<string, List<SymbolRecord>>? csharpContainerCandidatesByName;
-        private List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)>? recordPrimaryCtorRanges;
+        private List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container, SymbolRecord Owner)>? recordPrimaryCtorRanges;
         private bool recordPrimaryCtorRangesResolved;
         private (
             IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
@@ -254,7 +254,7 @@ public static partial class ReferenceExtractor
             return powershellSplatAssignments!;
         }
 
-        internal List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
+        internal List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container, SymbolRecord Owner)> GetRecordPrimaryCtorRanges()
         {
             if (!recordPrimaryCtorRangesResolved)
             {
@@ -448,6 +448,7 @@ public static partial class ReferenceExtractor
                     ReferenceKind = "bcl_regex_without_timeout",
                     Line = reference.Line,
                     Column = reference.Column,
+                    SpanLength = reference.SpanLength,
                     Context = reference.Context,
                     ContainerKind = reference.ContainerKind,
                     ContainerName = reference.ContainerName,

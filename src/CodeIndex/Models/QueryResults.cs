@@ -734,6 +734,12 @@ public class CalleeResult
     public bool AggregateTruncated { get; set; }
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
+    // The representative call-site span is explicit so location consumers do not
+    // reconstruct a column from display text. Legacy rows can retain a null column.
+    // 代表 call-site の span を明示し、location consumer が表示文字列から列を
+    // 復元しないようにする。legacy row の列は null のまま保持できる。
+    public int? FirstColumn { get; set; }
+    public int? FirstLength { get; set; }
     public int ReferenceCount { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? BodyContent { get; set; }

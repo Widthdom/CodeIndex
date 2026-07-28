@@ -147,7 +147,8 @@ public static partial class ReferenceExtractor
                         line.Context,
                         line.LineNumber,
                         callContainer,
-                        line.Language);
+                        line.Language,
+                        sourceLength: name.Length);
                 }
 
                 return false;
@@ -169,7 +170,8 @@ public static partial class ReferenceExtractor
                 line.LineNumber,
                 callContainer,
                 line.Language,
-                targetQualifier);
+                targetQualifier,
+                name.Length);
             return true;
         }
         if (line.Language == "rust"
@@ -189,7 +191,8 @@ public static partial class ReferenceExtractor
                 line.Context,
                 line.LineNumber,
                 callContainer,
-                line.Language);
+                line.Language,
+                sourceLength: name.Length);
             return true;
         }
         if (line.Language == "python"
@@ -209,7 +212,8 @@ public static partial class ReferenceExtractor
                 line.Context,
                 line.LineNumber,
                 callContainer,
-                line.Language);
+                line.Language,
+                sourceLength: name.Length);
             return true;
         }
         if (line.Language == "csharp"
@@ -248,7 +252,8 @@ public static partial class ReferenceExtractor
                 line.Context,
                 line.LineNumber,
                 callContainer,
-                line.Language);
+                line.Language,
+                sourceLength: name.Length);
             if (line.Language == "csharp"
                 && metadataKind == "attribute"
                 && CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(
@@ -266,7 +271,8 @@ public static partial class ReferenceExtractor
                     line.Context,
                     line.LineNumber,
                     callContainer,
-                    line.Language);
+                    line.Language,
+                    sourceLength: name.Length);
             }
             return true;
         }
@@ -285,7 +291,8 @@ public static partial class ReferenceExtractor
                 "instantiate",
                 line.Context,
                 line.LineNumber,
-                callContainer);
+                callContainer,
+                sourceLength: name.Length);
             return true;
         }
 
@@ -302,7 +309,8 @@ public static partial class ReferenceExtractor
                 "consumes_hook",
                 line.Context,
                 line.LineNumber,
-                callContainer);
+                callContainer,
+                sourceLength: name.Length);
             return true;
         }
 
@@ -319,7 +327,8 @@ public static partial class ReferenceExtractor
             ScientificNativeReferenceExtractor.Supports(line.Language)
                 ? line.Language
                 : null,
-            targetQualifier: targetQualifier);
+            targetQualifier: targetQualifier,
+            sourceLength: name.Length);
         return true;
     }
 

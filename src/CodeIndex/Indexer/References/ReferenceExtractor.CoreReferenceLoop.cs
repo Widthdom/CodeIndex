@@ -240,25 +240,44 @@ public static partial class ReferenceExtractor
             {
                 if (language == "csharp")
                 {
+                    SymbolRecord? primaryCtorOwner = null;
                     foreach (var (
                                  rangeStart,
                                  rangeStartColumn,
                                  rangeEnd,
                                  rangeEndColumn,
-                                 syntheticRecordCtor) in
+                                 syntheticRecordCtor,
+                                 owner) in
                              lookups.GetRecordPrimaryCtorRanges())
                     {
+                        if (ReferenceEquals(container, syntheticRecordCtor)
+                            || (container?.Kind == "function"
+                                && container.FileId == syntheticRecordCtor.FileId
+                                && container.StartLine == syntheticRecordCtor.StartLine
+                                && (container.StartLine < rangeEnd
+                                    || (container.StartColumn is int containerStartColumn
+                                        && containerStartColumn < rangeEndColumn))
+                                && string.Equals(
+                                    container.Name,
+                                    syntheticRecordCtor.Name,
+                                    StringComparison.Ordinal)))
+                        {
+                            primaryCtorOwner ??= owner;
+                        }
                         if (lineNumber < rangeStart || lineNumber > rangeEnd)
                             continue;
                         if (lineNumber == rangeStart
                             && column < rangeStartColumn)
                         {
-                            continue;
+                            return owner;
                         }
                         if (lineNumber == rangeEnd && column >= rangeEndColumn)
                             continue;
                         return syntheticRecordCtor;
                     }
+
+                    if (primaryCtorOwner != null)
+                        return primaryCtorOwner;
                 }
 
                 if (javaSameLineCtor != null)
