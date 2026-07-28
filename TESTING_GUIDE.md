@@ -514,7 +514,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   keeps the negative-cursor exception narrow by proving a recognized short option after `--cursor` remains an option and still produces the missing-cursor-value diagnostic.
 - `QueryCommandRunnerTests.RunSearch_UnknownRecipeQuerySuggestsOnlyFromActiveRecipe_Issue4862`, `RunSearch_RecipeQuerySuggestionHandlesZeroOneAndManyQueries_Issue4862`, and `RunSearch_ExternalRecipeAliasesResolveAndSuggestCanonicalActiveQueries_Issue4862`
   keep human/JSON usage errors, canonical names, current/deprecated aliases, deterministic typo correction, active-recipe isolation, normalized filter preservation, and shell-safe replay quoting in one recipe-selection contract. Suggestions and replay selectors must remain canonical names from the active recipe even when an alias is the nearest match.
-  Include/exclude typo recovery must preserve selector semantics, while aliases that collide with canonical names or multiple query owners must be removed with bounded diagnostics.
+  Include/exclude typo recovery must preserve selector semantics, unresolved repeated selectors, and raw FTS mode. Missing close matches and recipe-name corrections with child selectors must not offer a replay that broadens the selection, while aliases that collide with canonical names or multiple query owners must be removed with bounded diagnostics.
 - `QueryCommandRunnerTests.RunReferences_ExactJson_StylesheetAndSqlFixturesShareIndexedWorkspace`
   keeps SCSS variable/mixin/extend references beside SQL multiline MERGE hints, non-ASCII identifiers, quoted-string masking, and temporary-table body boundaries in one multi-file workspace with one CLI index. Use language-specific queries and unique per-file sentinels so count, kind, and line assertions remain independently diagnostic.
 - `QueryCommandRunnerTests.RunReferences_ExactJson_CSharpQueryBoundariesAndVisualBasicQuerySyntaxShareIndexedWorkspace`
@@ -1419,7 +1419,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は負の cursor に対する例外を狭く保ち、`--cursor` の直後にある既知の short option は cursor 値として消費されず、従来どおり cursor 値欠如の診断を返すことを検証します。
 - `QueryCommandRunnerTests.RunSearch_UnknownRecipeQuerySuggestsOnlyFromActiveRecipe_Issue4862`、`RunSearch_RecipeQuerySuggestionHandlesZeroOneAndManyQueries_Issue4862`、`RunSearch_ExternalRecipeAliasesResolveAndSuggestCanonicalActiveQueries_Issue4862`
   は human / JSON usage error、canonical 名、現行 / deprecated alias、決定的な typo correction、active recipe への限定、正規化済み filter の保持、shell-safe な replay quoting を1つの recipe-selection 契約として維持します。alias が最も近い候補でも、suggestion と replay selector は active recipe の canonical 名でなければなりません。
-  include / exclude の typo recovery は selector の意味を保持し、canonical 名または複数の query owner と衝突する alias は上限付き diagnostic とともに除去しなければなりません。
+  include / exclude の typo recovery は selector の意味、未解決の繰り返し selector、raw FTS mode を保持します。近い候補がない場合、および child selector を伴う recipe 名訂正では selection を広げる replay を提示せず、canonical 名または複数の query owner と衝突する alias は上限付き diagnostic とともに除去しなければなりません。
 - `QueryCommandRunnerTests.RunReferences_ExactJson_StylesheetAndSqlFixturesShareIndexedWorkspace`
   は SCSS の variable / mixin / extend 参照と、SQL の multiline MERGE hint、非 ASCII identifier、quoted-string masking、temporary-table body boundary を、CLI index 1回の multi-file workspace で共有します。言語別 query と file ごとの固有 sentinel を使い、件数・kind・line assertion の診断性を独立に保ってください。
 - `QueryCommandRunnerTests.RunReferences_ExactJson_CSharpQueryBoundariesAndVisualBasicQuerySyntaxShareIndexedWorkspace`

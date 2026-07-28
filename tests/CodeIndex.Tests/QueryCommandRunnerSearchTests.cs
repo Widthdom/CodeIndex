@@ -3683,6 +3683,7 @@ public partial class QueryCommandRunnerTests
             "xml-parser-security/xml-readr-settings",
             "--path",
             "src folder/**",
+            "--fts",
             "--limit",
             "7",
         };
@@ -3700,6 +3701,8 @@ public partial class QueryCommandRunnerTests
             "dtd-processing",
             "--include-query",
             "xml-readr-settings",
+            "--include-query",
+            "completely-unrelated-child",
             "--exclude-query",
             "xml-resolver",
             "--limit",
@@ -3725,13 +3728,19 @@ public partial class QueryCommandRunnerTests
         var (excludeExitCode, excludeStdout, excludeStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
             [.. excludeArgs],
             _jsonOptions));
+        var (noSuggestionExitCode, noSuggestionStdout, noSuggestionStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "xml-parser-security/completely-unrelated-child"],
+            _jsonOptions));
+        var (recipeTypoExitCode, recipeTypoStdout, recipeTypoStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "xml-parser-securit/xml-reader-settings"],
+            _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("unknown recipe query 'xml-readr-settings' for recipe 'xml-parser-security'", stderr);
         Assert.Contains("Did you mean: 'xml-reader-settings'?", stderr);
         Assert.Contains(
-            "cdidx search --recipe xml-parser-security/xml-reader-settings --format compact --limit 7 --path 'src folder/**'",
+            "cdidx search --recipe xml-parser-security/xml-reader-settings --format compact --limit 7 --path 'src folder/**' --fts",
             stderr);
         Assert.DoesNotContain("risky-code/raw-diagnostic-echo", stderr);
         Assert.DoesNotContain("Suggestions across all recipes", stderr);
@@ -3740,7 +3749,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, includeStdout);
         Assert.Contains(
             "cdidx search --recipe xml-parser-security --format compact --limit 7"
-            + " --include-query dtd-processing --include-query xml-reader-settings --exclude-query xml-resolver",
+            + " --include-query dtd-processing --include-query xml-reader-settings"
+            + " --include-query completely-unrelated-child --exclude-query xml-resolver",
             includeStderr);
         Assert.DoesNotContain("--recipe xml-parser-security/xml-reader-settings", includeStderr);
 
@@ -3750,6 +3760,18 @@ public partial class QueryCommandRunnerTests
             "cdidx search --recipe xml-parser-security --format compact --limit 7 --exclude-query xml-resolver",
             excludeStderr);
         Assert.DoesNotContain("--recipe xml-parser-security/xml-resolver", excludeStderr);
+
+        Assert.Equal(CommandExitCodes.UsageError, noSuggestionExitCode);
+        Assert.Equal(string.Empty, noSuggestionStdout);
+        Assert.Contains("unknown recipe query 'completely-unrelated-child'", noSuggestionStderr);
+        Assert.Contains("no retry command was generated because no close match was found", noSuggestionStderr);
+        Assert.DoesNotContain("Retry with `", noSuggestionStderr);
+
+        Assert.Equal(CommandExitCodes.UsageError, recipeTypoExitCode);
+        Assert.Equal(string.Empty, recipeTypoStdout);
+        Assert.Contains("Did you mean: 'xml-parser-security'?", recipeTypoStderr);
+        Assert.Contains("retaining the requested query selectors", recipeTypoStderr);
+        Assert.DoesNotContain("Retry with `", recipeTypoStderr);
     }
 
     [Fact]

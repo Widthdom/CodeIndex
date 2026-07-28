@@ -267,8 +267,14 @@ public static partial class QueryCommandRunner
             var suggestionText = suggestions.Count > 0
                 ? $" Did you mean: {string.Join(", ", suggestions.Select(candidate => $"'{candidate}'"))}?"
                 : string.Empty;
-            var hint = suggestions.Count > 0
+            var canReplaySuggestedRecipe = suggestions.Count > 0
+                && directQueryName == null
+                && options.IncludeRecipeQueries.Count == 0
+                && options.ExcludeRecipeQueries.Count == 0;
+            var hint = canReplaySuggestedRecipe
                 ? $"Retry with `{BuildSearchRecipeSelectionReplayCommand(suggestions[0], options)}`."
+                : suggestions.Count > 0
+                    ? "Correct the recipe name while retaining the requested query selectors, or run `cdidx search --list-recipes` to inspect the available recipes."
                 : "Run `cdidx search --list-recipes` to choose an available recipe.";
             error = new(
                 $"unknown search recipe '{recipeName}'. Available recipes: {available}.{suggestionText}",
@@ -413,18 +419,28 @@ public static partial class QueryCommandRunner
             ? $" Did you mean: {string.Join(", ", suggestions.Select(candidate => $"'{candidate}'"))}?"
             : string.Empty;
         var suggestedQueryName = suggestions.FirstOrDefault();
-        var replaySelector = selectorMode == SearchRecipeQuerySelectorMode.Direct && suggestedQueryName != null
-            ? $"{recipe.Name}/{suggestions[0]}"
-            : recipe.Name;
-        var hint = recipe.Queries.Count > 0
-            ? $"Retry with `{BuildSearchRecipeSelectionReplayCommand(
+        string hint;
+        if (suggestedQueryName != null)
+        {
+            var replaySelector = selectorMode == SearchRecipeQuerySelectorMode.Direct
+                ? $"{recipe.Name}/{suggestedQueryName}"
+                : recipe.Name;
+            hint = $"Retry with `{BuildSearchRecipeSelectionReplayCommand(
                 replaySelector,
                 options,
                 recipe,
                 selectorMode,
                 rawSelector,
-                suggestedQueryName)}`."
-            : $"Recipe '{recipe.Name}' has no runnable queries; run `cdidx search --list-recipes` to choose another recipe.";
+                suggestedQueryName)}`.";
+        }
+        else if (recipe.Queries.Count > 0)
+        {
+            hint = $"Choose one of the available queries listed above for recipe '{recipe.Name}'; no retry command was generated because no close match was found.";
+        }
+        else
+        {
+            hint = $"Recipe '{recipe.Name}' has no runnable queries; run `cdidx search --list-recipes` to choose another recipe.";
+        }
         return new(message + suggestionText, hint);
     }
 
@@ -506,7 +522,7 @@ public static partial class QueryCommandRunner
                 {
                     canonicalName = queryBySelector.TryGetValue(selector, out var query)
                         ? query.Name
-                        : null;
+                        : selector;
                 }
 
                 if (canonicalName != null && emitted.Add(canonicalName))
@@ -1106,6 +1122,8 @@ public static partial class QueryCommandRunner
             args.Add("--no-dedup");
         if (options.NoVisibilityRank)
             args.Add("--no-visibility-rank");
+        if (options.RawFts)
+            args.Add("--fts");
         if (options.Exact)
             args.Add("--exact");
         if (options.ExactSubstring)

@@ -1455,7 +1455,9 @@ Recipe JSON and compact output apply `--limit` per query, include a `summary`
 Unknown child-query diagnostics compare only the active recipe's canonical
 query names and aliases. Their replay command keeps that recipe and normalized
 search filters, quotes shell-sensitive values, and never substitutes a query
-from another recipe.
+from another recipe. A replay is emitted only when a close canonical match
+exists; otherwise the diagnostic keeps the available-query list without
+offering a command that would broaden the selection.
 The MCP `search` tool exposes the same recipe surface with
 `{"listRecipes":true}` for discovery and `{"recipe":"risky-code"}` for
 execution. MCP recipe runs apply the same default source scope as the CLI; pass
@@ -4655,7 +4657,8 @@ list metadata ごとに grouped されるため usage error で拒否します�
 `--recipe <recipe>/<query> --cursor <next_cursor>` として再実行してください。
 未知の child query の診断は、active recipe 内の canonical query 名と alias だけを比較します。
 再実行コマンドは同じ recipe と正規化済み search filter を保持し、shell で意味を持つ値を引用し、
-別 recipe の query へ置き換えることはありません。
+別 recipe の query へ置き換えることはありません。近い canonical 候補がある場合だけ再実行コマンドを
+返し、候補がない場合は selection を広げるコマンドを提示せず、利用可能な query の一覧を維持します。
 MCP `search` tool では `{"listRecipes":true}` で recipe を発見し、
 `{"recipe":"risky-code"}` で実行できます。MCP の recipe run も CLI と同じ既定の source
 scope を適用します。docs、tests、changelog、recipe definitions を意図的に audit する場合は
