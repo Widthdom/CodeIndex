@@ -413,6 +413,38 @@ public partial class DbWriter
         DELETE FROM symbol_reference_candidates;
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, target.id, 0
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS target
+          ON target.file_id = source_file.id
+         AND (
+             (target.kind = 'heading' AND target.name_folded = r.symbol_name_folded)
+             OR (target.kind = 'anchor' AND target.name_folded = r.symbol_name COLLATE BINARY)
+         )
+        WHERE source_file.lang = 'markdown'
+          AND r.reference_kind = 'reference'
+          AND r.target_qualifier IS NULL;
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, target.id, 0
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN files AS target_file
+          ON target_file.lang = 'markdown'
+         AND target_file.path =
+             markdown_resolve_path(source_file.path, r.target_qualifier)
+        JOIN symbols AS target
+          ON target.file_id = target_file.id
+         AND (
+             (target.kind = 'heading' AND target.name_folded = r.symbol_name_folded)
+             OR (target.kind = 'anchor' AND target.name_folded = r.symbol_name COLLATE BINARY)
+         )
+        WHERE source_file.lang = 'markdown'
+          AND r.reference_kind = 'reference'
+          AND r.target_qualifier IS NOT NULL;
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
         SELECT r.id, s.id, 0
         FROM symbol_references AS r
         JOIN files AS source_file ON source_file.id = r.file_id
@@ -445,6 +477,7 @@ public partial class DbWriter
           )
           AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND {CSharpTypeReferenceCandidatePredicateSql}
+          AND source_file.lang <> 'markdown'
           AND r.target_qualifier IS NOT NULL
           AND r.target_qualifier NOT LIKE char(31) || 'receiver:%'
           AND (
@@ -533,6 +566,7 @@ public partial class DbWriter
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
+          AND source_file.lang <> 'markdown'
           AND r.target_qualifier IS NULL
           AND s.file_id = r.file_id
           AND source.container_name IS NOT NULL
@@ -564,6 +598,7 @@ public partial class DbWriter
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
+          AND source_file.lang <> 'markdown'
           AND r.target_qualifier IS NULL
           AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND source.container_qualified_name IS NOT NULL
@@ -591,6 +626,7 @@ public partial class DbWriter
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
+          AND source_file.lang <> 'markdown'
           AND r.target_qualifier IS NULL
           AND s.file_id = r.file_id
           AND NOT EXISTS (
@@ -616,6 +652,7 @@ public partial class DbWriter
               OR (source_file.lang = 'ambiguous_m' AND target_file.lang IN ('matlab', 'objc'))
           )
           AND {CSharpTypeReferenceCandidatePredicateSql}
+          AND source_file.lang <> 'markdown'
           AND r.target_qualifier IS NULL
           AND (source_file.lang <> 'dependency_lock' OR s.file_id = r.file_id)
           AND source.container_name IS NOT NULL
@@ -703,7 +740,7 @@ public partial class DbWriter
          AND target_file.path || char(31) ||
              COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
              COALESCE(target.name, '') = unique_family.family_key
-        WHERE source_file.lang <> 'csharp'
+        WHERE source_file.lang NOT IN ('csharp', 'markdown')
           AND (
               r.target_qualifier IS NULL
               OR source_file.lang IN (

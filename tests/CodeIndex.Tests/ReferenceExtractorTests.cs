@@ -1094,14 +1094,12 @@ public partial class ReferenceExtractorTests
             && reference.SymbolName == "deep-details"
             && reference.ContainerName == "Intro");
         Assert.Contains(references, reference =>
-            reference.ReferenceKind == "reference"
-            && reference.SymbolName == "api"
-            && reference.ContainerName == "Intro");
-        Assert.Contains(references, reference =>
             reference.ReferenceKind == "import"
             && reference.SymbolName == "docs/api.md"
             && reference.ContainerName == "Intro");
+        Assert.Equal(3, references.Count);
         Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored.md");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "api");
     }
 
     [Fact]
@@ -1110,7 +1108,8 @@ public partial class ReferenceExtractorTests
         const string content = """
             # Deep Details
 
-            See [local](#Deep-Details) and [guide](USER_GUIDE.md#Error-Codes).
+            See [local](#Deep-Details), [guide](USER_GUIDE.md#Error-Codes),
+            and [entity](#A&amp;B).
             """;
 
         var symbols = SymbolExtractor.Extract(1, "markdown", content);
@@ -1118,10 +1117,20 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.ReferenceKind == "reference"
-            && reference.SymbolName == "deep-details");
+            && reference.SymbolName == "Deep-Details"
+            && reference.IdentitySymbolNameFolded == "deep-details");
         Assert.Contains(references, reference =>
             reference.ReferenceKind == "import"
             && reference.SymbolName == "USER_GUIDE.md#Error-Codes");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "Error-Codes"
+            && reference.IdentitySymbolNameFolded == "error-codes"
+            && reference.TargetQualifier == "USER_GUIDE.md");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "A&B"
+            && reference.IdentitySymbolNameFolded == "ab");
     }
 
     [Fact]
