@@ -1943,10 +1943,27 @@ public partial class DbReader
     internal string GetIssuePaginationGenerationIdentity()
     {
         var userVersion = ExecuteScalar("PRAGMA user_version");
+        var issuesDataCurrent = _hasIssuesTable
+            && (userVersion & DbContext.IssuesReadyFlag) != 0;
         return string.Create(
             CultureInfo.InvariantCulture,
             $"stored-issues-ready-bit:{userVersion & DbContext.IssuesReadyFlag}\n"
-            + $"issues-table-available:{(_hasIssuesTable ? "1" : "0")}");
+            + $"issues-table-available:{(_hasIssuesPhysicalTable ? "1" : "0")}\n"
+            + $"effective-issues-ready:{(issuesDataCurrent ? "1" : "0")}");
+    }
+
+    /// <summary>
+    /// Re-check issue readiness after the caller has established its read snapshot.
+    /// The constructor's cached readiness remains a conservative prerequisite so a reader
+    /// opened while issues were degraded cannot promote itself without being reopened.
+    /// 呼び出し側が read snapshot を確立した後で issue readiness を再確認する。
+    /// degraded 時に開いた reader は再オープンなしに昇格させない。
+    /// </summary>
+    internal bool IsIssueDataCurrentInSnapshot()
+    {
+        var userVersion = ExecuteScalar("PRAGMA user_version");
+        return _hasIssuesTable
+            && (userVersion & DbContext.IssuesReadyFlag) != 0;
     }
 
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()

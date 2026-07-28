@@ -282,6 +282,28 @@ public partial class McpServerTests
         Assert.False(degraded["total_count_authoritative"]!.GetValue<bool>());
         Assert.True(degraded["issues_table_available"]!.GetValue<bool>());
         Assert.False(degraded["file_issues_data_current"]!.GetValue<bool>());
+        Assert.Equal("unknown", degraded["summary"]!["actionability"]!.GetValue<string>());
+        Assert.False(degraded["summary"]!["authoritative"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Validate_RechecksIssueReadinessInsidePaginationSnapshot_Issue4853()
+    {
+        SeedIssue4853DiscoveryRows(1);
+        using var readerOpenedWhileReady = new DbReader(_db);
+        Assert.True(readerOpenedWhileReady._hasIssuesTable);
+
+        var writer = new DbWriter(_db.Connection);
+        writer.ClearReadyFlags();
+
+        var snapshotState = readerOpenedWhileReady.RunInReadSnapshot(() => (
+            Generation: readerOpenedWhileReady.GetIssuePaginationGenerationIdentity(),
+            Current: readerOpenedWhileReady.IsIssueDataCurrentInSnapshot()));
+
+        Assert.Contains("stored-issues-ready-bit:0", snapshotState.Generation, StringComparison.Ordinal);
+        Assert.Contains("issues-table-available:1", snapshotState.Generation, StringComparison.Ordinal);
+        Assert.Contains("effective-issues-ready:0", snapshotState.Generation, StringComparison.Ordinal);
+        Assert.False(snapshotState.Current);
     }
 
     [Fact]

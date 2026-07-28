@@ -1215,13 +1215,15 @@ public partial class McpServer
                 ("exclude-path", excludePaths, PreserveOrder: false));
             var generation = BuildMcpGenerationFingerprint(reader, includeIssueState: true);
             var issuesTableAvailable = reader._hasIssuesPhysicalTable;
-            var issuesDataCurrent = reader._hasIssuesTable;
-            var total = reader.CountIssues(
-                kind,
-                pathPatterns,
-                excludePaths,
-                excludeTests,
-                severity);
+            var issuesDataCurrent = reader.IsIssueDataCurrentInSnapshot();
+            var total = issuesDataCurrent
+                ? reader.CountIssues(
+                    kind,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests,
+                    severity)
+                : 0;
             if (ValidateMcpQueryCursor(
                     id,
                     "validate",
@@ -1233,14 +1235,16 @@ public partial class McpServer
                 return cursorError;
             }
             var offset = cursor?.Offset ?? 0;
-            var issues = reader.GetIssues(
-                kind,
-                pathPatterns,
-                excludePaths,
-                excludeTests,
-                limit: countOnly ? null : limit,
-                severity: severity,
-                offset: offset);
+            var issues = issuesDataCurrent
+                ? reader.GetIssues(
+                    kind,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests,
+                    limit: countOnly ? null : limit,
+                    severity: severity,
+                    offset: offset)
+                : [];
             QueryCommandRunner.AnnotateValidateIssues(issues);
             var pathFilterArray = new JsonArray();
             if (pathPatterns is not null)
@@ -1248,6 +1252,10 @@ public partial class McpServer
                 foreach (var path in pathPatterns)
                     pathFilterArray.Add(path);
             }
+            var issueSummary = QueryCommandRunner.BuildValidateIssueSummary(issues);
+            issueSummary["authoritative"] = issuesDataCurrent;
+            if (!issuesDataCurrent)
+                issueSummary["actionability"] = "unknown";
             var payload = new JsonObject
             {
                 ["count"] = countOnly ? total : issues.Count,
@@ -1259,7 +1267,7 @@ public partial class McpServer
                     ["exclude_paths"] = JsonSerializer.SerializeToNode(excludePaths),
                     ["exclude_tests"] = excludeTests,
                 },
-                ["summary"] = QueryCommandRunner.BuildValidateIssueSummary(issues),
+                ["summary"] = issueSummary,
                 ["top_files"] = BuildTopFileHistogram(issues, issue => issue.Path),
                 ["issues_table_available"] = issuesTableAvailable,
                 ["file_issues_data_current"] = issuesDataCurrent,
