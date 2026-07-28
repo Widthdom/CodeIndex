@@ -789,6 +789,7 @@ public static partial class QueryCommandRunner
                 ? CountSearchMatches(reader, options, exactSearch)
                 : default;
             var displayRows = ReadSearchDisplayRows(reader, options, exactSearch, out var boundedSelection);
+            var sarifSourceRows = displayRows;
             var selection = boundedSelection ?? ApplySearchOutputSelection(displayRows, options);
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
@@ -812,7 +813,14 @@ public static partial class QueryCommandRunner
                 }
                 if (options.Json && TryWriteEmptySearchJsonWithOptionalByteLimit(options, jsonOptions, out var emptyJsonExitCode))
                     return emptyJsonExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : emptyJsonExitCode;
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                var emptySarifRunProperties = options.OutputFormat == OutputFormatSarif
+                    ? BuildAdHocSearchSarifRunProperties(
+                        options,
+                        selection,
+                        CountAdHocSearchSarifSourceResults(reader, options, exactSearch, sarifSourceRows),
+                        returnedResultCount: 0)
+                    : null;
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions, emptySarifRunProperties))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                 {
@@ -935,7 +943,16 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch)).Take(options.Limit), jsonOptions);
+                    var sarifItems = displayRows
+                        .SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch))
+                        .Take(options.Limit)
+                        .ToList();
+                    var runProperties = BuildAdHocSearchSarifRunProperties(
+                        options,
+                        selection,
+                        CountAdHocSearchSarifSourceResults(reader, options, exactSearch, sarifSourceRows),
+                        sarifItems.Count);
+                    WriteSarif(sarifItems, jsonOptions, runProperties: runProperties);
                     return CommandExitCodes.Success;
                 }
                 if (options.JsonOutputFormat == JsonOutputFormatArray)

@@ -124,7 +124,10 @@ public static partial class QueryCommandRunner
             jsonOptions);
     }
 
-    private static bool TryWriteEmptyFormattedResult(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static bool TryWriteEmptyFormattedResult(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        JsonObject? sarifRunProperties = null)
     {
         if (options.OutputFormat == OutputFormatCount)
         {
@@ -150,7 +153,7 @@ public static partial class QueryCommandRunner
             return true;
         if (options.OutputFormat == OutputFormatSarif)
         {
-            WriteSarif(Array.Empty<(string Path, int Line, int Column, string Message, string RuleId)>(), jsonOptions);
+            WriteSarif(Array.Empty<SarifLocation>(), jsonOptions, runProperties: sarifRunProperties);
             return true;
         }
         return false;
