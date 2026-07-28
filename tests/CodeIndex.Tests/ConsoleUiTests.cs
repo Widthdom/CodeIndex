@@ -21,6 +21,8 @@ public class ConsoleUiTests
             ConsoleUi.PrintCommandUsage("db-schema") ? 1 : 0);
         var (_, hooksHelp, _) = ConsoleCapture.Capture(() =>
             ConsoleUi.PrintCommandUsage("hooks") ? 1 : 0);
+        dbSchemaHelp = dbSchemaHelp.ReplaceLineEndings("\n");
+        hooksHelp = hooksHelp.ReplaceLineEndings("\n");
 
         Assert.Contains("--type <table|index|trigger|view>", dbSchemaHelp, StringComparison.Ordinal);
         Assert.DoesNotContain("--integrity-check", dbSchemaHelp, StringComparison.Ordinal);
