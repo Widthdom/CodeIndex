@@ -238,6 +238,7 @@ public class HookCommandRunnerTests
                 ["install", "--project", projectRoot, "--dry-run", "--json"]);
 
             Assert.Equal(CommandExitCodes.UsageError, blockedPreview.ExitCode);
+            Assert.DoesNotContain(projectRoot, blockedPreview.StdOut, StringComparison.Ordinal);
             using (var document = JsonDocument.Parse(blockedPreview.StdOut))
             {
                 Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
@@ -255,10 +256,10 @@ public class HookCommandRunnerTests
                 ["install", "--project", projectRoot, "--dry-run"]);
 
             Assert.Equal(CommandExitCodes.UsageError, blockedHumanPreview.ExitCode);
+            Assert.Equal(string.Empty, blockedHumanPreview.StdOut);
             Assert.Contains("chained hook already exists", blockedHumanPreview.StdErr, StringComparison.Ordinal);
-            Assert.Contains("Planned action: blocked", blockedHumanPreview.StdOut, StringComparison.Ordinal);
-            Assert.Contains("Managed hook preview:", blockedHumanPreview.StdOut, StringComparison.Ordinal);
-            Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Hint:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
+            Assert.Contains("Usage:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
             Assert.Equal(customHook, File.ReadAllText(hookPath));
             Assert.Equal(existingChain, File.ReadAllText(chainedHookPath));
             TestProjectHelper.DeleteFile(chainedHookPath);
@@ -609,7 +610,7 @@ public class HookCommandRunnerTests
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             var backupWarning = warnings[1];
             Assert.Equal("chained_hook_backup", backupWarning.GetProperty("category").GetString());
-            Assert.Contains("pre-commit.cdidx-chain", backupWarning.GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal("pre-commit.cdidx-chain", backupWarning.GetProperty("path").GetString());
             Assert.Equal("pre-commit.cdidx-chain", backupWarning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to back up existing hook", backupWarning.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
@@ -643,10 +644,38 @@ public class HookCommandRunnerTests
             Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
             var warning = document.RootElement.GetProperty("warnings")[0];
             Assert.Equal("managed_hook", warning.GetProperty("category").GetString());
-            Assert.Equal(hookPath, warning.GetProperty("path").GetString());
+            Assert.Equal("pre-commit", warning.GetProperty("path").GetString());
             Assert.Equal("pre-commit", warning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to delete managed_hook", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            HookCommandRunner.DeleteFileForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_UninstallHuman_ReportsManagedHookDeleteWarning_Issue4855()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_human_warning");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var installExit = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
+            Assert.Equal(CommandExitCodes.Success, installExit);
+            HookCommandRunner.DeleteFileForTesting = _ => throw new IOException("delete denied");
+
+            var result = RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]);
+
+            Assert.Equal(CommandExitCodes.InstallError, result.ExitCode);
+            Assert.Equal(string.Empty, result.StdOut);
+            Assert.Contains("Warning:", result.StdErr, StringComparison.Ordinal);
+            Assert.Contains("failed to delete managed_hook", result.StdErr, StringComparison.Ordinal);
+            Assert.Contains("pre-commit", result.StdErr, StringComparison.Ordinal);
+            Assert.Contains(nameof(IOException), result.StdErr, StringComparison.Ordinal);
+            Assert.Contains($"Error [{CommandErrorCodes.HookOperationFailed}]:", result.StdErr, StringComparison.Ordinal);
         }
         finally
         {
@@ -679,7 +708,7 @@ public class HookCommandRunnerTests
             Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
             var warning = document.RootElement.GetProperty("warnings")[0];
             Assert.Equal("chained_hook_backup", warning.GetProperty("category").GetString());
-            Assert.Equal(chainedHookPath, warning.GetProperty("path").GetString());
+            Assert.Equal("pre-commit.cdidx-chain", warning.GetProperty("path").GetString());
             Assert.Equal("pre-commit.cdidx-chain", warning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to restore chained hook backup", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);

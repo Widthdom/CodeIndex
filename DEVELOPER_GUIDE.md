@@ -342,6 +342,23 @@ Usage: <command shape>
 
 When an error code is available, the first line is `Error [<code>]: <message>`. Use `CommandErrorWriter` for new CLI parse, validation, and filesystem preflight errors so `ProgramRunner`, `IndexCommandRunner`, and query runners keep the same format. JSON error payloads continue to use `CommandErrorJsonResult`.
 
+For JSON mode, recoverable non-database failures use the same versioned
+`CommandErrorJsonResult` envelope. It requires `api_version`, `status`,
+`message`, `hint`, `error_code`, `category`, `command`, `exit_code`, and
+`usage`; command-specific fields may be merged only after paths, warnings, and
+previews are sanitized and bounded. JSON failures write the envelope to stdout
+and leave stderr empty. Human failures write the matching coded `Error`,
+`Hint`, and `Usage` lines to stderr and leave stdout empty.
+
+| Failure class | Exit code | Error code | Category |
+|---|---:|---|---|
+| Usage / invalid arguments | 1 or 7 | `E010_USAGE_ERROR` | `usage` |
+| Missing outline path | 2 | `E019_FILE_NOT_FOUND` | `not_found` |
+| Invalid configuration | 1 | `E024_CONFIG_INVALID` | `configuration` |
+| Hook platform or filesystem failure | 9 | `E025_HOOK_OPERATION_FAILED` | `platform` |
+| Hooks outside a Git repository | 2 | `E026_NOT_GIT_REPOSITORY` | `not_found` |
+| Other recoverable command failure | command-specific | `E023_COMMAND_FAILED` | stable writer classification |
+
 ### Process launch policy
 
 All production subprocess launch sites must use `ProcessStartInfo.ArgumentList` and must leave `UseShellExecute` disabled. Start-info construction belongs in `ProcessLaunchPolicy` or a nearby purpose-specific helper that calls it, so git, isolated workers, hook callbacks, installer dispatch, and other subprocesses share the same argument, encoding, and no-shell defaults.
@@ -3572,6 +3589,23 @@ error code がある場合、先頭行は `Error [<code>]: <message>` です。�
 validation、filesystem preflight error は `CommandErrorWriter` を使い、`ProgramRunner`、
 `IndexCommandRunner`、query runner の形式を揃えてください。JSON error payload は
 `CommandErrorJsonResult` を使い続けます。
+
+JSON mode の回復可能な非データベース系失敗も、共通のバージョン付き
+`CommandErrorJsonResult` envelope を使います。`api_version`、`status`、
+`message`、`hint`、`error_code`、`category`、`command`、`exit_code`、
+`usage` は必須です。command 固有 field を加える場合は、path、warning、preview を
+sanitization し、上限を適用してから merge します。JSON の失敗は envelope を stdout に
+出し、stderr を空に保ちます。human の失敗は対応する code 付き `Error`、`Hint`、
+`Usage` を stderr に出し、stdout を空に保ちます。
+
+| failure class | exit code | error code | category |
+|---|---:|---|---|
+| usage / 不正な引数 | 1 または 7 | `E010_USAGE_ERROR` | `usage` |
+| outline path が見つからない | 2 | `E019_FILE_NOT_FOUND` | `not_found` |
+| 不正な設定 | 1 | `E024_CONFIG_INVALID` | `configuration` |
+| hook の platform / filesystem failure | 9 | `E025_HOOK_OPERATION_FAILED` | `platform` |
+| Git repository 外での hooks 実行 | 2 | `E026_NOT_GIT_REPOSITORY` | `not_found` |
+| その他の回復可能な command failure | command ごと | `E023_COMMAND_FAILED` | writer による安定した分類 |
 
 ### プロセス起動ポリシー
 

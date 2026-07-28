@@ -41,13 +41,17 @@ public static partial class QueryCommandRunner
                 ? "Pass this cursor back to the unchanged `cdidx inspect` query that returned it."
                 : "fix the invalid or missing option value, then rerun with the command shape below.";
         WriteParseError(primaryError, primaryHint, commandName, options, jsonOptions);
-        if (options.ParseError != null && dbPathError != null)
+        if (options.ParseError != null
+            && dbPathError != null
+            && !(options.Json && jsonOptions != null))
+        {
             WriteParseError(
                 dbPathError,
                 "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.",
                 commandName,
                 options,
                 jsonOptions);
+        }
         return true;
     }
 
@@ -121,7 +125,8 @@ public static partial class QueryCommandRunner
                 hint,
                 GetUsageLineOrThrow(commandName),
                 ExtractErrorCode(error),
-                category: "usage");
+                category: "usage",
+                command: commandName);
             return;
         }
 
@@ -129,7 +134,10 @@ public static partial class QueryCommandRunner
             StripErrorPrefix(error),
             hint,
             GetUsageLineOrThrow(commandName),
-            ExtractErrorCode(error));
+            ExtractErrorCode(error)
+                ?? (string.Equals(commandName, "outline", StringComparison.Ordinal)
+                    ? CommandErrorCodes.UsageError
+                    : null));
     }
 
     private static string? BuildExplicitDbPathParseError(QueryCommandOptions options)
@@ -201,7 +209,9 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static bool TryWriteInvalidOutlineKindFilterError(QueryCommandOptions options)
+    private static bool TryWriteInvalidOutlineKindFilterError(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
     {
         if (options.Kind == null)
             return false;
@@ -209,10 +219,15 @@ public static partial class QueryCommandRunner
         var kinds = BuildOutlineKindFilters(options.Kind);
         if (kinds.Count == 0)
         {
-            CommandErrorWriter.Write(
+            CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
                 $"invalid --kind value `{ConsoleUi.FormatBoundedValue(options.Kind)}`.",
+                CommandExitCodes.InvalidArgument,
                 $"use one or more of: {string.Join(", ", KnownSymbolKindFilters)}.",
-                GetUsageLineOrThrow("outline"));
+                GetUsageLineOrThrow("outline"),
+                CommandErrorCodes.UsageError,
+                command: "outline");
             return true;
         }
 
@@ -221,10 +236,15 @@ public static partial class QueryCommandRunner
             if (KnownSymbolKindFilters.Contains(kind))
                 continue;
 
-            CommandErrorWriter.Write(
+            CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
                 $"invalid --kind value `{ConsoleUi.FormatBoundedValue(kind)}`.",
+                CommandExitCodes.InvalidArgument,
                 $"use one or more of: {string.Join(", ", KnownSymbolKindFilters)}.",
-                GetUsageLineOrThrow("outline"));
+                GetUsageLineOrThrow("outline"),
+                CommandErrorCodes.UsageError,
+                command: "outline");
             return true;
         }
 
@@ -260,8 +280,40 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions, string? queryLiteral = null)
+    private static bool TryWriteUnsupportedOptionError(
+        string commandName,
+        string[] cmdArgs,
+        IEnumerable<string> supportedOptions,
+        string? queryLiteral = null,
+        JsonSerializerOptions? jsonOptions = null)
     {
+        void WriteOptionError(string message, string hint, string? errorCode = null)
+        {
+            if (jsonOptions != null
+                && cmdArgs.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal)))
+            {
+                CommandErrorWriter.WriteJsonOrHuman(
+                    true,
+                    jsonOptions,
+                    message,
+                    CommandExitCodes.UsageError,
+                    hint,
+                    GetUsageLineOrThrow(commandName),
+                    errorCode ?? CommandErrorCodes.UsageError,
+                    command: commandName);
+                return;
+            }
+
+            CommandErrorWriter.Write(
+                message,
+                hint,
+                GetUsageLineOrThrow(commandName),
+                errorCode
+                    ?? (string.Equals(commandName, "outline", StringComparison.Ordinal)
+                        ? CommandErrorCodes.UsageError
+                        : null));
+        }
+
         var supported = supportedOptions.ToHashSet(StringComparer.Ordinal);
         var skippedQueryLiteral = false;
         for (var i = 0; i < cmdArgs.Length; i++)
@@ -290,10 +342,9 @@ public static partial class QueryCommandRunner
             {
                 if (commandName == "outline")
                 {
-                    CommandErrorWriter.Write(
+                    WriteOptionError(
                         "--json=<format> is not supported by outline because outline emits one JSON object.",
-                        "use plain `--json`; add `--limit <n>` to cap symbols and read the paging metadata (`returned_symbol_count`, `total_symbol_count`, `next_cursor`).",
-                        GetUsageLineOrThrow(commandName));
+                        "use plain `--json`; add `--limit <n>` to cap symbols and read the paging metadata (`returned_symbol_count`, `total_symbol_count`, `next_cursor`).");
                     return true;
                 }
                 if (commandName == "validate" && string.Equals(inlineValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
@@ -301,14 +352,13 @@ public static partial class QueryCommandRunner
                     continue;
                 }
 
-                CommandErrorWriter.Write(
+                WriteOptionError(
                     commandName == "validate"
                         ? "--json=<format> for validate only supports 'array'."
                         : "--json=<format> is only supported by 'search', 'files', 'symbols', and validate's array output.",
                     commandName == "validate"
                         ? "use plain `--json` or `--json=array`."
-                        : "use plain `--json` here, rerun search/files/symbols with `--json=array`, or rerun validate with `--json=array`.",
-                    GetUsageLineOrThrow(commandName));
+                        : "use plain `--json` here, rerun search/files/symbols with `--json=array`, or rerun validate with `--json=array`.");
                 return true;
             }
 
@@ -333,19 +383,17 @@ public static partial class QueryCommandRunner
 
             if (normalizedArg == "--group-by-name")
             {
-                CommandErrorWriter.Write(
+                WriteOptionError(
                     "--group-by-name is only supported by 'hotspots'.",
-                    "remove `--group-by-name` here, or rerun with `cdidx hotspots --group-by-name ...`.",
-                    GetUsageLineOrThrow(commandName));
+                    "remove `--group-by-name` here, or rerun with `cdidx hotspots --group-by-name ...`.");
                 return true;
             }
 
             if (normalizedArg == "--group-by")
             {
-                CommandErrorWriter.Write(
+                WriteOptionError(
                     "--group-by is only supported by 'hotspots'.",
-                    "remove `--group-by` here, or rerun with `cdidx hotspots --group-by <symbol|file|statement> ...`.",
-                    GetUsageLineOrThrow(commandName));
+                    "remove `--group-by` here, or rerun with `cdidx hotspots --group-by <symbol|file|statement> ...`.");
                 return true;
             }
 
@@ -374,10 +422,9 @@ public static partial class QueryCommandRunner
             var hint = suggestion == null
                 ? $"remove `{displayArg}` and rerun, or use only the options shown in `{commandName} --help`."
                 : $"Did you mean: {suggestion}? Remove `{displayArg}` and rerun, or use `{suggestion}` if that is what you meant.";
-            CommandErrorWriter.Write(
+            WriteOptionError(
                 $"{displayArg} is not supported for {commandName}.",
                 hint,
-                GetUsageLineOrThrow(commandName),
                 CommandErrorCodes.UsageError);
             return true;
         }
