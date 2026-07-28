@@ -1978,7 +1978,21 @@ Different graph entry points walk different `reference_kind` subsets by design. 
 | `deps` (default = forward) | source file → target file | all kinds; metadata rows require class-like + metadata-eligible targets (`has_metadata_target_kind`) and a unique resolution (`target_ambiguity`); MSBuild imports/project references resolve paths relative to the declaring project instead of matching shared package names | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | same as forward `deps` (same SQL) | `DbReader.GetFileDependencies` |
 
-`deps --symbol`, `--symbol-family`, and `--suppress-noise` are pushed into the logical-reference and target-candidate SQL scopes before candidate ranking and `--limit`; cycle and cross-workspace reads apply the same filters before their candidate limits. Consequently, `reference_count`, ranking, and the `symbol_filter` before/after counters describe the SQL-filtered scope rather than the whole pre-filter workspace. Long SQLite dependency reads also register command cancellation with the query token.
+`deps --symbol`, `--symbol-family`, and the generic-symbol part of
+`--suppress-noise` are pushed into the logical-reference and target-candidate
+SQL scopes before candidate ranking and `--limit`; cycle and cross-workspace
+reads apply the same name filters before their candidate limits. Markdown
+heading-name matches are classified separately as
+`markdown_heading_name_match` evidence. Suppressed queries prioritize retained
+evidence before candidate limits, then remove only that evidence in the CLI
+layer, so explicit Markdown path links remain visible even when an edge also
+contains legacy heading fanout. Machine-readable edges expose
+`source_language`, `origin`, `reference_kind`, `target_kind`, and
+`reference_count` distributions in `evidence`; `symbol_filter` adds reference
+before/after totals and per-reason affected/removed counts. Generic-symbol
+counters still describe the SQL-filtered scope rather than the whole pre-filter
+workspace. Long SQLite dependency reads also register command cancellation with
+the query token.
 
 Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas default `callers <ClassName>` returns only executable edges. Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`), or pass an explicitly supported non-default kind to `callers` / `callees`, to surface edges that the default call graph intentionally drops.
 
@@ -5256,7 +5270,18 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 | `deps` (デフォルト = forward) | source file → target file | 全 kind。metadata 行は class-like かつ metadata-eligible な target (`has_metadata_target_kind`) と一意解決 (`target_ambiguity`) を要求。MSBuild の import / project reference は共有 package 名との一致ではなく、宣言元 project 相対の path として解決 | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | forward `deps` と同じ SQL を共有 | `DbReader.GetFileDependencies` |
 
-`deps --symbol`、`--symbol-family`、`--suppress-noise` は、候補の ranking と `--limit` より前に logical-reference と target-candidate の SQL scope へ push down される。cycle と cross-workspace の read も、各候補上限より前に同じ filter を適用する。そのため `reference_count`、ranking、`symbol_filter` の before/after counter は、絞り込み前の workspace 全体ではなく SQL で絞り込まれた scope を表す。長時間の SQLite dependency read では query token による command cancellation も登録する。
+`deps --symbol`、`--symbol-family`、`--suppress-noise` の汎用 symbol 部分は、候補の
+ranking と `--limit` より前に logical-reference と target-candidate の SQL scope へ
+push down される。cycle と cross-workspace の read も、各候補上限より前に同じ名前
+filter を適用する。Markdown の見出し名一致は
+`markdown_heading_name_match` evidence として別に分類する。抑制時は候補上限より前に
+保持対象 evidence を優先し、CLI 層でこの evidence だけを除くため、旧 index 由来の
+見出し fanout と同じ edge に含まれる明示的な Markdown path link も残る。
+machine-readable edge の `evidence` は `source_language`、`origin`、`reference_kind`、
+`target_kind`、`reference_count` の分布を公開し、`symbol_filter` は reference の
+before/after 合計と理由別の affected / removed 件数を加える。汎用 symbol の counter は
+引き続き、絞り込み前の workspace 全体ではなく SQL で絞り込まれた scope を表す。
+長時間の SQLite dependency read では query token による command cancellation も登録する。
 
 実運用上の帰結: クラスのようなシンボルに対する `impact <ClassName>` は、member-level の caller が存在しない場合 heuristic file-dependency-hint fallback (metadata エッジを含む) を返し、一方の既定 `callers <ClassName>` は実行可能 edge だけを返す。両方とも個々の契約上は正しいが、件数は一致しない。差分を埋めるには `references <ClassName> --kind attribute`（または `annotation`）を使うか、`callers` / `callees` に明示的に対応する非既定 kind を渡し、既定 call graph が意図的に落としている edge を確認する。
 

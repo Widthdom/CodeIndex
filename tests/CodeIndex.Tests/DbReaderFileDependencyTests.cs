@@ -285,12 +285,82 @@ public partial class DbReaderTests
         }
 
         var dependencies = _reader.GetFileDependencies(limit: 20, lang: "markdown");
-        Assert.Contains(dependencies, dependency =>
+        var explicitDependency = Assert.Single(dependencies, dependency =>
             dependency.SourcePath == "docs/issue4846/source.md"
             && dependency.TargetPath == "docs/issue4846/target.md");
+        var explicitEvidence = Assert.IsType<List<FileDependencyEvidence>>(explicitDependency.Evidence);
+        Assert.Contains(explicitEvidence, evidence =>
+            evidence.Origin == "markdown_explicit_link"
+            && evidence.SourceLanguage == "markdown"
+            && evidence.ReferenceCount > 0);
+        Assert.DoesNotContain(explicitEvidence, evidence =>
+            evidence.Origin == "markdown_heading_name_match");
         Assert.DoesNotContain(dependencies, dependency =>
             dependency.SourcePath == "docs/issue4846/source.md"
             && dependency.TargetPath == "docs/issue4846/unrelated.md");
+    }
+
+    [Fact]
+    public void GetFileDependencies_ReportsLegacyMarkdownHeadingEvidenceSeparatelyFromExplicitLinks_Issue4868()
+    {
+        InsertIndexedFile(
+            "docs/issue4868/target.md",
+            "markdown",
+            "# Error\n\n# Shared heading\n");
+        InsertIndexedFile(
+            "docs/issue4868/noise.md",
+            "markdown",
+            "# Shared heading\n");
+        InsertIndexedFile(
+            "docs/issue4868/unrelated.md",
+            "markdown",
+            "# Shared heading\n");
+        InsertIndexedFile(
+            "docs/issue4868/source.md",
+            "markdown",
+            "# Source\n\n[target](target.md#error)\n");
+
+        long sourceFileId;
+        using (var sourceFile = _db.Connection.CreateCommand())
+        {
+            sourceFile.CommandText = "SELECT id FROM files WHERE path = 'docs/issue4868/source.md'";
+            sourceFileId = Convert.ToInt64(sourceFile.ExecuteScalar());
+        }
+        _writer.InsertReferences(Enumerable.Range(0, 2_000).Select(index => new ReferenceRecord
+        {
+            FileId = sourceFileId,
+            SymbolName = "Shared heading",
+            ReferenceKind = "use",
+            Line = index + 10,
+            Column = 1,
+            Context = $"legacy heading reference {index}",
+        }).ToArray());
+
+        var dependencies = _reader.GetFileDependencies(
+            limit: 20,
+            lang: "markdown",
+            suppressDependencyNoise: true);
+
+        var explicitDependency = Assert.Single(dependencies, dependency =>
+            dependency.SourcePath == "docs/issue4868/source.md"
+            && dependency.TargetPath == "docs/issue4868/target.md");
+        var explicitEvidence = Assert.IsType<List<FileDependencyEvidence>>(explicitDependency.Evidence);
+        Assert.Contains(explicitEvidence, evidence =>
+            evidence.Origin == "markdown_explicit_link"
+            && evidence.ReferenceKind == "import"
+            && evidence.TargetKind == "file"
+            && evidence.ReferenceCount == 1);
+        Assert.Contains(explicitEvidence, evidence =>
+            evidence.Origin == "markdown_heading_name_match"
+            && evidence.ReferenceCount == 2_000);
+
+        var noisyDependency = Assert.Single(dependencies, dependency =>
+            dependency.SourcePath == "docs/issue4868/source.md"
+            && dependency.TargetPath == "docs/issue4868/noise.md");
+        var noiseEvidence = Assert.Single(
+            Assert.IsType<List<FileDependencyEvidence>>(noisyDependency.Evidence));
+        Assert.Equal("markdown_heading_name_match", noiseEvidence.Origin);
+        Assert.Equal(2_000, noiseEvidence.ReferenceCount);
     }
 
     [Fact]

@@ -1409,6 +1409,7 @@ public static partial class QueryCommandRunner
         if (!applied)
         {
             var unchangedSymbolCount = edges.Sum(edge => SplitDependencySymbols(edge.Symbols).Count);
+            var unchangedReferenceCount = edges.Sum(static edge => (long)edge.ReferenceCount);
             return new DependencySymbolFilterResult(
                 edges.ToList(),
                 new DependencySymbolFilterSummary(
@@ -1419,25 +1420,76 @@ public static partial class QueryCommandRunner
                     EdgesBefore: edges.Count,
                     EdgesAfter: edges.Count,
                     SymbolsBefore: unchangedSymbolCount,
-                    SymbolsAfter: unchangedSymbolCount));
+                    SymbolsAfter: unchangedSymbolCount,
+                    ReferencesBefore: unchangedReferenceCount,
+                    ReferencesAfter: unchangedReferenceCount,
+                    SuppressionReasons: []));
         }
 
         var filteredEdges = new List<FileDependencyResult>(edges.Count);
         var symbolsBefore = 0;
         var symbolsAfter = 0;
+        long referencesBefore = 0;
+        long referencesAfter = 0;
+        var headingEdgesAffected = 0;
+        var headingEdgesRemoved = 0;
+        long headingReferencesRemoved = 0;
         foreach (var edge in edges)
         {
+            referencesBefore += edge.ReferenceCount;
+            var edgeEvidence = edge.Evidence ?? [];
+            var preservesExplicitMarkdownLink = edgeEvidence.Any(
+                static evidence => evidence.Origin == "markdown_explicit_link");
+            var keptEvidence = edgeEvidence;
+            var referenceCount = edge.ReferenceCount;
+            if (options.DependencySuppressNoise && edgeEvidence.Count > 0)
+            {
+                keptEvidence = edgeEvidence
+                    .Where(static evidence => evidence.Origin != "markdown_heading_name_match")
+                    .ToList();
+                var removedReferenceCount = edgeEvidence
+                    .Where(static evidence => evidence.Origin == "markdown_heading_name_match")
+                    .Sum(static evidence => (long)evidence.ReferenceCount);
+                if (removedReferenceCount > 0)
+                {
+                    headingEdgesAffected++;
+                    headingReferencesRemoved += removedReferenceCount;
+                    referenceCount = (int)Math.Max(0L, edge.ReferenceCount - removedReferenceCount);
+                    if (referenceCount == 0)
+                        headingEdgesRemoved++;
+                }
+            }
+
             var symbols = SplitDependencySymbols(edge.Symbols);
             symbolsBefore += symbols.Count;
             var keptSymbols = symbols
-                .Where(symbol => KeepDependencySymbol(symbol, options))
+                .Where(symbol => KeepDependencySymbol(symbol, options, preservesExplicitMarkdownLink))
                 .ToList();
-            symbolsAfter += keptSymbols.Count;
             if (keptSymbols.Count == 0)
                 continue;
-            filteredEdges.Add(CopyDependencyEdge(edge, string.Join(",", keptSymbols)));
+
+            if (referenceCount == 0)
+                continue;
+
+            symbolsAfter += keptSymbols.Count;
+            referencesAfter += referenceCount;
+            filteredEdges.Add(CopyDependencyEdge(
+                edge,
+                string.Join(",", keptSymbols),
+                referenceCount,
+                keptEvidence));
         }
 
+        IReadOnlyList<DependencySuppressionReasonSummary> suppressionReasons =
+            headingReferencesRemoved > 0
+                ? [
+                    new DependencySuppressionReasonSummary(
+                        Reason: "markdown_heading_name_match",
+                        EdgesAffected: headingEdgesAffected,
+                        EdgesRemoved: headingEdgesRemoved,
+                        ReferencesRemoved: headingReferencesRemoved),
+                ]
+                : [];
         return new DependencySymbolFilterResult(
             filteredEdges,
             new DependencySymbolFilterSummary(
@@ -1448,12 +1500,20 @@ public static partial class QueryCommandRunner
                 EdgesBefore: edges.Count,
                 EdgesAfter: filteredEdges.Count,
                 SymbolsBefore: symbolsBefore,
-                SymbolsAfter: symbolsAfter));
+                SymbolsAfter: symbolsAfter,
+                ReferencesBefore: referencesBefore,
+                ReferencesAfter: referencesAfter,
+                SuppressionReasons: suppressionReasons));
     }
 
-    private static bool KeepDependencySymbol(string symbol, QueryCommandOptions options)
+    private static bool KeepDependencySymbol(
+        string symbol,
+        QueryCommandOptions options,
+        bool preservesExplicitMarkdownLink)
     {
-        if (options.DependencySuppressNoise && DependencyNoiseProfile.IsNoiseSymbol(symbol))
+        if (options.DependencySuppressNoise
+            && !preservesExplicitMarkdownLink
+            && DependencyNoiseProfile.IsNoiseSymbol(symbol))
             return false;
 
         var hasNameFilters = options.DependencySymbols.Count > 0 || options.DependencySymbolFamilies.Count > 0;
@@ -1467,7 +1527,11 @@ public static partial class QueryCommandRunner
     private static List<string> SplitDependencySymbols(string symbols)
         => symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    private static FileDependencyResult CopyDependencyEdge(FileDependencyResult edge, string symbols)
+    private static FileDependencyResult CopyDependencyEdge(
+        FileDependencyResult edge,
+        string symbols,
+        int referenceCount,
+        List<FileDependencyEvidence> evidence)
         => new()
         {
             ResultKind = edge.ResultKind,
@@ -1475,9 +1539,10 @@ public static partial class QueryCommandRunner
             TargetPath = edge.TargetPath,
             SourceDb = edge.SourceDb,
             TargetDb = edge.TargetDb,
-            ReferenceCount = edge.ReferenceCount,
-            RankingScore = edge.RankingScore,
+            ReferenceCount = referenceCount,
+            RankingScore = DependencyNoiseProfile.ComputeRankingScore(referenceCount, symbols),
             Symbols = symbols,
+            Evidence = evidence,
         };
 
     private static void AddDependencySchemaJsonFields(
@@ -1527,7 +1592,23 @@ public static partial class QueryCommandRunner
             ["symbols_before"] = symbolFilter.SymbolsBefore,
             ["symbols_after"] = symbolFilter.SymbolsAfter,
             ["symbols_removed"] = symbolFilter.SymbolsBefore - symbolFilter.SymbolsAfter,
+            ["references_before"] = symbolFilter.ReferencesBefore,
+            ["references_after"] = symbolFilter.ReferencesAfter,
+            ["references_removed"] = symbolFilter.ReferencesBefore - symbolFilter.ReferencesAfter,
         };
+        if (symbolFilter.SuppressionReasons.Count > 0)
+        {
+            filter["suppression_reasons"] = new JsonArray(
+                symbolFilter.SuppressionReasons
+                    .Select(reason => (JsonNode?)new JsonObject
+                    {
+                        ["reason"] = reason.Reason,
+                        ["edges_affected"] = reason.EdgesAffected,
+                        ["edges_removed"] = reason.EdgesRemoved,
+                        ["references_removed"] = reason.ReferencesRemoved,
+                    })
+                    .ToArray());
+        }
         if (symbolFilter.Symbols.Count > 0)
             filter["symbol"] = JsonSerializer.SerializeToNode(symbolFilter.Symbols.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (symbolFilter.SymbolFamilies.Count > 0)
@@ -1537,6 +1618,16 @@ public static partial class QueryCommandRunner
 
     private static JsonArray BuildDependencySymbolsJson(string symbols)
         => new(SplitDependencySymbols(symbols).Select(symbol => JsonValue.Create(symbol)).ToArray<JsonNode?>());
+
+    private static JsonArray BuildDependencyEvidenceJson(IReadOnlyList<FileDependencyEvidence> evidence)
+        => new(evidence.Select(item => (JsonNode?)new JsonObject
+        {
+            ["source_language"] = item.SourceLanguage,
+            ["origin"] = item.Origin,
+            ["reference_kind"] = item.ReferenceKind,
+            ["target_kind"] = item.TargetKind,
+            ["reference_count"] = item.ReferenceCount,
+        }).ToArray());
 
     private static bool DepsEmitsJson(QueryCommandOptions options, string depsFormat)
         => depsFormat == OutputFormatJsonGraph || (options.Json && depsFormat == OutputFormatEdgeList);
@@ -1560,7 +1651,16 @@ public static partial class QueryCommandRunner
         int EdgesBefore,
         int EdgesAfter,
         int SymbolsBefore,
-        int SymbolsAfter);
+        int SymbolsAfter,
+        long ReferencesBefore,
+        long ReferencesAfter,
+        IReadOnlyList<DependencySuppressionReasonSummary> SuppressionReasons);
+
+    private sealed record DependencySuppressionReasonSummary(
+        string Reason,
+        int EdgesAffected,
+        int EdgesRemoved,
+        long ReferencesRemoved);
 
     private static int WriteDependencyGraph(
         IReadOnlyList<FileDependencyResult> edges,
@@ -1628,6 +1728,7 @@ public static partial class QueryCommandRunner
                 ["reference_count"] = edge.ReferenceCount,
                 ["ranking_score"] = edge.RankingScore,
                 ["symbols"] = BuildDependencySymbolsJson(edge.Symbols),
+                ["evidence"] = BuildDependencyEvidenceJson(edge.Evidence ?? []),
             }).ToArray());
         }
         addExtraJsonFields?.Invoke(payload);
@@ -1862,11 +1963,25 @@ public static partial class QueryCommandRunner
         using var cmd = connection.CreateCommand();
         var sourcePathExpr = reverse ? "dst.path" : "src.path";
         var targetPathExpr = reverse ? "src.path" : "dst.path";
+        var crossReferenceOrderSql = options.DependencySuppressNoise
+            ? "edge_totals.retained_reference_count DESC, edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path"
+            : "edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path";
+        var retainedCrossSymbolFilterSql = options.DependencySuppressNoise
+            ? " WHERE origin <> 'markdown_heading_name_match'"
+            : string.Empty;
         cmd.CommandText = $@"
             WITH edges AS (
             SELECT {sourcePathExpr} AS source_path,
                    {targetPathExpr} AS target_path,
-                   r.symbol_name
+                   r.symbol_name,
+                   src.lang AS source_lang,
+                   CASE
+                       WHEN src.lang = 'markdown' AND s.kind = 'heading'
+                           THEN 'markdown_heading_name_match'
+                       ELSE 'cross_database_symbol_name_match'
+                   END AS origin,
+                   r.reference_kind AS raw_reference_kind,
+                   CASE WHEN s.kind = 'heading' THEN 'heading' ELSE 'symbol' END AS target_kind
             FROM symbol_references r
             JOIN files src ON src.id = r.file_id
             JOIN targetdb.symbols s ON s.name = r.symbol_name
@@ -1892,21 +2007,65 @@ public static partial class QueryCommandRunner
             "r.symbol_name",
             options.DependencySymbols,
             options.DependencySymbolFamilies,
-            options.DependencySuppressNoise,
-            "crossDependency");
+            suppressDependencyNoise: false,
+            parameterPrefix: "crossDependencyNames");
+        DbReader.AppendDependencySymbolFilter(
+            cmd,
+            ref crossDatabaseSql,
+            "r.symbol_name",
+            dependencySymbols: null,
+            dependencySymbolFamilies: null,
+            suppressDependencyNoise: options.DependencySuppressNoise,
+            parameterPrefix: "crossDependencyNoise",
+            filterScopeSql: "NOT (src.lang = 'markdown' AND s.kind = 'heading')");
         cmd.CommandText = crossDatabaseSql;
         cmd.CommandText += @"
             ),
             edge_totals AS (
                 SELECT source_path,
                        target_path,
-                       COUNT(*) AS reference_count
+                       COUNT(*) AS reference_count,
+                       SUM(CASE WHEN origin = 'markdown_heading_name_match' THEN 0 ELSE 1 END) AS retained_reference_count
                 FROM edges
+                GROUP BY source_path, target_path
+            ),
+            edge_evidence_rows AS (
+                SELECT source_path,
+                       target_path,
+                       source_lang,
+                       origin,
+                       raw_reference_kind,
+                       target_kind,
+                       COUNT(*) AS evidence_reference_count
+                FROM edges
+                GROUP BY source_path,
+                         target_path,
+                         source_lang,
+                         origin,
+                         raw_reference_kind,
+                         target_kind
+            ),
+            ordered_edge_evidence AS (
+                SELECT source_path,
+                       target_path,
+                       source_lang || char(31) ||
+                       origin || char(31) ||
+                       raw_reference_kind || char(31) ||
+                       target_kind || char(31) ||
+                       evidence_reference_count AS evidence_item
+                FROM edge_evidence_rows
+                ORDER BY source_path, target_path, source_lang, origin, raw_reference_kind, target_kind
+            ),
+            edge_evidence_payloads AS (
+                SELECT source_path,
+                       target_path,
+                       GROUP_CONCAT(evidence_item, char(30)) AS evidence_payload
+                FROM ordered_edge_evidence
                 GROUP BY source_path, target_path
             ),
             distinct_edge_symbols AS (
                 SELECT DISTINCT source_path, target_path, symbol_name
-                FROM edges
+                FROM edges" + retainedCrossSymbolFilterSql + @"
             ),
             ranked_edge_symbols AS (
                 SELECT source_path,
@@ -1918,13 +2077,20 @@ public static partial class QueryCommandRunner
             SELECT edge_totals.source_path,
                    edge_totals.target_path,
                    edge_totals.reference_count,
-                   COALESCE(GROUP_CONCAT(CASE WHEN ranked_edge_symbols.symbol_rank <= @symbolSampleLimit THEN ranked_edge_symbols.symbol_name END), '') AS symbols
+                   COALESCE(GROUP_CONCAT(CASE WHEN ranked_edge_symbols.symbol_rank <= @symbolSampleLimit THEN ranked_edge_symbols.symbol_name END), '') AS symbols,
+                   COALESCE(edge_evidence_payloads.evidence_payload, '') AS evidence_payload
             FROM edge_totals
             LEFT JOIN ranked_edge_symbols
               ON ranked_edge_symbols.source_path = edge_totals.source_path
              AND ranked_edge_symbols.target_path = edge_totals.target_path
-            GROUP BY edge_totals.source_path, edge_totals.target_path, edge_totals.reference_count
-            ORDER BY edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path
+            LEFT JOIN edge_evidence_payloads
+              ON edge_evidence_payloads.source_path = edge_totals.source_path
+             AND edge_evidence_payloads.target_path = edge_totals.target_path
+            GROUP BY edge_totals.source_path,
+                     edge_totals.target_path,
+                     edge_totals.reference_count,
+                     edge_evidence_payloads.evidence_payload
+            ORDER BY " + crossReferenceOrderSql + @"
             LIMIT @limit";
         SqliteCommandPolicy.Add(cmd, "@limit", DependencyNoiseProfile.GetRankingCandidateLimit(limit));
         SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
@@ -1945,6 +2111,7 @@ public static partial class QueryCommandRunner
                     TargetDb = reverse ? sourceDbPath : targetDbPath,
                     ReferenceCount = reader.GetInt32(2),
                     Symbols = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                    Evidence = DbReader.ParseDependencyEvidence(reader.GetString(4)),
                 });
             }
         }
@@ -1953,7 +2120,14 @@ public static partial class QueryCommandRunner
             throw new OperationCanceledException(cancellationToken);
         }
         foreach (var result in results)
-            result.RankingScore = DependencyNoiseProfile.ComputeRankingScore(result.ReferenceCount, result.Symbols);
+        {
+            var rankingReferenceCount = options.DependencySuppressNoise
+                ? (result.Evidence ?? [])
+                    .Where(static evidence => evidence.Origin != "markdown_heading_name_match")
+                    .Sum(static evidence => evidence.ReferenceCount)
+                : result.ReferenceCount;
+            result.RankingScore = DependencyNoiseProfile.ComputeRankingScore(rankingReferenceCount, result.Symbols);
+        }
 
         return results
             .OrderByDescending(result => result.RankingScore)
