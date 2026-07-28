@@ -6,6 +6,7 @@ internal sealed class LspLiveDocumentStore
 {
     private readonly Dictionary<string, string> _documents;
     private readonly Dictionary<string, int> _documentByteCounts;
+    private readonly Dictionary<string, int?> _documentVersions;
     private readonly List<string> _documentOrder = [];
     private readonly StringComparison _keyComparison;
     private readonly int _maxDocuments;
@@ -19,6 +20,7 @@ internal sealed class LspLiveDocumentStore
     {
         _documents = new Dictionary<string, string>(comparer);
         _documentByteCounts = new Dictionary<string, int>(comparer);
+        _documentVersions = new Dictionary<string, int?>(comparer);
         _keyComparison = keyComparison;
         _maxDocuments = maxDocuments;
         _maxDocumentBytes = maxDocumentBytes;
@@ -31,13 +33,21 @@ internal sealed class LspLiveDocumentStore
 
     internal long EvictedBytes => _evictedBytes;
 
-    internal void SetText(string key, string text)
+    internal bool SetText(string key, string text, int? version = null)
     {
+        if (version.HasValue
+            && _documentVersions.TryGetValue(key, out var previousVersion)
+            && previousVersion.HasValue
+            && version.Value <= previousVersion.Value)
+        {
+            return false;
+        }
+
         var textBytes = Encoding.UTF8.GetByteCount(text);
         if (textBytes > _maxDocumentBytes || textBytes > _maxLiveBytes)
         {
             Remove(key);
-            return;
+            return false;
         }
 
         if (!_documents.ContainsKey(key))
@@ -47,8 +57,11 @@ internal sealed class LspLiveDocumentStore
 
         _documents[key] = text;
         _documentByteCounts[key] = textBytes;
+        _documentVersions[key] = version
+            ?? (_documentVersions.TryGetValue(key, out var currentVersion) ? currentVersion : null);
         _documentBytes += textBytes;
         EnsureCapacity();
+        return _documents.ContainsKey(key);
     }
 
     internal bool TryGetText(string key, out string text) => _documents.TryGetValue(key, out text!);
@@ -66,6 +79,7 @@ internal sealed class LspLiveDocumentStore
         }
 
         _documents.Remove(key);
+        _documentVersions.Remove(key);
         _documentOrder.RemoveAll(existing => string.Equals(existing, key, _keyComparison));
     }
 
@@ -82,6 +96,7 @@ internal sealed class LspLiveDocumentStore
         {
             _documents.Clear();
             _documentByteCounts.Clear();
+            _documentVersions.Clear();
             _documentOrder.Clear();
             _documentBytes = 0;
         }

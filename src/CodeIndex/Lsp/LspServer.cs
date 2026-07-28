@@ -771,7 +771,7 @@ internal sealed partial class LspServer : IDisposable
     {
         var uri = GetTextDocumentUri(root);
         if (TryGet(root, out var textElement, "params", "textDocument", "text") && textElement.ValueKind == JsonValueKind.String)
-            SetLiveDocumentText(uri, textElement.GetString() ?? string.Empty);
+            SetLiveDocumentText(uri, textElement.GetString() ?? string.Empty, GetTextDocumentVersion(root));
         return null;
     }
 
@@ -803,7 +803,7 @@ internal sealed partial class LspServer : IDisposable
         }
 
         if (latestText != null)
-            SetLiveDocumentText(uri, latestText);
+            SetLiveDocumentText(uri, latestText, GetTextDocumentVersion(root));
         return null;
     }
 
@@ -815,15 +815,21 @@ internal sealed partial class LspServer : IDisposable
         return null;
     }
 
-    private void SetLiveDocumentText(string uri, string text)
+    private void SetLiveDocumentText(string uri, string text, int? version)
     {
         if (!TryGetLiveDocumentKeyFromUri(uri, out var key))
             return;
 
-        _liveDocumentStore.SetText(key, text);
+        _liveDocumentStore.SetText(key, text, version);
         Activity.Current?.SetTag("lsp.live_documents.bytes", _liveDocumentStore.Bytes);
         Activity.Current?.SetTag("lsp.live_documents.eviction_count", _liveDocumentStore.EvictionCount);
     }
+
+    private static int? GetTextDocumentVersion(JsonElement root) =>
+        TryGet(root, out var versionElement, "params", "textDocument", "version")
+        && versionElement.TryGetInt32(out var version)
+            ? version
+            : null;
 
     private bool TryGetLiveDocumentKeyFromUri(string uri, out string key)
     {

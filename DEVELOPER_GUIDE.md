@@ -427,9 +427,11 @@ Editor integrations can request standard location shapes directly. `definition`,
 The `cdidx lsp` server advertises full text document synchronization and keeps
 open document text in a bounded in-memory cache only. Position-based providers
 must read that live cache before disk so unsaved editor buffers can identify the
-requested token, but provider results remain conservative and index-backed:
-return empty arrays or null when the database cannot answer safely instead of
-inventing language-server analysis.
+requested token. Provider results remain conservative and index-backed except
+that document symbols for an indexed document may be structurally re-extracted
+from the bounded live buffer through the normal language extractor and container
+pipeline. Other providers return empty arrays or null when the database cannot
+answer safely instead of inventing language-server analysis.
 Disk-backed position-line caching must enforce its 4 MiB input limit while
 streaming, not only through a pre-read `Length` check. Bytes beyond the limit
 must never reach text decoding, including when a shared file grows concurrently,
@@ -457,6 +459,10 @@ container names, container kinds, enclosing ranges, and same-line selection
 columns. Same-range members such as positional record properties therefore stay
 beneath their declaring type regardless of deterministic presentation order,
 while a later same-named container on the line cannot capture an earlier member.
+Live document symbols use the same extractor, normalization, and hierarchy
+builder as indexed symbols, so a full-text change updates both ranges and
+containers together. Numeric document versions must increase; an older or equal
+change cannot replace the newest accepted live text.
 The stdio reader and the single response worker are separated by a bounded
 queue, so `$/cancelRequest` can cancel an active or queued symbol request without
 making database-backed request processing concurrent. Cancellation IDs retain
@@ -3624,9 +3630,11 @@ editor integration は標準的な location 形状を直接要求できる。`de
 
 `cdidx lsp` server は full text document synchronization を advertise し、open document text は
 上限付きの in-memory cache にだけ保持する。position-based provider は未保存 editor buffer から
-request token を特定できるよう disk より先に live cache を読む必要があるが、provider result は
-保守的かつ index-backed のままにする。database が安全に答えられない場合は、language-server
-analysis を作り上げず、空配列または null を返す。
+request token を特定できるよう disk より先に live cache を読む必要がある。provider result は
+保守的かつ index-backed のままとするが、indexed document の document symbol だけは上限付きの
+live buffer を通常の language extractor と container pipeline で構造的に再抽出できる。それ以外の
+provider は database が安全に答えられない場合、language-server analysis を作り上げず、空配列
+または null を返す。
 disk 上の position-line cache は、事前の `Length` check だけでなく streaming 中も 4 MiB の
 input 上限を強制する必要がある。共有 file が同時に増大する場合も上限超過 byte を text decode に
 渡してはならず、bounded な failure reason は `position_file_too_large` のままとする。
@@ -3649,6 +3657,10 @@ integer `partialResultToken` と `workDoneToken` を処理する。partial resul
 container name・container kind・包含 range・同一行の selection column で親を解決するため、
 positional record property のように同じ range を持つ member も決定的な表示順序に左右されず
 宣言元 type の配下に留まり、行内で後にある同名 container が前の member を取り込まない。
+live document symbol は indexed symbol と同じ extractor、normalization、hierarchy builder を
+使うため、full-text change では range と container が一緒に更新される。numeric document version
+は増加する必要があり、古い、または同じ version の change は最後に受理した live text を
+置き換えられない。
 stdio reader と単一 response worker は上限付き queue
 で分離するため、database-backed request processing を並行化せずに `$/cancelRequest` で active
 または queued symbol request を cancel できる。cancellation ID は JSON 型を保持し、cancel

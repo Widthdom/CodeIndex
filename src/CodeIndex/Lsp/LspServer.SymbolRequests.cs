@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
 using CodeIndex.Security;
@@ -183,7 +184,7 @@ internal sealed partial class LspServer : IDisposable
         if (!TryResolveIndexedDocument(root, out var document))
             return new SymbolResponse([], [], 0, false);
 
-        var candidates = _reader.SearchSymbols((string?)null, MaxDocumentSymbolMaterialization + 1, pathPatterns: [document.IndexedPath]);
+        var candidates = GetDocumentSymbolCandidates(document, cancellationToken);
         var materializationTruncated = candidates.Count > MaxDocumentSymbolMaterialization;
         var materializedCount = Math.Min(candidates.Count, MaxDocumentSymbolMaterialization);
         Activity.Current?.SetTag("lsp.document_symbols.materialized_count", materializedCount);
@@ -215,6 +216,58 @@ internal sealed partial class LspServer : IDisposable
             [],
             Math.Max(0, symbols.Count - tree.RemovedCount),
             materializationTruncated || tree.RemovedCount > 0);
+    }
+
+    private IReadOnlyList<SymbolResult> GetDocumentSymbolCandidates(
+        IndexedDocumentContext document,
+        CancellationToken cancellationToken)
+    {
+        if (!_liveDocumentStore.TryGetText(document.ResolvedPath, out var liveText))
+        {
+            return _reader.SearchSymbols(
+                (string?)null,
+                MaxDocumentSymbolMaterialization + 1,
+                pathPatterns: [document.IndexedPath]);
+        }
+
+        var language = FileIndexer.DetectLanguage(document.ResolvedPath);
+        if (language == null)
+        {
+            return _reader.SearchSymbols(
+                (string?)null,
+                MaxDocumentSymbolMaterialization + 1,
+                pathPatterns: [document.IndexedPath]);
+        }
+
+        return SymbolExtractor.Extract(
+                0,
+                language,
+                liveText,
+                document.ResolvedPath,
+                _projectRoot ?? document.WorkspaceRoot,
+                cancellationToken)
+            .Take(MaxDocumentSymbolMaterialization + 1)
+            .Select(symbol => new SymbolResult
+            {
+                Path = document.IndexedPath,
+                Lang = language,
+                Kind = symbol.Kind,
+                SubKind = symbol.SubKind,
+                Name = symbol.Name,
+                Line = symbol.Line,
+                StartLine = symbol.StartLine,
+                StartColumn = symbol.StartColumn,
+                EndLine = symbol.EndLine,
+                BodyStartLine = symbol.BodyStartLine,
+                BodyEndLine = symbol.BodyEndLine,
+                Signature = symbol.Signature,
+                ContainerKind = symbol.ContainerKind,
+                ContainerName = symbol.ContainerName,
+                ContainerQualifiedName = symbol.ContainerQualifiedName,
+                Visibility = symbol.Visibility,
+                ReturnType = symbol.ReturnType,
+            })
+            .ToList();
     }
 
     private IEnumerable<JsonNode> EnumerateDocumentSymbolItems(

@@ -1996,6 +1996,123 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_DocumentSymbol_PreservesLiveHierarchyAcrossFullChanges_Issue4851()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_live_hierarchy");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var initialSource = string.Join(
+                "\r\n",
+                "namespace Ω",
+                "{",
+                "    public sealed class Outer",
+                "    {",
+                "        public readonly record struct Token(int Line, int 長さ)",
+                "        {",
+                "            public int Body => 長さ;",
+                "            public sealed class Inner { }",
+                "        }",
+                "    }",
+                "}",
+                string.Empty);
+            var shiftedLfSource = string.Join(
+                "\n",
+                "// full-change line shift",
+                string.Empty,
+                "namespace Ω",
+                "{",
+                "    public sealed class Outer",
+                "    {",
+                "        public readonly record struct Token(int Line, int 長さ)",
+                "        {",
+                "            public int Body => 長さ;",
+                "            public sealed class Inner { }",
+                "        }",
+                "    }",
+                "}",
+                string.Empty);
+            var newerCrLfSource = string.Join(
+                "\r\n",
+                "// newer full change",
+                "namespace Ω",
+                "{",
+                "    public sealed class Outer",
+                "    {",
+                "        public readonly record struct Token(int Line, int 長さ)",
+                "        {",
+                "            public int Body => 長さ;",
+                "            public string 追加 => \"値\";",
+                "            public sealed class Inner { }",
+                "        }",
+                "    }",
+                "}",
+                string.Empty);
+            var sourcePath = TestProjectHelper.WriteTextFile(projectRoot, "app.cs", initialSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", initialSource);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var indexedResponse = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48509));
+            Assert.NotNull(indexedResponse);
+            var indexedRoots = indexedResponse!["result"]!.AsArray();
+            var indexedStructure = GetDocumentSymbolStructure(indexedRoots);
+            var indexedRecursiveCount = FlattenDocumentSymbols(indexedRoots).Count();
+
+            Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, initialSource, version: 1)));
+            var initialResponse = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48510));
+            Assert.NotNull(initialResponse);
+            var initialRoots = initialResponse!["result"]!.AsArray();
+            var initialStructure = GetDocumentSymbolStructure(initialRoots);
+            var initialRecursiveCount = FlattenDocumentSymbols(initialRoots).Count();
+            Assert.Equal(indexedRoots.Count, initialRoots.Count);
+            Assert.Equal(indexedRecursiveCount, initialRecursiveCount);
+            Assert.Equal(indexedStructure, initialStructure);
+            var initialToken = Assert.Single(
+                FlattenDocumentSymbols(initialRoots)
+                    .Where(symbol => symbol?["name"]?.GetValue<string>() == "Token"));
+            var initialTokenLine = initialToken!["selectionRange"]!["start"]!["line"]!.GetValue<int>();
+            var initialTokenChildren = initialToken["children"]!.AsArray();
+            Assert.Contains(initialTokenChildren, child => child?["name"]?.GetValue<string>() == "Line");
+            Assert.Contains(initialTokenChildren, child => child?["name"]?.GetValue<string>() == "長さ");
+
+            Assert.Null(server.HandleMessage(CreateDidChangeRequest(sourcePath, shiftedLfSource, version: 2)));
+            var shiftedResponse = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48511));
+            Assert.NotNull(shiftedResponse);
+            var shiftedRoots = shiftedResponse!["result"]!.AsArray();
+            Assert.Equal(initialRoots.Count, shiftedRoots.Count);
+            Assert.Equal(initialRecursiveCount, FlattenDocumentSymbols(shiftedRoots).Count());
+            Assert.Equal(initialStructure, GetDocumentSymbolStructure(shiftedRoots));
+            var shiftedToken = Assert.Single(
+                FlattenDocumentSymbols(shiftedRoots)
+                    .Where(symbol => symbol?["name"]?.GetValue<string>() == "Token"));
+            Assert.Equal(
+                initialTokenLine + 2,
+                shiftedToken!["selectionRange"]!["start"]!["line"]!.GetValue<int>());
+
+            Assert.Null(server.HandleMessage(CreateDidChangeRequest(sourcePath, newerCrLfSource, version: 3)));
+            var newerResponse = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48512));
+            Assert.NotNull(newerResponse);
+            var newerRoots = newerResponse!["result"]!.AsArray();
+            var newerStructure = GetDocumentSymbolStructure(newerRoots);
+            Assert.Equal(initialRoots.Count, newerRoots.Count);
+            Assert.Equal(initialRecursiveCount + 1, FlattenDocumentSymbols(newerRoots).Count());
+            Assert.Contains(
+                FlattenDocumentSymbols(newerRoots),
+                symbol => symbol?["name"]?.GetValue<string>() == "追加");
+
+            Assert.Null(server.HandleMessage(CreateDidChangeRequest(sourcePath, "class Stale { }\n", version: 2)));
+            var staleResponse = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48513));
+            Assert.NotNull(staleResponse);
+            Assert.Equal(newerStructure, GetDocumentSymbolStructure(staleResponse!["result"]!.AsArray()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_DocumentSymbol_NestsSameStartLongerContainerBeforeChild_Issue3537()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_same_start_container");
@@ -3551,6 +3668,29 @@ public class LspServerTests
                 foreach (var child in FlattenDocumentSymbols(children))
                     yield return child;
             }
+        }
+    }
+
+    private static IReadOnlyList<string> GetDocumentSymbolStructure(JsonArray symbols)
+    {
+        var structure = new List<string>();
+        AddDocumentSymbolStructure(symbols, string.Empty, structure);
+        return structure;
+    }
+
+    private static void AddDocumentSymbolStructure(
+        JsonArray symbols,
+        string parentIdentity,
+        List<string> structure)
+    {
+        foreach (var symbol in symbols)
+        {
+            var name = symbol!["name"]!.GetValue<string>();
+            var kind = symbol["kind"]!.GetValue<int>();
+            var identity = $"{parentIdentity}/{name}:{kind}";
+            structure.Add(identity);
+            if (symbol["children"] is JsonArray children)
+                AddDocumentSymbolStructure(children, identity, structure);
         }
     }
 
