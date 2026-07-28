@@ -744,6 +744,25 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Reconstruct all indexed source lines while preserving absolute line positions for semantic classification.
+    /// semantic 分類向けに絶対行位置を維持しながら、indexed source 全行を再構成する。
+    /// </summary>
+    internal IReadOnlyList<string?> GetIndexedSourceLinesForSemanticTokens(string path)
+    {
+        if (!TryLoadIndexedFileLines(path, out _, out var totalLines, out var lineMap) || totalLines <= 0)
+            return [];
+
+        var sourceLines = new string?[totalLines];
+        foreach (var (line, content) in lineMap)
+        {
+            if (line > 0 && line <= sourceLines.Length)
+                sourceLines[line - 1] = content;
+        }
+
+        return sourceLines;
+    }
+
+    /// <summary>
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>

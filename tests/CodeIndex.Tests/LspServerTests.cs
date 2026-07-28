@@ -1028,6 +1028,82 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_SemanticTokens_SharesCSharpDeclarationAndUsageKinds_Issue4852()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_semantic_tokens_4852");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = string.Join('\n',
+            [
+                "using System.Collections.Generic;",
+                "namespace Sample.Tools;",
+                "internal sealed record App<T>(T Value)",
+                "{",
+                "    private const int Count = 1;",
+                "    public string Name { get; init; } = string.Empty;",
+                "    public void Run<TArg>(TArg input) where TArg : notnull",
+                "    {",
+                "        var local = new List<TArg>();",
+                "        Helper(input);",
+                "    }",
+                "    private void Helper(T value) { }",
+                "}",
+            ]);
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+
+            var response = HandleInitializedMessage(
+                server,
+                CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 4852));
+
+            Assert.NotNull(response);
+            var tokens = DecodeSemanticTokens(response!["result"]!["data"]!.AsArray(), source);
+            AssertSemanticToken(tokens, 0, "using", 15, 0);
+            AssertSemanticToken(tokens, 0, "System", 0, 0);
+            AssertSemanticToken(tokens, 0, "Collections", 0, 0);
+            AssertSemanticToken(tokens, 0, "Generic", 0, 0);
+            AssertSemanticToken(tokens, 1, "namespace", 15, 0);
+            AssertSemanticToken(tokens, 1, "Sample", 0, 0);
+            AssertSemanticToken(tokens, 2, "internal", 16, 0);
+            AssertSemanticToken(tokens, 2, "sealed", 16, 0);
+            AssertSemanticToken(tokens, 2, "record", 15, 0);
+            AssertSemanticToken(tokens, 2, "App", 2, 1);
+            AssertSemanticToken(tokens, 2, "T", 6, 1);
+            AssertSemanticToken(tokens, 2, "Value", 7, 1);
+            AssertSemanticToken(tokens, 4, "private", 16, 0);
+            AssertSemanticToken(tokens, 4, "Count", 23, 1);
+            AssertSemanticToken(tokens, 5, "Name", 9, 1);
+            AssertSemanticToken(tokens, 5, "get", 15, 0);
+            AssertSemanticToken(tokens, 5, "init", 15, 0);
+            AssertSemanticToken(tokens, 6, "Run", 13, 1);
+            AssertSemanticToken(tokens, 6, "TArg", 6, 1);
+            AssertSemanticToken(tokens, 6, "input", 7, 1);
+            AssertSemanticToken(tokens, 6, "where", 15, 0);
+            AssertSemanticToken(tokens, 8, "local", 8, 1);
+            AssertSemanticToken(tokens, 9, "Helper", 13, 0);
+            AssertSemanticToken(tokens, 9, "input", 7, 0);
+            Assert.DoesNotContain(
+                tokens.SelectMany((left, index) => tokens.Skip(index + 1).Select(right => (left, right))),
+                pair =>
+                    pair.left.Line == pair.right.Line &&
+                    pair.left.Character < pair.right.Character + pair.right.Text.Length &&
+                    pair.right.Character < pair.left.Character + pair.left.Text.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_InlayHint_HonorsRangeAndSuppressesExplicitTypes_Issue4418()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_inlay_hint_range");

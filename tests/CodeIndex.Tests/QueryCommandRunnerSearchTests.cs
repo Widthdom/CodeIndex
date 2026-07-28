@@ -10433,6 +10433,110 @@ jobs:
     }
 
     [Fact]
+    public void RunExcerpt_JsonCSharpSemanticKindsMatchLspClassifier_Issue4852()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_semantic_kinds_4852");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var source = string.Join('\n',
+            [
+                "using System.Collections.Generic;",
+                "namespace Sample.Tools;",
+                "internal sealed record App<T>(T Value)",
+                "{",
+                "    private const int Count = 1;",
+                "    public string Name { get; init; } = string.Empty;",
+                "    public void Run<TArg>(TArg input) where TArg : notnull",
+                "    {",
+                "        var local = new List<TArg>();",
+                "        Helper(input);",
+                "    }",
+                "    private void Helper(T value) { }",
+                "}",
+            ]);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Sample.cs", "csharp", source);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--start", "1", "--end", "13", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var semanticTokens = json.GetProperty("semantic_tokens").EnumerateArray().ToArray();
+            var sourceLines = source.Split('\n');
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExcerptToken(1, "using", "keyword");
+            AssertExcerptToken(1, "System", "namespace");
+            AssertExcerptToken(2, "Sample", "namespace");
+            AssertExcerptToken(3, "internal", "modifier");
+            AssertExcerptToken(3, "record", "keyword");
+            AssertExcerptToken(3, "App", "class", declaration: true);
+            AssertExcerptToken(3, "T", "typeParameter", declaration: true);
+            AssertExcerptToken(3, "Value", "parameter", declaration: true);
+            AssertExcerptToken(5, "private", "modifier");
+            AssertExcerptToken(5, "Count", "field", declaration: true);
+            AssertExcerptToken(6, "Name", "property", declaration: true);
+            AssertExcerptToken(7, "Run", "method", declaration: true);
+            AssertExcerptToken(7, "input", "parameter", declaration: true);
+            AssertExcerptToken(7, "where", "keyword");
+            AssertExcerptToken(9, "local", "variable", declaration: true);
+            AssertExcerptToken(10, "Helper", "method");
+            AssertExcerptToken(10, "input", "parameter");
+
+            var (partialExitCode, partialStdout, partialStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--start", "9", "--end", "10", "--json"],
+                _jsonOptions));
+            using var partialDocument = ParseJsonOutput(partialStdout);
+            var partialSemanticTokens = partialDocument.RootElement
+                .GetProperty("semantic_tokens")
+                .EnumerateArray()
+                .ToArray();
+            Assert.Equal(CommandExitCodes.Success, partialExitCode);
+            Assert.Equal(string.Empty, partialStderr);
+            AssertExcerptTokenIn(partialSemanticTokens, 9, "TArg", "typeParameter");
+            AssertExcerptTokenIn(partialSemanticTokens, 10, "input", "parameter");
+
+            Assert.DoesNotContain(
+                semanticTokens.SelectMany((left, index) => semanticTokens.Skip(index + 1).Select(right => (left, right))),
+                pair =>
+                    pair.left.GetProperty("start_line").GetInt32() == pair.right.GetProperty("start_line").GetInt32() &&
+                    pair.left.GetProperty("start_column").GetInt32() < pair.right.GetProperty("end_column").GetInt32() &&
+                    pair.right.GetProperty("start_column").GetInt32() < pair.left.GetProperty("end_column").GetInt32());
+
+            void AssertExcerptToken(
+                int line,
+                string text,
+                string type,
+                bool declaration = false)
+                => AssertExcerptTokenIn(semanticTokens, line, text, type, declaration);
+
+            void AssertExcerptTokenIn(
+                JsonElement[] actualTokens,
+                int line,
+                string text,
+                string type,
+                bool declaration = false)
+            {
+                var column = sourceLines[line - 1].IndexOf(text, StringComparison.Ordinal) + 1;
+                Assert.Contains(actualTokens, token =>
+                    token.GetProperty("start_line").GetInt32() == line &&
+                    token.GetProperty("start_column").GetInt32() == column &&
+                    token.GetProperty("end_column").GetInt32() == column + text.Length &&
+                    token.GetProperty("type").GetString() == type &&
+                    token.GetProperty("modifiers").EnumerateArray()
+                        .Any(modifier => modifier.GetString() == "declaration") == declaration);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_JsonMaxBytesRejectsOversizedPayload_Issue4311()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_json_max_bytes_4311");

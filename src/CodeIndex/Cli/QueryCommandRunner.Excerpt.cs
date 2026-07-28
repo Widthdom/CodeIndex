@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Semantics;
 
 namespace CodeIndex.Cli;
 
@@ -148,7 +149,7 @@ public static partial class QueryCommandRunner
             {
                 ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, options.DbPath);
                 if (!options.NoSemanticTokens)
-                    excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
+                    excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt, reader);
             }
 
             if (options.Json)
@@ -217,13 +218,26 @@ public static partial class QueryCommandRunner
     private static bool TryParsePositiveLine(string value, out int line)
         => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out line) && line > 0;
 
-    private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(FileExcerptResult excerpt)
+    private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(
+        FileExcerptResult excerpt,
+        DbReader reader)
     {
         var tokens = new List<ExcerptSemanticToken>();
         var lines = excerpt.Content.Replace("\r\n", "\n").Split('\n');
         var spans = excerpt.ContentLineSpans.Count == 0
             ? BuildIdentityExcerptContentLineSpans(excerpt, lines)
             : excerpt.ContentLineSpans;
+        var isCSharp = string.Equals(excerpt.Lang, "csharp", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Path.GetExtension(excerpt.Path), ".cs", StringComparison.OrdinalIgnoreCase);
+        var indexedSourceLines = isCSharp
+            ? reader.GetIndexedSourceLinesForSemanticTokens(excerpt.Path)
+            : [];
+        var classifiesIndexedSource = indexedSourceLines.Count > 0;
+        var classifiedCSharpTokens = isCSharp
+            ? CSharpSemanticTokenClassifier.Classify(
+                classifiesIndexedSource ? indexedSourceLines : lines,
+                CSharpSemanticTokenClassifier.DefaultExcerptTokenLimit)
+            : [];
         foreach (var span in spans)
         {
             if (span.ContentLine <= 0 || span.ContentLine > lines.Length)
@@ -232,6 +246,42 @@ public static partial class QueryCommandRunner
             var line = lines[span.ContentLine - 1];
             var startColumn = Math.Clamp(span.ContentStartColumn - 1, 0, line.Length);
             var endColumn = Math.Clamp(span.ContentEndColumn - 1, startColumn, line.Length);
+            if (isCSharp)
+            {
+                var classifiedLine = classifiesIndexedSource
+                    ? span.SourceLine - 1
+                    : span.ContentLine - 1;
+                var classifiedStartColumn = classifiesIndexedSource
+                    ? span.SourceStartColumn - 1
+                    : startColumn;
+                var classifiedEndColumn = classifiesIndexedSource
+                    ? span.SourceEndColumn - 1
+                    : endColumn;
+                foreach (var token in classifiedCSharpTokens)
+                {
+                    if (token.Line != classifiedLine ||
+                        token.StartCharacter < classifiedStartColumn ||
+                        token.StartCharacter + token.Length > classifiedEndColumn)
+                    {
+                        continue;
+                    }
+
+                    var sourceStartColumn = span.SourceStartColumn +
+                        token.StartCharacter -
+                        classifiedStartColumn;
+                    tokens.Add(new ExcerptSemanticToken
+                    {
+                        StartLine = span.SourceLine,
+                        StartColumn = sourceStartColumn,
+                        EndLine = span.SourceLine,
+                        EndColumn = sourceStartColumn + token.Length,
+                        Type = CSharpSemanticTokenClassifier.ToProtocolName(token.Kind),
+                        Modifiers = token.IsDeclaration ? ["declaration"] : [],
+                    });
+                }
+                continue;
+            }
+
             var column = startColumn;
             while (column < endColumn)
             {
