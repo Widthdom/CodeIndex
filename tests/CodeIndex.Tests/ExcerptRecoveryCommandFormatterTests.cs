@@ -127,6 +127,51 @@ public class ExcerptRecoveryCommandFormatterTests
     }
 
     [Fact]
+    public void ApplyDbPath_DefaultRedaction_DoesNotTreatOptionLikeSourceAsDbFlag_Issue4860()
+    {
+        const string path = "--db";
+        const string dbPath = "/tmp/private-workspace/codeindex.db";
+        var recovery = FileExcerptResult.CreateRecoveryHint(path, 2, 3);
+
+        ExcerptRecoveryCommandFormatter.ApplyDbPath(
+            recovery,
+            path,
+            dbPath,
+            ["/opt/cdidx"],
+            RecoveryCommandShell.PosixSh);
+
+        Assert.Equal(
+            ["cdidx", "excerpt", "--", "--db", "--db", "codeindex.db"],
+            recovery.Argv.Take(6));
+        Assert.DoesNotContain("/tmp/private-workspace", recovery.Command, StringComparison.Ordinal);
+        Assert.True(recovery.PathsRedacted);
+        Assert.True(recovery.RequiresLocalPathSubstitution);
+    }
+
+    [Fact]
+    public void ApplyDbPath_DefaultRedaction_SanitizesFileUriQueryPathsAndSecrets_Issue4860()
+    {
+        const string dbPath =
+            "file:/tmp/private-workspace/codeindex.db?mode=ro&aux=/Users/alice/private-cache&token=visible4860&encoded=%2FUsers%2Falice%2Fsecret";
+        var recovery = FileExcerptResult.CreateRecoveryHint("src/app.cs", 2, 3);
+
+        ExcerptRecoveryCommandFormatter.ApplyDbPath(
+            recovery,
+            "src/app.cs",
+            dbPath,
+            ["/opt/cdidx"],
+            RecoveryCommandShell.PosixSh);
+
+        Assert.Contains(
+            "file:codeindex.db?mode=ro&aux=private-cache&token=<redacted>&encoded=secret",
+            recovery.Argv);
+        Assert.DoesNotContain("private-workspace", recovery.Command, StringComparison.Ordinal);
+        Assert.DoesNotContain("Users", recovery.Command, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("alice", recovery.Command, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("visible4860", recovery.Command, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ResolveInvocationPrefix_PreservesDotnetAssemblyOrNativeApphost_Issue4567()
     {
         var assemblyPath = Path.Combine("relative path", "cdidx.dll");

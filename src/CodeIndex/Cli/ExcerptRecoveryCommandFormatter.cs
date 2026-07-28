@@ -131,7 +131,7 @@ internal static class ExcerptRecoveryCommandFormatter
         if (sourcePathIndex < output.Count)
             output[sourcePathIndex] = RedactAbsolutePathArgument(output[sourcePathIndex]);
 
-        var dbFlagIndex = output.IndexOf("--db");
+        var dbFlagIndex = output.FindIndex(sourcePathIndex + 1, argument => argument == "--db");
         if (dbFlagIndex >= 0 && dbFlagIndex + 1 < output.Count)
             output[dbFlagIndex + 1] = RedactAbsolutePathArgument(output[dbFlagIndex + 1]);
 
@@ -141,16 +141,10 @@ internal static class ExcerptRecoveryCommandFormatter
     private static string RedactAbsolutePathArgument(string value)
     {
         if (value.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-        {
-            var queryIndex = value.IndexOf('?');
-            var pathEnd = queryIndex >= 0 ? queryIndex : value.Length;
-            var path = value["file:".Length..pathEnd];
-            var query = queryIndex >= 0 ? value[queryIndex..] : string.Empty;
-            return "file:" + DiagnosticSanitizer.ForPath(path) + query;
-        }
+            return DiagnosticSanitizer.ForSupportSafePath(value);
 
         return IsAbsolutePathArgument(value)
-            ? DiagnosticSanitizer.ForPath(value)
+            ? DiagnosticSanitizer.ForSupportSafePath(value)
             : value;
     }
 

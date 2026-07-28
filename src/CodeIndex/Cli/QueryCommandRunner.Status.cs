@@ -1051,7 +1051,11 @@ public static partial class QueryCommandRunner
         }
 
         string? PathValue(string? value)
-            => redactPaths && value != null ? DiagnosticSanitizer.ForPath(value) : value;
+            => value == null
+                ? null
+                : redactPaths
+                    ? DiagnosticSanitizer.ForSupportSafePath(value)
+                    : DiagnosticRedactor.RedactSensitiveText(value);
 
         var staleAfterEnvValue = CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
 

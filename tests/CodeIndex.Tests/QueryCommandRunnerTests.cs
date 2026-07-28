@@ -631,6 +631,45 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatusConfig_FileUriRedactsQueryPathsAndSecrets_Issue4860()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}.db");
+        var dbUri =
+            $"file:{missingDb}?mode=ro&aux=/Users/alice/private-cache&token=visible4860";
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--config", "--db", dbUri, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var dbPath = document.RootElement
+            .GetProperty("effective_config")
+            .GetProperty("db_path")
+            .GetProperty("value")
+            .GetString();
+        Assert.Equal(
+            $"file:{Path.GetFileName(missingDb)}?mode=ro&aux=private-cache&token=<redacted>",
+            dbPath);
+        Assert.DoesNotContain(Path.GetTempPath(), stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Users", stdout, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("alice", stdout, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("visible4860", stdout, StringComparison.Ordinal);
+
+        var (showExitCode, showStdout, showStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--config", "--db", dbUri, "--json", "--show-paths"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, showExitCode);
+        Assert.Equal(string.Empty, showStderr);
+        Assert.Contains(missingDb, showStdout, StringComparison.Ordinal);
+        Assert.Contains("/Users/alice/private-cache", showStdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("visible4860", showStdout, StringComparison.Ordinal);
+        Assert.Contains("token=\\u003Credacted\\u003E", showStdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunStatusConfig_ReportsConfigFileSourceForSearchDefaults()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_status_config_source");
