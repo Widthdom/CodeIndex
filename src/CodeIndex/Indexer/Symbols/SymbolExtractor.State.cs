@@ -47,13 +47,19 @@ public static partial class SymbolExtractor
 
     private sealed class SymbolExtractionList : List<SymbolRecord>
     {
-        public SymbolExtractionList(int initialCapacity)
-            : base(initialCapacity)
+        private readonly int? _maxSymbols;
+
+        public SymbolExtractionList(int initialCapacity, int? maxSymbols = null)
+            : base(maxSymbols.HasValue ? Math.Min(initialCapacity, maxSymbols.Value) : initialCapacity)
         {
-            ExtractionState = new SymbolExtractionState(initialCapacity);
+            _maxSymbols = maxSymbols;
+            ExtractionState = new SymbolExtractionState(
+                maxSymbols.HasValue ? Math.Min(initialCapacity, maxSymbols.Value) : initialCapacity);
         }
 
         public SymbolExtractionState ExtractionState { get; }
+
+        public bool IsAtCapacity => _maxSymbols.HasValue && Count >= _maxSymbols.Value;
     }
 
     private sealed class SymbolAddState

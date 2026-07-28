@@ -286,7 +286,7 @@ public partial class IndexCommandRunnerTests
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
-            Assert.Equal(5, DbContext.ReferenceIdentityContractVersion);
+            Assert.Equal(6, DbContext.ReferenceIdentityContractVersion);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var connection = new SqliteConnection($"Data Source={dbPath}"))
@@ -351,7 +351,7 @@ public partial class IndexCommandRunnerTests
             using var markerCommand = verification.CreateCommand();
             markerCommand.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
             markerCommand.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
-            Assert.Equal("5", Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+            Assert.Equal("6", Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
 
             using var resolutionCommand = verification.CreateCommand();
             resolutionCommand.CommandText = """
@@ -384,6 +384,87 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(
                 "target.md",
                 Convert.ToString(candidateCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_NoOpRepairsPriorConstructorIdentityContract_Issue4850()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Caller.cs"),
+                "public class Caller { public object Create() => new Target(); }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Target.cs"),
+                "public class Target { public Target() { } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM symbol_reference_candidates
+                    WHERE reference_id IN (
+                        SELECT id
+                        FROM symbol_references
+                        WHERE reference_kind = 'instantiate'
+                          AND symbol_name = 'Target'
+                    );
+                    INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+                    SELECT reference.id, symbol.id, 5
+                    FROM symbol_references AS reference
+                    JOIN symbols AS symbol ON symbol.name = reference.symbol_name
+                    WHERE reference.reference_kind = 'instantiate'
+                      AND reference.symbol_name = 'Target';
+                    UPDATE codeindex_meta
+                    SET value = '5'
+                    WHERE key = @key;
+                    """;
+                command.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
+                command.ExecuteNonQuery();
+            }
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "Caller.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+
+            using var verification = new SqliteConnection($"Data Source={dbPath}");
+            verification.Open();
+            using var markerCommand = verification.CreateCommand();
+            markerCommand.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            markerCommand.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
+            Assert.Equal(
+                DbContext.ReferenceIdentityContractVersion.ToString(CultureInfo.InvariantCulture),
+                Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+
+            using var candidateCommand = verification.CreateCommand();
+            candidateCommand.CommandText = """
+                SELECT symbol.kind
+                FROM symbol_reference_candidates AS candidate
+                JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+                JOIN symbols AS symbol ON symbol.id = candidate.symbol_id
+                WHERE reference.reference_kind = 'instantiate'
+                  AND reference.symbol_name = 'Target'
+                """;
+            using var candidateReader = candidateCommand.ExecuteReader();
+            var candidateKinds = new List<string>();
+            while (candidateReader.Read())
+                candidateKinds.Add(candidateReader.GetString(0));
+            Assert.Equal(["function"], candidateKinds);
         }
         finally
         {

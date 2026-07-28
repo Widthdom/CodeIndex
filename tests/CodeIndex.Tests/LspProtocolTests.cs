@@ -37,4 +37,42 @@ public class LspProtocolTests
         Assert.Equal(1, store.EvictionCount);
         Assert.Equal(Encoding.UTF8.GetByteCount("first"), store.EvictedBytes);
     }
+
+    [Fact]
+    public void LiveDocumentStore_PreservesBoundedVersionTombstonesAcrossEviction()
+    {
+        var store = new LspLiveDocumentStore(
+            StringComparer.Ordinal,
+            StringComparison.Ordinal,
+            maxDocuments: 1,
+            maxDocumentBytes: 100,
+            maxLiveBytes: 100);
+
+        Assert.True(store.SetText("/first.cs", "first", version: 3));
+        Assert.True(store.SetText("/second.cs", "second", version: 2));
+        Assert.False(store.SetText("/first.cs", "stale", version: 2));
+        Assert.Equal(1, store.VersionTombstoneCount);
+
+        store.Remove("/first.cs");
+
+        Assert.True(store.SetText("/first.cs", "reopened", version: 2));
+        Assert.True(store.VersionTombstoneCount <= 1);
+    }
+
+    [Fact]
+    public void LiveDocumentStore_PreservesNewerVersionWhenOversizedTextIsDropped()
+    {
+        var store = new LspLiveDocumentStore(
+            StringComparer.Ordinal,
+            StringComparison.Ordinal,
+            maxDocuments: 1,
+            maxDocumentBytes: 5,
+            maxLiveBytes: 5);
+
+        Assert.True(store.SetText("/app.cs", "small", version: 3));
+        Assert.False(store.SetText("/app.cs", "oversized", version: 4));
+        Assert.False(store.TryGetText("/app.cs", out _));
+        Assert.False(store.SetText("/app.cs", "old", version: 3));
+        Assert.Equal(1, store.VersionTombstoneCount);
+    }
 }
