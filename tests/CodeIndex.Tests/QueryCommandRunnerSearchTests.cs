@@ -10464,12 +10464,24 @@ jobs:
                 "    void IFoo.Execute() { }",
                 "    string IFoo.Label => Name;",
                 "    private void Helper(T value) { _ = $\"{value}\"; }",
+                "    [Obsolete()]",
+                "    private void ReviewCases()",
+                "    {",
+                "        int record = 0, @class = 1;",
+                "        using var stream = Open();",
+                "        var text = 1.ToString();",
+                "        _ = @class;",
+                "        async();",
+                "    }",
+                "    private IDisposable Open() => null!;",
+                "    public int Size { get { int nested = 1; return nested; } }",
+                "    private void async() { }",
                 "}",
             ]);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Sample.cs", "csharp", source);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
-                ["src/Sample.cs", "--db", dbPath, "--start", "1", "--end", "24", "--json"],
+                ["src/Sample.cs", "--db", dbPath, "--start", "1", "--end", "36", "--json"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -10511,6 +10523,19 @@ jobs:
             AssertExcerptToken(21, "Execute", "method", declaration: true);
             AssertExcerptToken(22, "Label", "property", declaration: true);
             AssertExcerptToken(23, "value", "parameter", declaration: true);
+            AssertExcerptToken(24, "Obsolete", "type");
+            AssertExcerptToken(25, "ReviewCases", "method", declaration: true);
+            AssertExcerptToken(27, "record", "variable", declaration: true);
+            AssertExcerptToken(27, "@class", "variable", declaration: true);
+            AssertExcerptToken(28, "stream", "variable", declaration: true);
+            AssertExcerptToken(28, "Open", "method");
+            AssertExcerptToken(29, "1", "number");
+            AssertExcerptToken(29, "ToString", "method");
+            AssertExcerptToken(30, "@class", "variable");
+            AssertExcerptToken(31, "async", "method");
+            AssertExcerptToken(33, "Open", "method", declaration: true);
+            AssertExcerptToken(34, "nested", "variable", declaration: true);
+            AssertExcerptToken(35, "async", "method", declaration: true);
 
             var (partialExitCode, partialStdout, partialStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["src/Sample.cs", "--db", dbPath, "--start", "16", "--end", "17", "--json"],
@@ -10579,6 +10604,19 @@ jobs:
                 "src/Large.cs",
                 "csharp",
                 source.ToString());
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var boundedSource = new DbReader(db)
+                    .GetIndexedSourceLinesForSemanticTokens(
+                        "src/Large.cs",
+                        maxLines: 10,
+                        maxCharacters: 96);
+                Assert.InRange(boundedSource.Count, 1, 10);
+                Assert.InRange(
+                    boundedSource.Sum(line => (line?.Length ?? 0) + 1),
+                    1,
+                    96);
+            }
 
             const int targetSourceLine = 4_003;
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(

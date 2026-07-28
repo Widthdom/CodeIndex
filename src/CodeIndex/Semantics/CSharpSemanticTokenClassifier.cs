@@ -34,12 +34,28 @@ internal readonly record struct ClassifiedCSharpSemanticToken(
 internal static class CSharpSemanticTokenClassifier
 {
     internal const int DefaultExcerptTokenLimit = 10_000;
+    internal const int DefaultExcerptSourceLineLimit = 100_000;
+    internal const int DefaultExcerptSourceCharacterLimit = 4 * 1024 * 1024;
 
     private static readonly HashSet<string> Modifiers = new(StringComparer.Ordinal)
     {
         "abstract", "async", "const", "extern", "file", "internal", "override", "partial",
         "private", "protected", "public", "readonly", "required", "sealed", "static",
         "unsafe", "virtual", "volatile",
+    };
+
+    private static readonly HashSet<string> ContextualModifiers = new(StringComparer.Ordinal)
+    {
+        "async", "file", "partial", "required",
+    };
+
+    private static readonly HashSet<string> ContextualKeywords = new(StringComparer.Ordinal)
+    {
+        "add", "alias", "and", "ascending", "async", "await", "by", "descending", "dynamic",
+        "equals", "file", "from", "get", "global", "group", "init", "into", "join", "let",
+        "managed", "nameof", "not", "notnull", "on", "or", "orderby", "partial", "record",
+        "remove", "required", "scoped", "select", "set", "unmanaged", "var", "when", "where",
+        "with", "yield",
     };
 
     private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
@@ -97,6 +113,7 @@ internal static class CSharpSemanticTokenClassifier
         var declaredEventNames = new HashSet<string>(StringComparer.Ordinal);
         var methodBodies = new List<(int Start, int End)>();
         var enumBodies = new List<(int Start, int End)>();
+        var typeBodies = new List<(int Start, int End)>();
 
         ClassifyKeywordsAndNumbers(lexemes, kinds);
         ClassifyDirectives(lexemes, kinds);
@@ -107,7 +124,8 @@ internal static class CSharpSemanticTokenClassifier
             declaredTypeNames,
             declaredTypeParameterNames,
             declaredParameterNames,
-            enumBodies);
+            enumBodies,
+            typeBodies);
         ClassifyEnumMembers(
             lexemes,
             kinds,
@@ -136,7 +154,7 @@ internal static class CSharpSemanticTokenClassifier
             lexemes,
             kinds,
             declarations,
-            methodBodies,
+            typeBodies,
             declaredFieldNames);
         ClassifyRemainingIdentifiers(
             lexemes,
@@ -232,9 +250,11 @@ internal static class CSharpSemanticTokenClassifier
                 continue;
 
             var word = NormalizeIdentifier(lexeme.Text);
-            if (Modifiers.Contains(word))
+            if (lexeme.Text[0] == '@')
+                continue;
+            if (Modifiers.Contains(word) && IsModifierAt(lexemes, index, word))
                 kinds[index] = CSharpSemanticTokenKind.Modifier;
-            else if (Keywords.Contains(word))
+            else if (Keywords.Contains(word) && IsKeywordAt(lexemes, index, word))
                 kinds[index] = CSharpSemanticTokenKind.Keyword;
         }
     }
@@ -246,6 +266,8 @@ internal static class CSharpSemanticTokenClassifier
         for (var index = 0; index < lexemes.Count; index++)
         {
             var word = NormalizeIdentifier(lexemes[index].Text);
+            if (kinds[index] != CSharpSemanticTokenKind.Keyword)
+                continue;
             if (word == "namespace")
             {
                 MarkQualifiedName(lexemes, kinds, index + 1, stopAtEquals: false);
@@ -264,12 +286,14 @@ internal static class CSharpSemanticTokenClassifier
         HashSet<string> declaredTypeNames,
         HashSet<string> declaredTypeParameterNames,
         HashSet<string> declaredParameterNames,
-        List<(int Start, int End)> enumBodies)
+        List<(int Start, int End)> enumBodies,
+        List<(int Start, int End)> typeBodies)
     {
         for (var index = 0; index < lexemes.Count; index++)
         {
             var keyword = NormalizeIdentifier(lexemes[index].Text);
-            if (!TypeDeclarationKeywords.Contains(keyword))
+            if (!TypeDeclarationKeywords.Contains(keyword) ||
+                kinds[index] != CSharpSemanticTokenKind.Keyword)
                 continue;
             if (keyword is "class" or "struct" &&
                 index > 0 &&
@@ -318,10 +342,11 @@ internal static class CSharpSemanticTokenClassifier
                     declaredParameterNames);
             }
 
-            if (kind == CSharpSemanticTokenKind.Enum &&
-                TryFindTypeBodyRange(lexemes, nameIndex, out var enumBody))
+            if (TryFindTypeBodyRange(lexemes, nameIndex, out var typeBody))
             {
-                enumBodies.Add(enumBody);
+                typeBodies.Add(typeBody);
+                if (kind == CSharpSemanticTokenKind.Enum)
+                    enumBodies.Add(typeBody);
             }
         }
     }
@@ -387,7 +412,8 @@ internal static class CSharpSemanticTokenClassifier
     {
         for (var eventIndex = 0; eventIndex < lexemes.Count; eventIndex++)
         {
-            if (NormalizeIdentifier(lexemes[eventIndex].Text) != "event")
+            if (NormalizeIdentifier(lexemes[eventIndex].Text) != "event" ||
+                kinds[eventIndex] != CSharpSemanticTokenKind.Keyword)
                 continue;
 
             var segmentStart = eventIndex + 1;
@@ -469,6 +495,12 @@ internal static class CSharpSemanticTokenClassifier
             if (!TryFindInvocationOpenParen(lexemes, index, out var openParen))
                 continue;
 
+            if (IsInsideAttributeList(lexemes, index))
+            {
+                kinds[index] = CSharpSemanticTokenKind.Type;
+                continue;
+            }
+
             var previous = index - 1;
             if (previous >= 0 && NormalizeIdentifier(lexemes[previous].Text) == "new")
             {
@@ -507,7 +539,7 @@ internal static class CSharpSemanticTokenClassifier
         IReadOnlyList<Lexeme> lexemes,
         CSharpSemanticTokenKind?[] kinds,
         bool[] declarations,
-        IReadOnlyList<(int Start, int End)> methodBodies,
+        IReadOnlyList<(int Start, int End)> typeBodies,
         HashSet<string> declaredFieldNames)
     {
         for (var index = 0; index < lexemes.Count; index++)
@@ -521,11 +553,9 @@ internal static class CSharpSemanticTokenClassifier
             if (IsDeclarationTypeBefore(lexemes, kinds, index) &&
                 HasDeclarationTerminatorAfter(lexemes, index))
             {
-                var insideMethod = methodBodies.Any(
-                    body => index > body.Start && index < body.End);
-                kind = insideMethod
-                    ? CSharpSemanticTokenKind.Variable
-                    : CSharpSemanticTokenKind.Field;
+                kind = IsDirectlyInsideTypeBody(lexemes, index, typeBodies)
+                    ? CSharpSemanticTokenKind.Field
+                    : CSharpSemanticTokenKind.Variable;
             }
             else if (!TryGetCommaSeparatedDeclarationKind(
                 lexemes,
@@ -887,10 +917,32 @@ internal static class CSharpSemanticTokenClassifier
                 if (char.IsDigit(line[index]))
                 {
                     var start = index++;
-                    while (index < line.Length &&
-                        (char.IsLetterOrDigit(line[index]) || line[index] is '_' or '.'))
+                    var hasDecimalPoint = false;
+                    while (index < line.Length)
                     {
-                        index++;
+                        var value = line[index];
+                        if (char.IsLetterOrDigit(value) || value == '_')
+                        {
+                            index++;
+                            continue;
+                        }
+                        if (!hasDecimalPoint &&
+                            value == '.' &&
+                            index + 1 < line.Length &&
+                            char.IsDigit(line[index + 1]))
+                        {
+                            hasDecimalPoint = true;
+                            index++;
+                            continue;
+                        }
+                        if (value is '+' or '-' &&
+                            index > start &&
+                            line[index - 1] is 'e' or 'E')
+                        {
+                            index++;
+                            continue;
+                        }
+                        break;
                     }
                     result.Add(new Lexeme(
                         lineIndex,
@@ -934,6 +986,111 @@ internal static class CSharpSemanticTokenClassifier
             LexemeKind.Punctuation));
     }
 
+    private static bool IsModifierAt(
+        IReadOnlyList<Lexeme> lexemes,
+        int index,
+        string word)
+    {
+        if (!Modifiers.Contains(word))
+            return false;
+        if (!ContextualModifiers.Contains(word))
+            return true;
+        if (LooksLikeIdentifierDeclaration(lexemes, index))
+            return false;
+        if (index + 1 >= lexemes.Count)
+            return false;
+
+        var next = lexemes[index + 1];
+        if (next.Kind == LexemeKind.Identifier)
+            return true;
+        if (word != "async" || next.Text != "(")
+            return false;
+
+        var closeParen = FindMatching(lexemes, index + 1, "(", ")");
+        return closeParen >= 0 &&
+            closeParen + 1 < lexemes.Count &&
+            lexemes[closeParen + 1].Text == "=>";
+    }
+
+    private static bool IsKeywordAt(
+        IReadOnlyList<Lexeme> lexemes,
+        int index,
+        string word)
+    {
+        if (!Keywords.Contains(word) ||
+            lexemes[index].Text.StartsWith('@'))
+        {
+            return false;
+        }
+        if (!ContextualKeywords.Contains(word))
+            return true;
+        if (LooksLikeIdentifierDeclaration(lexemes, index))
+            return false;
+
+        var previous = index > 0 ? lexemes[index - 1].Text : null;
+        var next = index + 1 < lexemes.Count ? lexemes[index + 1].Text : null;
+        if (word is "get" or "set" or "init" or "add" or "remove")
+        {
+            return previous is "{" or "}" or ";" &&
+                next is "{" or ";" or "=>";
+        }
+        if (word == "record")
+        {
+            return next is "class" or "struct" ||
+                (index + 1 < lexemes.Count &&
+                 lexemes[index + 1].Kind == LexemeKind.Identifier &&
+                 next is not "=" and not "," and not ";" and not ")");
+        }
+        if (word is "notnull" or "unmanaged" or "managed")
+            return previous is ":" or ",";
+        if (word == "var")
+        {
+            return index + 1 < lexemes.Count &&
+                lexemes[index + 1].Kind == LexemeKind.Identifier;
+        }
+        if (word == "nameof")
+            return next == "(";
+        if (word == "global")
+            return next is "using" or "::";
+        if (word == "with")
+            return next == "{";
+        if (word == "yield")
+            return next is "return" or "break";
+        if (word == "when")
+            return next == "(" ||
+                (index + 1 < lexemes.Count &&
+                 lexemes[index + 1].Kind == LexemeKind.Identifier);
+        if (word is "and" or "or" or "not" or "ascending" or "by" or
+            "descending" or "equals" or "from" or "group" or "into" or
+            "join" or "let" or "on" or "orderby" or "select" or "where")
+        {
+            return next is not null and not "." and not "?." and not "(" and
+                not "=" and not "," and not ";" and not ")";
+        }
+
+        return index + 1 < lexemes.Count &&
+            lexemes[index + 1].Kind == LexemeKind.Identifier;
+    }
+
+    private static bool LooksLikeIdentifierDeclaration(
+        IReadOnlyList<Lexeme> lexemes,
+        int index)
+    {
+        if (index <= 0 || lexemes[index - 1].Text is "." or "?.")
+            return false;
+
+        var previous = lexemes[index - 1];
+        if (previous.Text is ">" or "]" or "?")
+            return true;
+        if (previous.Kind != LexemeKind.Identifier)
+            return false;
+
+        var previousWord = NormalizeIdentifier(previous.Text);
+        return BuiltInTypeKeywords.Contains(previousWord) ||
+            previousWord == "var" ||
+            StartsWithUppercase(previousWord);
+    }
+
     private static bool IsDirectiveStart(IReadOnlyList<Lexeme> lexemes, int index)
     {
         if (index + 1 < lexemes.Count && lexemes[index + 1].Text == "(")
@@ -945,6 +1102,32 @@ internal static class CSharpSemanticTokenClassifier
         {
             if (NormalizeIdentifier(lexemes[previous].Text) != "global")
                 return false;
+        }
+
+        var equals = -1;
+        var identifierCount = 0;
+        for (var next = index + 1; next < lexemes.Count; next++)
+        {
+            if (lexemes[next].Text is ";" or "{")
+                break;
+            if (lexemes[next].Text == "=")
+            {
+                equals = next;
+                break;
+            }
+            if (lexemes[next].Kind == LexemeKind.Identifier &&
+                NormalizeIdentifier(lexemes[next].Text) is not "static" and not "unsafe")
+            {
+                identifierCount++;
+            }
+        }
+
+        if (equals >= 0 && identifierCount > 1)
+            return false;
+        if (index + 1 < lexemes.Count &&
+            NormalizeIdentifier(lexemes[index + 1].Text) == "var")
+        {
+            return false;
         }
 
         return true;
@@ -986,7 +1169,10 @@ internal static class CSharpSemanticTokenClassifier
             if (lexemes[index].Text is ";" or "{" or "}")
                 return -1;
             if (lexemes[index].Kind == LexemeKind.Identifier &&
-                !Keywords.Contains(NormalizeIdentifier(lexemes[index].Text)) &&
+                !IsKeywordAt(
+                    lexemes,
+                    index,
+                    NormalizeIdentifier(lexemes[index].Text)) &&
                 !kinds[index].HasValue)
             {
                 return index;
@@ -1013,7 +1199,10 @@ internal static class CSharpSemanticTokenClassifier
         for (var index = open + 1; index < close; index++)
         {
             if (lexemes[index].Kind != LexemeKind.Identifier ||
-                Keywords.Contains(NormalizeIdentifier(lexemes[index].Text)))
+                IsKeywordAt(
+                    lexemes,
+                    index,
+                    NormalizeIdentifier(lexemes[index].Text)))
             {
                 continue;
             }
@@ -1081,7 +1270,8 @@ internal static class CSharpSemanticTokenClassifier
             if (lexemes[index].Kind != LexemeKind.Identifier)
                 continue;
             var word = NormalizeIdentifier(lexemes[index].Text);
-            if (!Keywords.Contains(word) && kinds[index] is not CSharpSemanticTokenKind.Modifier)
+            if (!IsKeywordAt(lexemes, index, word) &&
+                kinds[index] is not CSharpSemanticTokenKind.Modifier)
                 return index;
         }
 
@@ -1175,7 +1365,7 @@ internal static class CSharpSemanticTokenClassifier
             if (lexemes[index].Kind != LexemeKind.Identifier)
                 continue;
             var word = NormalizeIdentifier(lexemes[index].Text);
-            if (!Keywords.Contains(word))
+            if (!IsKeywordAt(lexemes, index, word))
                 return index;
         }
         return -1;
@@ -1189,6 +1379,58 @@ internal static class CSharpSemanticTokenClassifier
         for (var index = openBrace + 1; index < closeBrace; index++)
         {
             if (NormalizeIdentifier(lexemes[index].Text) is "get" or "set" or "init" or "add" or "remove")
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsInsideAttributeList(
+        IReadOnlyList<Lexeme> lexemes,
+        int index)
+    {
+        var bracketDepth = 0;
+        for (var previous = index - 1; previous >= 0; previous--)
+        {
+            if (lexemes[previous].Text == "]")
+            {
+                bracketDepth++;
+                continue;
+            }
+            if (lexemes[previous].Text != "[")
+                continue;
+            if (bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (previous == 0)
+                return true;
+            return lexemes[previous - 1].Text is
+                "{" or "}" or ";" or "(" or "," or ":" or "<" or "[";
+        }
+        return false;
+    }
+
+    private static bool IsDirectlyInsideTypeBody(
+        IReadOnlyList<Lexeme> lexemes,
+        int index,
+        IReadOnlyList<(int Start, int End)> typeBodies)
+    {
+        foreach (var body in typeBodies)
+        {
+            if (index <= body.Start || index >= body.End)
+                continue;
+
+            var braceDepth = 0;
+            for (var current = body.Start + 1; current < index; current++)
+            {
+                if (lexemes[current].Text == "{")
+                    braceDepth++;
+                else if (lexemes[current].Text == "}" && braceDepth > 0)
+                    braceDepth--;
+            }
+            if (braceDepth == 0)
                 return true;
         }
         return false;

@@ -1060,6 +1060,18 @@ public class LspServerTests
                 "    void IFoo.Execute() { }",
                 "    string IFoo.Label => Name;",
                 "    private void Helper(T value) { _ = $\"{value}\"; }",
+                "    [Obsolete()]",
+                "    private void ReviewCases()",
+                "    {",
+                "        int record = 0, @class = 1;",
+                "        using var stream = Open();",
+                "        var text = 1.ToString();",
+                "        _ = @class;",
+                "        async();",
+                "    }",
+                "    private IDisposable Open() => null!;",
+                "    public int Size { get { int nested = 1; return nested; } }",
+                "    private void async() { }",
                 "}",
             ]);
             File.WriteAllText(sourcePath, source);
@@ -1117,6 +1129,20 @@ public class LspServerTests
             AssertSemanticToken(tokens, 21, "Label", 9, 1);
             AssertSemanticToken(tokens, 22, "value", 7, 1);
             AssertSemanticToken(tokens, 22, "value", 7, 0);
+            AssertSemanticToken(tokens, 23, "Obsolete", 1, 0);
+            AssertSemanticToken(tokens, 24, "ReviewCases", 13, 1);
+            AssertSemanticToken(tokens, 26, "record", 8, 1);
+            AssertSemanticToken(tokens, 26, "@class", 8, 1);
+            AssertSemanticToken(tokens, 27, "stream", 8, 1);
+            AssertSemanticToken(tokens, 27, "Open", 13, 0);
+            AssertSemanticToken(tokens, 28, "1", 19, 0);
+            AssertSemanticToken(tokens, 28, "ToString", 13, 0);
+            AssertSemanticToken(tokens, 29, "@class", 8, 0);
+            AssertSemanticToken(tokens, 30, "async", 13, 0);
+            AssertSemanticToken(tokens, 32, "Open", 13, 1);
+            AssertSemanticToken(tokens, 33, "nested", 8, 1);
+            AssertSemanticToken(tokens, 33, "nested", 8, 0);
+            AssertSemanticToken(tokens, 34, "async", 13, 1);
             Assert.DoesNotContain(
                 tokens.SelectMany((left, index) => tokens.Skip(index + 1).Select(right => (left, right))),
                 pair =>

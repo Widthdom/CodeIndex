@@ -230,7 +230,10 @@ public static partial class QueryCommandRunner
         var isCSharp = string.Equals(excerpt.Lang, "csharp", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(Path.GetExtension(excerpt.Path), ".cs", StringComparison.OrdinalIgnoreCase);
         var indexedSourceLines = isCSharp
-            ? reader.GetIndexedSourceLinesForSemanticTokens(excerpt.Path)
+            ? reader.GetIndexedSourceLinesForSemanticTokens(
+                excerpt.Path,
+                CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit,
+                CSharpSemanticTokenClassifier.DefaultExcerptSourceCharacterLimit)
             : [];
         var classifiesIndexedSource = indexedSourceLines.Count > 0;
         var includedSourceLines = classifiesIndexedSource

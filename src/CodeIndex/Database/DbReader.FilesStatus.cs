@@ -744,21 +744,94 @@ public partial class DbReader
     }
 
     /// <summary>
-    /// Reconstruct all indexed source lines while preserving absolute line positions for semantic classification.
-    /// semantic 分類向けに絶対行位置を維持しながら、indexed source 全行を再構成する。
+    /// Reconstruct a bounded indexed-source prefix while preserving absolute line positions for semantic classification.
+    /// semantic 分類向けに絶対行位置を維持しながら、bounded な indexed-source prefix を再構成する。
     /// </summary>
-    internal IReadOnlyList<string?> GetIndexedSourceLinesForSemanticTokens(string path)
+    internal IReadOnlyList<string?> GetIndexedSourceLinesForSemanticTokens(
+        string path,
+        int maxLines,
+        int maxCharacters)
     {
-        if (!TryLoadIndexedFileLines(path, out _, out var totalLines, out var lineMap) || totalLines <= 0)
+        if (string.IsNullOrWhiteSpace(path) || maxLines <= 0 || maxCharacters <= 0)
             return [];
 
-        var sourceLines = new string?[totalLines];
-        foreach (var (line, content) in lineMap)
+        var totalLines = 0;
+        using (var fileCmd = _conn.CreateCommand())
         {
-            if (line > 0 && line <= sourceLines.Length)
-                sourceLines[line - 1] = content;
+            fileCmd.CommandText = "SELECT lines FROM files WHERE path = @path";
+            SqliteCommandPolicy.Add(fileCmd, "@path", path);
+            using var fileReader = fileCmd.ExecuteTrackedReader();
+            if (!fileReader.TrackedRead())
+                return [];
+            totalLines = fileReader.GetInt32(0);
+        }
+        if (totalLines <= 0)
+            return [];
+
+        var sourceLines = new string?[Math.Min(totalLines, maxLines)];
+        using var chunkCmd = _conn.CreateCommand();
+        chunkCmd.CommandText = """
+            SELECT c.start_line, c.end_line, substr(c.content, 1, @maxChunkCharacters)
+            FROM chunks c
+            JOIN files f ON c.file_id = f.id
+            WHERE f.path = @path
+              AND c.start_line <= @maxLines
+            ORDER BY c.start_line, c.chunk_index
+            """;
+        SqliteCommandPolicy.Add(chunkCmd, "@path", path);
+        SqliteCommandPolicy.Add(chunkCmd, "@maxLines", sourceLines.Length);
+        SqliteCommandPolicy.Add(
+            chunkCmd,
+            "@maxChunkCharacters",
+            checked(maxCharacters + 1));
+
+        var remainingCharacters = maxCharacters;
+        var lastContiguousLine = 0;
+        var budgetExhausted = false;
+        using var chunkReader = chunkCmd.ExecuteTrackedReader();
+        while (!budgetExhausted && chunkReader.TrackedRead())
+        {
+            var chunkStartLine = chunkReader.GetInt32(0);
+            var chunkEndLine = chunkReader.GetInt32(1);
+            var chunkLines = chunkReader.GetString(2).Split('\n');
+            var lineCount = Math.Min(
+                chunkLines.Length,
+                chunkEndLine - chunkStartLine + 1);
+            for (var index = 0; index < lineCount; index++)
+            {
+                var absoluteLine = chunkStartLine + index;
+                if (absoluteLine <= 0)
+                    continue;
+                if (absoluteLine > sourceLines.Length)
+                {
+                    budgetExhausted = true;
+                    break;
+                }
+                if (sourceLines[absoluteLine - 1] != null)
+                    continue;
+
+                var content = chunkLines[index];
+                var requiredCharacters = checked(content.Length + 1);
+                if (requiredCharacters > remainingCharacters)
+                {
+                    budgetExhausted = true;
+                    break;
+                }
+
+                sourceLines[absoluteLine - 1] = content;
+                remainingCharacters -= requiredCharacters;
+                while (lastContiguousLine < sourceLines.Length &&
+                    sourceLines[lastContiguousLine] != null)
+                {
+                    lastContiguousLine++;
+                }
+            }
         }
 
+        if (lastContiguousLine == 0)
+            return [];
+        if (lastContiguousLine < sourceLines.Length)
+            Array.Resize(ref sourceLines, lastContiguousLine);
         return sourceLines;
     }
 
