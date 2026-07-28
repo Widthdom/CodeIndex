@@ -83,7 +83,7 @@ public static partial class DbCommandRunner
                 jsonOptions,
                 "db requires a mode flag",
                 CommandExitCodes.UsageError,
-                "Pass `integrity`, `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list|--delete|--prune`, `restore <name> [--dry-run]`, or `restore-backups --list|--prune --keep <n> [--dry-run]`.",
+                "Pass `integrity`, `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list|--delete|--prune`, `restore <name> [--dry-run] [--no-backup]`, or `restore-backups --list|--prune --keep <n>|--restore <id> [--dry-run] [--no-backup]`.",
                 CommandErrorCodes.UsageError);
 
         if ((options.IntegrityCheck ? 1 : 0)
@@ -98,7 +98,7 @@ public static partial class DbCommandRunner
                 jsonOptions,
                 "db accepts exactly one mode",
                 CommandExitCodes.UsageError,
-                "Run one of `cdidx db integrity`, `cdidx db --integrity-check`, `cdidx db schema`, `cdidx db prune --dry-run|--apply`, `cdidx db checkpoint [name]`, `cdidx db checkpoints --list|--delete|--prune`, `cdidx db restore <name> [--dry-run]`, or `cdidx db restore-backups --list|--prune --keep <n> [--dry-run]`.",
+                "Run one of `cdidx db integrity`, `cdidx db --integrity-check`, `cdidx db schema`, `cdidx db prune --dry-run|--apply`, `cdidx db checkpoint [name]`, `cdidx db checkpoints --list|--delete|--prune`, `cdidx db restore <name> [--dry-run] [--no-backup]`, or `cdidx db restore-backups --list|--prune --keep <n>|--restore <id> [--dry-run] [--no-backup]`.",
                 CommandErrorCodes.UsageError);
 
         var dbPath = options.DbPath;
@@ -138,10 +138,10 @@ public static partial class DbCommandRunner
                 return RunCheckpoints(options, jsonOptions);
 
             if (options.Restore)
-                return RunRestore(options, jsonOptions);
+                return RunRestore(options, jsonOptions, cancellationToken);
 
             if (options.RestoreBackups)
-                return RunRestoreBackups(options, jsonOptions);
+                return RunRestoreBackups(options, jsonOptions, cancellationToken);
 
             return RunIntegrityCheck(options, jsonOptions, dbPath, isUri, cancellationToken);
         }
@@ -381,8 +381,10 @@ internal sealed class DbCommandOptions
     public bool RestoreBackups { get; init; }
     public bool RestoreBackupsList { get; init; }
     public bool RestoreBackupsPrune { get; init; }
+    public bool RestoreBackupsRestore { get; init; }
     public int RestoreBackupsKeep { get; init; } = DbCommandRunner.DefaultRestoreBackupKeepCount;
     public bool RestoreBackupsDryRun { get; init; }
+    public bool NoBackup { get; init; }
     public bool SchemaSummaryOnly { get; init; }
     public int SchemaEntryLimit { get; init; } = DbCommandRunner.SchemaEntryLimit;
     public int SchemaSqlTextLimit { get; init; } = DbCommandRunner.SchemaSqlTextLimit;
@@ -432,7 +434,8 @@ internal sealed record DbRestorePreviewResult(
     long? AvailableSpaceBytes,
     List<string> Files,
     long Bytes,
-    List<DbDiagnosticJsonResult> Diagnostics);
+    List<DbDiagnosticJsonResult> Diagnostics,
+    ManagedRestoreBackupCreationPreview BackupPreview);
 
 internal sealed record DbCheckpointPayloadValidationResult(
     bool PathsValid,

@@ -10,7 +10,10 @@ namespace CodeIndex.Cli;
 
 public static partial class DbCommandRunner
 {
-    private static int RunRestore(DbCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static int RunRestore(
+        DbCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(options.Name))
             return WriteCommandError(options.Json, jsonOptions, "restore requires a checkpoint name", CommandExitCodes.UsageError, "Use `cdidx db restore <name> --db <path>`.", CommandErrorCodes.UsageError);
@@ -24,13 +27,18 @@ public static partial class DbCommandRunner
             if (!Directory.Exists(checkpointPath))
                 return WriteCommandError(options.Json, jsonOptions, $"checkpoint not found: {FormatCheckpointNameForDiagnostic(options.Name)}", CommandExitCodes.NotFound, "Run `cdidx db checkpoints --list` to see available checkpoints.", CommandErrorCodes.CheckpointNotFound);
 
-            var preview = PreviewRestoreCheckpoint(fullDbPath, options.Name, checkpointPath);
+            var preview = PreviewRestoreCheckpoint(
+                fullDbPath,
+                options.Name,
+                checkpointPath,
+                backupEnabled: !options.NoBackup,
+                cancellationToken);
             if (options.RestoreDryRun)
                 return WriteRestoreDryRunResult(options, jsonOptions, fullDbPath, options.Name, checkpointPath, preview);
             if (!preview.Ready)
                 throw new InvalidOperationException("checkpoint validation failed");
 
-            var backupPath = RestoreCheckpoint(fullDbPath, options.Name, checkpointPath);
+            var backupPath = RestoreCheckpoint(fullDbPath, options.Name, checkpointPath, options.NoBackup, cancellationToken);
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
@@ -42,7 +50,7 @@ public static partial class DbCommandRunner
                 Console.WriteLine("Restored database checkpoint.");
                 Console.WriteLine($"  database  : {fullDbPath}");
                 Console.WriteLine($"  checkpoint: {options.Name}");
-                Console.WriteLine($"  backup    : {backupPath}");
+                Console.WriteLine($"  backup    : {(options.NoBackup ? "disabled" : backupPath)}");
             }
 
             return CommandExitCodes.Success;
@@ -94,6 +102,9 @@ public static partial class DbCommandRunner
                     preview.AvailableSpaceBytes,
                     preview.Files,
                     preview.Bytes,
+                    options.NoBackup ? "disabled" : "automatic",
+                    preview.BackupPreview.WouldCreate,
+                    preview.BackupPreview.RequiredSpaceBytes,
                     preview.Diagnostics,
                     message,
                     preview.Ready ? null : CommandErrorCodes.DbError,
@@ -109,6 +120,8 @@ public static partial class DbCommandRunner
             Console.WriteLine($"  manifest  : {(preview.ManifestValid ? "valid" : "invalid")}");
             Console.WriteLine($"  paths     : {(preview.PathsValid ? "valid" : "invalid")}");
             Console.WriteLine($"  bytes     : {preview.Bytes:N0}");
+            Console.WriteLine($"  backup    : {(options.NoBackup ? "disabled" : preview.BackupPreview.WouldCreate ? "would create" : "not required")}");
+            Console.WriteLine($"  backup bytes: {preview.BackupPreview.RequiredSpaceBytes:N0}");
             Console.WriteLine($"  available : {(preview.AvailableSpaceBytes is long available ? available.ToString("N0", System.Globalization.CultureInfo.CurrentCulture) : "unknown")}");
             Console.WriteLine($"  space     : {(preview.SpaceSufficient is true ? "sufficient" : preview.SpaceSufficient is false ? "insufficient" : "unknown")}");
             Console.WriteLine($"  ready     : {(preview.Ready ? "yes" : "no")}");
@@ -160,28 +173,36 @@ public static partial class DbCommandRunner
             category: DiagnosticRedactor.ClassifyException(primary));
     }
 
-    private static int RunRestoreBackups(DbCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static int RunRestoreBackups(
+        DbCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
     {
-        if (!options.RestoreBackupsList && !options.RestoreBackupsPrune)
+        if (!options.RestoreBackupsList && !options.RestoreBackupsPrune && !options.RestoreBackupsRestore)
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                "restore-backups requires --list or --prune",
+                "restore-backups requires --list, --prune, or --restore <id>",
                 CommandExitCodes.UsageError,
-                "Use `cdidx db restore-backups --list` or `cdidx db restore-backups --prune --keep <n>`.",
+                "Use `cdidx db restore-backups --list`, `--prune --keep <n>`, or `--restore <id>`.",
                 CommandErrorCodes.UsageError);
 
-        if (options.RestoreBackupsList && options.RestoreBackupsPrune)
+        if ((options.RestoreBackupsList ? 1 : 0)
+            + (options.RestoreBackupsPrune ? 1 : 0)
+            + (options.RestoreBackupsRestore ? 1 : 0) > 1)
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                "restore-backups accepts only one of --list or --prune",
+                "restore-backups accepts only one of --list, --prune, or --restore <id>",
                 CommandExitCodes.UsageError,
-                "Choose `--list` or `--prune`.",
+                "Choose one restore-backup action.",
                 CommandErrorCodes.UsageError);
 
         if (!TryResolveFileDb(options.DbPath, out var fullDbPath, out var error))
             return WriteCommandError(options.Json, jsonOptions, error, CommandExitCodes.DatabaseError, "Use a filesystem database path, not a SQLite URI.", CommandErrorCodes.DbError);
+
+        if (options.RestoreBackupsRestore)
+            return RunRestoreBackupById(options, jsonOptions, fullDbPath, cancellationToken);
 
         if (options.RestoreBackupsList)
         {
@@ -211,7 +232,12 @@ public static partial class DbCommandRunner
                 else
                 {
                     foreach (var entry in result.Entries)
-                        Console.WriteLine($"  {entry.Name}  {entry.CreatedAtUtc}  {entry.Bytes:N0} bytes{(entry.FilesTruncated ? " (files truncated)" : string.Empty)}");
+                    {
+                        var managedMetadata = entry.Managed
+                            ? $"  ID {entry.Id}  {entry.Provenance}"
+                            : "  legacy (not restorable by ID)";
+                        Console.WriteLine($"  {entry.Name}  {entry.CreatedAtUtc}  {entry.Bytes:N0} bytes{managedMetadata}{(entry.FilesTruncated ? " (files truncated)" : string.Empty)}");
+                    }
                 }
 
                 foreach (var diagnostic in result.Diagnostics)

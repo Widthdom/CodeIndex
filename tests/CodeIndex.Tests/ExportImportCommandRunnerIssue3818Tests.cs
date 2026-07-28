@@ -50,7 +50,7 @@ public class ExportImportCommandRunnerIssue3818Tests
             var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
                 ExportImportCommandRunner.RunImport([archivePath, "--db", targetDbPath, "--json"], jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
             Assert.Equal(string.Empty, stderr);
             using var document = JsonDocument.Parse(stdout);
             var root = document.RootElement;

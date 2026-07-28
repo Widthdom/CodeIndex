@@ -201,6 +201,9 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("pruned_project_root")]
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? PrunedProjectRoot,
+        [property: JsonPropertyName("backup_policy")] string BackupPolicy,
+        [property: JsonPropertyName("backup_would_be_created")] bool BackupWouldBeCreated,
+        [property: JsonPropertyName("backup_required_space_bytes")] long BackupRequiredSpaceBytes,
         [property: JsonPropertyName("replacement_would_be_allowed")] bool ReplacementWouldBeAllowed,
         [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases,
         [property: JsonPropertyName("destination_delta")]
@@ -292,6 +295,10 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("pruned_project_root")]
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? PrunedProjectRoot,
+        [property: JsonPropertyName("backup_policy")] string BackupPolicy,
+        [property: JsonPropertyName("backup_id")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? BackupId,
         [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases,
         [property: JsonPropertyName("unknown_extension_file_count")] long? UnknownExtensionFileCount = null,
         [property: JsonPropertyName("unknown_extension_files")] string[]? UnknownExtensionFiles = null,

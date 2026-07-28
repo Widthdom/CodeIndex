@@ -804,7 +804,7 @@ public class ProgramCliTests
 
             var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
             var (dryRunExit, dryRunStdout, dryRunStderr) = RunCliInSubprocess([
-                "import", archivePath, "--db", destinationDbPath, "--prune-paths", "--dry-run", "--json"
+                "import", archivePath, "--db", destinationDbPath, "--prune-paths", "--no-backup", "--dry-run", "--json"
             ]);
 
             Assert.True(exportExit == 0, exportStderr);
@@ -856,7 +856,7 @@ public class ProgramCliTests
 
             var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
             var (checkExit, checkStdout, checkStderr) = RunCliInSubprocess([
-                "import", archivePath, "--db", destinationDbPath, "--check", "--json"
+                "import", archivePath, "--db", destinationDbPath, "--no-backup", "--check", "--json"
             ]);
 
             Assert.True(exportExit == 0, exportStderr);
@@ -1010,7 +1010,9 @@ public class ProgramCliTests
             File.WriteAllText(destinationDbPath + "-shm", "old shm");
 
             var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
-            var (importExit, _, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", destinationDbPath]);
+            var (importExit, _, importStderr) = RunCliInSubprocess([
+                "import", archivePath, "--db", destinationDbPath, "--no-backup"
+            ]);
 
             Assert.True(exportExit == 0, exportStderr);
             Assert.True(importExit == 0, importStderr);

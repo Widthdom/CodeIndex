@@ -26,6 +26,7 @@ internal static partial class ExportImportCommandRunner
         var prunePaths = importArguments.PrunePaths;
         var importMode = importArguments.ImportMode;
         var dryRun = importArguments.DryRun;
+        var backupEnabled = !importArguments.NoBackup;
         var limit = importArguments.Limit;
         var offset = importArguments.Offset;
         var dbPath = importArguments.DbPath
@@ -39,6 +40,7 @@ internal static partial class ExportImportCommandRunner
         string? tempDirectory = null;
         string? tempPath = null;
         ExportManifest? importedManifest = null;
+        ManagedRestoreBackupInfo? managedBackup = null;
         var validationPhases = new List<ImportValidationPhaseResult>();
         var phase = PhaseOpenArchive;
         try
@@ -122,6 +124,27 @@ internal static partial class ExportImportCommandRunner
                 SqliteConnection.ClearAllPools();
             }
 
+            phase = PhasePreReplaceBackup;
+            var backupDiagnostics = new List<DbDiagnosticJsonResult>();
+            var backupPreview = ManagedRestoreBackupStore.PreviewCreation(
+                fullDbPath,
+                backupEnabled,
+                backupDiagnostics,
+                cancellationToken);
+            if (!backupPreview.Ready)
+            {
+                return WriteImportError(
+                    wantsJson,
+                    jsonOptions,
+                    PhasePreReplaceBackup,
+                    "import_rollback_backup_unavailable",
+                    "import cannot create verified rollback material for the existing destination database.",
+                    "resolve the reported database or free-space problem, or pass `--no-backup` only when discarding rollback material is intentional.",
+                    ImportUsage,
+                    exitCode: CommandExitCodes.DatabaseError,
+                    diagnostics: ConvertBackupDiagnostics(backupDiagnostics));
+            }
+
             if (dryRun)
             {
                 phase = PhaseDestinationDelta;
@@ -137,6 +160,15 @@ internal static partial class ExportImportCommandRunner
                     PhaseDestinationDelta,
                     destinationDelta.Comparable ? "success" : "unavailable",
                     destinationDelta.Message);
+                AddImportValidationPhase(
+                    validationPhases,
+                    PhasePreReplaceBackup,
+                    backupPreview.WouldCreate ? "success" : "skipped",
+                    backupPreview.WouldCreate
+                        ? $"would create a verified managed restore backup ({backupPreview.RequiredSpaceBytes} bytes required)"
+                        : backupEnabled
+                            ? "destination database does not exist; no rollback backup is required"
+                            : "automatic rollback backup explicitly disabled by --no-backup");
                 AddImportValidationPhase(validationPhases, PhaseReplaceDb, "skipped", $"{importMode} mode does not replace the destination database");
                 var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
                 return WriteImportDryRunResult(
@@ -146,8 +178,27 @@ internal static partial class ExportImportCommandRunner
                     importTargetProjectRoot,
                     validationPhases,
                     destinationDelta,
-                    manifest);
+                    manifest,
+                    backupPreview);
             }
+
+            if (backupPreview.WouldCreate)
+            {
+                managedBackup = ManagedRestoreBackupStore.Create(
+                    fullDbPath,
+                    ManagedRestoreBackupStore.PreImportProvenance,
+                    importedManifest?.DatabaseSha256,
+                    cancellationToken);
+            }
+            AddImportValidationPhase(
+                validationPhases,
+                PhasePreReplaceBackup,
+                managedBackup is not null ? "success" : "skipped",
+                managedBackup is not null
+                    ? $"created verified managed restore backup {managedBackup.Id}"
+                    : backupEnabled
+                        ? "destination database does not exist; no rollback backup was required"
+                        : "automatic rollback backup explicitly disabled by --no-backup");
 
             phase = PhaseReplaceDb;
             ReplaceImportedDatabase(tempPath, fullDbPath, cancellationToken);
@@ -158,7 +209,8 @@ internal static partial class ExportImportCommandRunner
                 fullDbPath,
                 importTargetProjectRoot,
                 validationPhases,
-                importedManifest ?? throw new InvalidDataException("archive manifest was not loaded"));
+                importedManifest ?? throw new InvalidDataException("archive manifest was not loaded"),
+                managedBackup);
         }
         catch (OperationCanceledException)
         {
@@ -182,7 +234,21 @@ internal static partial class ExportImportCommandRunner
                 $"import failed ({CommandErrorWriter.FormatSanitizedException(ex.InnerException ?? ex)}).",
                 "check destination database permissions and inspect diagnostics for residual replacement state.",
                 ImportUsage,
+                exitCode: CommandExitCodes.DatabaseError,
                 diagnostics: ex.Diagnostics);
+        }
+        catch (ManagedRestoreBackupException ex)
+        {
+            return WriteImportError(
+                wantsJson,
+                jsonOptions,
+                PhasePreReplaceBackup,
+                "import_rollback_backup_failed",
+                $"import could not create verified rollback material ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+                "resolve the reported database or free-space problem, or pass `--no-backup` only when discarding rollback material is intentional.",
+                ImportUsage,
+                exitCode: CommandExitCodes.DatabaseError,
+                diagnostics: ConvertBackupDiagnostics(ex.Diagnostics));
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or SqliteException)
         {
@@ -207,4 +273,13 @@ internal static partial class ExportImportCommandRunner
                 TryDeleteDirectoryIfEmpty(tempDirectory, "import temporary directory", Path.GetTempPath(), "codeindex-import-");
         }
     }
+
+    private static IReadOnlyList<ExportImportDiagnosticResult> ConvertBackupDiagnostics(
+        IEnumerable<DbDiagnosticJsonResult> diagnostics)
+        => diagnostics
+            .Select(diagnostic => new ExportImportDiagnosticResult(
+                diagnostic.Code,
+                diagnostic.Message,
+                diagnostic.Path))
+            .ToList();
 }

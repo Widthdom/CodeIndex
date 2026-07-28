@@ -1196,13 +1196,15 @@ cdidx db schema --summary-only --json                   # counts without full SQ
 cdidx db schema --type table --name files --json         # exact schema object projection
 cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
 cdidx db checkpoint before-prune --dry-run --json        # preview snapshot files and bytes
+cdidx db restore-backups --list --json                   # list managed backup IDs and provenance
+cdidx db restore-backups --restore <id> --dry-run --json # validate a selected backup without mutation
 ```
 
 This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and prints whether the file is `ok` or lists the failures. Exit codes are stable for scripting: `0` clean, `2` (NotFound) when the file does not exist, `3` (DatabaseError) when corruption is detected. SQLite does not offer a general-purpose repair primitive — if the check fails, recover by rebuilding with `cdidx index <projectPath> --rebuild`.
 
 `db schema` keeps the current full schema dump by default for support bundles. Add `--summary-only` to return only object counts, combine `--type <table|index|trigger|view>` and `--name <object>` for an exact projection, and use `--limit`, `--max-sql-chars`, and `--exclude-internal` to keep schema diagnostics bounded.
 
-`db checkpoint --dry-run` reports the DB/WAL/SHM files and total bytes that would be copied without creating the checkpoint directory. Running `db checkpoint` without `--dry-run` creates the snapshot next to the DB; `db restore <name>` replaces the DB and keeps a pre-restore backup directory. A checkpoint name must be a non-blank single file name of at most 128 characters: it cannot be `.` or `..`, contain a directory separator, or contain characters that the operating system rejects in file names. Invalid names are input errors (`E010_USAGE_ERROR`), not database or storage failures.
+`db checkpoint --dry-run` reports the DB/WAL/SHM files and total bytes that would be copied without creating the checkpoint directory. Import, checkpoint restore, and managed-backup restore create a verified standalone rollback snapshot before replacing an existing DB. `db restore-backups --list` returns each managed ID and provenance; `--restore <id>` validates its bounded manifest, SHA-256, supported schema stamp, and free space before an atomic replacement that rolls back on failure. Add `--dry-run` to perform the same validations and preview the pre-restore backup without mutation. `--no-backup` is an explicit opt-out from creating rollback material and should be reserved for cases where losing the current DB is acceptable. A checkpoint name must be a non-blank single file name of at most 128 characters: it cannot be `.` or `..`, contain a directory separator, or contain characters that the operating system rejects in file names. Invalid names are input errors (`E010_USAGE_ERROR`), not database or storage failures.
 
 `cdidx optimize --dry-run --json` previews FTS5 maintenance without acquiring the index lock or changing the source DB/WAL/SHM files. The result includes DB/core-table/FTS sizes, page and freelist indicators, the incremental-write recommendation, current lock and readiness state, a previous-duration estimate when available, and the operations a real optimize would perform, including its repair-mode schema initialization or migration check. `object_sizes_measurement` distinguishes exact `dbstat` page bytes from the logical-payload fallback used when SQLite does not provide `dbstat`.
 
@@ -4396,13 +4398,15 @@ cdidx db schema --summary-only --json                   # SQL 本文なしで件
 cdidx db schema --type table --name files --json         # schema object を exact に絞り込み
 cdidx db schema --limit 20 --max-sql-chars 4000 --exclude-internal --json
 cdidx db checkpoint before-prune --dry-run --json        # snapshot 対象 file と byte 数を preview
+cdidx db restore-backups --list --json                   # managed backup の ID と provenance を一覧表示
+cdidx db restore-backups --restore <id> --dry-run --json # 選択した backup を変更せず検証
 ```
 
 DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損検出です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
 
 `db schema` は support bundle 向けに、既定では従来どおり full schema dump を維持します。`--summary-only` を付けると object 件数だけを返し、`--type <table|index|trigger|view>` と `--name <object>` を組み合わせると exact projection を適用できます。schema diagnostics を小さく保つには `--limit`、`--max-sql-chars`、`--exclude-internal` を使います。
 
-`db checkpoint --dry-run` は checkpoint directory を作らずに、コピー対象になる DB/WAL/SHM file と合計 byte 数を報告します。`--dry-run` なしの `db checkpoint` は DB の隣に snapshot を作り、`db restore <name>` は DB を置き換えて pre-restore backup directory を保持します。checkpoint 名は空白だけではない 128 文字以下の単一 file 名でなければならず、`.`、`..`、directory separator、または OS が file 名で拒否する文字は使用できません。不正な名前は database / storage 障害ではなく入力エラー (`E010_USAGE_ERROR`) として扱われます。
+`db checkpoint --dry-run` は checkpoint directory を作らずに、コピー対象になる DB/WAL/SHM file と合計 byte 数を報告します。import、checkpoint restore、managed-backup restore は既存 DB の置換前に検証済み standalone rollback snapshot を作成します。`db restore-backups --list` は managed ID と provenance を返し、`--restore <id>` は bounded manifest、SHA-256、対応する schema stamp、free space を検証してから、失敗時に rollback する atomic replacement を実行します。`--dry-run` を付けると、同じ検証と pre-restore backup の予定を DB 無変更で確認できます。`--no-backup` は rollback material 作成の明示的な opt-out であり、現在の DB を失ってもよい場合にだけ使用してください。checkpoint 名は空白だけではない 128 文字以下の単一 file 名でなければならず、`.`、`..`、directory separator、または OS が file 名で拒否する文字は使用できません。不正な名前は database / storage 障害ではなく入力エラー (`E010_USAGE_ERROR`) として扱われます。
 
 `cdidx optimize --dry-run --json` は index lock を取得せず、source DB/WAL/SHM file も変更せずに FTS5 maintenance を preview します。結果には DB/core table/FTS の size、page と freelist の指標、incremental write に基づく推奨、現在の lock/readiness 状態、利用可能な場合は前回所要時間に基づく見積もり、repair mode での schema 初期化または migration の確認を含む、実際の optimize が行う操作が含まれます。`object_sizes_measurement` は、正確な `dbstat` page byte と、SQLite が `dbstat` を提供しない場合の logical-payload fallback を区別します。
 

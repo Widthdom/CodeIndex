@@ -199,12 +199,23 @@ public static partial class DbCommandRunner
             }
 
             var bytes = SumCheckpointBytes(path, diagnostics);
+            var managed = ManagedRestoreBackupStore.TryReadSummary(
+                fullDbPath,
+                path,
+                out var summary);
             entries.Add(new DbRestoreBackupEntryJsonResult(
                 info.Name,
                 path,
-                createdAtUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                managed
+                    ? summary.CreatedAtUtc
+                    : createdAtUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
                 bytes.Bytes,
-                bytes.Truncated));
+                bytes.Truncated,
+                managed ? summary.Id : null,
+                managed,
+                managed ? summary.Provenance : null,
+                managed ? summary.SourceId : null,
+                managed ? summary.UserVersion : null));
         }
 
         entries.Sort((left, right) =>
