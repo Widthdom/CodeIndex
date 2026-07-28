@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Lsp;
 using CodeIndex.Models;
 
@@ -1339,13 +1340,125 @@ public class LspServerTests
         Assert.Equal((13, 6), LspServer.MapLspKindsForTesting("parameter"));
         Assert.Equal((13, 6), LspServer.MapLspKindsForTesting("plugin.custom"));
 
+        static SymbolResult ToResult(SymbolRecord symbol, string lang) => new()
+        {
+            Lang = lang,
+            Kind = symbol.Kind,
+            SubKind = symbol.SubKind,
+            Name = symbol.Name,
+            Signature = symbol.Signature,
+            ContainerKind = symbol.ContainerKind,
+            ContainerName = symbol.ContainerName,
+        };
+
+        var typeScriptSymbols = SymbolExtractor.Extract(1, "typescript", """
+            class Widget {
+              constructor() {}
+              Widget() {}
+            }
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(typeScriptSymbols, symbol => symbol.Signature?.StartsWith("constructor", StringComparison.Ordinal) == true),
+                "typescript")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(typeScriptSymbols, symbol => symbol.Signature?.StartsWith("Widget", StringComparison.Ordinal) == true),
+                "typescript")));
+
+        var kotlinSymbols = SymbolExtractor.Extract(2, "kotlin", """
+            class KotlinThing {
+                constructor(value: Int)
+                fun KotlinThing() {}
+            }
+            enum class KtColor {
+                RED,
+            }
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(kotlinSymbols, symbol => symbol.Signature?.StartsWith("constructor", StringComparison.Ordinal) == true),
+                "kotlin")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(kotlinSymbols, symbol => symbol.Signature?.StartsWith("fun KotlinThing", StringComparison.Ordinal) == true),
+                "kotlin")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(kotlinSymbols, symbol => symbol.Name == "RED"),
+                "kotlin")));
+
+        var soliditySymbols = SymbolExtractor.Extract(3, "solidity", """
+            contract Vault {
+                constructor(address owner) {}
+                function Vault(uint amount) public {}
+            }
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(soliditySymbols, symbol => symbol.SubKind == "constructor"),
+                "solidity")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(soliditySymbols, symbol => symbol.SubKind == "function"),
+                "solidity")));
+
+        var javaSymbols = SymbolExtractor.Extract(4, "java", """
+            enum Outer {
+                A;
+                enum Inner {
+                    B;
+                }
+            }
+            """);
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(javaSymbols, symbol => symbol.Name == "A"),
+                "java")));
+        Assert.Equal(
+            (10, 13),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(javaSymbols, symbol => symbol.Name == "Inner"),
+                "java")));
+
+        var swiftSymbols = SymbolExtractor.Extract(5, "swift", """
+            enum SwiftColor {
+                case red
+            }
+            """);
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(swiftSymbols, symbol => symbol.Name == "red"),
+                "swift")));
+
+        var semanticMappings = new (string Kind, string Detail, string? SubKind, string ContainerKind, string ContainerName, int SymbolKind, int CompletionItemKind)[]
+        {
+            ("function", "public MapKindB()", null, "class", "MapKindB", 9, 4),
+            ("function", "static MapKindB()", null, "class", "MapKindB", 9, 4),
+            ("function", "~MapKindB()", null, "class", "MapKindB", 12, 3),
+            ("function", "constructor()", null, "class", "MapKindB", 9, 4),
+            ("function", "subkind constructor", "constructor", "class", "MapKindB", 9, 4),
+            ("enum", "MapKindB,", null, "enum", "MappingEnum", 22, 20),
+            ("enum", "enum MapKindB {", null, "enum", "MappingEnum", 10, 13),
+            ("function", "MapKindB", null, "enum", "MappingEnum", 22, 20),
+            ("property", "case MapKindB", null, "enum", "MappingEnum", 22, 20),
+            ("property", "val MapKindB: Int", null, "enum", "MappingEnum", 7, 10),
+            ("function", "void MapKindB()", null, "enum", "MappingEnum", 12, 3),
+        };
         var expectedRows = mappings
             .Select(mapping => (mapping.Kind, mapping.SymbolKind, mapping.CompletionItemKind))
             .ToList();
-        expectedRows.Add(("public MapKindB()", 9, 4));
-        expectedRows.Add(("static MapKindB()", 9, 4));
-        expectedRows.Add(("~MapKindB()", 12, 3));
-        expectedRows.Add(("enum member", 22, 20));
+        expectedRows.AddRange(semanticMappings.Select(mapping =>
+            (mapping.Detail, mapping.SymbolKind, mapping.CompletionItemKind)));
         const int queryGroupSize = 40;
         var symbolNames = expectedRows
             .Select((_, index) => index < queryGroupSize ? "MapKindA" : "MapKindB")
@@ -1391,58 +1504,20 @@ public class LspServerTests
                     EndLine = index + 1,
                     Signature = mapping.Kind,
                 }).ToList();
-                symbols.Add(new SymbolRecord
+                symbols.AddRange(semanticMappings.Select((mapping, index) => new SymbolRecord
                 {
                     FileId = fileId,
-                    Kind = "function",
-                    Name = symbolNames[mappings.Length],
-                    Line = mappings.Length + 1,
-                    StartLine = mappings.Length + 1,
+                    Kind = mapping.Kind,
+                    SubKind = mapping.SubKind,
+                    Name = symbolNames[mappings.Length + index],
+                    Line = mappings.Length + index + 1,
+                    StartLine = mappings.Length + index + 1,
                     StartColumn = 0,
-                    EndLine = mappings.Length + 1,
-                    Signature = "public MapKindB()",
-                    ContainerKind = "class",
-                    ContainerName = "MapKindB",
-                });
-                symbols.Add(new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "function",
-                    Name = symbolNames[mappings.Length + 1],
-                    Line = mappings.Length + 2,
-                    StartLine = mappings.Length + 2,
-                    StartColumn = 0,
-                    EndLine = mappings.Length + 2,
-                    Signature = "static MapKindB()",
-                    ContainerKind = "class",
-                    ContainerName = "MapKindB",
-                });
-                symbols.Add(new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "function",
-                    Name = symbolNames[mappings.Length + 2],
-                    Line = mappings.Length + 3,
-                    StartLine = mappings.Length + 3,
-                    StartColumn = 0,
-                    EndLine = mappings.Length + 3,
-                    Signature = "~MapKindB()",
-                    ContainerKind = "class",
-                    ContainerName = "MapKindB",
-                });
-                symbols.Add(new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "enum",
-                    Name = symbolNames[mappings.Length + 3],
-                    Line = mappings.Length + 4,
-                    StartLine = mappings.Length + 4,
-                    StartColumn = 0,
-                    EndLine = mappings.Length + 4,
-                    Signature = "enum member",
-                    ContainerKind = "enum",
-                    ContainerName = "MappingEnum",
-                });
+                    EndLine = mappings.Length + index + 1,
+                    Signature = mapping.Detail,
+                    ContainerKind = mapping.ContainerKind,
+                    ContainerName = mapping.ContainerName,
+                }));
                 writer.InsertSymbols(symbols);
             }
 

@@ -97,11 +97,17 @@ internal sealed partial class LspServer
         return (kinds.SymbolKind, kinds.CompletionItemKind);
     }
 
+    internal static (int SymbolKind, int CompletionItemKind) MapLspKindsForTesting(SymbolResult symbol)
+    {
+        var kinds = LspKinds(symbol);
+        return (kinds.SymbolKind, kinds.CompletionItemKind);
+    }
+
     private static LspProtocolKinds LspKinds(SymbolResult symbol)
     {
         if (IsConstructorSymbol(symbol))
             return new LspProtocolKinds(SymbolKind: 9, CompletionItemKind: 4);
-        if (symbol.Kind == "enum" && symbol.ContainerKind == "enum")
+        if (IsEnumMemberSymbol(symbol))
             return new LspProtocolKinds(SymbolKind: 22, CompletionItemKind: 20);
         return LspKinds(symbol.Kind);
     }
@@ -116,20 +122,121 @@ internal sealed partial class LspServer
         if (symbol.Kind is not ("function" or "method") ||
             string.IsNullOrEmpty(symbol.Name) ||
             string.IsNullOrWhiteSpace(symbol.Signature) ||
-            !string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal))
+            string.IsNullOrWhiteSpace(symbol.ContainerName))
         {
             return false;
         }
 
-        var signature = symbol.Signature;
+        if (string.Equals(symbol.SubKind, "constructor", StringComparison.Ordinal) ||
+            SignatureStartsWithKeywordAfterModifiers(symbol.Signature, "constructor"))
+        {
+            return true;
+        }
+
+        var usesContainerName = symbol.Lang is "csharp" or "cpp" or "dart" or "groovy" or "java";
+        if (usesContainerName &&
+            string.Equals(symbol.Name, symbol.ContainerName, StringComparison.Ordinal))
+        {
+            return SignatureContainsNamedCall(symbol.Signature, symbol.Name);
+        }
+
+        var usesDedicatedName = symbol.Lang switch
+        {
+            "php" => symbol.Name == "__construct",
+            "python" => symbol.Name == "__init__",
+            "ruby" => symbol.Name == "initialize",
+            "scala" => symbol.Name == "this",
+            "swift" => symbol.Name == "init",
+            _ => false,
+        };
+        return usesDedicatedName && SignatureContainsNamedCall(symbol.Signature, symbol.Name);
+    }
+
+    private static bool IsEnumMemberSymbol(SymbolResult symbol)
+    {
+        if (symbol.ContainerKind != "enum" ||
+            string.IsNullOrEmpty(symbol.Name) ||
+            string.IsNullOrWhiteSpace(symbol.Signature))
+        {
+            return false;
+        }
+
+        if (symbol.Kind == "enum")
+            return !SignatureStartsWithKeywordAfterModifiers(symbol.Signature, "enum");
+        if (symbol.Kind is not ("function" or "property"))
+            return false;
+
+        var signature = symbol.Signature.AsSpan().TrimStart();
+        TryConsumeLeadingKeyword(ref signature, "case");
+        if (signature.Length > 0 && signature[0] == '@')
+            signature = signature[1..];
+        if (!signature.StartsWith(symbol.Name, StringComparison.Ordinal))
+            return false;
+
+        var remainder = signature[symbol.Name.Length..];
+        if (remainder.Length > 0 && IsIdentifierCharacter(remainder[0]))
+            return false;
+        remainder = remainder.TrimStart();
+        return remainder.IsEmpty || remainder[0] is ',' or ';' or '(' or '{' or '=';
+    }
+
+    private static bool SignatureStartsWithKeywordAfterModifiers(string signature, string keyword)
+    {
+        var remaining = signature.AsSpan().TrimStart();
+        while (!remaining.IsEmpty)
+        {
+            if (TryConsumeLeadingKeyword(ref remaining, keyword))
+                return true;
+
+            var wordEnd = 0;
+            while (wordEnd < remaining.Length && IsIdentifierCharacter(remaining[wordEnd]))
+                wordEnd++;
+            if (wordEnd == 0 || !IsDeclarationModifier(remaining[..wordEnd]))
+                return false;
+            remaining = remaining[wordEnd..].TrimStart();
+        }
+
+        return false;
+    }
+
+    private static bool TryConsumeLeadingKeyword(ref ReadOnlySpan<char> text, string keyword)
+    {
+        if (!text.StartsWith(keyword, StringComparison.Ordinal) ||
+            (text.Length > keyword.Length && IsIdentifierCharacter(text[keyword.Length])))
+        {
+            return false;
+        }
+
+        text = text[keyword.Length..].TrimStart();
+        return true;
+    }
+
+    private static bool IsDeclarationModifier(ReadOnlySpan<char> word)
+        => word.SequenceEqual("abstract") ||
+           word.SequenceEqual("actual") ||
+           word.SequenceEqual("class") ||
+           word.SequenceEqual("declare") ||
+           word.SequenceEqual("default") ||
+           word.SequenceEqual("expect") ||
+           word.SequenceEqual("export") ||
+           word.SequenceEqual("external") ||
+           word.SequenceEqual("final") ||
+           word.SequenceEqual("internal") ||
+           word.SequenceEqual("private") ||
+           word.SequenceEqual("protected") ||
+           word.SequenceEqual("public") ||
+           word.SequenceEqual("static");
+
+    private static bool SignatureContainsNamedCall(string signature, string name)
+    {
         var searchStart = 0;
         while (searchStart < signature.Length)
         {
-            var nameStart = signature.IndexOf(symbol.Name, searchStart, StringComparison.Ordinal);
+            var nameStart = signature.IndexOf(name, searchStart, StringComparison.Ordinal);
             if (nameStart < 0)
                 return false;
 
-            var nameEnd = nameStart + symbol.Name.Length;
+            var nameEnd = nameStart + name.Length;
             var hasIdentifierBoundaryBefore = nameStart == 0 || !IsIdentifierCharacter(signature[nameStart - 1]);
             var hasIdentifierBoundaryAfter = nameEnd == signature.Length || !IsIdentifierCharacter(signature[nameEnd]);
             if (hasIdentifierBoundaryBefore && hasIdentifierBoundaryAfter)

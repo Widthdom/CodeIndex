@@ -495,8 +495,8 @@ deliberate mappings and fallbacks are:
 | `record`, `struct`, `union` | `Struct` | `Struct` |
 | `annotation`, `implements`, `interface`, `protocol`, `trait` | `Interface` | `Interface` |
 | `enum` | `Enum` | `Enum` |
-| `enum` whose container kind is `enum` | `EnumMember` | `EnumMember` |
-| `function` or `method` whose declaration name and container name identify a constructor | `Constructor` | `Constructor` |
+| Enum-entry shapes stored as `enum`, `function`, or `property` under an enum container | `EnumMember` | `EnumMember` |
+| `function` or `method` identified by constructor subkind, declaration keyword, dedicated initializer name, or a language-valid type-name declaration | `Constructor` | `Constructor` |
 | `method`, `test.method`, `accessor`, `class_hook` | `Method` | `Method` |
 | `add`, `async_function`, `async_generator`, `copy`, `delegate`, `function`, `generator`, `hook`, `lambda`, `procedure`, `route`, `run`, `shell`, `subroutine` | `Function` | `Function` |
 | `attribute`, `expose`, `property`, `stopsignal` | `Property` | `Property` |
@@ -519,11 +519,15 @@ deliberate mappings and fallbacks are:
 | `workdir` | `Module` | `Folder` |
 | Non-catalog `parameter` and unknown/plugin-defined kinds | `Variable` | `Variable` |
 
-Constructors and enum members are semantic refinements because the persisted
-catalog stores them as `function`/`method` and `enum`, respectively. A finalizer
-is not refined to `Constructor`. The current persisted catalog has no standalone
-`parameter` kind; the conservative fallback keeps legacy or plugin-provided
-parameter-like symbols compatible.
+Constructors and enum members are semantic refinements because extractors reuse
+broader persisted kinds. Constructor detection honors explicit subkind/keyword
+metadata, dedicated initializer names, and type-name constructors only in
+languages where that declaration shape is valid; same-name methods in other
+languages and finalizers stay functions. Enum-entry detection recognizes the
+persisted C#, Java, Kotlin, and Swift shapes while keeping a nested enum as an
+enum declaration. The current persisted catalog has no standalone `parameter`
+kind; the conservative fallback keeps legacy or plugin-provided parameter-like
+symbols compatible.
 
 Document/workspace symbol providers advertise work-done support and honor
 bounded string/integer `partialResultToken` and `workDoneToken` values. Partial
@@ -3792,8 +3796,8 @@ fallback は次のとおりである。
 | `record`, `struct`, `union` | `Struct` | `Struct` |
 | `annotation`, `implements`, `interface`, `protocol`, `trait` | `Interface` | `Interface` |
 | `enum` | `Enum` | `Enum` |
-| container kind が `enum` である `enum` | `EnumMember` | `EnumMember` |
-| declaration name と container name が constructor を示す `function` または `method` | `Constructor` | `Constructor` |
+| enum container 配下で `enum`、`function`、`property` として保存される enum-entry 形状 | `EnumMember` | `EnumMember` |
+| constructor subkind、declaration keyword、専用 initializer 名、または言語上有効な型名 declaration で識別される `function` / `method` | `Constructor` | `Constructor` |
 | `method`, `test.method`, `accessor`, `class_hook` | `Method` | `Method` |
 | `add`, `async_function`, `async_generator`, `copy`, `delegate`, `function`, `generator`, `hook`, `lambda`, `procedure`, `route`, `run`, `shell`, `subroutine` | `Function` | `Function` |
 | `attribute`, `expose`, `property`, `stopsignal` | `Property` | `Property` |
@@ -3816,10 +3820,12 @@ fallback は次のとおりである。
 | `workdir` | `Module` | `Folder` |
 | catalog 外の `parameter` および未知または plugin 定義の kind | `Variable` | `Variable` |
 
-constructor と enum member は、永続化 catalog ではそれぞれ `function` / `method` と `enum` として
-保存されるため、metadata に基づいて意味を詳細化する。finalizer は `Constructor` に詳細化しない。
-現在の永続化 catalog には独立した `parameter` kind がないため、legacy または plugin が提供する
-parameter 相当の symbol は保守的な fallback で互換性を維持する。
+constructor と enum member は extractor が広い永続化 kind を再利用するため、metadata に基づいて
+意味を詳細化する。constructor は明示 subkind / keyword、専用 initializer 名、およびその declaration
+形状が有効な言語だけで型名 constructor を認識する。他言語の同名 method と finalizer は function の
+ままにする。enum entry は C#、Java、Kotlin、Swift の保存形状を認識し、enum 内の nested enum は
+enum declaration のままにする。現在の永続化 catalog には独立した `parameter` kind がないため、
+legacy または plugin が提供する parameter 相当の symbol は保守的な fallback で互換性を維持する。
 
 document/workspace symbol provider は work-done 対応を advertise し、上限付きの string /
 integer `partialResultToken` と `workDoneToken` を処理する。partial result は provider の
