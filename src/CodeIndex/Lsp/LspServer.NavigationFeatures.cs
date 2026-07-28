@@ -299,7 +299,7 @@ internal sealed partial class LspServer : IDisposable
     private static JsonObject ToCompletionItem(SymbolResult symbol, int index) => new()
     {
         ["label"] = symbol.Name,
-        ["kind"] = CompletionItemKind(symbol.Kind),
+        ["kind"] = CompletionItemKind(symbol),
         ["detail"] = FormatSymbolDetail(symbol),
         ["sortText"] = index.ToString("D4", CultureInfo.InvariantCulture) + "_" + symbol.Name,
     };
@@ -349,18 +349,6 @@ internal sealed partial class LspServer : IDisposable
             ? detail
             : detail[..(MaxDocumentSymbolDetailChars - "...".Length)] + "...";
     }
-
-    private static int CompletionItemKind(string kind) => kind switch
-    {
-        "class" => 7,
-        "function" or "test.method" => 3,
-        "property" => 10,
-        "enum" => 13,
-        "interface" => 8,
-        "namespace" => 9,
-        "struct" => 22,
-        _ => 6,
-    };
 
     private static void AddDocumentHighlight(JsonArray array, HashSet<string> seenRanges, int startLine, int startColumn, int endLine, int endColumn)
     {

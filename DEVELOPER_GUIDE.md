@@ -485,6 +485,46 @@ inlay hints are emitted only when the indexed return type is not already written
 before the declaration identifier, so explicit method return, local, and field
 types remain suppressed.
 
+LSP symbol and completion kinds come from one ordinal internal-kind mapping so
+document symbols, workspace symbols, and completion items cannot drift. The
+deliberate mappings and fallbacks are:
+
+| Internal kinds | LSP `SymbolKind` | LSP `CompletionItemKind` |
+|---|---|---|
+| `base_image`, `class`, `service`, `specialization`, `type` | `Class` | `Class` |
+| `record`, `struct`, `union` | `Struct` | `Struct` |
+| `annotation`, `implements`, `interface`, `protocol`, `trait` | `Interface` | `Interface` |
+| `enum` | `Enum` | `Enum` |
+| `enum` whose container kind is `enum` | `EnumMember` | `EnumMember` |
+| `function` or `method` whose declaration name and container name identify a constructor | `Constructor` | `Constructor` |
+| `method`, `test.method`, `accessor`, `class_hook` | `Method` | `Method` |
+| `add`, `async_function`, `async_generator`, `copy`, `delegate`, `function`, `generator`, `hook`, `lambda`, `procedure`, `route`, `run`, `shell`, `subroutine` | `Function` | `Function` |
+| `attribute`, `expose`, `property`, `stopsignal` | `Property` | `Property` |
+| `field`, `volume` | `Field` | `Field` |
+| `event` | `Event` | `Event` |
+| `constant` | `Constant` | `Constant` |
+| `operator` | `Operator` | `Operator` |
+| `associatedtype`, `type_parameter`, `typealias` | `TypeParameter` | `TypeParameter` |
+| `array` | `Array` | `Value` |
+| `assembly`, `file_module`, `import`, `module`, `program`, `project`, `stage`, `submodule` | `Module` | `Module` |
+| `namespace` | `Namespace` | `Module` |
+| `package` | `Package` | `Module` |
+| `block data`, `layout`, `object`, `protocol_impl`, `rule` | `Object` | `Class` |
+| `reference` | `Variable` | `Reference` |
+| `build_arg`, `environment`, `user`, `variable` | `Variable` | `Variable` |
+| `value` | `Variable` | `Value` |
+| `code` | `String` | `Text` |
+| `anchor` | `Key` | `Reference` |
+| `heading`, `label` | `Key` | `Text` |
+| `workdir` | `Module` | `Folder` |
+| Non-catalog `parameter` and unknown/plugin-defined kinds | `Variable` | `Variable` |
+
+Constructors and enum members are semantic refinements because the persisted
+catalog stores them as `function`/`method` and `enum`, respectively. A finalizer
+is not refined to `Constructor`. The current persisted catalog has no standalone
+`parameter` kind; the conservative fallback keeps legacy or plugin-provided
+parameter-like symbols compatible.
+
 Document/workspace symbol providers advertise work-done support and honor
 bounded string/integer `partialResultToken` and `workDoneToken` values. Partial
 results preserve the provider's deterministic order and use `$/progress`
@@ -3741,6 +3781,45 @@ identifier を確認して、古い不正確な column にも対応する。sour
 保存済み column に fallback し、column も無い場合だけ character 0 を使う。type inlay hint は
 indexed return type が declaration identifier の前に明示されていない場合だけ返すため、method の
 明示 return type、local、field の明示型は表示しない。
+
+LSP の symbol kind と completion kind は、ordinal 比較する1つの internal-kind mapping から導出する。
+これにより document symbol、workspace symbol、completion item の分類がずれない。意図的な mapping と
+fallback は次のとおりである。
+
+| internal kind | LSP `SymbolKind` | LSP `CompletionItemKind` |
+|---|---|---|
+| `base_image`, `class`, `service`, `specialization`, `type` | `Class` | `Class` |
+| `record`, `struct`, `union` | `Struct` | `Struct` |
+| `annotation`, `implements`, `interface`, `protocol`, `trait` | `Interface` | `Interface` |
+| `enum` | `Enum` | `Enum` |
+| container kind が `enum` である `enum` | `EnumMember` | `EnumMember` |
+| declaration name と container name が constructor を示す `function` または `method` | `Constructor` | `Constructor` |
+| `method`, `test.method`, `accessor`, `class_hook` | `Method` | `Method` |
+| `add`, `async_function`, `async_generator`, `copy`, `delegate`, `function`, `generator`, `hook`, `lambda`, `procedure`, `route`, `run`, `shell`, `subroutine` | `Function` | `Function` |
+| `attribute`, `expose`, `property`, `stopsignal` | `Property` | `Property` |
+| `field`, `volume` | `Field` | `Field` |
+| `event` | `Event` | `Event` |
+| `constant` | `Constant` | `Constant` |
+| `operator` | `Operator` | `Operator` |
+| `associatedtype`, `type_parameter`, `typealias` | `TypeParameter` | `TypeParameter` |
+| `array` | `Array` | `Value` |
+| `assembly`, `file_module`, `import`, `module`, `program`, `project`, `stage`, `submodule` | `Module` | `Module` |
+| `namespace` | `Namespace` | `Module` |
+| `package` | `Package` | `Module` |
+| `block data`, `layout`, `object`, `protocol_impl`, `rule` | `Object` | `Class` |
+| `reference` | `Variable` | `Reference` |
+| `build_arg`, `environment`, `user`, `variable` | `Variable` | `Variable` |
+| `value` | `Variable` | `Value` |
+| `code` | `String` | `Text` |
+| `anchor` | `Key` | `Reference` |
+| `heading`, `label` | `Key` | `Text` |
+| `workdir` | `Module` | `Folder` |
+| catalog 外の `parameter` および未知または plugin 定義の kind | `Variable` | `Variable` |
+
+constructor と enum member は、永続化 catalog ではそれぞれ `function` / `method` と `enum` として
+保存されるため、metadata に基づいて意味を詳細化する。finalizer は `Constructor` に詳細化しない。
+現在の永続化 catalog には独立した `parameter` kind がないため、legacy または plugin が提供する
+parameter 相当の symbol は保守的な fallback で互換性を維持する。
 
 document/workspace symbol provider は work-done 対応を advertise し、上限付きの string /
 integer `partialResultToken` と `workDoneToken` を処理する。partial result は provider の

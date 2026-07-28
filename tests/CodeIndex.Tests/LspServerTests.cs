@@ -1256,6 +1256,261 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_SymbolAndCompletionKindsUseSharedMapping_Issue4870()
+    {
+        var mappings = new (string Kind, int SymbolKind, int CompletionItemKind)[]
+        {
+            ("accessor", 6, 2),
+            ("add", 12, 3),
+            ("anchor", 20, 18),
+            ("annotation", 11, 8),
+            ("assembly", 2, 9),
+            ("array", 18, 12),
+            ("async_function", 12, 3),
+            ("async_generator", 12, 3),
+            ("attribute", 7, 10),
+            ("associatedtype", 26, 25),
+            ("base_image", 5, 7),
+            ("build_arg", 13, 6),
+            ("class", 5, 7),
+            ("class_hook", 6, 2),
+            ("code", 15, 1),
+            ("constant", 14, 21),
+            ("copy", 12, 3),
+            ("delegate", 12, 3),
+            ("enum", 10, 13),
+            ("environment", 13, 6),
+            ("event", 24, 23),
+            ("expose", 7, 10),
+            ("field", 8, 5),
+            ("file_module", 2, 9),
+            ("function", 12, 3),
+            ("generator", 12, 3),
+            ("heading", 20, 1),
+            ("hook", 12, 3),
+            ("implements", 11, 8),
+            ("import", 2, 9),
+            ("interface", 11, 8),
+            ("lambda", 12, 3),
+            ("label", 20, 1),
+            ("layout", 19, 7),
+            ("method", 6, 2),
+            ("module", 2, 9),
+            ("namespace", 3, 9),
+            ("operator", 25, 24),
+            ("object", 19, 7),
+            ("package", 4, 9),
+            ("property", 7, 10),
+            ("procedure", 12, 3),
+            ("program", 2, 9),
+            ("project", 2, 9),
+            ("protocol", 11, 8),
+            ("protocol_impl", 19, 7),
+            ("reference", 13, 18),
+            ("record", 23, 22),
+            ("rule", 19, 7),
+            ("route", 12, 3),
+            ("run", 12, 3),
+            ("service", 5, 7),
+            ("shell", 12, 3),
+            ("specialization", 5, 7),
+            ("stage", 2, 9),
+            ("stopsignal", 7, 10),
+            ("struct", 23, 22),
+            ("submodule", 2, 9),
+            ("subroutine", 12, 3),
+            ("test.method", 6, 2),
+            ("trait", 11, 8),
+            ("type", 5, 7),
+            ("type_parameter", 26, 25),
+            ("typealias", 26, 25),
+            ("union", 23, 22),
+            ("user", 13, 6),
+            ("value", 13, 12),
+            ("block data", 19, 7),
+            ("variable", 13, 6),
+            ("volume", 8, 5),
+            ("workdir", 2, 19),
+        };
+
+        Assert.Equal(
+            SymbolKindCatalog.SymbolKinds.Order(StringComparer.Ordinal),
+            LspServer.MappedInternalKindsForTesting.Order(StringComparer.Ordinal));
+        Assert.Equal((13, 6), LspServer.MapLspKindsForTesting("parameter"));
+        Assert.Equal((13, 6), LspServer.MapLspKindsForTesting("plugin.custom"));
+
+        var expectedRows = mappings
+            .Select(mapping => (mapping.Kind, mapping.SymbolKind, mapping.CompletionItemKind))
+            .ToList();
+        expectedRows.Add(("public MapKindB()", 9, 4));
+        expectedRows.Add(("static MapKindB()", 9, 4));
+        expectedRows.Add(("~MapKindB()", 12, 3));
+        expectedRows.Add(("enum member", 22, 20));
+        const int queryGroupSize = 40;
+        var symbolNames = expectedRows
+            .Select((_, index) => index < queryGroupSize ? "MapKindA" : "MapKindB")
+            .ToArray();
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_symbol_kind_mapping");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "kinds.cs");
+            var source = string.Join('\n', symbolNames) + '\n';
+            File.WriteAllText(sourcePath, source);
+            using (var fixtureDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(fixtureDb.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "kinds.cs",
+                    Lang = "csharp",
+                    Size = source.Length,
+                    Lines = expectedRows.Count,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "issue4870-lsp-kind-mapping",
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = expectedRows.Count,
+                        Content = source,
+                    },
+                ]);
+                var symbols = mappings.Select((mapping, index) => new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = mapping.Kind,
+                    Name = symbolNames[index],
+                    Line = index + 1,
+                    StartLine = index + 1,
+                    StartColumn = 0,
+                    EndLine = index + 1,
+                    Signature = mapping.Kind,
+                }).ToList();
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = symbolNames[mappings.Length],
+                    Line = mappings.Length + 1,
+                    StartLine = mappings.Length + 1,
+                    StartColumn = 0,
+                    EndLine = mappings.Length + 1,
+                    Signature = "public MapKindB()",
+                    ContainerKind = "class",
+                    ContainerName = "MapKindB",
+                });
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = symbolNames[mappings.Length + 1],
+                    Line = mappings.Length + 2,
+                    StartLine = mappings.Length + 2,
+                    StartColumn = 0,
+                    EndLine = mappings.Length + 2,
+                    Signature = "static MapKindB()",
+                    ContainerKind = "class",
+                    ContainerName = "MapKindB",
+                });
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = symbolNames[mappings.Length + 2],
+                    Line = mappings.Length + 3,
+                    StartLine = mappings.Length + 3,
+                    StartColumn = 0,
+                    EndLine = mappings.Length + 3,
+                    Signature = "~MapKindB()",
+                    ContainerKind = "class",
+                    ContainerName = "MapKindB",
+                });
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "enum",
+                    Name = symbolNames[mappings.Length + 3],
+                    Line = mappings.Length + 4,
+                    StartLine = mappings.Length + 4,
+                    StartColumn = 0,
+                    EndLine = mappings.Length + 4,
+                    Signature = "enum member",
+                    ContainerKind = "enum",
+                    ContainerName = "MappingEnum",
+                });
+                writer.InsertSymbols(symbols);
+            }
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var documentResponse = HandleInitializedMessage(
+                server,
+                CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48700));
+            var workspaceResponses = new[] { "MapKindA", "MapKindB" }.Select((query, index) =>
+                HandleInitializedMessage(server, JsonSerializer.Serialize(new
+                {
+                    jsonrpc = "2.0",
+                    id = 48701 + index,
+                    method = "workspace/symbol",
+                    @params = new { query },
+                }))).ToArray();
+            var completionResponses = new[]
+            {
+                HandleInitializedMessage(
+                    server,
+                    CreatePositionRequest("textDocument/completion", sourcePath, 48703, 0, "MapKindA".Length)),
+                HandleInitializedMessage(
+                    server,
+                    CreatePositionRequest(
+                        "textDocument/completion",
+                        sourcePath,
+                        48704,
+                        queryGroupSize,
+                        "MapKindB".Length)),
+            };
+
+            Assert.NotNull(documentResponse);
+            Assert.All(workspaceResponses, response => Assert.NotNull(response));
+            Assert.All(completionResponses, response => Assert.NotNull(response));
+            var documentKindsByLine = FlattenDocumentSymbols(documentResponse!["result"]!.AsArray())
+                .ToDictionary(
+                    symbol => symbol!["selectionRange"]!["start"]!["line"]!.GetValue<int>(),
+                    symbol => symbol!["kind"]!.GetValue<int>());
+            var workspaceKindsByLine = workspaceResponses
+                .SelectMany(response => response!["result"]!.AsArray())
+                .ToDictionary(
+                    symbol => symbol!["location"]!["range"]!["start"]!["line"]!.GetValue<int>(),
+                    symbol => symbol!["kind"]!.GetValue<int>());
+            var completionKindsByInternalKind = completionResponses
+                .SelectMany(response => response!["result"]!["items"]!.AsArray())
+                .ToDictionary(
+                    item => item!["detail"]!.GetValue<string>(),
+                    item => item!["kind"]!.GetValue<int>(),
+                    StringComparer.Ordinal);
+
+            Assert.Equal(expectedRows.Count, documentKindsByLine.Count);
+            Assert.Equal(expectedRows.Count, workspaceKindsByLine.Count);
+            Assert.Equal(expectedRows.Count, completionKindsByInternalKind.Count);
+            for (var index = 0; index < expectedRows.Count; index++)
+            {
+                var expected = expectedRows[index];
+                Assert.Equal(expected.SymbolKind, documentKindsByLine[index]);
+                Assert.Equal(expected.SymbolKind, workspaceKindsByLine[index]);
+                Assert.Equal(expected.CompletionItemKind, completionKindsByInternalKind[expected.Kind]);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Completion_ReturnsEmptyListWhenNoIndexedSymbolMatches_Issue4360()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_completion_empty");
