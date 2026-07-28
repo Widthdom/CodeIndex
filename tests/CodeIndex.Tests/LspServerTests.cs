@@ -2426,6 +2426,147 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_ConstructorNavigation_SeparatesCallableAndPartialTypeIdentities_Issue4850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_constructor_identity");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var explicitAPath = Path.Combine(projectRoot, "explicit-a.cs");
+            var explicitBPath = Path.Combine(projectRoot, "explicit-b.cs");
+            var implicitAPath = Path.Combine(projectRoot, "implicit-a.cs");
+            var implicitBPath = Path.Combine(projectRoot, "implicit-b.cs");
+            var recordPath = Path.Combine(projectRoot, "packet.cs");
+            var callerPath = Path.Combine(projectRoot, "caller.cs");
+            var explicitASource = """
+                namespace Demo;
+
+                public partial class Widget
+                {
+                    public Widget() { }
+                }
+                """;
+            var explicitBSource = """
+                namespace Demo;
+
+                public partial class Widget
+                {
+                    public Widget(int value) { }
+                }
+                """;
+            var implicitASource = """
+                namespace Demo;
+
+                public partial class ImplicitWidget
+                {
+                }
+                """;
+            var implicitBSource = """
+                namespace Demo;
+
+                public partial class ImplicitWidget
+                {
+                }
+                """;
+            var recordSource = """
+                namespace Demo;
+
+                public sealed record Packet(int Id, string Name);
+                """;
+            var callerSource = """
+                namespace Demo;
+
+                public class Caller
+                {
+                    private Widget? _widget;
+                    public object CreateDefault() => new Widget();
+                    public object CreateValue() => new Widget(1);
+                    public object CreateImplicit() => new ImplicitWidget();
+                    public object CreatePacket() => new Packet(1, "x");
+                }
+                """;
+
+            foreach (var (path, relativePath, source) in new[]
+            {
+                (explicitAPath, "explicit-a.cs", explicitASource),
+                (explicitBPath, "explicit-b.cs", explicitBSource),
+                (implicitAPath, "implicit-a.cs", implicitASource),
+                (implicitBPath, "implicit-b.cs", implicitBSource),
+                (recordPath, "packet.cs", recordSource),
+                (callerPath, "caller.cs", callerSource),
+            })
+            {
+                File.WriteAllText(path, source);
+                TestProjectHelper.InsertIndexedFile(dbPath, relativePath, "csharp", source);
+            }
+            MarkGraphReady(dbPath);
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var reader = new DbReader(db);
+            var packetResolution = reader.GetReferencePositionResolution(
+                "caller.cs",
+                "Packet",
+                9,
+                CharacterOf(callerSource, 8, "new Packet") + "new ".Length + 1,
+                64);
+            var packetCandidate = Assert.Single(packetResolution.Candidates);
+            Assert.Equal("packet.cs", packetCandidate.Definition.Path);
+            Assert.Equal("class", packetCandidate.Definition.Kind);
+            using var server = new LspServer(
+                reader,
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+
+            foreach (var (line, character, expectedPath, expectedLine) in new[]
+            {
+                (5, CharacterOf(callerSource, 5, "Widget"), explicitAPath, 4),
+                (6, CharacterOf(callerSource, 6, "Widget"), explicitBPath, 4),
+                (7, CharacterOf(callerSource, 7, "ImplicitWidget"), implicitAPath, 2),
+                (8, CharacterOf(callerSource, 8, "new Packet") + "new ".Length, recordPath, 2),
+            })
+            {
+                foreach (var method in new[] { "textDocument/definition", "textDocument/declaration" })
+                {
+                    var response = server.HandleMessage(CreatePositionRequest(
+                        method,
+                        callerPath,
+                        48500 + line,
+                        line,
+                        character));
+
+                    Assert.NotNull(response);
+                    var location = Assert.Single(response!["result"]!.AsArray());
+                    Assert.Equal(new Uri(expectedPath).AbsoluteUri, location!["uri"]!.GetValue<string>());
+                    Assert.Equal(expectedLine, location["range"]!["start"]!["line"]!.GetValue<int>());
+                }
+            }
+
+            var typeResponse = server.HandleMessage(CreateDefinitionRequest(
+                callerPath,
+                48510,
+                4,
+                CharacterOf(callerSource, 4, "Widget")));
+
+            Assert.NotNull(typeResponse);
+            var typeLocations = typeResponse!["result"]!.AsArray();
+            Assert.Equal(2, typeLocations.Count);
+            Assert.Equal(
+                new[] { explicitAPath, explicitBPath },
+                typeLocations
+                    .Select(location => new Uri(location!["uri"]!.GetValue<string>()).LocalPath)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .ToArray());
+            Assert.All(typeLocations, location =>
+                Assert.Equal(2, location!["range"]!["start"]!["line"]!.GetValue<int>()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Declaration_ReturnsDefinitionLocation_Issues3537And4420()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_alias");

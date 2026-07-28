@@ -123,11 +123,150 @@ public partial class DbWriter
         ) WITHOUT ROWID
         """;
 
-    private const string CSharpTypeReferenceCandidatePredicateSql = """
+    private static string BuildCSharpProjectPrefixSql(string symbolAlias)
+        => $"""
+            CASE
+                WHEN INSTR(COALESCE({symbolAlias}.family_key, ''), '|') > 0
+                    THEN SUBSTR(
+                        {symbolAlias}.family_key,
+                        1,
+                        INSTR({symbolAlias}.family_key, '|'))
+                ELSE NULL
+            END
+            """;
+
+    private static string BuildCSharpUnprefixedTypeIdentitySql(string symbolAlias)
+        => $"""
+            CASE
+                WHEN COALESCE({symbolAlias}.container_qualified_name, '') = ''
+                    THEN {symbolAlias}.name
+                WHEN {symbolAlias}.container_qualified_name = {symbolAlias}.name COLLATE BINARY
+                     OR substr(
+                            {symbolAlias}.container_qualified_name,
+                            -length({symbolAlias}.name) - 1
+                        ) = ('.' || {symbolAlias}.name) COLLATE BINARY
+                    THEN {symbolAlias}.container_qualified_name
+                ELSE {symbolAlias}.container_qualified_name || '.' || {symbolAlias}.name
+            END
+            """;
+
+    private static string BuildCSharpTypeIdentitySql(string symbolAlias, string fileAlias)
+        => $"""
+            (
+                COALESCE(
+                    {BuildCSharpProjectPrefixSql(symbolAlias)},
+                    CASE
+                        WHEN INSTR(
+                                 ' ' || LOWER(
+                                     REPLACE(
+                                         REPLACE(
+                                             REPLACE(
+                                                 REPLACE(COALESCE({symbolAlias}.signature, ''), '(', ' '),
+                                                 ')',
+                                                 ' '),
+                                             ':',
+                                             ' '),
+                                         CHAR(9),
+                                         ' ')) || ' ',
+                                 ' partial ') > 0
+                            THEN ''
+                        ELSE {fileAlias}.path || char(31)
+                    END
+                ) ||
+                {BuildCSharpUnprefixedTypeIdentitySql(symbolAlias)}
+            )
+            """;
+
+    private static string BuildCSharpConstructorIdentitySql(string symbolAlias, string fileAlias)
+        => $"""
+            (
+                COALESCE(
+                    {BuildCSharpProjectPrefixSql(symbolAlias)},
+                    CASE
+                        WHEN EXISTS (
+                            SELECT 1
+                            FROM symbols AS constructor_partial_type
+                            JOIN files AS constructor_partial_file
+                              ON constructor_partial_file.id = constructor_partial_type.file_id
+                             AND constructor_partial_file.lang = 'csharp'
+                            WHERE constructor_partial_type.name_folded = {symbolAlias}.name_folded
+                              AND constructor_partial_type.name = {symbolAlias}.name COLLATE BINARY
+                              AND constructor_partial_type.kind IN ('class', 'struct', 'record')
+                              AND INSTR(
+                                      ' ' || LOWER(
+                                          REPLACE(
+                                              REPLACE(
+                                                  REPLACE(
+                                                      REPLACE(
+                                                          COALESCE(constructor_partial_type.signature, ''),
+                                                          '(',
+                                                          ' '),
+                                                      ')',
+                                                      ' '),
+                                                  ':',
+                                                  ' '),
+                                              CHAR(9),
+                                              ' ')) || ' ',
+                                      ' partial ') > 0
+                              AND {BuildCSharpUnprefixedTypeIdentitySql("constructor_partial_type")}
+                                  = COALESCE(
+                                      NULLIF({symbolAlias}.container_qualified_name, ''),
+                                      NULLIF({symbolAlias}.container_name, ''),
+                                      {symbolAlias}.name) COLLATE BINARY
+                        ) THEN ''
+                        ELSE {fileAlias}.path || char(31)
+                    END
+                ) ||
+                COALESCE(
+                    NULLIF({symbolAlias}.container_qualified_name, ''),
+                    NULLIF({symbolAlias}.container_name, ''),
+                    {symbolAlias}.name)
+            )
+            """;
+
+    private static string CSharpTypeReferenceCandidatePredicateSql => $"""
         (
             source_file.lang <> 'csharp'
-            OR r.reference_kind <> 'type_reference'
+            OR r.reference_kind NOT IN ('instantiate', 'type_reference')
             OR CASE
+                WHEN r.reference_kind = 'instantiate'
+                     AND s.name <> r.symbol_name COLLATE BINARY THEN 0
+                WHEN r.reference_kind = 'instantiate'
+                     AND s.kind = 'function'
+                     AND s.container_name = s.name COLLATE BINARY THEN 1
+                WHEN r.reference_kind = 'instantiate'
+                     AND s.kind IN ('class', 'struct', 'record')
+                     AND s.id = (
+                         SELECT representative.id
+                         FROM symbols AS representative
+                         JOIN files AS representative_file
+                           ON representative_file.id = representative.file_id
+                          AND representative_file.lang = 'csharp'
+                         WHERE representative.name_folded = s.name_folded
+                           AND representative.name = s.name COLLATE BINARY
+                           AND representative.kind IN ('class', 'struct', 'record')
+                           AND {BuildCSharpTypeIdentitySql("representative", "representative_file")}
+                               = {BuildCSharpTypeIdentitySql("s", "target_file")} COLLATE BINARY
+                         ORDER BY representative_file.path,
+                                  COALESCE(representative.start_line, representative.line),
+                                  representative.id
+                         LIMIT 1
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM symbols AS explicit_constructor
+                         JOIN files AS constructor_file
+                           ON constructor_file.id = explicit_constructor.file_id
+                          AND constructor_file.lang = 'csharp'
+                         WHERE explicit_constructor.name_folded = s.name_folded
+                           AND explicit_constructor.name = s.name COLLATE BINARY
+                           AND explicit_constructor.kind = 'function'
+                           AND explicit_constructor.container_name =
+                               explicit_constructor.name COLLATE BINARY
+                           AND {BuildCSharpConstructorIdentitySql("explicit_constructor", "constructor_file")}
+                               = {BuildCSharpTypeIdentitySql("s", "target_file")} COLLATE BINARY
+                     ) THEN 1
+                WHEN r.reference_kind = 'instantiate' THEN 0
                 WHEN s.kind NOT IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate') THEN 0
                 WHEN s.name <> r.symbol_name COLLATE BINARY THEN 0
                 WHEN csharp_reference_type_arity(
@@ -448,11 +587,22 @@ public partial class DbWriter
           AND r.target_qualifier IS NOT NULL
           AND r.target_qualifier NOT LIKE char(31) || 'receiver:%'
           AND (
-              s.container_name = r.target_qualifier COLLATE NOCASE
-              OR s.container_qualified_name = r.target_qualifier COLLATE NOCASE
-              OR s.container_qualified_name LIKE '%.' || r.target_qualifier COLLATE NOCASE
-              OR (
-                  source_file.lang IN (
+               s.container_name = r.target_qualifier COLLATE NOCASE
+               OR s.container_qualified_name = r.target_qualifier COLLATE NOCASE
+               OR s.container_qualified_name LIKE '%.' || r.target_qualifier COLLATE NOCASE
+               OR (
+                   source_file.lang = 'csharp'
+                   AND r.reference_kind = 'instantiate'
+                   AND s.kind = 'function'
+                   AND (
+                       s.container_qualified_name =
+                           (r.target_qualifier || '.' || r.symbol_name) COLLATE NOCASE
+                       OR s.container_qualified_name LIKE
+                           ('%.' || r.target_qualifier || '.' || r.symbol_name) COLLATE NOCASE
+                   )
+               )
+               OR (
+                   source_file.lang IN (
                       'ada',
                       'ambiguous_m',
                       'cython',
@@ -631,7 +781,7 @@ public partial class DbWriter
         FROM symbol_references AS r
         JOIN files AS source_file ON source_file.id = r.file_id
         JOIN (
-            SELECT MIN(type_symbol.id) AS symbol_id,
+            SELECT type_symbol.id AS symbol_id,
                    type_symbol.name_folded,
                    type_symbol.name,
                    csharp_definition_type_arity(
@@ -639,20 +789,38 @@ public partial class DbWriter
                        type_symbol.name,
                        type_symbol.kind) AS type_arity
             FROM symbols AS type_symbol
-            JOIN files AS target_file ON target_file.id = type_symbol.file_id
+            JOIN files AS target_file
+              ON target_file.id = type_symbol.file_id
             WHERE target_file.lang = 'csharp'
               AND type_symbol.name_folded IS NOT NULL
               AND type_symbol.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
-            GROUP BY type_symbol.name_folded, type_symbol.name, type_arity
-            HAVING type_arity IS NOT NULL
-               AND COUNT(DISTINCT target_file.path || char(31) ||
-                                  COALESCE(
-                                      type_symbol.container_qualified_name,
-                                      type_symbol.container_name,
-                                      '') || char(31) ||
-                                  COALESCE(type_symbol.name, '')) = 1
-        ) AS unique_target ON unique_target.name_folded = r.symbol_name_folded
-                          AND unique_target.name = r.symbol_name COLLATE BINARY
+              AND csharp_definition_type_arity(
+                      type_symbol.signature,
+                      type_symbol.name,
+                      type_symbol.kind) IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM symbols AS other_type
+                  JOIN files AS other_type_file
+                    ON other_type_file.id = other_type.file_id
+                   AND other_type_file.lang = 'csharp'
+                  WHERE other_type.name_folded = type_symbol.name_folded
+                    AND other_type.name = type_symbol.name COLLATE BINARY
+                    AND other_type.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
+                    AND csharp_definition_type_arity(
+                            other_type.signature,
+                            other_type.name,
+                            other_type.kind)
+                        = csharp_definition_type_arity(
+                            type_symbol.signature,
+                            type_symbol.name,
+                            type_symbol.kind)
+                    AND {BuildCSharpTypeIdentitySql("other_type", "other_type_file")}
+                        <> {BuildCSharpTypeIdentitySql("type_symbol", "target_file")} COLLATE BINARY
+              )
+        ) AS unique_target
+          ON unique_target.name_folded = r.symbol_name_folded
+         AND unique_target.name = r.symbol_name COLLATE BINARY
         WHERE source_file.lang = 'csharp'
           AND r.target_qualifier IS NULL
           AND r.reference_kind = 'type_reference'
@@ -663,8 +831,8 @@ public partial class DbWriter
                       (SELECT reference_line.context
                        FROM reference_lines AS reference_line
                        WHERE reference_line.id = r.reference_line_id)),
-                  r.symbol_name,
-                  r.column_number) IS NULL
+                   r.symbol_name,
+                   r.column_number) IS NULL
               OR unique_target.type_arity
                  = csharp_reference_type_arity(
                      COALESCE(
@@ -773,15 +941,70 @@ public partial class DbWriter
         FROM symbol_references AS r
         JOIN files AS source_file ON source_file.id = r.file_id
         JOIN (
-            SELECT MIN(s.id) AS symbol_id, s.name_folded
-            FROM symbols AS s
-            JOIN files AS target_file ON target_file.id = s.file_id
-            WHERE target_file.lang = 'csharp'
-              AND s.name_folded IS NOT NULL
-              AND s.kind IN ('class', 'struct', 'record')
-            GROUP BY s.name_folded
-            HAVING COUNT(*) = 1
+            SELECT candidate.id AS symbol_id,
+                   unique_type.name_folded,
+                   unique_type.name
+            FROM (
+                SELECT s.name_folded,
+                       s.name,
+                       MIN({BuildCSharpTypeIdentitySql("s", "target_file")}) AS type_identity
+                FROM symbols AS s
+                JOIN files AS target_file ON target_file.id = s.file_id
+                WHERE target_file.lang = 'csharp'
+                  AND s.name_folded IS NOT NULL
+                  AND s.kind IN ('class', 'struct', 'record')
+                GROUP BY s.name_folded, s.name
+                HAVING COUNT(DISTINCT {BuildCSharpTypeIdentitySql("s", "target_file")}) = 1
+            ) AS unique_type
+            JOIN symbols AS candidate
+              ON candidate.name_folded = unique_type.name_folded
+             AND candidate.name = unique_type.name COLLATE BINARY
+            JOIN files AS candidate_file
+              ON candidate_file.id = candidate.file_id
+             AND candidate_file.lang = 'csharp'
+            WHERE (
+                    candidate.kind = 'function'
+                    AND candidate.container_name = candidate.name COLLATE BINARY
+                    AND {BuildCSharpConstructorIdentitySql("candidate", "candidate_file")}
+                        = unique_type.type_identity COLLATE BINARY
+                )
+               OR (
+                    candidate.kind IN ('class', 'struct', 'record')
+                    AND {BuildCSharpTypeIdentitySql("candidate", "candidate_file")}
+                        = unique_type.type_identity COLLATE BINARY
+                    AND candidate.id = (
+                        SELECT representative.id
+                        FROM symbols AS representative
+                        JOIN files AS representative_file
+                          ON representative_file.id = representative.file_id
+                         AND representative_file.lang = 'csharp'
+                        WHERE representative.name_folded = unique_type.name_folded
+                          AND representative.name = unique_type.name COLLATE BINARY
+                          AND representative.kind IN ('class', 'struct', 'record')
+                          AND {BuildCSharpTypeIdentitySql("representative", "representative_file")}
+                              = unique_type.type_identity COLLATE BINARY
+                        ORDER BY representative_file.path,
+                                 COALESCE(representative.start_line, representative.line),
+                                 representative.id
+                        LIMIT 1
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM symbols AS explicit_constructor
+                        JOIN files AS constructor_file
+                          ON constructor_file.id = explicit_constructor.file_id
+                         AND constructor_file.lang = 'csharp'
+                        WHERE explicit_constructor.name_folded = unique_type.name_folded
+                          AND explicit_constructor.name = unique_type.name COLLATE BINARY
+                          AND explicit_constructor.kind = 'function'
+                          AND explicit_constructor.container_name =
+                              explicit_constructor.name COLLATE BINARY
+                          AND {BuildCSharpConstructorIdentitySql("explicit_constructor", "constructor_file")}
+                              = unique_type.type_identity COLLATE BINARY
+                    )
+                )
         ) AS unique_target ON unique_target.name_folded = r.symbol_name_folded
+                           AND unique_target.name = r.symbol_name COLLATE BINARY
         WHERE source_file.lang = 'csharp'
           AND r.target_qualifier IS NULL
           AND r.reference_kind = 'instantiate'

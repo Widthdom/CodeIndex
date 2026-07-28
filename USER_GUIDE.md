@@ -2702,6 +2702,16 @@ but do not speak MCP. It also advertises full `textDocument` sync and
 conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
 `codeLens`, and `inlayHint` providers backed by indexed symbols and references
 where available.
+C# constructor navigation is source-position-aware. For `new Type(...)`,
+`textDocument/definition` and `textDocument/declaration` use the exact indexed
+reference site and invocation arity to select only matching explicit constructor
+symbols. When no explicit constructor is indexed, including implicit constructors
+on partial classes and positional records, they return one stable representative
+type declaration. This is separate from ordinary type-reference navigation, which
+may intentionally return every declaration in one logical partial-type family.
+CLI `definition` and `goto` are name-based; use `--kind function` for explicit
+constructors, or a type kind together with `--group-partials` for the logical type
+family.
 `textDocument/inlayHint` honors the requested LSP range (including its exclusive
 end position) and omits type labels when the indexed return type is already
 written immediately before the symbol name, so explicit field, property, and
@@ -5813,6 +5823,16 @@ MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 
 indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
 `documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
 advertise します。
+C# の constructor navigation は source position を考慮します。`new Type(...)` に
+対する `textDocument/definition` と `textDocument/declaration` は、index 済みの
+正確な reference site と invocation arity を使い、一致する明示 constructor symbol
+だけを選択します。partial class の暗黙 constructor や positional record のように
+明示 constructor が index されていない場合は、安定した代表 type declaration を
+1 件返します。この経路は通常の type-reference navigation と分離されており、後者は
+1 つの logical partial-type family に属する全 declaration を意図的に返す場合があります。
+CLI の `definition` と `goto` は名前ベースなので、明示 constructor には
+`--kind function`、logical type family には type kind と `--group-partials` を
+組み合わせてください。
 `textDocument/inlayHint` は end position を含まない requested LSP range を尊重し、
 indexed return type が symbol name の直前にすでに明記されている場合は type label を
 省略するため、field / property / method の明示型を hint として重複表示しません。

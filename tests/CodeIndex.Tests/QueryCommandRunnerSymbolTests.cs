@@ -251,6 +251,81 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ConstructorCommands_KeepCallableAndPartialTypeResultsSeparate_Issue4850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_constructor_commands_issue4850");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Widget.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class Widget
+                {
+                    public Widget() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Widget.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class Widget
+                {
+                    public Widget(int value) { }
+                }
+                """);
+
+            var (definitionExit, definitionStdout, definitionStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunDefinition(
+                    ["Widget", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "function"],
+                    _jsonOptions));
+            var constructorDefinitions = ParseJsonLines(definitionStdout);
+
+            Assert.Equal(CommandExitCodes.Success, definitionExit);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(2, constructorDefinitions.Count);
+            Assert.All(constructorDefinitions, row =>
+                Assert.Equal("function", row.RootElement.GetProperty("kind").GetString()));
+
+            var (gotoExit, gotoStdout, gotoStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunGoto(
+                    ["Widget", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "function", "--all"],
+                    _jsonOptions));
+            using var gotoDocument = ParseJsonOutput(gotoStdout);
+            var constructorLocations = gotoDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, gotoExit);
+            Assert.Equal(string.Empty, gotoStderr);
+            Assert.Equal(2, constructorLocations.Count);
+            Assert.All(constructorLocations, location =>
+                Assert.Equal(4, location.GetProperty("range").GetProperty("start").GetProperty("line").GetInt32()));
+
+            var (typeExit, typeStdout, typeStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunDefinition(
+                    ["Widget", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials"],
+                    _jsonOptions));
+            var typeDefinitions = ParseJsonLines(typeStdout);
+            var partialType = Assert.Single(typeDefinitions);
+
+            Assert.Equal(CommandExitCodes.Success, typeExit);
+            Assert.Equal(string.Empty, typeStderr);
+            Assert.Equal("class", partialType.RootElement.GetProperty("kind").GetString());
+            Assert.Equal(2, partialType.RootElement.GetProperty("definition_sites").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunGoto_AllIgnoresDefaultLimitAndHonorsExplicitLimit_Issue4837()
     {
         const int definitionCount = 63;

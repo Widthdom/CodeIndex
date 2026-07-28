@@ -25,16 +25,16 @@ internal sealed partial class LspServer : IDisposable
             if (positionDefinitions.Count > 0)
                 return positionDefinitions;
 
-            var localReferenceTarget = ResolveReferenceTargetAtPosition(context);
-            return localReferenceTarget == null ? localDefinitions : [localReferenceTarget];
+            var localReferenceTargets = ResolveReferenceTargetsAtPosition(context);
+            return localReferenceTargets.Count == 0 ? localDefinitions : localReferenceTargets;
         }
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
         if (workspaceDefinitions.Count > 1)
         {
-            var referenceTarget = ResolveReferenceTargetAtPosition(context);
-            if (referenceTarget != null)
-                return [referenceTarget];
+            var referenceTargets = ResolveReferenceTargetsAtPosition(context);
+            if (referenceTargets.Count > 0)
+                return referenceTargets;
         }
         return workspaceDefinitions;
     }
@@ -71,6 +71,12 @@ internal sealed partial class LspServer : IDisposable
 
     private DefinitionResult? ResolveReferenceTargetAtPosition(PositionTokenContext context)
     {
+        var targets = ResolveReferenceTargetsAtPosition(context);
+        return targets.Count == 1 ? targets[0] : null;
+    }
+
+    private List<DefinitionResult> ResolveReferenceTargetsAtPosition(PositionTokenContext context)
+    {
         var resolution = _reader.GetReferencePositionResolution(
             context.IndexedPath,
             context.Token,
@@ -78,14 +84,17 @@ internal sealed partial class LspServer : IDisposable
             context.StartCharacter + 1,
             MaxReferencePositionCandidates);
         if (!resolution.IdentityAvailable || resolution.CandidatesTruncated)
-            return null;
+            return [];
 
         var selected = resolution.Candidates
             .Where(candidate => candidate.Authoritative)
             .Take(2)
             .ToList();
         if (selected.Count == 1)
-            return _reader.GetDefinitionForSymbol(selected[0].Definition);
+        {
+            var authoritativeDefinition = _reader.GetDefinitionForSymbol(selected[0].Definition);
+            return authoritativeDefinition == null ? [] : [authoritativeDefinition];
+        }
 
         if (TryGetCSharpInvocationArgumentCount(context, out var argumentCount))
         {
@@ -95,12 +104,40 @@ internal sealed partial class LspServer : IDisposable
                 .Take(2)
                 .ToList();
             if (selected.Count == 1)
-                return _reader.GetDefinitionForSymbol(selected[0].Definition);
+            {
+                var arityDefinition = _reader.GetDefinitionForSymbol(selected[0].Definition);
+                return arityDefinition == null ? [] : [arityDefinition];
+            }
         }
 
-        return resolution.Candidates.Count == 1
-            ? _reader.GetDefinitionForSymbol(resolution.Candidates[0].Definition)
-            : null;
+        if (resolution.Candidates.Count == 1)
+        {
+            var onlyDefinition = _reader.GetDefinitionForSymbol(resolution.Candidates[0].Definition);
+            return onlyDefinition == null ? [] : [onlyDefinition];
+        }
+
+        var typeFamilyKeys = resolution.Candidates
+            .Select(candidate =>
+                LogicalPartialSymbolGrouper.TryBuildKey(candidate.Definition, out var key)
+                    ? key
+                    : null)
+            .Where(static key => key != null)
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .ToList();
+        if (typeFamilyKeys.Count != 1 ||
+            resolution.Candidates.Any(candidate =>
+                !LogicalPartialSymbolGrouper.TryBuildKey(candidate.Definition, out _)))
+        {
+            return [];
+        }
+
+        return resolution.Candidates
+            .Select(candidate => _reader.GetDefinitionForSymbol(candidate.Definition))
+            .OfType<DefinitionResult>()
+            .OrderBy(definition => definition.Path, StringComparer.Ordinal)
+            .ThenBy(definition => definition.StartLine)
+            .ToList();
     }
 
     private bool TryGetCSharpInvocationArgumentCount(PositionTokenContext context, out int argumentCount)
