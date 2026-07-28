@@ -22,6 +22,7 @@ internal static partial class ExportImportCommandRunner
         string? dbPath = null;
         var wantsJson = Array.Exists(args, arg => arg == "--json");
         var prunePaths = false;
+        var noBackup = false;
         var importMode = "import";
         var dryRun = false;
         var limit = DiffCommandRunner.DefaultDiffLimit;
@@ -53,6 +54,11 @@ internal static partial class ExportImportCommandRunner
             if (arg == "--prune-paths")
             {
                 prunePaths = true;
+                continue;
+            }
+            if (arg == "--no-backup")
+            {
+                noBackup = true;
                 continue;
             }
             if (arg is "--dry-run" or "--check")
@@ -118,7 +124,7 @@ internal static partial class ExportImportCommandRunner
             return Fail("import_offset_invalid", "--offset is too large for the requested --limit.", "choose a lower --offset.");
 
         return new ImportArgumentParseResult(
-            new ImportArguments(archivePath, dbPath, wantsJson, prunePaths, importMode, dryRun, limit, offset),
+            new ImportArguments(archivePath, dbPath, wantsJson, prunePaths, noBackup, importMode, dryRun, limit, offset),
             CommandExitCodes.Success);
     }
 }

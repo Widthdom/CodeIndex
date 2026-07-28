@@ -41,11 +41,12 @@ internal static partial class ExportImportCommandRunner
     private const string PhaseSqliteValidate = "sqlite_validate";
     private const string PhasePrunePaths = "prune_paths";
     private const string PhaseDestinationDelta = "destination_delta";
+    private const string PhasePreReplaceBackup = "pre_replace_backup";
     private const string PhaseScopeArchive = "scope_archive";
     private const string PhaseReplaceDb = "replace_db";
     private const string PhaseWriteArchive = "write_archive";
     private const string PhaseWriteCtags = "write_ctags";
-    private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--limit <n<=10000>] [--offset <n>] [--json]";
+    private const string ImportUsage = "cdidx import <archive> [--db <path>] [--prune-paths] [--no-backup] [--dry-run|--check] [--limit <n<=10000>] [--offset <n>] [--json]";
     private const string ArchiveExportUsage = "cdidx export <archive> [--db <path>] [--json] [--overwrite] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--project <name|path>] [--solution <path>] [--exclude-tests]";
     private const string CtagsExportUsage = "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-generated]";
     private const string CtagsSkipInvalidName = "invalid_name";
@@ -62,6 +63,7 @@ internal static partial class ExportImportCommandRunner
         string? DbPath,
         bool WantsJson,
         bool PrunePaths,
+        bool NoBackup,
         string ImportMode,
         bool DryRun,
         int Limit,

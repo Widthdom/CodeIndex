@@ -701,7 +701,7 @@ public class DbCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
             Assert.Contains("saved", checkpointOut);
 
-            File.WriteAllText(dbPath, "changed");
+            MutateValidDatabase(dbPath);
 
             var (restoreExit, restoreOut, _) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
 
@@ -726,7 +726,8 @@ public class DbCommandRunnerTests
             InitializeEmptyDb(dbPath);
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
-            File.WriteAllText(dbPath, "changed");
+            MutateValidDatabase(dbPath);
+            var changedBytes = File.ReadAllBytes(dbPath);
             DbCommandRunner.AvailableFreeSpaceForTesting = _ => 1_000_000;
 
             var (exitCode, json) = RunAndCaptureJson(["restore", "saved", "--dry-run", "--db", dbPath, "--json"]);
@@ -744,7 +745,7 @@ public class DbCommandRunnerTests
             Assert.Contains(
                 json.GetProperty("files").EnumerateArray(),
                 file => file.GetString() == "codeindex.db");
-            Assert.Equal("changed", File.ReadAllText(dbPath));
+            Assert.Equal(changedBytes, File.ReadAllBytes(dbPath));
             Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
             Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
         }
@@ -1561,7 +1562,8 @@ public class DbCommandRunnerTests
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
 
-            File.WriteAllText(dbPath, "changed");
+            MutateValidDatabase(dbPath);
+            var changedBytes = File.ReadAllBytes(dbPath);
             DbCommandRunner.RestoreFailureAfterBackupForTesting = () => throw new IOException("injected restore failure");
 
             var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
@@ -1569,9 +1571,83 @@ public class DbCommandRunnerTests
             Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
             Assert.Contains("IOException", stderr);
             Assert.DoesNotContain("injected restore failure", stderr);
-            Assert.Equal("changed", File.ReadAllText(dbPath));
+            Assert.Equal(changedBytes, File.ReadAllBytes(dbPath));
             Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
             Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreCancellationAfterBackup_RollsBackAndReturnsInterrupted_Issue4857()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_cancel");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            MutateValidDatabase(dbPath);
+            var changedBytes = File.ReadAllBytes(dbPath);
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+                throw new OperationCanceledException("injected restore cancellation");
+
+            var (restoreExit, stdout, stderr) = RunAndCaptureStreams(
+                ["restore", "saved", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, restoreExit);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(
+                CommandErrorCodes.Interrupted,
+                document.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal(changedBytes, File.ReadAllBytes(dbPath));
+            Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreNoBackupRollbackFailureRetainsTransientOriginal_Issue4857()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_no_backup_rollback_fail");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            MutateValidDatabase(dbPath);
+            var changedBytes = File.ReadAllBytes(dbPath);
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+            {
+                Directory.CreateDirectory(dbPath);
+                throw new IOException("injected no-backup restore failure");
+            };
+
+            var (restoreExit, stdout, _) = RunAndCaptureStreams(
+                ["restore", "saved", "--no-backup", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.True(document.RootElement.GetProperty("rollback_failed").GetBoolean());
+            Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+            var restoreTempPath = Assert.Single(
+                Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+            var retainedOriginalPath = Path.Combine(restoreTempPath, "rollback", "codeindex.db");
+            Assert.True(File.Exists(retainedOriginalPath));
+            Assert.Equal(changedBytes, File.ReadAllBytes(retainedOriginalPath));
         }
         finally
         {
@@ -1592,7 +1668,7 @@ public class DbCommandRunnerTests
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
 
-            File.WriteAllText(dbPath, "changed");
+            MutateValidDatabase(dbPath);
             DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
             {
                 Directory.CreateDirectory(dbPath);
@@ -1629,7 +1705,7 @@ public class DbCommandRunnerTests
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
 
-            File.WriteAllText(dbPath, "changed");
+            MutateValidDatabase(dbPath);
             DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
             {
                 Directory.CreateDirectory(dbPath);
@@ -1927,7 +2003,7 @@ public class DbCommandRunnerTests
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
 
-            File.WriteAllText(dbPath, "changed");
+            MutateValidDatabase(dbPath);
             DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
             {
                 var restoreTempPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
@@ -1962,7 +2038,7 @@ public class DbCommandRunnerTests
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
 
-            File.WriteAllText(dbPath, "changed");
+            MutateValidDatabase(dbPath);
             DbCommandRunner.DeleteTemporaryDirectoryForTesting = path =>
             {
                 if (Path.GetFileName(path).StartsWith("codeindex.db.restore-tmp-", StringComparison.Ordinal))
@@ -2002,11 +2078,11 @@ public class DbCommandRunnerTests
         var inspected = false;
         try
         {
-            File.WriteAllText(dbPath, "original");
+            InitializeEmptyDb(dbPath);
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
 
-            File.WriteAllText(dbPath, "changed");
+            MutateValidDatabase(dbPath);
             DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
             {
                 var restoreTempPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
@@ -2186,7 +2262,7 @@ public class DbCommandRunnerTests
 
         Assert.Contains("checkpoint --dry-run", stdout);
         Assert.Contains("schema defaults to the full sqlite_master dump", stdout);
-        Assert.Contains("manifest, regular-file paths, and destination free space", stdout);
+        Assert.Contains("manifest, regular-file paths, rollback-backup policy, and destination free space", stdout);
         Assert.Contains("--delete and --prune remove snapshots", stdout);
         Assert.Contains("--prune --dry-run reports exact deleted/retained paths", stdout);
         Assert.Contains("prune --dry-run only counts", stdout);
@@ -2261,5 +2337,18 @@ public class DbCommandRunnerTests
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    private static void MutateValidDatabase(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+        }.ConnectionString);
+        connection.Open();
+        Execute(connection, "CREATE TABLE restore_test_state (value TEXT NOT NULL)");
+        Execute(connection, "INSERT INTO restore_test_state(value) VALUES ('changed')");
+        ReleaseSqlitePools();
     }
 }
