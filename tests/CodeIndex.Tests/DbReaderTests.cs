@@ -3193,6 +3193,15 @@ public partial class DbReaderTests : IDisposable
                 exact: true,
                 pathPatterns: ["src/*common_member_graph_fixture*"],
                 includeQualifiedCommonCalls: true));
+        var caseInsensitiveReferences = _reader.SearchReferences(
+            "getstring",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"]);
+        Assert.Equal(2, caseInsensitiveReferences.Count);
+        Assert.DoesNotContain(
+            caseInsensitiveReferences,
+            reference => reference.Context.Contains("json.GetString", StringComparison.Ordinal));
         Assert.DoesNotContain(defaultReferences, reference => reference.Context.Contains("json.GetString", StringComparison.Ordinal));
         var unresolvedReceiverCalls = completeReferences
             .Where(reference => reference.Context.Contains("json.GetString", StringComparison.Ordinal))

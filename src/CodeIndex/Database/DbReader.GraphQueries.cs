@@ -13,7 +13,7 @@ public partial class DbReader
             .OrderBy(static name => name, StringComparer.Ordinal)
             .Select(static name => $"'{name}'"));
 
-    private static string BuildCSharpBareMemberReferenceFilter(
+    private string BuildCSharpBareMemberReferenceFilter(
         string query,
         string? lang,
         string fileAlias,
@@ -27,10 +27,23 @@ public partial class DbReader
         return BuildCSharpQualifiedCommonCallNoiseFilter(fileAlias, referenceAlias);
     }
 
-    private static string BuildCSharpQualifiedCommonCallNoiseFilter(
+    private string BuildCSharpQualifiedCommonCallNoiseFilter(
         string fileAlias,
         string referenceAlias)
-        => $" AND NOT ({fileAlias}.lang = 'csharp' AND {referenceAlias}.reference_kind = 'call' AND {referenceAlias}.symbol_name IN ({CSharpCommonQualifiedMemberCallNamesSql}) AND {referenceAlias}.target_qualifier IS NOT NULL AND COALESCE({referenceAlias}.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group'))";
+    {
+        // Legacy read-only indexes cannot run the migrations that added resolution
+        // evidence. Preserve their pre-filter graph behavior instead of emitting SQL
+        // against columns they do not have.
+        // 読み取り専用の旧 index は resolution evidence 列を追加できないため、
+        // 存在しない列を参照せず従来の graph 結果へフォールバックする。
+        if (!_referenceColumns.Contains("target_qualifier")
+            || !_referenceColumns.Contains("resolution_state"))
+        {
+            return string.Empty;
+        }
+
+        return $" AND NOT ({fileAlias}.lang = 'csharp' AND {referenceAlias}.reference_kind = 'call' AND {referenceAlias}.symbol_name IN ({CSharpCommonQualifiedMemberCallNamesSql}) AND {referenceAlias}.target_qualifier IS NOT NULL AND COALESCE({referenceAlias}.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group'))";
+    }
 
     private static bool ShouldFilterCSharpQualifiedCommonBareMemberQuery(string query, string? lang)
     {
@@ -45,7 +58,9 @@ public partial class DbReader
             return false;
 
         return value.All(c => char.IsLetterOrDigit(c) || c == '_')
-            && CSharpReferenceExtractor.CommonQualifiedMemberCallNames.Contains(value);
+            && CSharpReferenceExtractor.CommonQualifiedMemberCallNames.Contains(
+                value,
+                StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
