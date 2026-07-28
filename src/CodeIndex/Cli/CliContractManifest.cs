@@ -59,6 +59,10 @@ internal static class CliContractManifest
         new(nameof(CommandErrorCodes.LineOutOfRange), CommandErrorCodes.LineOutOfRange, null),
         new(nameof(CommandErrorCodes.SuggestionStoreUnavailable), CommandErrorCodes.SuggestionStoreUnavailable, null),
         new(nameof(CommandErrorCodes.IndexPartial), CommandErrorCodes.IndexPartial, null),
+        new(nameof(CommandErrorCodes.CommandFailed), CommandErrorCodes.CommandFailed, null),
+        new(nameof(CommandErrorCodes.ConfigInvalid), CommandErrorCodes.ConfigInvalid, null),
+        new(nameof(CommandErrorCodes.HookOperationFailed), CommandErrorCodes.HookOperationFailed, null),
+        new(nameof(CommandErrorCodes.NotGitRepository), CommandErrorCodes.NotGitRepository, null),
     ];
 
     public static IReadOnlyList<Type> CliJsonRootTypes { get; } = LoadCliJsonRootTypes();
