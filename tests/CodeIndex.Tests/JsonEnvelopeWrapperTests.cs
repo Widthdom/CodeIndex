@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -141,6 +142,72 @@ public class JsonEnvelopeWrapperTests
             var results = document.RootElement.GetProperty("results");
             Assert.Equal(1, results.GetArrayLength());
             Assert.Equal(1, results[0].GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Search_WithEnvelope_UsesLatestIndexedHeadAndFallsBackForLegacyDatabase_Issue4854()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("envelope_indexed_head");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App { void Authenticate() {} }\n");
+            const string fullScanHead = "1111111111111111111111111111111111111111";
+            const string latestHead = "2222222222222222222222222222222222222222";
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, fullScanHead),
+                    (DbContext.IndexedHeadShaMetaKey, latestHead));
+            }
+
+            var (latestExitCode, latestStdout, latestStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Authenticate", "--db", dbPath, "--json-envelope"],
+                _jsonOptions,
+                "1.0.0"));
+
+            Assert.Equal(CommandExitCodes.Success, latestExitCode);
+            Assert.Equal(string.Empty, latestStderr);
+            using (var latestDocument = JsonDocument.Parse(latestStdout))
+            {
+                Assert.Equal(
+                    latestHead,
+                    latestDocument.RootElement
+                        .GetProperty("metadata")
+                        .GetProperty("indexed_at_head_sha")
+                        .GetString());
+            }
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues((DbContext.IndexedHeadShaMetaKey, null));
+            }
+
+            var (legacyExitCode, legacyStdout, legacyStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Authenticate", "--db", dbPath, "--json-envelope"],
+                _jsonOptions,
+                "1.0.0"));
+
+            Assert.Equal(CommandExitCodes.Success, legacyExitCode);
+            Assert.Equal(string.Empty, legacyStderr);
+            using var legacyDocument = JsonDocument.Parse(legacyStdout);
+            Assert.Equal(
+                fullScanHead,
+                legacyDocument.RootElement
+                    .GetProperty("metadata")
+                    .GetProperty("indexed_at_head_sha")
+                    .GetString());
         }
         finally
         {

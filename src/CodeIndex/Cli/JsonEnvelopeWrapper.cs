@@ -262,7 +262,9 @@ internal static partial class JsonEnvelopeWrapper
             var resolvedPath = dbPath;
             if (!dbPathExplicit && !File.Exists(LongPath.EnsureWindowsPrefix(resolvedPath)))
                 return null;
-            return DbPathResolver.TryReadIndexedHeadCommit(DbPathResolver.NormalizeDbPath(resolvedPath));
+            var normalizedPath = DbPathResolver.NormalizeDbPath(resolvedPath);
+            return DbPathResolver.TryReadIndexedHeadSha(normalizedPath)
+                ?? DbPathResolver.TryReadIndexedHeadCommit(normalizedPath);
         }
         catch
         {
