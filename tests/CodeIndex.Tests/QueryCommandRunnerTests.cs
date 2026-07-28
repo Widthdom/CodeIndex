@@ -1178,9 +1178,12 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("error", lineError.GetProperty("status").GetString());
         Assert.Equal(2, lineError.GetProperty("line").GetInt32());
         Assert.Equal(CommandExitCodes.UsageError, lineError.GetProperty("exit_code").GetInt32());
-        Assert.Equal(string.Empty, lineError.GetProperty("stdout").GetString());
-        Assert.Equal(string.Empty, lineError.GetProperty("stderr").GetString());
+        Assert.False(lineError.TryGetProperty("stdout", out _));
+        Assert.False(lineError.TryGetProperty("stderr", out _));
         Assert.Contains("batch line 2 must be a non-empty JSON string array or a command object", lineError.GetProperty("error").GetProperty("message").GetString());
+        Assert.Equal(
+            "invalid_batch_input_shape",
+            lineError.GetProperty("error").GetProperty("category").GetString());
 
         var unsupportedRecord = unsupportedRecordDocument.RootElement;
         Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
@@ -1188,8 +1191,11 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(3, unsupportedRecord.GetProperty("line").GetInt32());
         Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
         Assert.Equal(CommandExitCodes.UsageError, unsupportedRecord.GetProperty("exit_code").GetInt32());
-        Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
-        Assert.Contains("batch only supports query and read-only discovery commands", unsupportedRecord.GetProperty("stderr").GetString());
+        Assert.False(unsupportedRecord.TryGetProperty("stdout", out _));
+        Assert.False(unsupportedRecord.TryGetProperty("stderr", out _));
+        Assert.Equal(
+            "batch_command_not_allowed",
+            unsupportedRecord.GetProperty("error").GetProperty("category").GetString());
 
         var summary = summaryDocument.RootElement;
         Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
@@ -1244,8 +1250,11 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
         Assert.Equal("error", unsupportedRecord.GetProperty("status").GetString());
         Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
-        Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
-        Assert.Contains("batch only supports query and read-only discovery commands", unsupportedRecord.GetProperty("stderr").GetString());
+        Assert.False(unsupportedRecord.TryGetProperty("stdout", out _));
+        Assert.False(unsupportedRecord.TryGetProperty("stderr", out _));
+        Assert.Equal(
+            "batch_command_not_allowed",
+            unsupportedRecord.GetProperty("error").GetProperty("category").GetString());
 
         var summary = summaryDocument.RootElement;
         Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
@@ -1388,10 +1397,11 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("error", excerptRecord.GetProperty("status").GetString());
         Assert.Equal("excerpt", excerptRecord.GetProperty("command").GetString());
         Assert.Equal(CommandExitCodes.InvalidArgument, excerptRecord.GetProperty("exit_code").GetInt32());
-        Assert.DoesNotContain("database", excerptRecord.GetProperty("stderr").GetString()!, StringComparison.OrdinalIgnoreCase);
+        Assert.False(excerptRecord.TryGetProperty("stderr", out _));
         var error = excerptRecord.GetProperty("error");
         Assert.Contains("stdout exceeded", error.GetProperty("message").GetString());
         Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+        Assert.Equal("batch_child_output_limit", error.GetProperty("category").GetString());
         Assert.Equal(JsonEnvelopeWrapper.MaxCapturedOutputChars, error.GetProperty("max_chars").GetInt32());
         Assert.Equal("stdout", error.GetProperty("stream").GetString());
         Assert.Equal("command", error.GetProperty("scope").GetString());
