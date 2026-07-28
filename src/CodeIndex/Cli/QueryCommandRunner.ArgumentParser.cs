@@ -91,6 +91,7 @@ public static partial class QueryCommandRunner
         private bool dbPathExplicit;
         private bool readOnly;
         private bool dryRun;
+        private bool showPaths;
         private bool checkWorkspace;
         private bool statusCheckExplicit;
         private TimeSpan? staleAfter;
@@ -375,6 +376,7 @@ public static partial class QueryCommandRunner
                 DbPathExplicit = dbPathExplicit,
                 ReadOnly = readOnly,
                 DryRun = dryRun,
+                ShowPaths = showPaths,
                 DataDir = dbResolution.DataDir,
                 DataDirSource = dbResolution.DataDirSource,
                 Json = json ?? jsonDefault,

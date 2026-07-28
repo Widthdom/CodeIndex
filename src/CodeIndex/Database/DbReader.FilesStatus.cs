@@ -1998,12 +1998,64 @@ public partial class DbReader
         var freshness = GetFreshnessHint();
         var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
         var indexedHeadTimestamp = TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey);
+        // files_resource_generation_* triggers advance this persisted counter inside the
+        // same transaction as every indexed-file insert/update/delete. Unlike indexed_at,
+        // it cannot collapse multiple committed indexing batches into the same second.
+        // files_resource_generation_* trigger は indexed-file の insert/update/delete と
+        // 同じ transaction 内でこの永続 counter を進めるため、同一秒内の複数 commit
+        // batch が indexed_at 上で同一 generation に潰れることを防ぐ。
+        var committedWriteGeneration =
+            TryGetMetaStringInternal(DbContext.ResourceListGenerationMetaKey);
         var indexedAt = freshness.IndexedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
         var stableAt = indexedHeadTimestamp ?? indexedAt;
         var identity = string.Create(
             CultureInfo.InvariantCulture,
-            $"{indexedHeadSha ?? "no-indexed-head"}\n{indexedHeadTimestamp ?? "no-indexed-head-timestamp"}\n{indexedAt ?? "no-indexed-at"}\n{freshness.FileCount}");
+            $"{indexedHeadSha ?? "no-indexed-head"}\n"
+            + $"{indexedHeadTimestamp ?? "no-indexed-head-timestamp"}\n"
+            + $"{indexedAt ?? "no-indexed-at"}\n"
+            + $"{freshness.FileCount}\n"
+            + $"{committedWriteGeneration ?? "no-committed-write-generation"}");
         return (identity, stableAt);
+    }
+
+    internal string GetFoldPaginationGenerationIdentity()
+    {
+        var userVersion = ExecuteScalar("PRAGMA user_version");
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"stored-fold-ready-bit:{userVersion & DbContext.FoldReadyFlag}\n"
+            + $"stored-fold-version:{TryGetMetaStringInternal("fold_key_version") ?? "no-fold-key-version"}\n"
+            + $"stored-fold-fingerprint:{TryGetMetaStringInternal("fold_key_fingerprint") ?? "no-fold-key-fingerprint"}\n"
+            + $"effective-fold-ready:{(_foldReady ? "1" : "0")}\n"
+            + $"runtime-fold-version:{NameFold.Version}\n"
+            + $"runtime-fold-fingerprint:{NameFold.Fingerprint()}\n"
+            + $"fold-backfill-pending:{TryGetMetaStringInternal(DbWriter.FoldBackfillGraphRefreshPendingMetaKey) ?? "no-fold-backfill-pending"}");
+    }
+
+    internal string GetIssuePaginationGenerationIdentity()
+    {
+        var userVersion = ExecuteScalar("PRAGMA user_version");
+        var issuesDataCurrent = _hasIssuesTable
+            && (userVersion & DbContext.IssuesReadyFlag) != 0;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"stored-issues-ready-bit:{userVersion & DbContext.IssuesReadyFlag}\n"
+            + $"issues-table-available:{(_hasIssuesPhysicalTable ? "1" : "0")}\n"
+            + $"effective-issues-ready:{(issuesDataCurrent ? "1" : "0")}");
+    }
+
+    /// <summary>
+    /// Re-check issue readiness after the caller has established its read snapshot.
+    /// The constructor's cached readiness remains a conservative prerequisite so a reader
+    /// opened while issues were degraded cannot promote itself without being reopened.
+    /// 呼び出し側が read snapshot を確立した後で issue readiness を再確認する。
+    /// degraded 時に開いた reader は再オープンなしに昇格させない。
+    /// </summary>
+    internal bool IsIssueDataCurrentInSnapshot()
+    {
+        var userVersion = ExecuteScalar("PRAGMA user_version");
+        return _hasIssuesTable
+            && (userVersion & DbContext.IssuesReadyFlag) != 0;
     }
 
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()

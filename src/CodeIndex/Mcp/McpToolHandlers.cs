@@ -1183,15 +1183,68 @@ public partial class McpServer
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
         var pathPatterns = ReadScopedPathList(args);
-
-        return WithDbReader(id, args, reader =>
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var rawCursor = args?["cursor"]?.GetValue<string>();
+        if (countOnly && rawCursor is not null)
+            return CreateToolErrorResponse(id, "cursor is not supported when validate uses countOnly or format=count.");
+        McpQueryCursor? cursor = null;
+        if (rawCursor is not null && !TryParseMcpQueryCursor(rawCursor, out cursor))
         {
-            var issues = reader.GetIssues(
-                kind,
-                pathPatterns,
-                limit: countOnly ? null : FetchLimitForEnvelope(limit),
-                severity: severity);
-            var truncated = !countOnly && TrimToRequestedLimit(issues, limit);
+            return CreateMcpCursorError(
+                id,
+                "validate",
+                "cursor_malformed",
+                "cursor must be an opaque response:v2 next_cursor returned by validate.",
+                stale: false);
+        }
+
+        return WithDbReader(id, args, reader => reader.RunInReadSnapshot(() =>
+        {
+            var queryFingerprint = BuildMcpQueryFingerprint(
+                "validate",
+                limit,
+                format,
+                new Dictionary<string, string?>
+                {
+                    ["kind"] = kind,
+                    ["severity"] = severity,
+                    ["exclude-tests"] = excludeTests ? "true" : "false",
+                },
+                ("path", pathPatterns, PreserveOrder: false),
+                ("exclude-path", excludePaths, PreserveOrder: false));
+            var generation = BuildMcpGenerationFingerprint(reader, includeIssueState: true);
+            var issuesTableAvailable = reader._hasIssuesPhysicalTable;
+            var issuesDataCurrent = reader.IsIssueDataCurrentInSnapshot();
+            var total = issuesDataCurrent
+                ? reader.CountIssues(
+                    kind,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests,
+                    severity)
+                : 0;
+            if (ValidateMcpQueryCursor(
+                    id,
+                    "validate",
+                    cursor,
+                    queryFingerprint,
+                    generation.Fingerprint,
+                    total) is JsonObject cursorError)
+            {
+                return cursorError;
+            }
+            var offset = cursor?.Offset ?? 0;
+            var issues = issuesDataCurrent
+                ? reader.GetIssues(
+                    kind,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests,
+                    limit: countOnly ? null : limit,
+                    severity: severity,
+                    offset: offset)
+                : [];
             QueryCommandRunner.AnnotateValidateIssues(issues);
             var pathFilterArray = new JsonArray();
             if (pathPatterns is not null)
@@ -1199,23 +1252,31 @@ public partial class McpServer
                 foreach (var path in pathPatterns)
                     pathFilterArray.Add(path);
             }
+            var issueSummary = QueryCommandRunner.BuildValidateIssueSummary(issues);
+            issueSummary["authoritative"] = issuesDataCurrent;
+            if (!issuesDataCurrent)
+                issueSummary["actionability"] = "unknown";
             var payload = new JsonObject
             {
-                ["count"] = issues.Count,
-                ["truncated"] = truncated,
-                ["more_available"] = truncated,
+                ["count"] = countOnly ? total : issues.Count,
                 ["filters"] = new JsonObject
                 {
                     ["kind"] = kind,
                     ["severity"] = severity,
                     ["path"] = pathFilterArray,
+                    ["exclude_paths"] = JsonSerializer.SerializeToNode(excludePaths),
+                    ["exclude_tests"] = excludeTests,
                 },
-                ["summary"] = QueryCommandRunner.BuildValidateIssueSummary(issues),
+                ["summary"] = issueSummary,
                 ["top_files"] = BuildTopFileHistogram(issues, issue => issue.Path),
+                ["issues_table_available"] = issuesTableAvailable,
+                ["file_issues_data_current"] = issuesDataCurrent,
             };
             if (countOnly)
             {
                 payload["format"] = "count";
+                payload["truncated"] = false;
+                payload["more_available"] = false;
             }
             else if (format == "compact")
             {
@@ -1226,12 +1287,30 @@ public partial class McpServer
             {
                 payload["issues"] = JsonSerializer.SerializeToNode(issues, _jsonOptions);
             }
-            var summary = issues.Count > 0
-                ? $"Found {issues.Count} encoding issue(s)."
-                : "No encoding issues found.";
+            if (!countOnly)
+            {
+                AddMcpPaginationEnvelope(
+                    payload,
+                    total,
+                    issues.Count,
+                    offset,
+                    limit,
+                    queryFingerprint,
+                    generation,
+                    totalCountAuthoritative: issuesDataCurrent);
+            }
+            var summary = !issuesDataCurrent
+                ? issuesTableAvailable
+                    ? "Validation issue data is not current; results are non-authoritative."
+                    : "Validation issue data is unavailable; results are non-authoritative."
+                : issues.Count > 0
+                    ? $"Found {issues.Count} encoding issue(s)."
+                    : total > 0
+                        ? "No more encoding issues found."
+                        : "No encoding issues found.";
             adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
-        });
+        }));
     }
 
     private static JsonArray BuildCompactValidateIssues(IEnumerable<FileIssue> issues)

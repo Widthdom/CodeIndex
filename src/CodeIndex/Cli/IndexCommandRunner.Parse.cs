@@ -46,6 +46,7 @@ public static partial class IndexCommandRunner
         bool yes = false;
         bool watch = false;
         bool optimizeOnly = false;
+        bool showPaths = false;
         bool symbolsOnly = false;
         bool memoryTrace = false;
         int? watchDebounceMs = null;
@@ -140,6 +141,9 @@ public static partial class IndexCommandRunner
                     break;
                 case "--optimize":
                     optimizeOnly = true;
+                    break;
+                case "--show-paths":
+                    showPaths = true;
                     break;
                 case "--symbols-only":
                     symbolsOnly = true;
@@ -321,6 +325,8 @@ public static partial class IndexCommandRunner
             var themes = new[] { "--sushi", "--coffee", "--ramen", "--wine", "--beer", "--matcha", "--whisky" };
             easterEgg = themes[Random.Shared.Next(themes.Length)];
         }
+        if (showPaths && !optimizeOnly)
+            parseError ??= "--show-paths is only valid with `cdidx index <projectPath> --optimize`.";
 
         return new IndexCommandOptions
         {
@@ -352,6 +358,7 @@ public static partial class IndexCommandRunner
             Yes = yes,
             Watch = watch,
             OptimizeOnly = optimizeOnly,
+            ShowPaths = showPaths,
             SymbolsOnly = symbolsOnly,
             MemoryTrace = memoryTrace,
             WatchDebounceMs = watchDebounceMs,

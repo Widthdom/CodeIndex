@@ -104,6 +104,33 @@ public class McpToolContractTests
     }
 
     [Fact]
+    public void ToolsList_HighVolumeDiscoveryCursorsHaveSharedArgumentContract_Issue4853()
+    {
+        var advertisedSchemas = GetAdvertisedToolSchemas();
+        foreach (var toolName in new[] { "symbols", "files", "validate" })
+        {
+            var properties = advertisedSchemas[toolName];
+            Assert.True(properties.ContainsKey("cursor"));
+            Assert.Contains("cursor", GetAllowedToolArguments(toolName));
+            Assert.Equal("string", ExpectedTypeFromSchema(properties["cursor"]));
+            Assert.Equal((true, "string"), TryGetExpectedJsonType(toolName, "cursor"));
+            Assert.Equal(
+                McpServer.MaxMcpQueryCursorCharacters,
+                properties["cursor"]["maxLength"]!.GetValue<int>());
+        }
+
+        var validateDescription = GetAdvertisedTools()["validate"]["description"]!.GetValue<string>();
+        Assert.Contains(
+            "authoritative only while `file_issues_data_current` is true",
+            validateDescription,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`file_issues_data_current` が true の間だけ authoritative",
+            validateDescription,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolsList_DepsArgumentsHaveSharedArgumentContract_Issue3196()
     {
         var depsProperties = GetAdvertisedToolSchemas()["deps"];
@@ -303,7 +330,7 @@ public class McpToolContractTests
         var advertisedSchemas = GetAdvertisedToolSchemas();
 
         AssertToolArgumentsExactly(advertisedSchemas, "outline", ["path"]);
-        AssertToolArgumentsExactly(advertisedSchemas, "validate", ["kind", "severity", "limit", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution"]);
+        AssertToolArgumentsExactly(advertisedSchemas, "validate", ["kind", "severity", "limit", "cursor", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution"]);
 
         AssertNoopArgumentsAbsent(advertisedSchemas, "outline", ["limit", "includeImports", "maxLineWidth", "lang"]);
         AssertNoopArgumentsAbsent(advertisedSchemas, "validate", ["includeImports", "maxLineWidth", "lang"]);
