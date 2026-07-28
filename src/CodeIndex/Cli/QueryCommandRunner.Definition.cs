@@ -215,7 +215,7 @@ public static partial class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
-            ApplyBodyRecoveryCommands(results, options.DbPath);
+            ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
             if (options.Json)
             {
                 if (TryWriteFormattedLocations(

@@ -4566,15 +4566,18 @@ public partial class McpServerTests
         Assert.Equal(1, recovery["startLine"]!.GetValue<int>());
         Assert.Equal(1, recovery["endLine"]!.GetValue<int>());
         Assert.Equal(
-            ["cdidx", "excerpt", "dist/data.txt", "--db", Path.GetFullPath(_dbPath), "--start", "1", "--end", "1", "--max-line-width", "0", "--json"],
+            ["cdidx", "excerpt", "dist/data.txt", "--db", DiagnosticSanitizer.ForPath(_dbPath), "--start", "1", "--end", "1", "--max-line-width", "0", "--json"],
             recovery["argv"]!.AsArray().Select(argument => argument!.GetValue<string>()).ToArray());
         Assert.Equal(OperatingSystem.IsWindows() ? "powershell" : "posix-sh", recovery["commandShell"]!.GetValue<string>());
         Assert.True(recovery["commandDisplayOnly"]!.GetValue<bool>());
         var recoveryCommand = recovery["command"]!.GetValue<string>();
         Assert.Contains("cdidx excerpt dist/data.txt", recoveryCommand);
         Assert.Contains("--db", recoveryCommand);
-        Assert.Contains(_dbPath, recoveryCommand);
+        Assert.DoesNotContain(_dbPath, recoveryCommand);
+        Assert.Contains(DiagnosticSanitizer.ForPath(_dbPath), recoveryCommand);
         Assert.Contains("--start 1 --end 1 --max-line-width 0 --json", recoveryCommand);
+        Assert.True(recovery["pathsRedacted"]!.GetValue<bool>());
+        Assert.True(recovery["requiresLocalPathSubstitution"]!.GetValue<bool>());
     }
 
     [Fact]

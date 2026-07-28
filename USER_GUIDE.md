@@ -177,6 +177,10 @@ The generated scripts complete subcommands, flags, and common flag values.
 `--lang` suggests supported languages, `--kind` suggests symbol/reference kinds,
 and path-like options such as `--db`, `--path`, and `--output` use shell file
 completion.
+Command-specific `--format` values, search origin filters, and `--result-kind`
+values come from the same registry as command help and runtime validation. For
+example, audit completion includes `sarif`, and search completion includes
+`schema_description` and `unknown`.
 
 Install the script in the startup file or completion directory for your shell:
 
@@ -303,7 +307,9 @@ the same filtered file set.
 
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
-Run `cdidx --help` for the full syntax line for every command. For focused help,
+Run `cdidx --help-all` for the full syntax line for every command and
+`cdidx --help-flags` for global, safety/scope, index/update, and shared query
+options. For focused help,
 `cdidx help <command> [subcommand]` is equivalent to the existing
 `cdidx <command> [subcommand] --help` form and never executes that command.
 Known public command targets and supported command or nested aliases exit `0`;
@@ -507,18 +513,34 @@ use the sibling project directory; other database paths fall back to the process
 current directory. `--dry-run` and its `--check` alias also compare an existing
 destination DB with the validated archive without replacing it. JSON
 `destination_delta.comparison` reports schema and count deltas plus bounded
-file, symbol, reference-edge, chunk, and metadata samples. Use
-`--limit <n<=10000>` and `--offset <n>` to page those samples. If the destination
-does not exist or cannot be read, `destination_delta` reports that state instead
-of claiming a comparison.
+file, symbol, reference-edge, chunk, and metadata records. Text fields in those
+records are represented by named SHA-256 and UTF-8 byte-length metadata rather
+than source content or paths. Use `--limit <n<=10000>` and `--offset <n>` to
+page those records. If the destination does not exist or cannot be read,
+`destination_delta` reports that state instead of claiming a comparison.
 
 Use `cdidx diff <db1> <db2> --detailed --json` to verify the restored index.
 Database identity is based on semantic index content: reference-line links are
 compared by their indexed path, line, and context rather than SQLite surrogate
 row IDs, so equivalent databases remain identical after rows are rehydrated.
-Detailed JSON also includes `references_only_in_left/right` and
-`chunks_only_in_left/right`. `--limit` bounds each difference family and
-`--offset` selects the page; `has_more` and `next_offset` indicate continuation.
+Detailed JSON returns one deterministic `records` sequence. Each record names
+its `area` and `side`, carries a stable `identity_sha256`, and exposes named
+`fields` instead of an opaque encoded row. By default, text fields and database
+paths are redacted to SHA-256 and UTF-8 byte-length metadata; source text is
+returned only when `--include-content` is explicitly combined with
+`--detailed --json`.
+
+Detailed JSON is capped at 1 MiB by default. Every JSON mode accepts
+`--max-json-bytes <n>` (4096 through 16777216) for a caller-controlled
+whole-output UTF-8 budget. In detailed mode, CodeIndex stops only at complete
+record boundaries, so the result remains valid JSON. `total_count`, `returned_count`,
+`omitted_count`, `truncated`, and `truncation_reason` describe the page.
+`--limit` bounds the unified record page, `--offset` remains available for
+direct paging, and `next_cursor` plus `replay.next_page_arguments` provide the
+preferred deterministic continuation contract. Reuse the same database
+arguments and emitted replay flags to resume. Cursors bind the complete
+deterministic difference sequence as well as the database arguments and content
+policy; if either database changes, restart without `--cursor`.
 
 ## Flag compatibility and migrations
 
@@ -3425,6 +3447,9 @@ read-write で mount してください。read-only query container では、fre
 生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
 `--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
 `--path`、`--output` など path 系 option は shell の file completion を使います。
+command 固有の `--format` 値、search origin filter、`--result-kind` 値は command
+help と runtime validation と同じ registry から生成されます。たとえば audit の補完には
+`sarif`、search の補完には `schema_description` と `unknown` が含まれます。
 
 利用中の shell の startup file または completion directory にスクリプトを
 インストールしてください。
@@ -3539,8 +3564,10 @@ cdidx index . --quiet
 filter 済み file 集合を表します。
 
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
-release changelog を source of truth とします。完全な syntax line は `cdidx --help`
-を参照してください。個別の help は `cdidx help <command> [subcommand]` を使え、既存の
+release changelog を source of truth とします。全 command の完全な syntax line は
+`cdidx --help-all`、global、safety / scope、index / update、共有 query option は
+`cdidx --help-flags` を参照してください。個別の help は
+`cdidx help <command> [subcommand]` を使え、既存の
 `cdidx <command> [subcommand] --help` と同じ内容を command を実行せずに表示します。
 既知の公開 command target と対応する command / nested alias は終了コード `0` を返し、
 内部 usage key は help target として受理しません。target の欠落・未検出は bounded な
@@ -3733,17 +3760,33 @@ SQLite file が CodeIndex DB であることを検証してから destination da
 それ以外の database path では process current directory に fallback します。
 `--dry-run` と alias の `--check` は置換せず、既存 destination DB と検証済み archive を
 比較します。JSON の `destination_delta.comparison` には schema / count delta と、
-file、symbol、reference edge、chunk、metadata の bounded sample が含まれます。
-sample の paging には `--limit <n<=10000>` と `--offset <n>` を使います。destination が
-存在しない、または読み取れない場合は、比較済みとせずその状態を `destination_delta` に返します。
+file、symbol、reference edge、chunk、metadata の bounded record が含まれます。
+これらの record の text field は source content や path そのものではなく、名前付きの
+SHA-256 と UTF-8 byte length metadata として表現されます。record の paging には
+`--limit <n<=10000>` と `--offset <n>` を使います。destination が存在しない、または
+読み取れない場合は、比較済みとせずその状態を `destination_delta` に返します。
 
 復元した index の確認には `cdidx diff <db1> <db2> --detailed --json` を使います。
 database の同一性は semantic index content に基づきます。reference-line link は SQLite の
 surrogate row ID ではなく indexed path、line、context で比較されるため、row が再構築されても
-意味的に同等な database は identical のままです。詳細 JSON には
-`references_only_in_left/right` と `chunks_only_in_left/right` も含まれます。
-`--limit` は difference family ごとの件数を制限し、`--offset` は page を選択します。
-続きがある場合は `has_more` と `next_offset` を返します。
+意味的に同等な database は identical のままです。詳細 JSON は deterministic な単一の
+`records` sequence を返します。各 record は `area` と `side` を明示し、stable な
+`identity_sha256` と、opaque な encoded row ではなく名前付きの `fields` を持ちます。
+既定では text field と database path を SHA-256 と UTF-8 byte length metadata に
+redact します。source text を返すには `--detailed --json` とともに
+`--include-content` を明示的に指定してください。
+
+詳細 JSON は既定で 1 MiB に制限されます。すべての JSON mode で、caller が output
+全体の UTF-8 budget を指定するための `--max-json-bytes <n>`（4096 以上 16777216 以下）
+を使えます。詳細 mode では CodeIndex が complete record の境界でのみ停止するため、
+結果は常に valid JSON です。
+page の状態は `total_count`、`returned_count`、`omitted_count`、`truncated`、
+`truncation_reason` で確認できます。`--limit` は unified record page を制限し、
+direct paging 用の `--offset` も引き続き使えます。deterministic な続きの取得には
+`next_cursor` と `replay.next_page_arguments` を使うことを推奨します。同じ database
+arguments と、出力された replay flags を再利用して再開してください。cursor は database
+arguments と content policy に加えて deterministic な差分 sequence 全体に束縛されます。
+いずれかの database が変更された場合は `--cursor` なしで最初からやり直してください。
 
 ## フラグ互換性と移行
 
@@ -4260,6 +4303,9 @@ Bash、Zsh、Fish、PowerShell です。生成されたスクリプトは subcom
 よく使う flag value を補完し、`--lang` は対応言語、`--kind` は symbol/reference
 kind、`--db` / `--path` / `--output` のような path 系 option は shell の file
 completion を使います。
+command 固有の `--format` 値、search origin filter、`--result-kind` 値は command
+help と runtime validation と同じ registry から生成されます。たとえば audit の補完には
+`sarif`、search の補完には `schema_description` と `unknown` が含まれます。
 
 使っている shell の startup file または completion directory に保存してください:
 

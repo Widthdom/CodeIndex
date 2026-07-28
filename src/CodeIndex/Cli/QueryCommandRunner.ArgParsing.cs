@@ -430,11 +430,12 @@ public static partial class QueryCommandRunner
     {
         if (!ValidateCsvBounds(optionName, rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
             return;
+        var acceptedValues = CliFlagSchema.GetCanonicalValuesForCommand("search", optionName);
         foreach (var rawOrigin in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (!TryNormalizeSearchMatchOrigin(rawOrigin, out var origin))
+            if (!CliFlagSchema.TryNormalizeOptionValue("search", optionName, rawOrigin, out var origin))
             {
-                addParseError($"Error: unsupported {optionName} value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use code, comment, string_literal, regex_literal, help_text, schema_description, or unknown.");
+                addParseError($"Error: unsupported {optionName} value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use {FormatOptionValueList(acceptedValues)}.");
                 continue;
             }
             if (!origins.Contains(origin, StringComparer.Ordinal))
@@ -450,50 +451,16 @@ public static partial class QueryCommandRunner
             excludeOrigins.Add(origin);
     }
 
-    private static bool TryNormalizeSearchMatchOrigin(string rawOrigin, out string origin)
-    {
-        switch (rawOrigin.ToLowerInvariant().Replace("-", "_"))
-        {
-            case SearchMatchClassifier.Code:
-                origin = SearchMatchClassifier.Code;
-                return true;
-            case SearchMatchClassifier.Comment:
-                origin = SearchMatchClassifier.Comment;
-                return true;
-            case "string":
-            case SearchMatchClassifier.StringLiteral:
-                origin = SearchMatchClassifier.StringLiteral;
-                return true;
-            case "regex":
-            case SearchMatchClassifier.RegexLiteral:
-                origin = SearchMatchClassifier.RegexLiteral;
-                return true;
-            case "help":
-            case SearchMatchClassifier.HelpText:
-                origin = SearchMatchClassifier.HelpText;
-                return true;
-            case "schema":
-            case SearchMatchClassifier.SchemaDescription:
-                origin = SearchMatchClassifier.SchemaDescription;
-                return true;
-            case SearchMatchClassifier.Unknown:
-                origin = SearchMatchClassifier.Unknown;
-                return true;
-            default:
-                origin = string.Empty;
-                return false;
-        }
-    }
-
     private static void AddSearchResultKinds(string rawValue, List<string> resultKinds, Action<string> addParseError)
     {
         if (!ValidateCsvBounds("--result-kind", rawValue, MaxSearchProjectionFieldsCsvLength, MaxSearchProjectionFieldsCsvEntries, addParseError))
             return;
+        var acceptedValues = CliFlagSchema.GetCanonicalValuesForCommand("search", "--result-kind");
         foreach (var rawKind in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (!TryNormalizeSearchResultKind(rawKind, out var kind))
+            if (!CliFlagSchema.TryNormalizeOptionValue("search", "--result-kind", rawKind, out var kind))
             {
-                addParseError($"Error: unsupported --result-kind value '{ConsoleUi.FormatBoundedValue(rawKind)}'. Use call_site, declaration, identifier, code, comment, string_literal, regex_literal, help_text, schema_description, or unknown.");
+                addParseError($"Error: unsupported --result-kind value '{ConsoleUi.FormatBoundedValue(rawKind)}'. Use {FormatOptionValueList(acceptedValues)}.");
                 continue;
             }
             if (!resultKinds.Contains(kind, StringComparer.Ordinal))
@@ -501,53 +468,13 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static bool TryNormalizeSearchResultKind(string rawKind, out string kind)
-    {
-        switch (rawKind.ToLowerInvariant().Replace("-", "_"))
+    private static string FormatOptionValueList(IReadOnlyList<string> values) =>
+        values.Count switch
         {
-            case "call":
-            case "callsite":
-            case "call_site":
-                kind = "call_site";
-                return true;
-            case "decl":
-            case "declaration":
-                kind = "declaration";
-                return true;
-            case "identifier":
-            case "ident":
-                kind = "identifier";
-                return true;
-            case SearchMatchClassifier.Code:
-                kind = SearchMatchClassifier.Code;
-                return true;
-            case SearchMatchClassifier.Comment:
-                kind = SearchMatchClassifier.Comment;
-                return true;
-            case "string":
-            case SearchMatchClassifier.StringLiteral:
-                kind = SearchMatchClassifier.StringLiteral;
-                return true;
-            case "regex":
-            case SearchMatchClassifier.RegexLiteral:
-                kind = SearchMatchClassifier.RegexLiteral;
-                return true;
-            case "help":
-            case SearchMatchClassifier.HelpText:
-                kind = SearchMatchClassifier.HelpText;
-                return true;
-            case "schema":
-            case SearchMatchClassifier.SchemaDescription:
-                kind = SearchMatchClassifier.SchemaDescription;
-                return true;
-            case SearchMatchClassifier.Unknown:
-                kind = SearchMatchClassifier.Unknown;
-                return true;
-            default:
-                kind = string.Empty;
-                return false;
-        }
-    }
+            0 => "a documented value",
+            1 => values[0],
+            _ => $"{string.Join(", ", values.Take(values.Count - 1))}, or {values[values.Count - 1]}",
+        };
 
     private static bool ValidateCsvBounds(
         string optionName,
