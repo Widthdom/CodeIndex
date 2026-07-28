@@ -108,7 +108,7 @@ internal static class SearchMatchClassifier
         var index = Math.Clamp(column - 1, 0, Math.Max(0, text.Length - 1));
         var normalizedLang = lang?.ToLowerInvariant();
         if (string.Equals(normalizedLang, "csharp", StringComparison.Ordinal))
-            return ClassifyCSharp(path, text, index);
+            return ClassifyCSharp(path, line, text, index, lineContext);
 
         if (string.Equals(normalizedLang, "markdown", StringComparison.Ordinal))
         {
@@ -136,7 +136,12 @@ internal static class SearchMatchClassifier
         return Code;
     }
 
-    private static string ClassifyCSharp(string path, string text, int index)
+    private static string ClassifyCSharp(
+        string path,
+        int line,
+        string text,
+        int index,
+        IReadOnlyDictionary<int, string>? lineContext)
     {
         var trimmed = text.TrimStart();
         if (trimmed.StartsWith("///", StringComparison.Ordinal) ||
@@ -166,10 +171,10 @@ internal static class SearchMatchClassifier
             {
                 if (index >= contentStart && index <= contentEnd)
                 {
+                    if (LooksLikeSchemaDescription(path, line, text, contentStart, lineContext))
+                        return SchemaDescription;
                     if (LooksLikeRegexString(text))
                         return RegexLiteral;
-                    if (LooksLikeSchemaDescription(path, text, contentStart))
-                        return SchemaDescription;
                     return LooksLikeHelpText(path, text) ? HelpText : StringLiteral;
                 }
 
@@ -265,10 +270,19 @@ internal static class SearchMatchClassifier
                text.Contains("--", StringComparison.Ordinal);
     }
 
-    private static bool LooksLikeSchemaDescription(string path, string text, int contentStart)
+    private static bool LooksLikeSchemaDescription(
+        string path,
+        int line,
+        string text,
+        int contentStart,
+        IReadOnlyDictionary<int, string>? lineContext)
     {
-        if (!string.Equals(path.Replace('\\', '/'), "src/CodeIndex/Mcp/McpToolDefinitions.cs", StringComparison.Ordinal))
+        var normalizedPath = path.Replace('\\', '/');
+        if (normalizedPath is not "src/CodeIndex/Mcp/McpToolDefinitions.cs"
+            and not "src/CodeIndex/Mcp/McpToolCatalog.cs")
+        {
             return false;
+        }
 
         const string descriptionProperty = "[\"description\"]";
         var propertyIndex = text.IndexOf(descriptionProperty, StringComparison.Ordinal);
@@ -279,14 +293,111 @@ internal static class SearchMatchClassifier
             return valueQuoteIndex >= 0 && contentStart == valueQuoteIndex + 1;
         }
 
-        const string appendCall = "AppendConstraintDescription(";
-        var callIndex = text.IndexOf(appendCall, StringComparison.Ordinal);
+        return IsDescriptionBuilderArgument(line, text, contentStart, lineContext);
+    }
+
+    private static bool IsDescriptionBuilderArgument(
+        int line,
+        string text,
+        int contentStart,
+        IReadOnlyDictionary<int, string>? lineContext)
+    {
+        var context = text;
+        var targetIndex = contentStart;
+        if (lineContext is not null)
+        {
+            var builder = new System.Text.StringBuilder();
+            for (var candidateLine = Math.Max(1, line - 64); candidateLine <= line; candidateLine++)
+            {
+                var candidateText = candidateLine == line
+                    ? text
+                    : lineContext.TryGetValue(candidateLine, out var value) ? value : string.Empty;
+                if (candidateLine == line)
+                    targetIndex = builder.Length + contentStart;
+                builder.AppendLine(candidateText);
+            }
+            context = builder.ToString();
+        }
+
+        return IsInvocationArgument(context, targetIndex, "CreateToolDefinition(", expectedArgumentIndex: 1) ||
+               IsInvocationArgument(context, targetIndex, "StringOrArraySchema(", expectedArgumentIndex: 0) ||
+               IsInvocationArgument(context, targetIndex, "AppendConstraintDescription(", expectedArgumentIndex: 1);
+    }
+
+    private static bool IsInvocationArgument(
+        string text,
+        int targetIndex,
+        string invocation,
+        int expectedArgumentIndex)
+    {
+        var callIndex = text.LastIndexOf(invocation, Math.Min(targetIndex, text.Length - 1), StringComparison.Ordinal);
         if (callIndex < 0)
             return false;
 
-        var commaIndex = text.IndexOf(',', callIndex + appendCall.Length);
-        var argumentQuoteIndex = commaIndex < 0 ? -1 : text.IndexOf('"', commaIndex + 1);
-        return argumentQuoteIndex >= 0 && contentStart == argumentQuoteIndex + 1;
+        var argumentIndex = 0;
+        var parentheses = 0;
+        var brackets = 0;
+        var braces = 0;
+        for (var i = callIndex + invocation.Length; i < targetIndex && i < text.Length; i++)
+        {
+            if (StartsCSharpString(text, i, out var contentStart, out var contentEnd))
+            {
+                if (targetIndex >= contentStart && targetIndex <= contentEnd)
+                    return argumentIndex == expectedArgumentIndex;
+                i = Math.Max(i, contentEnd + 1);
+                continue;
+            }
+
+            if (text[i] == '\'')
+            {
+                i = SkipCharacterLiteral(text, i);
+                continue;
+            }
+
+            switch (text[i])
+            {
+                case '(':
+                    parentheses++;
+                    break;
+                case ')':
+                    if (parentheses == 0 && brackets == 0 && braces == 0)
+                        return false;
+                    parentheses = Math.Max(0, parentheses - 1);
+                    break;
+                case '[':
+                    brackets++;
+                    break;
+                case ']':
+                    brackets = Math.Max(0, brackets - 1);
+                    break;
+                case '{':
+                    braces++;
+                    break;
+                case '}':
+                    braces = Math.Max(0, braces - 1);
+                    break;
+                case ',' when parentheses == 0 && brackets == 0 && braces == 0:
+                    argumentIndex++;
+                    break;
+            }
+        }
+
+        return argumentIndex == expectedArgumentIndex;
+    }
+
+    private static int SkipCharacterLiteral(string text, int quoteIndex)
+    {
+        for (var i = quoteIndex + 1; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+            if (text[i] == '\'')
+                return i;
+        }
+        return text.Length - 1;
     }
 
     private static bool IsInsideGitHubActionsRunBlock(
