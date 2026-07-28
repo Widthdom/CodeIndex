@@ -21,6 +21,7 @@ internal static class SearchAuditRecipes
     private const int MaxExternalRecipesPerFile = 32;
     private const int MaxExternalQueriesPerRecipe = 32;
     private const int MaxExternalNameLength = 80;
+    private const int MaxExternalQueryAliasCount = 16;
     private const int MaxExternalDescriptionLength = 512;
     private const int MaxExternalFalsePositiveGuidanceLength = 512;
     private const int MaxExternalLabelCount = 16;
@@ -3842,6 +3843,8 @@ internal static class SearchAuditRecipes
             AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{name}' has no valid queries and was ignored.");
             return false;
         }
+        if (!TryNormalizeRecipeQuerySelectors(queries, sourceLabel, name, diagnostics))
+            return false;
 
         recipe = new SearchAuditRecipe(name, description, queries)
         {
@@ -3878,6 +3881,24 @@ internal static class SearchAuditRecipes
         }
 
         var labels = ReadLabels(obj, sourceLabel, recipeName, name, diagnostics);
+        var aliases = ReadQuerySelectorAliases(
+            obj,
+            "aliases",
+            "aliases",
+            "aliases",
+            sourceLabel,
+            recipeName,
+            name,
+            diagnostics);
+        var deprecatedAliases = ReadQuerySelectorAliases(
+            obj,
+            "deprecatedAliases",
+            "deprecated_aliases",
+            "deprecated aliases",
+            sourceLabel,
+            recipeName,
+            name,
+            diagnostics);
         var falsePositiveGuidance = TryReadString(obj["falsePositiveGuidance"] ?? obj["false_positive_guidance"], out var guidance)
             && !string.IsNullOrWhiteSpace(guidance)
             ? guidance.Trim()
@@ -3891,6 +3912,8 @@ internal static class SearchAuditRecipes
         query = new SearchAuditRecipeQuery(name, queryText, description, labels, falsePositiveGuidance, exactSubstring)
         {
             Severity = severity,
+            Aliases = aliases,
+            DeprecatedAliases = deprecatedAliases,
             PathPatterns = pathPatterns,
             ExcludePaths = excludePaths
         };
@@ -4077,6 +4100,137 @@ internal static class SearchAuditRecipes
         return labels;
     }
 
+    private static List<string> ReadQuerySelectorAliases(
+        JsonObject obj,
+        string camelCasePropertyName,
+        string snakeCasePropertyName,
+        string fieldDescription,
+        string sourceLabel,
+        string recipeName,
+        string queryName,
+        List<string> diagnostics)
+    {
+        var aliasesNode = obj[camelCasePropertyName] ?? obj[snakeCasePropertyName];
+        if (aliasesNode is null)
+            return [];
+        if (aliasesNode is not JsonArray aliasArray)
+        {
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' {fieldDescription} must be an array.");
+            return [];
+        }
+
+        var aliases = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < aliasArray.Count && i < MaxExternalQueryAliasCount; i++)
+        {
+            if (!TryReadString(aliasArray[i], out var alias) || string.IsNullOrWhiteSpace(alias))
+            {
+                AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' {fieldDescription} item #{i + 1} must be a non-empty string.");
+                continue;
+            }
+
+            alias = alias.Trim();
+            if (alias.Length > MaxExternalNameLength)
+            {
+                AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' {fieldDescription} item #{i + 1} exceeds {MaxExternalNameLength} characters.");
+                continue;
+            }
+            if (!string.Equals(alias, queryName, StringComparison.OrdinalIgnoreCase) && seen.Add(alias))
+                aliases.Add(alias);
+        }
+
+        if (aliasArray.Count > MaxExternalQueryAliasCount)
+            AddDiagnostic(diagnostics, $"{sourceLabel} recipe '{recipeName}' query '{queryName}' has more than {MaxExternalQueryAliasCount} {fieldDescription}; extra entries are ignored.");
+        return aliases;
+    }
+
+    private static bool TryNormalizeRecipeQuerySelectors(
+        IReadOnlyList<SearchAuditRecipeQuery> queries,
+        string sourceLabel,
+        string recipeName,
+        List<string> diagnostics)
+    {
+        var canonicalOwners = new Dictionary<string, SearchAuditRecipeQuery>(StringComparer.OrdinalIgnoreCase);
+        foreach (var query in queries)
+        {
+            if (canonicalOwners.TryAdd(query.Name, query))
+                continue;
+
+            AddDiagnostic(
+                diagnostics,
+                $"{sourceLabel} recipe '{recipeName}' defines duplicate canonical query name '{query.Name}' and was ignored.");
+            return false;
+        }
+
+        var aliasClaims = new Dictionary<string, List<(SearchAuditRecipeQuery Query, bool Deprecated)>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var query in queries)
+        {
+            AddClaims(query, query.Aliases, deprecated: false);
+            AddClaims(query, query.DeprecatedAliases, deprecated: true);
+        }
+
+        foreach (var (selector, claims) in aliasClaims)
+        {
+            if (canonicalOwners.TryGetValue(selector, out var canonicalOwner))
+            {
+                foreach (var claim in claims)
+                    RemoveSelector(claim, selector);
+                AddDiagnostic(
+                    diagnostics,
+                    $"{sourceLabel} recipe '{recipeName}' alias '{selector}' conflicts with canonical query '{canonicalOwner.Name}' and was ignored.");
+                continue;
+            }
+
+            var distinctOwners = claims
+                .Select(claim => claim.Query)
+                .Distinct()
+                .ToList();
+            if (distinctOwners.Count > 1)
+            {
+                foreach (var claim in claims)
+                    RemoveSelector(claim, selector);
+                AddDiagnostic(
+                    diagnostics,
+                    $"{sourceLabel} recipe '{recipeName}' alias '{selector}' is shared by multiple queries and was ignored.");
+                continue;
+            }
+
+            if (claims.Any(claim => !claim.Deprecated) && claims.Any(claim => claim.Deprecated))
+            {
+                foreach (var claim in claims.Where(claim => claim.Deprecated))
+                    RemoveSelector(claim, selector);
+                AddDiagnostic(
+                    diagnostics,
+                    $"{sourceLabel} recipe '{recipeName}' query '{distinctOwners[0].Name}' declares alias '{selector}' as both current and deprecated; the deprecated entry was ignored.");
+            }
+        }
+
+        return true;
+
+        void AddClaims(SearchAuditRecipeQuery query, IEnumerable<string> selectors, bool deprecated)
+        {
+            foreach (var selector in selectors)
+            {
+                if (!aliasClaims.TryGetValue(selector, out var claims))
+                {
+                    claims = [];
+                    aliasClaims.Add(selector, claims);
+                }
+                claims.Add((query, deprecated));
+            }
+        }
+
+        static void RemoveSelector(
+            (SearchAuditRecipeQuery Query, bool Deprecated) claim,
+            string selector)
+        {
+            var target = claim.Deprecated
+                ? claim.Query.DeprecatedAliases
+                : claim.Query.Aliases;
+            target.RemoveAll(value => string.Equals(value, selector, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     private static void AddDiagnostic(List<string> diagnostics, string message)
     {
         if (diagnostics.Count >= MaxRecipeDiagnosticCount)
@@ -4156,6 +4310,8 @@ internal sealed record SearchAuditRecipeQuery(
     bool ExactSubstring = true)
 {
     public string Severity { get; init; } = SearchAuditRecipes.DefaultQuerySeverity;
+    public List<string> Aliases { get; init; } = [];
+    public List<string> DeprecatedAliases { get; init; } = [];
     public List<string> RiskEvidence { get; init; } = [];
     public List<SearchGuardFilter> GuardFilters { get; init; } = [];
     public List<string> RejectFileQueries { get; init; } = [];
@@ -4226,6 +4382,8 @@ internal sealed record SearchRecipeLimitSemanticsJsonResult(
 
 internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("aliases")] List<string> Aliases,
+    [property: JsonPropertyName("deprecated_aliases")] List<string> DeprecatedAliases,
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
