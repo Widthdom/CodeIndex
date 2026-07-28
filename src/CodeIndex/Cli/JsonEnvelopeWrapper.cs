@@ -222,7 +222,8 @@ internal static partial class JsonEnvelopeWrapper
         int exitCode,
         JsonObject? error = null,
         JsonObject? streamTerminal = null,
-        JsonArray? streamControlRecords = null)
+        JsonArray? streamControlRecords = null,
+        ResponseSnapshot? responseSnapshot = null)
     {
         var metadata = new JsonObject
         {
@@ -244,7 +245,9 @@ internal static partial class JsonEnvelopeWrapper
         if (streamControlRecords is { Count: > 0 })
             metadata["stream_control_records"] = streamControlRecords.DeepClone();
 
-        var indexedHead = SafeReadIndexedHead(dbPath, dbPathExplicit);
+        var indexedHead = responseSnapshot.HasValue
+            ? responseSnapshot.Value.IndexedHead
+            : SafeReadIndexedHead(dbPath, dbPathExplicit);
         if (!string.IsNullOrEmpty(indexedHead))
             metadata["indexed_at_head_sha"] = indexedHead;
 
@@ -263,8 +266,7 @@ internal static partial class JsonEnvelopeWrapper
             if (!dbPathExplicit && !File.Exists(LongPath.EnsureWindowsPrefix(resolvedPath)))
                 return null;
             var normalizedPath = DbPathResolver.NormalizeDbPath(resolvedPath);
-            return DbPathResolver.TryReadIndexedHeadSha(normalizedPath)
-                ?? DbPathResolver.TryReadIndexedHeadCommit(normalizedPath);
+            return DbPathResolver.TryReadIndexedHeadForResponse(normalizedPath);
         }
         catch
         {
