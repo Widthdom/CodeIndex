@@ -3669,22 +3669,75 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(recipeName, stderr);
     }
 
-    [Fact]
-    public void RunSearch_UnknownRecipeQuerySuggestsAcrossRecipeGroups_Issue3975()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunSearch_UnknownRecipeQuerySuggestsOnlyFromActiveRecipe_Issue4862(bool json)
     {
         using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
         env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
 
+        var args = new List<string>
+        {
+            "--recipe",
+            "xml-parser-security/xml-readr-settings",
+            "--path",
+            "src folder/**",
+            "--limit",
+            "7",
+        };
+        if (json)
+            args.Add("--json");
+
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-            ["--recipe", "risky-code/raw-sql", "--json"],
+            [.. args],
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("unknown recipe query 'raw-sql' for recipe 'risky-code'", stderr);
-        Assert.Contains("Suggestions across all recipes:", stderr);
-        Assert.Contains("dogfood-risk-patterns/raw-sql-command-text", stderr);
-        Assert.Contains("sqlite-query-policy-surfaces/sqlite-policy-add-with-value", stderr);
+        Assert.Contains("unknown recipe query 'xml-readr-settings' for recipe 'xml-parser-security'", stderr);
+        Assert.Contains("Did you mean: 'xml-reader-settings'?", stderr);
+        Assert.Contains(
+            "cdidx search --recipe xml-parser-security/xml-reader-settings --format compact --limit 7 --path 'src folder/**'",
+            stderr);
+        Assert.DoesNotContain("risky-code/raw-diagnostic-echo", stderr);
+        Assert.DoesNotContain("Suggestions across all recipes", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_RecipeQuerySuggestionHandlesZeroOneAndManyQueries_Issue4862()
+    {
+        static SearchAuditRecipeQuery Query(
+            string name,
+            List<string>? aliases = null,
+            List<string>? deprecatedAliases = null)
+            => new(name, "Needle", "Find a marker.", [], "Review surrounding context.")
+            {
+                Aliases = aliases ?? [],
+                DeprecatedAliases = deprecatedAliases ?? [],
+            };
+
+        var emptyRecipe = new SearchAuditRecipe("empty-recipe", "No queries.", []);
+        var singleRecipe = new SearchAuditRecipe(
+            "single-recipe",
+            "One query.",
+            [Query("canonical-query", ["short-query"], ["renamed-query"])]);
+        var manyRecipe = new SearchAuditRecipe(
+            "many-recipe",
+            "Several queries.",
+            [
+                Query("risk-query-one"),
+                Query("risk-query-two"),
+                Query("risk-query-six"),
+            ]);
+
+        Assert.Empty(QueryCommandRunner.BuildSearchRecipeQuerySuggestions(emptyRecipe, "missing"));
+        Assert.Equal(
+            ["canonical-query"],
+            QueryCommandRunner.BuildSearchRecipeQuerySuggestions(singleRecipe, "renamd-query"));
+        var manySuggestions = QueryCommandRunner.BuildSearchRecipeQuerySuggestions(manyRecipe, "risk-query-x");
+        Assert.Equal(3, manySuggestions.Count);
+        Assert.All(manySuggestions, suggestion => Assert.Contains(manyRecipe.Queries, query => query.Name == suggestion));
     }
 
     [Fact]
@@ -4504,6 +4557,108 @@ public partial class QueryCommandRunnerTests
             var userPathQuery = Assert.Single(userPathDocument.RootElement.GetProperty("queries").EnumerateArray());
             var userPathResult = Assert.Single(userPathQuery.GetProperty("results").EnumerateArray());
             Assert.Equal("docs/public.md", userPathResult.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExternalRecipeAliasesResolveAndSuggestCanonicalActiveQueries_Issue4862()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_aliases_4862");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var quotedDbDirectory = Path.Combine(projectRoot, "db folder");
+            Directory.CreateDirectory(quotedDbDirectory);
+            var quotedDbPath = Path.Combine(quotedDbDirectory, "index.db");
+            File.Copy(dbPath, quotedDbPath);
+            var recipePath = Path.Combine(projectRoot, "query-alias-recipes.json");
+            File.WriteAllText(
+                recipePath,
+                """
+                [
+                  {
+                    "name": "local-selector-audit",
+                    "description": "Exercise active-recipe query aliases.",
+                    "queries": [
+                      {
+                        "name": "current-query",
+                        "aliases": ["short-query"],
+                        "deprecated_aliases": ["old-query"],
+                        "query": "CurrentNeedle",
+                        "description": "Find the current marker."
+                      },
+                      {
+                        "name": "neighbor-query",
+                        "query": "NeighborNeedle",
+                        "description": "Find a neighboring marker."
+                      },
+                      {
+                        "name": "other-query",
+                        "query": "OtherNeedle",
+                        "description": "Find another marker."
+                      }
+                    ]
+                  }
+                ]
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public sealed class App { private const string Value = \"CurrentNeedle\"; }\n");
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, recipePath);
+
+            var (listExitCode, listStdout, listStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--list-recipes", "--json"],
+                _jsonOptions));
+            var (aliasExitCode, aliasStdout, aliasStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "local-selector-audit/short-query", "--db", dbPath, "--json", "--limit", "5"],
+                _jsonOptions));
+            var (deprecatedExitCode, deprecatedStdout, deprecatedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "local-selector-audit", "--include-query", "old-query", "--db", dbPath, "--json", "--limit", "5"],
+                _jsonOptions));
+            var (typoExitCode, typoStdout, typoStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "local-selector-audit/short-qurey", "--db", quotedDbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, listExitCode);
+            Assert.Equal(string.Empty, listStderr);
+            using (var listDocument = ParseJsonOutput(listStdout))
+            {
+                var query = listDocument.RootElement
+                    .GetProperty("recipes")
+                    .EnumerateArray()
+                    .Single(recipe => recipe.GetProperty("name").GetString() == "local-selector-audit")
+                    .GetProperty("queries")
+                    .EnumerateArray()
+                    .Single(item => item.GetProperty("name").GetString() == "current-query");
+                Assert.Equal(["short-query"], query.GetProperty("aliases").EnumerateArray().Select(item => item.GetString()).ToArray());
+                Assert.Equal(["old-query"], query.GetProperty("deprecated_aliases").EnumerateArray().Select(item => item.GetString()).ToArray());
+            }
+
+            Assert.Equal(CommandExitCodes.Success, aliasExitCode);
+            Assert.Equal(string.Empty, aliasStderr);
+            using (var aliasDocument = ParseJsonOutput(aliasStdout))
+                Assert.Equal("current-query", Assert.Single(aliasDocument.RootElement.GetProperty("queries").EnumerateArray()).GetProperty("name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, deprecatedExitCode);
+            Assert.Equal(string.Empty, deprecatedStderr);
+            using (var deprecatedDocument = ParseJsonOutput(deprecatedStdout))
+                Assert.Equal("current-query", Assert.Single(deprecatedDocument.RootElement.GetProperty("queries").EnumerateArray()).GetProperty("name").GetString());
+
+            Assert.Equal(CommandExitCodes.UsageError, typoExitCode);
+            Assert.Equal(string.Empty, typoStdout);
+            Assert.Contains("Did you mean: 'current-query'?", typoStderr);
+            Assert.Contains("--recipe local-selector-audit/current-query", typoStderr);
+            Assert.Contains($"--db '{quotedDbPath}'", typoStderr);
+            Assert.DoesNotContain("short-query --format", typoStderr);
+            Assert.DoesNotContain("risky-code/raw-diagnostic-echo", typoStderr);
         }
         finally
         {

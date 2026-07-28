@@ -231,7 +231,7 @@ public static partial class QueryCommandRunner
     private static bool TryResolveSearchRecipeSelection(
         QueryCommandOptions options,
         out SearchRecipeSelection selection,
-        out string? error)
+        out SearchRecipeSelectionError? error)
     {
         selection = default!;
         error = null;
@@ -243,12 +243,16 @@ public static partial class QueryCommandRunner
         {
             if (slash == 0 || slash == recipeSelector.Length - 1 || slash != recipeSelector.LastIndexOf('/'))
             {
-                error = "--recipe child selection must use recipe/query form.";
+                error = new(
+                    "--recipe child selection must use recipe/query form.",
+                    "Use `cdidx search --recipe <recipe>/<query>`, with exactly one non-empty recipe and query name.");
                 return false;
             }
             if (options.IncludeRecipeQueries.Count > 0 || options.ExcludeRecipeQueries.Count > 0)
             {
-                error = "--recipe recipe/query cannot be combined with --include-query or --exclude-query.";
+                error = new(
+                    "--recipe recipe/query cannot be combined with --include-query or --exclude-query.",
+                    "Use either `--recipe <recipe>/<query>` or a recipe name with `--include-query` / `--exclude-query`.");
                 return false;
             }
 
@@ -259,41 +263,61 @@ public static partial class QueryCommandRunner
         if (!SearchAuditRecipes.TryGet(recipeName, out var recipe))
         {
             var available = string.Join(", ", SearchAuditRecipes.All.Select(r => r.Name));
-            var suggestions = BuildRecipeSelectorSuggestions(recipeSelector);
+            var suggestions = ConsoleUi.FindClosestMatches(recipeName, SearchAuditRecipes.All.Select(candidate => candidate.Name));
             var suggestionText = suggestions.Count > 0
-                ? $" Did you mean: {string.Join(", ", suggestions)}?"
+                ? $" Did you mean: {string.Join(", ", suggestions.Select(candidate => $"'{candidate}'"))}?"
                 : string.Empty;
-            error = $"unknown search recipe '{recipeName}'. Available recipes: {available}.{suggestionText}";
+            var hint = suggestions.Count > 0
+                ? $"Retry with `{BuildSearchRecipeSelectionReplayCommand(suggestions[0], options)}`."
+                : "Run `cdidx search --list-recipes` to choose an available recipe.";
+            error = new(
+                $"unknown search recipe '{recipeName}'. Available recipes: {available}.{suggestionText}",
+                hint);
             return false;
         }
 
-        var queryByName = recipe.Queries.ToDictionary(query => query.Name, StringComparer.OrdinalIgnoreCase);
+        var queryBySelector = BuildRecipeQuerySelectorMap(recipe);
         var availableQueries = string.Join(", ", recipe.Queries.Select(query => query.Name));
-        if (!TryValidateRecipeQuerySelectors(queryByName, availableQueries, recipe.Name, options.IncludeRecipeQueries, "--include-query", out error) ||
-            !TryValidateRecipeQuerySelectors(queryByName, availableQueries, recipe.Name, options.ExcludeRecipeQueries, "--exclude-query", out error))
+        if (!TryValidateRecipeQuerySelectors(
+                queryBySelector,
+                availableQueries,
+                recipe.Name,
+                options.IncludeRecipeQueries,
+                "--include-query",
+                out var invalidSelector,
+                out var selectorError)
+            || !TryValidateRecipeQuerySelectors(
+                queryBySelector,
+                availableQueries,
+                recipe.Name,
+                options.ExcludeRecipeQueries,
+                "--exclude-query",
+                out invalidSelector,
+                out selectorError))
         {
+            error = BuildUnknownRecipeQueryError(recipe, invalidSelector!, selectorError!, options);
             return false;
         }
-        if (directQueryName != null && !queryByName.ContainsKey(directQueryName))
+        if (directQueryName != null && !queryBySelector.ContainsKey(directQueryName))
         {
-            var suggestions = BuildRecipeSelectorSuggestions(directQueryName);
-            var suggestionText = suggestions.Count > 0
-                ? $" Suggestions across all recipes: {string.Join(", ", suggestions)}."
-                : string.Empty;
-            error = $"unknown recipe query '{directQueryName}' for recipe '{recipe.Name}'. Available queries: {availableQueries}.{suggestionText}";
+            error = BuildUnknownRecipeQueryError(
+                recipe,
+                directQueryName,
+                $"unknown recipe query '{directQueryName}' for recipe '{recipe.Name}'. Available queries: {availableQueries}.",
+                options);
             return false;
         }
 
         var selected = new List<SearchAuditRecipeQuery>();
         if (directQueryName != null)
         {
-            selected.Add(queryByName[directQueryName]);
+            selected.Add(queryBySelector[directQueryName]);
         }
         else if (options.IncludeRecipeQueries.Count > 0)
         {
             foreach (var queryName in options.IncludeRecipeQueries)
             {
-                var query = queryByName[queryName];
+                var query = queryBySelector[queryName];
                 if (!selected.Any(existing => string.Equals(existing.Name, query.Name, StringComparison.OrdinalIgnoreCase)))
                     selected.Add(query);
             }
@@ -305,7 +329,9 @@ public static partial class QueryCommandRunner
 
         if (options.ExcludeRecipeQueries.Count > 0)
         {
-            var excludeSet = options.ExcludeRecipeQueries.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var excludeSet = options.ExcludeRecipeQueries
+                .Select(selector => queryBySelector[selector].Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             selected = selected
                 .Where(query => !excludeSet.Contains(query.Name))
                 .ToList();
@@ -313,7 +339,9 @@ public static partial class QueryCommandRunner
 
         if (selected.Count == 0)
         {
-            error = $"recipe query selection for '{recipe.Name}' is empty after applying --include-query/--exclude-query.";
+            error = new(
+                $"recipe query selection for '{recipe.Name}' is empty after applying --include-query/--exclude-query.",
+                $"Retry with `{BuildSearchRecipeSelectionReplayCommand(recipe.Name, options)}` to run the complete active recipe.");
             return false;
         }
 
@@ -322,62 +350,96 @@ public static partial class QueryCommandRunner
     }
 
     private static bool TryValidateRecipeQuerySelectors(
-        IReadOnlyDictionary<string, SearchAuditRecipeQuery> queryByName,
+        IReadOnlyDictionary<string, SearchAuditRecipeQuery> queryBySelector,
         string availableQueries,
         string recipeName,
         IReadOnlyList<string> selectors,
         string optionName,
+        out string? invalidSelector,
         out string? error)
     {
         foreach (var selector in selectors)
         {
-            if (!queryByName.ContainsKey(selector))
+            if (!queryBySelector.ContainsKey(selector))
             {
+                invalidSelector = selector;
                 error = $"unknown recipe query '{selector}' for recipe '{recipeName}' in {optionName}. Available queries: {availableQueries}.";
                 return false;
             }
         }
 
+        invalidSelector = null;
         error = null;
         return true;
     }
 
-    private static List<string> BuildRecipeSelectorSuggestions(string rawSelector)
+    private static Dictionary<string, SearchAuditRecipeQuery> BuildRecipeQuerySelectorMap(SearchAuditRecipe recipe)
     {
-        var tokens = NormalizeDiscoveryTokens(rawSelector);
-        if (tokens.Count == 0)
-            return [];
+        var queryBySelector = new Dictionary<string, SearchAuditRecipeQuery>(StringComparer.OrdinalIgnoreCase);
+        foreach (var query in recipe.Queries)
+            queryBySelector.TryAdd(query.Name, query);
+        foreach (var query in recipe.Queries)
+        {
+            foreach (var alias in query.Aliases.Concat(query.DeprecatedAliases))
+                queryBySelector.TryAdd(alias, query);
+        }
+        return queryBySelector;
+    }
 
-        return SearchAuditRecipes.All
-            .SelectMany(recipe => recipe.Queries.Select(query => new
-            {
-                Selector = $"{recipe.Name}/{query.Name}",
-                Score = ScoreRecipeSelectorSuggestion(tokens, recipe, query),
-            }))
-            .Where(item => item.Score > 0)
-            .OrderByDescending(item => item.Score)
-            .ThenBy(item => item.Selector, StringComparer.Ordinal)
+    private static SearchRecipeSelectionError BuildUnknownRecipeQueryError(
+        SearchAuditRecipe recipe,
+        string rawSelector,
+        string message,
+        QueryCommandOptions options)
+    {
+        var suggestions = BuildSearchRecipeQuerySuggestions(recipe, rawSelector);
+        var suggestionText = suggestions.Count > 0
+            ? $" Did you mean: {string.Join(", ", suggestions.Select(candidate => $"'{candidate}'"))}?"
+            : string.Empty;
+        var replaySelector = suggestions.Count > 0
+            ? $"{recipe.Name}/{suggestions[0]}"
+            : recipe.Name;
+        var hint = recipe.Queries.Count > 0
+            ? $"Retry with `{BuildSearchRecipeSelectionReplayCommand(replaySelector, options)}`."
+            : $"Recipe '{recipe.Name}' has no runnable queries; run `cdidx search --list-recipes` to choose another recipe.";
+        return new(message + suggestionText, hint);
+    }
+
+    internal static IReadOnlyList<string> BuildSearchRecipeQuerySuggestions(
+        SearchAuditRecipe recipe,
+        string rawSelector)
+    {
+        var canonicalBySelector = BuildRecipeQuerySelectorMap(recipe)
+            .ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value.Name,
+                StringComparer.OrdinalIgnoreCase);
+        return ConsoleUi.FindClosestMatches(rawSelector, canonicalBySelector.Keys, maxResults: 12)
+            .Select(selector => canonicalBySelector[selector])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(3)
-            .Select(item => item.Selector)
             .ToList();
     }
 
-    private static int ScoreRecipeSelectorSuggestion(IReadOnlyList<string> tokens, SearchAuditRecipe recipe, SearchAuditRecipeQuery query)
+    private static string BuildSearchRecipeSelectionReplayCommand(string recipeSelector, QueryCommandOptions options)
     {
-        var haystack = NormalizeDiscoveryText(string.Join(' ', BuildRecipeQuerySearchFields(recipe, query)));
-        var score = 0;
-        foreach (var token in tokens)
+        var args = new List<string>
         {
-            if (haystack.Contains(token, StringComparison.Ordinal))
-                score += token == "sql" && haystack.Contains("sqlite", StringComparison.Ordinal) ? 80 : 25;
-        }
-
-        var normalizedSelector = NormalizeDiscoveryText($"{recipe.Name} {query.Name}");
-        var normalizedRaw = string.Join(' ', tokens);
-        if (normalizedSelector.Contains(normalizedRaw, StringComparison.Ordinal))
-            score += 100;
-        return score;
+            "cdidx",
+            "search",
+            "--recipe",
+            recipeSelector,
+            "--format",
+            OutputFormatCompact,
+        };
+        AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
+        AddSearchRecipeCompactReplayOptions(args, options, includeRecipeQuerySelectors: false);
+        return string.Join(" ", args.Select(QuoteReplayShellArg));
     }
+
+    private sealed record SearchRecipeSelectionError(
+        string Message,
+        string Hint);
 
     private static bool SearchRecipeMatchesFilter(SearchAuditRecipe recipe, string filter)
         => DiscoveryFilterMatches(filter,
@@ -401,6 +463,10 @@ public static partial class QueryCommandRunner
         }
 
         yield return query.Name;
+        foreach (var alias in query.Aliases)
+            yield return alias;
+        foreach (var alias in query.DeprecatedAliases)
+            yield return alias;
         yield return query.Query;
         yield return query.Description;
         yield return query.FalsePositiveGuidance;
@@ -481,9 +547,9 @@ public static partial class QueryCommandRunner
         if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
         {
             WriteUsageError(
-                selectionError!,
+                selectionError!.Message,
                 GetUsageLineOrThrow("search"),
-                "Use `cdidx search --recipe risky-code/raw-diagnostic-echo`, or `--include-query` / `--exclude-query` with a recipe name.");
+                selectionError.Hint);
             return CommandExitCodes.UsageError;
         }
         var recipe = selection.Recipe;
@@ -928,12 +994,19 @@ public static partial class QueryCommandRunner
     {
         if (options.DbPathExplicit)
             AddReplayValueOption(args, "--db", options.DbPath);
+        if (string.Equals(options.DataDirSource, DbPathResolver.DataDirSourceFlag, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(options.DataDir))
+            AddReplayValueOption(args, "--data-dir", options.DataDir);
         if (options.SourceOnly)
             args.Add("--source-only");
         else if (options.AuditScopeExplicit)
             AddReplayValueOption(args, "--audit-scope", options.AuditScope);
         if (!string.IsNullOrWhiteSpace(options.Lang))
             AddReplayValueOption(args, "--lang", options.Lang);
+        if (!string.IsNullOrWhiteSpace(options.SolutionFilter))
+            AddReplayValueOption(args, "--solution", options.SolutionFilter);
+        foreach (var projectFilter in options.ProjectFilters)
+            AddReplayValueOption(args, "--project", projectFilter);
         foreach (var pathPattern in options.PathPatterns)
             AddReplayValueOption(args, "--path", pathPattern);
         foreach (var excludePath in options.ExcludePaths)
@@ -995,9 +1068,9 @@ public static partial class QueryCommandRunner
         if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
         {
             WriteUsageError(
-                selectionError!,
+                selectionError!.Message,
                 GetUsageLineOrThrow("search"),
-                "Use `cdidx search --recipe risky-code/raw-diagnostic-echo`, or `--include-query` / `--exclude-query` with a recipe name.");
+                selectionError.Hint);
             return CommandExitCodes.UsageError;
         }
 
@@ -1156,9 +1229,9 @@ public static partial class QueryCommandRunner
         if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
         {
             WriteUsageError(
-                selectionError!,
+                selectionError!.Message,
                 GetUsageLineOrThrow("search"),
-                "Use `cdidx search --recipe risky-code/raw-diagnostic-echo`, or `--include-query` / `--exclude-query` with a recipe name.");
+                selectionError.Hint);
             return CommandExitCodes.UsageError;
         }
         var recipe = selection.Recipe;
@@ -1222,9 +1295,9 @@ public static partial class QueryCommandRunner
         if (!TryResolveSearchRecipeSelection(options, out var selection, out var selectionError))
         {
             WriteUsageError(
-                selectionError!,
+                selectionError!.Message,
                 GetUsageLineOrThrow("search"),
-                "Use `cdidx search --recipe risky-code/raw-diagnostic-echo`, or `--include-query` / `--exclude-query` with a recipe name.");
+                selectionError.Hint);
             return CommandExitCodes.UsageError;
         }
 
@@ -3382,6 +3455,8 @@ public static partial class QueryCommandRunner
         SearchRecipeLimitSemantics,
         (queries ?? recipe.Queries).Select(query => new SearchRecipeQueryListItemJsonResult(
             query.Name,
+            [.. query.Aliases],
+            [.. query.DeprecatedAliases],
             query.Query,
             query.Description,
             query.RecommendedLabels,

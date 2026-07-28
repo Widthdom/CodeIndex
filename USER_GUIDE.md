@@ -1452,6 +1452,10 @@ Recipe JSON and compact output apply `--limit` per query, include a `summary`
   use a row selector with
 `next_cursor`; rerun a single child query as
 `--recipe <recipe>/<query> --cursor <next_cursor>` to page the next result set.
+Unknown child-query diagnostics compare only the active recipe's canonical
+query names and aliases. Their replay command keeps that recipe and normalized
+search filters, quotes shell-sensitive values, and never substitutes a query
+from another recipe.
 The MCP `search` tool exposes the same recipe surface with
 `{"listRecipes":true}` for discovery and `{"recipe":"risky-code"}` for
 execution. MCP recipe runs apply the same default source scope as the CLI; pass
@@ -1463,6 +1467,10 @@ reported as bounded `recipe_source_diagnostics`. External recipes may declare
 recipe-level `default_scope`, `default_path_patterns`, and
 `default_exclude_paths`; each query may declare `severity`, `path_patterns`, and
 `exclude_paths` to narrow a query independently of the recipe default scope.
+External queries may also declare `aliases` and `deprecated_aliases`; both
+forms select the canonical query name, appear in full recipe discovery JSON,
+and participate in active-recipe typo correction without becoming the replay
+selector.
 For triage automation, `--format issue-drafts` emits draft issue objects with
 titles, labels, evidence paths, severity/confidence/evidence-count triage
 metadata, Markdown bodies, and duplicate-preflight metadata. `--open-issues <path>` accepts an open-issue JSON list such as
@@ -1972,7 +1980,7 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together. Quote shell globs such as `--path 'src/**'` so the shell passes one literal pattern. |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, `bounded-read-evidence`, `resource-materialization-audit`, or `concurrency-state-audit`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, `--format sarif`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, `bounded-read-evidence`, `resource-materialization-audit`, or `concurrency-state-audit`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. An unknown recipe is compared with recipe names; an unknown child query is compared only with canonical names and aliases from the active recipe, and its safely quoted replay preserves that recipe and normalized filters. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, `--format sarif`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
 | `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; outline cursors use `outline:<offset>`. |
 | `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**` when no user path was supplied, and applies default doc/test/changelog exclusions, `--exclude-tests`, and default comment / CLI help-text origin exclusions. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
@@ -4644,6 +4652,9 @@ list metadata ごとに grouped されるため usage error で拒否します�
   `next_cursor` を付けます。
 次の result set を取得するには、単一 child query を
 `--recipe <recipe>/<query> --cursor <next_cursor>` として再実行してください。
+未知の child query の診断は、active recipe 内の canonical query 名と alias だけを比較します。
+再実行コマンドは同じ recipe と正規化済み search filter を保持し、shell で意味を持つ値を引用し、
+別 recipe の query へ置き換えることはありません。
 MCP `search` tool では `{"listRecipes":true}` で recipe を発見し、
 `{"recipe":"risky-code"}` で実行できます。MCP の recipe run も CLI と同じ既定の source
 scope を適用します。docs、tests、changelog、recipe definitions を意図的に audit する場合は
@@ -4654,6 +4665,9 @@ recipe array または `{ "recipes": [...] }` を受け付け、不正な source
 `default_scope`、`default_path_patterns`、`default_exclude_paths` を宣言できます。
 各 query は `severity`、`path_patterns`、`exclude_paths` を宣言でき、recipe の既定 scope
 とは独立して query ごとの対象を狭められます。
+外部 query は `aliases` と `deprecated_aliases` も宣言できます。どちらも canonical query 名へ
+解決され、完全な recipe discovery JSON に表示され、active recipe 内の typo correction 候補に
+使われますが、再実行 selector には canonical query 名が使われます。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
 severity / confidence / evidence-count の triage metadata、Markdown body、
 duplicate-preflight metadata を持つ issue draft object を出力します。
@@ -5139,7 +5153,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合）。`--path 'src/**'` のように shell glob を引用し、shell が 1 つの literal pattern として渡すようにする。 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence`、`resource-materialization-audit`、`concurrency-state-audit` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format sarif`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence`、`resource-materialization-audit`、`concurrency-state-audit` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe は recipe 名と比較し、未知の child query は active recipe 内の canonical 名と alias だけを比較する。安全に引用された再実行コマンドは同じ recipe と正規化済み filter を保持する。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format sarif`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
 | `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定し、outline cursor は `outline:<offset>` 形式を使う。 |
 | `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**` を追加し、既定の docs/tests/changelog exclusion、`--exclude-tests`、コメント / CLI ヘルプ文言 origin の既定除外を適用する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |
