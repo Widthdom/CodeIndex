@@ -45,6 +45,7 @@ public static partial class QueryCommandRunner
                     break;
                 case "--show-paths":
                     showPaths = true;
+                    redactPaths = false;
                     break;
                 case "--pretty":
                     break;
@@ -82,9 +83,7 @@ public static partial class QueryCommandRunner
                     break;
                 case "--redact-paths":
                     redactPaths = true;
-                    break;
-                case "--show-paths":
-                    redactPaths = false;
+                    showPaths = false;
                     break;
                 case "--json":
                     if (inlineValue == null)
