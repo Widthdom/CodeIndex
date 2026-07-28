@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -520,8 +521,11 @@ public partial class QueryCommandRunnerTests
             var recoveryCommand = recovery.GetProperty("command").GetString();
             Assert.Contains("cdidx excerpt src/long_body.py", recoveryCommand);
             Assert.Contains("--db", recoveryCommand);
-            Assert.Contains(dbPath, recoveryCommand);
+            Assert.DoesNotContain(dbPath, recoveryCommand);
+            Assert.Contains(DiagnosticSanitizer.ForPath(dbPath), recoveryCommand);
             Assert.Contains("--max-line-width 0 --json", recoveryCommand);
+            Assert.True(recovery.GetProperty("paths_redacted").GetBoolean());
+            Assert.True(recovery.GetProperty("requires_local_path_substitution").GetBoolean());
             Assert.False(json.TryGetProperty("complexity", out _));
             Assert.False(json.TryGetProperty("content", out _));
             Assert.True(json.GetProperty("content_omitted").GetBoolean());
@@ -640,8 +644,11 @@ public partial class QueryCommandRunnerTests
             var recoveryCommand = recovery.GetProperty("command").GetString();
             Assert.Contains("cdidx excerpt src/huge_body.py", recoveryCommand);
             Assert.Contains("--db", recoveryCommand);
-            Assert.Contains(dbPath, recoveryCommand);
+            Assert.DoesNotContain(dbPath, recoveryCommand);
+            Assert.Contains(DiagnosticSanitizer.ForPath(dbPath), recoveryCommand);
             Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
+            Assert.True(recovery.GetProperty("paths_redacted").GetBoolean());
+            Assert.True(recovery.GetProperty("requires_local_path_substitution").GetBoolean());
             Assert.False(json.TryGetProperty("complexity", out _));
         }
         finally

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 
@@ -41,6 +42,32 @@ public sealed class DiffCommandHelpersTests
         Assert.Equal("right.db", root.GetProperty("right_db").GetString());
         Assert.False(root.TryGetProperty("files_only_in_left", out _));
         Assert.False(root.TryGetProperty("files_only_in_right", out _));
+    }
+
+    [Fact]
+    public void WriteCommandError_BoundsOversizedJsonDetails_Issue4859()
+    {
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+        var output = CaptureStdout(() => DiffResultWriter.WriteCommandError(
+            json: true,
+            jsonOptions,
+            new string('x', DiffCommandRunner.MinDiffJsonBytes * 2),
+            CommandExitCodes.UsageError,
+            errorCode: CommandErrorCodes.UsageError,
+            maxJsonBytes: DiffCommandRunner.MinDiffJsonBytes));
+
+        Assert.InRange(
+            Encoding.UTF8.GetByteCount(output),
+            1,
+            DiffCommandRunner.MinDiffJsonBytes);
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal(
+            "diff error details were omitted to honor --max-json-bytes",
+            document.RootElement.GetProperty("message").GetString());
+        Assert.Equal(
+            CommandErrorCodes.UsageError,
+            document.RootElement.GetProperty("error_code").GetString());
     }
 
     [Theory]

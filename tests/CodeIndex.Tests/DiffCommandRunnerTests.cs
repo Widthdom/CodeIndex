@@ -11,6 +11,8 @@ namespace CodeIndex.Tests;
 [Collection("Console sensitive")]
 public class DiffCommandRunnerTests
 {
+    private const int LargeDiffFieldLength = 4096;
+
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -162,6 +164,425 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_JsonBudgetAndContentFlagsEnforceDetailedContract_Issue4859()
+    {
+        var minimum = DiffCommandRunner.ParseArgs(
+            ["left.db", "right.db", "--json", "--detailed", "--max-json-bytes", $"{DiffCommandRunner.MinDiffJsonBytes}"]);
+        var belowMinimum = DiffCommandRunner.ParseArgs(
+            ["left.db", "right.db", "--json", "--detailed", "--max-json-bytes", $"{DiffCommandRunner.MinDiffJsonBytes - 1}"]);
+        var contentWithoutDetailedJson = DiffCommandRunner.ParseArgs(
+            ["left.db", "right.db", "--include-content"]);
+
+        Assert.Equal(DiffCommandRunner.MinDiffJsonBytes, minimum.MaxJsonBytes);
+        Assert.Null(minimum.ParseError);
+        Assert.Equal(
+            $"--max-json-bytes must be at least {DiffCommandRunner.MinDiffJsonBytes}",
+            belowMinimum.ParseError);
+        Assert.Equal(
+            "--include-content requires --detailed --json and cannot be combined with --summary-only",
+            contentWithoutDetailedJson.ParseError);
+    }
+
+    [Fact]
+    public void Run_PagedModesOnlyAdvertiseValidAdvancingContinuations_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_continuation_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_continuation_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            for (var i = 0; i < 3; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    leftDb,
+                    $"src/OnlyInLeft{i}.cs",
+                    "csharp",
+                    $"public class OnlyInLeft{i} {{ }}");
+            }
+
+            var (sampleExitCode, sampleOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--limit", "1"]);
+            var (detailedTextExitCode, detailedTextOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--detailed", "--limit", "1"]);
+
+            Assert.Equal(1, sampleExitCode);
+            using var sampleDocument = JsonDocument.Parse(sampleOutput);
+            Assert.True(sampleDocument.RootElement.GetProperty("has_more").GetBoolean());
+            Assert.Equal(1, sampleDocument.RootElement.GetProperty("next_offset").GetInt32());
+            Assert.Equal(1, detailedTextExitCode);
+            Assert.Contains("rerun with --offset 1", detailedTextOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain("rerun with --cursor", detailedTextOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonRedactsSensitiveTextUntilContentIsExplicitlyIncluded_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_private_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_private_right");
+        try
+        {
+            const string privatePath = "src/customer-acme-api-key.cs";
+            const string secret = "sk-test-super-secret-value";
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(
+                leftDb,
+                privatePath,
+                "csharp",
+                $"public static class Secret {{ public const string Value = \"{secret}\"; }}");
+
+            var (redactedExitCode, redactedOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "100"]);
+
+            Assert.Equal(1, redactedExitCode);
+            using var redactedDocument = JsonDocument.Parse(redactedOutput);
+            var redactedRoot = redactedDocument.RootElement;
+            Assert.False(redactedRoot.GetProperty("content_included").GetBoolean());
+            Assert.Equal("redacted_hashes", redactedRoot.GetProperty("content_policy").GetString());
+            Assert.DoesNotContain(privatePath, redactedOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, redactedOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(leftDb, redactedOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(rightDb, redactedOutput, StringComparison.Ordinal);
+            var fileRecord = Assert.Single(GetRecords(redactedRoot, "file", "left"));
+            var pathField = GetField(fileRecord, "path");
+            Assert.True(pathField.GetProperty("redacted").GetBoolean());
+            Assert.False(pathField.TryGetProperty("value", out _));
+            Assert.Equal(64, pathField.GetProperty("sha256").GetString()?.Length);
+            Assert.True(pathField.GetProperty("byte_length").GetInt64() > 0);
+
+            const int byteBudget = 65_536;
+            var (includedExitCode, includedOutput) = RunWithCapturedOut(
+                [
+                    leftDb,
+                    rightDb,
+                    "--json",
+                    "--detailed",
+                    "--include-content",
+                    "--limit",
+                    "100",
+                    "--max-json-bytes",
+                    $"{byteBudget}",
+                ]);
+
+            Assert.Equal(1, includedExitCode);
+            Assert.InRange(Encoding.UTF8.GetByteCount(includedOutput), 1, byteBudget);
+            using var includedDocument = JsonDocument.Parse(includedOutput);
+            var includedRoot = includedDocument.RootElement;
+            Assert.True(includedRoot.GetProperty("content_included").GetBoolean());
+            Assert.Equal("included", includedRoot.GetProperty("content_policy").GetString());
+            Assert.Contains(privatePath, includedOutput, StringComparison.Ordinal);
+            Assert.Contains(secret, includedOutput, StringComparison.Ordinal);
+            var includedPath = GetField(
+                Assert.Single(GetRecords(includedRoot, "file", "left")),
+                "path");
+            Assert.False(includedPath.GetProperty("redacted").GetBoolean());
+            Assert.Equal(privatePath, includedPath.GetProperty("value").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonStopsAtRecordBoundaryAndCursorResumes_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_bounded_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_bounded_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            for (var i = 0; i < 30; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    leftDb,
+                    $"src/PrivateFile{i:00}.cs",
+                    "csharp",
+                    $"public static class PrivateFile{i:00} {{ public static string Value => \"{new string('x', 256)}\"; }}");
+            }
+
+            const int byteBudget = 8_192;
+            var (firstExitCode, firstOutput) = RunWithCapturedOut(
+                [
+                    leftDb,
+                    rightDb,
+                    "--json",
+                    "--detailed",
+                    "--limit",
+                    "100",
+                    "--max-json-bytes",
+                    $"{byteBudget}",
+                ]);
+
+            Assert.Equal(1, firstExitCode);
+            Assert.InRange(Encoding.UTF8.GetByteCount(firstOutput), 1, byteBudget);
+            using var firstDocument = JsonDocument.Parse(firstOutput);
+            var first = firstDocument.RootElement;
+            Assert.Equal("max_json_bytes", first.GetProperty("truncation_reason").GetString());
+            Assert.True(first.GetProperty("truncated").GetBoolean());
+            Assert.True(first.GetProperty("has_more").GetBoolean());
+            Assert.True(first.GetProperty("returned_count").GetInt32() > 0);
+            Assert.True(first.GetProperty("first_omitted_record_bytes").GetInt32() > 0);
+            Assert.Equal(
+                first.GetProperty("total_count").GetInt64(),
+                first.GetProperty("returned_count").GetInt32() + first.GetProperty("omitted_count").GetInt64());
+            var replay = first.GetProperty("replay");
+            Assert.True(replay.GetProperty("database_arguments_required").GetBoolean());
+            var nextCursor = replay.GetProperty("next_cursor").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(nextCursor));
+            var replayArguments = replay.GetProperty("next_page_arguments")
+                .EnumerateArray()
+                .Select(item => item.GetString()!)
+                .ToArray();
+
+            var (secondExitCode, secondOutput) = RunWithCapturedOut([leftDb, rightDb, .. replayArguments]);
+
+            Assert.Equal(1, secondExitCode);
+            Assert.InRange(Encoding.UTF8.GetByteCount(secondOutput), 1, byteBudget);
+            using var secondDocument = JsonDocument.Parse(secondOutput);
+            var second = secondDocument.RootElement;
+            Assert.Equal(nextCursor, second.GetProperty("current_cursor").GetString());
+            var firstIdentities = first.GetProperty("records")
+                .EnumerateArray()
+                .Select(record => record.GetProperty("identity_sha256").GetString())
+                .ToHashSet(StringComparer.Ordinal);
+            Assert.DoesNotContain(
+                second.GetProperty("records").EnumerateArray(),
+                record => firstIdentities.Contains(record.GetProperty("identity_sha256").GetString()));
+
+            var (mismatchExitCode, mismatchOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--include-content", "--cursor", nextCursor!]);
+            Assert.Equal(CommandExitCodes.UsageError, mismatchExitCode);
+            using var mismatchDocument = JsonDocument.Parse(mismatchOutput);
+            Assert.Equal("error", mismatchDocument.RootElement.GetProperty("status").GetString());
+
+            TestProjectHelper.InsertIndexedFile(
+                leftDb,
+                "src/AfterCursorMutation.cs",
+                "csharp",
+                "public static class AfterCursorMutation { }");
+            var (staleExitCode, staleOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--cursor", nextCursor!]);
+
+            Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
+            using var staleDocument = JsonDocument.Parse(staleOutput);
+            Assert.Equal("error", staleDocument.RootElement.GetProperty("status").GetString());
+            Assert.Contains(
+                "no longer matches the selected database contents",
+                staleDocument.RootElement.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void CompareDatabases_PrettyMaterializationUsesActiveJsonSize_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_pretty_bound_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_pretty_bound_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            for (var i = 0; i < 30; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    leftDb,
+                    $"src/PrettyBound{i:00}.cs",
+                    "csharp",
+                    $"public class PrettyBound{i:00} {{ public string Value => \"{new string('x', 128)}\"; }}");
+            }
+
+            var prettyOptions = new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+                WriteIndented = true,
+            };
+            const int byteBudget = DiffCommandRunner.MinDiffJsonBytes;
+            var complete = DiffCommandRunner.CompareDatabases(
+                new DiffCommandOptions
+                {
+                    LeftDb = leftDb,
+                    RightDb = rightDb,
+                    Json = true,
+                    Detailed = true,
+                    Limit = 100,
+                    MaxJsonBytes = DiffCommandRunner.MaxDiffJsonBytes,
+                },
+                prettyOptions,
+                CancellationToken.None);
+            var expectedRetained = GetMaterializedRecordCount(
+                complete.Records ?? [],
+                byteBudget,
+                CliJsonSerializerContextFactory.Create(prettyOptions));
+            var compactRetained = GetMaterializedRecordCount(
+                complete.Records ?? [],
+                byteBudget,
+                CliJsonSerializerContext.Default);
+
+            var bounded = DiffCommandRunner.CompareDatabases(
+                new DiffCommandOptions
+                {
+                    LeftDb = leftDb,
+                    RightDb = rightDb,
+                    Json = true,
+                    Detailed = true,
+                    Limit = 100,
+                    MaxJsonBytes = byteBudget,
+                },
+                prettyOptions,
+                CancellationToken.None);
+
+            Assert.True(expectedRetained < complete.Records!.Count);
+            Assert.True(expectedRetained < compactRetained);
+            Assert.Equal(expectedRetained, bounded.Records!.Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void CompareDatabases_EmbeddedSchemaMismatchOmitsCursorSelectionMetadata_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_embedded_schema_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_embedded_schema_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            ExecuteNonQuery(rightDb, "PRAGMA user_version = 999");
+
+            var result = DiffCommandRunner.CompareDatabases(
+                leftDb,
+                rightDb,
+                limit: 10,
+                offset: 0,
+                detailed: true,
+                CancellationToken.None,
+                emitCursorMetadata: false);
+
+            Assert.Equal("schema_mismatch", result.Status);
+            Assert.Null(result.SelectionFingerprint);
+            Assert.Null(result.CurrentCursor);
+            Assert.Null(result.NextCursor);
+            Assert.Null(result.Replay);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonLimitZeroWithholdsNonAdvancingReplay_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_zero_limit_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_zero_limit_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(
+                leftDb,
+                "src/OnlyInLeft.cs",
+                "csharp",
+                "public class OnlyInLeft { }");
+
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "0"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            Assert.True(root.GetProperty("has_more").GetBoolean());
+            Assert.Empty(root.GetProperty("records").EnumerateArray());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("next_offset").ValueKind);
+            Assert.False(root.TryGetProperty("next_cursor", out _));
+            var replay = root.GetProperty("replay");
+            Assert.False(replay.TryGetProperty("next_cursor", out _));
+            Assert.False(replay.TryGetProperty("next_page_arguments", out _));
+            Assert.Contains(
+                root.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("message").GetString()?.Contains(
+                    "positive --limit",
+                    StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_JsonModesHonorMinimumExplicitBudget_Issue4859()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_diff_minimum_budget");
+        try
+        {
+            var db = TestProjectHelper.CreateProjectDb(root);
+            const int byteBudget = DiffCommandRunner.MinDiffJsonBytes;
+
+            var (detailedExitCode, detailedOutput) = RunWithCapturedOut(
+                [db, db, "--json", "--detailed", "--max-json-bytes", $"{byteBudget}"]);
+            var (sampleExitCode, sampleOutput) = RunWithCapturedOut(
+                [db, db, "--json", "--max-json-bytes", $"{byteBudget}"]);
+            var (summaryExitCode, summaryOutput) = RunWithCapturedOut(
+                [db, db, "--summary-only", "--max-json-bytes", $"{byteBudget}"]);
+            var oversizedUnsupportedOption = "--" + new string('x', byteBudget * 2);
+            var (parseErrorExitCode, parseErrorOutput) = RunWithCapturedOut(
+                [
+                    db,
+                    db,
+                    "--json",
+                    oversizedUnsupportedOption,
+                    "--max-json-bytes",
+                    $"{byteBudget}",
+                ]);
+
+            Assert.Equal(0, detailedExitCode);
+            Assert.Equal(0, sampleExitCode);
+            Assert.Equal(0, summaryExitCode);
+            Assert.Equal(CommandExitCodes.UsageError, parseErrorExitCode);
+            Assert.InRange(Encoding.UTF8.GetByteCount(detailedOutput), 1, byteBudget);
+            Assert.InRange(Encoding.UTF8.GetByteCount(sampleOutput), 1, byteBudget);
+            Assert.InRange(Encoding.UTF8.GetByteCount(summaryOutput), 1, byteBudget);
+            Assert.InRange(Encoding.UTF8.GetByteCount(parseErrorOutput), 1, byteBudget);
+            using var detailedDocument = JsonDocument.Parse(detailedOutput);
+            using var sampleDocument = JsonDocument.Parse(sampleOutput);
+            using var summaryDocument = JsonDocument.Parse(summaryOutput);
+            using var parseErrorDocument = JsonDocument.Parse(parseErrorOutput);
+            Assert.Equal("identical", detailedDocument.RootElement.GetProperty("status").GetString());
+            Assert.Equal("identical", sampleDocument.RootElement.GetProperty("status").GetString());
+            Assert.Equal("identical", summaryDocument.RootElement.GetProperty("status").GetString());
+            Assert.Equal("error", parseErrorDocument.RootElement.GetProperty("status").GetString());
+            Assert.DoesNotContain(oversizedUnsupportedOption, parseErrorOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_DetailedJsonReportsLimitedSymbolRows_Issue2885()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_detailed_left");
@@ -170,20 +591,32 @@ public class DiffCommandRunnerTests
         {
             var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
             var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
-            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class LeftOnly { public void Run() { } }");
-            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class RightOnly { public void Run() { } }");
+            const string content = "public class Same { public void Run() { } }";
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", content);
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", content);
+            InsertSyntheticMethodSymbol(leftDb, "src/Same.cs", "LeftOnly", "void LeftOnly()");
+            InsertSyntheticMethodSymbol(rightDb, "src/Same.cs", "RightOnly", "void RightOnly()");
 
-            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "1"]);
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--include-content", "--limit", "2"]);
 
             Assert.Equal(1, exitCode);
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
-            var symbolsOnlyInLeft = root.GetProperty("symbols_only_in_left").EnumerateArray().ToList();
-            var symbolsOnlyInRight = root.GetProperty("symbols_only_in_right").EnumerateArray().ToList();
-            Assert.Single(symbolsOnlyInLeft);
-            Assert.Single(symbolsOnlyInRight);
-            Assert.Contains("LeftOnly", symbolsOnlyInLeft[0].GetString(), StringComparison.Ordinal);
-            Assert.Contains("RightOnly", symbolsOnlyInRight[0].GetString(), StringComparison.Ordinal);
+            var records = GetRecords(root, "symbol");
+            Assert.Collection(
+                records,
+                record =>
+                {
+                    Assert.Equal("left", record.GetProperty("side").GetString());
+                    Assert.Equal("LeftOnly", GetField(record, "name").GetProperty("value").GetString());
+                },
+                record =>
+                {
+                    Assert.Equal("right", record.GetProperty("side").GetString());
+                    Assert.Equal("RightOnly", GetField(record, "name").GetProperty("value").GetString());
+                });
+            Assert.All(records, record => Assert.Equal(64, record.GetProperty("identity_sha256").GetString()?.Length));
         }
         finally
         {
@@ -211,29 +644,33 @@ public class DiffCommandRunnerTests
             ExecuteNonQuery(rightDb, "UPDATE symbol_references SET context = COALESCE(context, '') || ' // right'");
 
             var (firstExitCode, firstOutput) = RunWithCapturedOut(
-                [leftDb, rightDb, "--json", "--detailed", "--limit", "1", "--offset", "0"]);
-            var (secondExitCode, secondOutput) = RunWithCapturedOut(
-                [leftDb, rightDb, "--json", "--detailed", "--limit", "1", "--offset", "1"]);
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "1"]);
 
             Assert.Equal(1, firstExitCode);
-            Assert.Equal(1, secondExitCode);
             using var firstDocument = JsonDocument.Parse(firstOutput);
-            using var secondDocument = JsonDocument.Parse(secondOutput);
             var first = firstDocument.RootElement;
-            var second = secondDocument.RootElement;
-            Assert.Single(first.GetProperty("references_only_in_left").EnumerateArray());
-            Assert.Single(first.GetProperty("references_only_in_right").EnumerateArray());
-            Assert.Single(first.GetProperty("chunks_only_in_left").EnumerateArray());
-            Assert.Single(first.GetProperty("chunks_only_in_right").EnumerateArray());
+            var firstRecord = Assert.Single(first.GetProperty("records").EnumerateArray());
+            Assert.Equal("reference", firstRecord.GetProperty("area").GetString());
             Assert.True(first.GetProperty("has_more").GetBoolean());
             Assert.Equal(1, first.GetProperty("next_offset").GetInt32());
+            var nextCursor = first.GetProperty("next_cursor").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(nextCursor));
+            Assert.Equal(
+                nextCursor,
+                first.GetProperty("replay").GetProperty("next_cursor").GetString());
+
+            var (secondExitCode, secondOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "1", "--cursor", nextCursor!]);
+
+            Assert.Equal(1, secondExitCode);
+            using var secondDocument = JsonDocument.Parse(secondOutput);
+            var second = secondDocument.RootElement;
             Assert.Equal(1, second.GetProperty("offset").GetInt32());
+            var secondRecord = Assert.Single(second.GetProperty("records").EnumerateArray());
+            Assert.Equal("reference", secondRecord.GetProperty("area").GetString());
             Assert.NotEqual(
-                first.GetProperty("chunks_only_in_left")[0].GetString(),
-                second.GetProperty("chunks_only_in_left")[0].GetString());
-            Assert.NotEqual(
-                first.GetProperty("references_only_in_left")[0].GetString(),
-                second.GetProperty("references_only_in_left")[0].GetString());
+                firstRecord.GetProperty("identity_sha256").GetString(),
+                secondRecord.GetProperty("identity_sha256").GetString());
         }
         finally
         {
@@ -290,8 +727,9 @@ public class DiffCommandRunnerTests
             var root = document.RootElement;
             Assert.Equal("different", root.GetProperty("status").GetString());
             Assert.False(root.GetProperty("identical").GetBoolean());
-            Assert.NotEmpty(root.GetProperty("references_only_in_left").EnumerateArray());
-            Assert.NotEmpty(root.GetProperty("references_only_in_right").EnumerateArray());
+            var referenceRecords = GetRecords(root, "reference");
+            Assert.Contains(referenceRecords, record => record.GetProperty("side").GetString() == "left");
+            Assert.Contains(referenceRecords, record => record.GetProperty("side").GetString() == "right");
         }
         finally
         {
@@ -319,14 +757,52 @@ public class DiffCommandRunnerTests
             var root = document.RootElement;
             Assert.Equal("identical", root.GetProperty("status").GetString());
             Assert.True(root.GetProperty("identical").GetBoolean());
-            Assert.Empty(root.GetProperty("files_only_in_left").EnumerateArray());
-            Assert.Empty(root.GetProperty("files_only_in_right").EnumerateArray());
-            Assert.Empty(root.GetProperty("symbols_only_in_left").EnumerateArray());
-            Assert.Empty(root.GetProperty("symbols_only_in_right").EnumerateArray());
-            var drift = Assert.Single(root.GetProperty("metadata_drift").EnumerateArray());
-            Assert.Equal("indexed_project_root", drift.GetProperty("key").GetString());
-            Assert.Equal(Path.GetFullPath(leftRoot), drift.GetProperty("left_value").GetString());
-            Assert.Equal(Path.GetFullPath(rightRoot), drift.GetProperty("right_value").GetString());
+            var drift = Assert.Single(GetRecords(root, "operational_metadata"));
+            Assert.Equal("changed", drift.GetProperty("side").GetString());
+            Assert.True(GetField(drift, "key").GetProperty("redacted").GetBoolean());
+            Assert.True(GetField(drift, "left_value").GetProperty("redacted").GetBoolean());
+            Assert.True(GetField(drift, "right_value").GetProperty("redacted").GetBoolean());
+            Assert.DoesNotContain(Path.GetFullPath(leftRoot), output, StringComparison.Ordinal);
+            Assert.DoesNotContain(Path.GetFullPath(rightRoot), output, StringComparison.Ordinal);
+
+            var additionalOperationalKeys = new[]
+            {
+                "indexed_follow_symlinks_policy",
+                "indexed_head_commit",
+                "indexed_head_commit_branch",
+                "indexed_head_sha",
+                "indexed_head_branch",
+                "indexed_head_timestamp",
+                "commit_scoped_fresh_head_sha",
+                "workspace_path_case_sensitive",
+                DbContext.CdidxWriterVersionMetaKey,
+            };
+            foreach (var key in additionalOperationalKeys)
+            {
+                SetMeta(leftDb, key, $"left-{key}");
+                SetMeta(rightDb, key, $"right-{key}");
+            }
+
+            const int completePageBudget = 7_500;
+            var (boundedExitCode, boundedOutput) = RunWithCapturedOut(
+                [
+                    leftDb,
+                    rightDb,
+                    "--json",
+                    "--detailed",
+                    "--limit",
+                    "100",
+                    "--max-json-bytes",
+                    $"{completePageBudget}",
+                ]);
+
+            Assert.Equal(0, boundedExitCode);
+            Assert.InRange(Encoding.UTF8.GetByteCount(boundedOutput), 1, completePageBudget);
+            using var boundedDocument = JsonDocument.Parse(boundedOutput);
+            var boundedRoot = boundedDocument.RootElement;
+            Assert.Equal(10, boundedRoot.GetProperty("total_count").GetInt64());
+            Assert.Equal(10, boundedRoot.GetProperty("returned_count").GetInt32());
+            Assert.False(boundedRoot.GetProperty("truncated").GetBoolean());
         }
         finally
         {
@@ -350,17 +826,18 @@ public class DiffCommandRunnerTests
             SetMeta(leftDb, DbContext.CdidxWriterVersionMetaKey, "writer-left");
             SetMeta(rightDb, DbContext.CdidxWriterVersionMetaKey, "writer-right");
 
-            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "5"]);
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--include-content", "--limit", "5"]);
 
             Assert.Equal(0, exitCode);
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
             Assert.Equal("identical", root.GetProperty("status").GetString());
             Assert.True(root.GetProperty("identical").GetBoolean());
-            var drift = Assert.Single(root.GetProperty("metadata_drift").EnumerateArray());
-            Assert.Equal("cdidx_writer_version", drift.GetProperty("key").GetString());
-            Assert.Equal("writer-left", drift.GetProperty("left_value").GetString());
-            Assert.Equal("writer-right", drift.GetProperty("right_value").GetString());
+            var drift = Assert.Single(GetRecords(root, "operational_metadata"));
+            Assert.Equal("cdidx_writer_version", GetField(drift, "key").GetProperty("value").GetString());
+            Assert.Equal("writer-left", GetField(drift, "left_value").GetProperty("value").GetString());
+            Assert.Equal("writer-right", GetField(drift, "right_value").GetProperty("value").GetString());
         }
         finally
         {
@@ -476,7 +953,7 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DetailedJsonTruncatesLargeEncodedSymbolFields_Issue3163()
+    public void Run_DetailedJsonHashesLargeSymbolFieldsByDefault_Issue3163()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_large_field_left");
         var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_large_field_right");
@@ -487,21 +964,54 @@ public class DiffCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { }");
             TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { }");
 
-            var longSignature = new string('a', DiffCommandRunner.MaxDiffEncodedFieldSampleLength * 4);
+            var longSignature = new string('a', LargeDiffFieldLength);
             InsertSyntheticMethodSymbol(leftDb, "src/Same.cs", "Drifted", longSignature);
 
             var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "1"]);
 
             Assert.Equal(1, exitCode);
             using var document = JsonDocument.Parse(output);
-            var row = Assert.Single(document.RootElement.GetProperty("symbols_only_in_left").EnumerateArray()).GetString();
-            Assert.NotNull(row);
+            var row = Assert.Single(GetRecords(document.RootElement, "symbol"));
+            var signature = GetField(row, "signature");
             var expectedHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(longSignature))).ToLowerInvariant();
-            Assert.Contains(new string('a', DiffCommandRunner.MaxDiffEncodedFieldSampleLength), row, StringComparison.Ordinal);
-            Assert.Contains($"[truncated original_length={longSignature.Length}", row, StringComparison.Ordinal);
-            Assert.Contains($"sha256={expectedHash}", row, StringComparison.Ordinal);
-            Assert.DoesNotContain(new string('a', DiffCommandRunner.MaxDiffEncodedFieldSampleLength + 1), row, StringComparison.Ordinal);
-            Assert.True(row!.Length < longSignature.Length);
+            Assert.True(signature.GetProperty("redacted").GetBoolean());
+            Assert.Equal(expectedHash, signature.GetProperty("sha256").GetString());
+            Assert.Equal(longSignature.Length, signature.GetProperty("byte_length").GetInt64());
+            Assert.False(signature.TryGetProperty("value", out _));
+            Assert.DoesNotContain(longSignature, output, StringComparison.Ordinal);
+
+            var (boundedExitCode, boundedOutput) = RunWithCapturedOut(
+                [
+                    leftDb,
+                    rightDb,
+                    "--json",
+                    "--detailed",
+                    "--include-content",
+                    "--limit",
+                    "1",
+                    "--max-json-bytes",
+                    $"{DiffCommandRunner.MinDiffJsonBytes}",
+                ]);
+            Assert.Equal(1, boundedExitCode);
+            Assert.InRange(
+                Encoding.UTF8.GetByteCount(boundedOutput),
+                1,
+                DiffCommandRunner.MinDiffJsonBytes);
+            using var boundedDocument = JsonDocument.Parse(boundedOutput);
+            var boundedRoot = boundedDocument.RootElement;
+            Assert.Empty(boundedRoot.GetProperty("records").EnumerateArray());
+            Assert.Equal("max_json_bytes", boundedRoot.GetProperty("truncation_reason").GetString());
+            Assert.True(boundedRoot.GetProperty("first_omitted_record_bytes").GetInt32() > 0);
+            Assert.Equal(JsonValueKind.Null, boundedRoot.GetProperty("next_offset").ValueKind);
+            Assert.False(boundedRoot.TryGetProperty("next_cursor", out _));
+            var replay = boundedRoot.GetProperty("replay");
+            Assert.False(replay.TryGetProperty("next_cursor", out _));
+            Assert.False(replay.TryGetProperty("next_page_arguments", out _));
+            Assert.Contains(
+                boundedRoot.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("message").GetString()?.Contains(
+                    "increase the byte budget",
+                    StringComparison.OrdinalIgnoreCase) == true);
         }
         finally
         {
@@ -522,7 +1032,7 @@ public class DiffCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { public void Run() { } }");
             TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { public void Run() { } }");
 
-            var sharedPrefix = new string('x', DiffCommandRunner.MaxDiffEncodedFieldSampleLength);
+            var sharedPrefix = new string('x', LargeDiffFieldLength);
             UpdateFirstChunkContent(leftDb, sharedPrefix + "left");
             UpdateFirstChunkContent(rightDb, sharedPrefix + "right");
 
@@ -553,16 +1063,17 @@ public class DiffCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(leftDb, "src/b.cs", "csharp", "public class b { }");
             TestProjectHelper.InsertIndexedFile(rightDb, "src/b.cs", "csharp", "public class b { }");
 
-            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "5"]);
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--include-content", "--limit", "5"]);
 
             Assert.Equal(1, exitCode);
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
-            var symbolsOnlyInLeft = root.GetProperty("symbols_only_in_left").EnumerateArray().ToList();
-            var symbolsOnlyInRight = root.GetProperty("symbols_only_in_right").EnumerateArray().ToList();
-            Assert.Contains(symbolsOnlyInLeft, item => item.GetString()?.Contains("src/aa.cs", StringComparison.Ordinal) == true);
-            Assert.DoesNotContain(symbolsOnlyInLeft, item => item.GetString()?.Contains("src/b.cs", StringComparison.Ordinal) == true);
-            Assert.Empty(symbolsOnlyInRight);
+            var leftRecords = GetRecords(root, "symbol", "left");
+            var rightRecords = GetRecords(root, "symbol", "right");
+            Assert.Contains(leftRecords, record => GetField(record, "path").GetProperty("value").GetString() == "src/aa.cs");
+            Assert.DoesNotContain(leftRecords, record => GetField(record, "path").GetProperty("value").GetString() == "src/b.cs");
+            Assert.Empty(rightRecords);
         }
         finally
         {
@@ -860,11 +1371,10 @@ public class DiffCommandRunnerTests
             var root = document.RootElement;
             Assert.Equal("identical", root.GetProperty("status").GetString());
             Assert.True(root.GetProperty("identical").GetBoolean());
-            Assert.Empty(root.GetProperty("files_only_in_left").EnumerateArray());
-            Assert.Empty(root.GetProperty("files_only_in_right").EnumerateArray());
-            Assert.Empty(root.GetProperty("symbols_only_in_left").EnumerateArray());
-            Assert.Empty(root.GetProperty("symbols_only_in_right").EnumerateArray());
-            Assert.Empty(root.GetProperty("metadata_drift").EnumerateArray());
+            Assert.Empty(root.GetProperty("records").EnumerateArray());
+            Assert.Equal(0, root.GetProperty("total_count").GetInt64());
+            Assert.Equal(0, root.GetProperty("returned_count").GetInt32());
+            Assert.Equal(0, root.GetProperty("omitted_count").GetInt64());
         }
         finally
         {
@@ -1151,6 +1661,38 @@ public class DiffCommandRunnerTests
         command.CommandText = sql;
         configure?.Invoke(command);
         command.ExecuteNonQuery();
+    }
+
+    private static List<JsonElement> GetRecords(JsonElement root, string area, string? side = null)
+        => root.GetProperty("records")
+            .EnumerateArray()
+            .Where(record =>
+                record.GetProperty("area").GetString() == area
+                && (side is null || record.GetProperty("side").GetString() == side))
+            .ToList();
+
+    private static JsonElement GetField(JsonElement record, string name)
+        => Assert.Single(
+            record.GetProperty("fields")
+                .EnumerateArray()
+                .Where(field => field.GetProperty("name").GetString() == name));
+
+    private static int GetMaterializedRecordCount(
+        List<DiffRecordJsonResult> records,
+        int byteBudget,
+        CliJsonSerializerContext context)
+    {
+        long materializedBytes = 0;
+        for (var i = 0; i < records.Count; i++)
+        {
+            materializedBytes += JsonSerializer.SerializeToUtf8Bytes(
+                records[i],
+                context.DiffRecordJsonResult).LongLength;
+            if (materializedBytes > byteBudget)
+                return i + 1;
+        }
+
+        return records.Count;
     }
 
     private (int ExitCode, string Output) RunWithCapturedOut(string[] args, CancellationToken cancellationToken = default)
