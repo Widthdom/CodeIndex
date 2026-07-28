@@ -59,12 +59,12 @@ public static partial class ReferenceExtractor
         internal bool SassStylusPreparedInBlockComment;
         internal bool SassStylusOriginalInBlockComment;
 
-        internal CoreReferenceLoopMutableState(string language)
+        internal CoreReferenceLoopMutableState(string language, string[] lines)
         {
             if (language is "graphql" or "html" or "markdown")
             {
                 MarkupSchemaState =
-                    new MarkupSchemaReferenceExtractor.MarkupState();
+                    MarkupSchemaReferenceExtractor.CreateState(language, lines);
             }
             if (language == "sass")
             {
@@ -119,7 +119,7 @@ public static partial class ReferenceExtractor
         var xamlBindingMarkupExtensionState = language == "xml"
             ? new XamlReferenceExtractor.BindingMarkupExtensionState()
             : null;
-        var mutableState = new CoreReferenceLoopMutableState(language);
+        var mutableState = new CoreReferenceLoopMutableState(language, lines);
         var shaderState = ShaderReferenceExtractor.CreateState(
             language,
             preparedLines,

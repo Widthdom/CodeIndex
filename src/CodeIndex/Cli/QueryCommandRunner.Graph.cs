@@ -9,9 +9,11 @@ public static partial class QueryCommandRunner
     {
         if (!TryParseGraphCommandOptions("references", cmdArgs, out var options, out var optionExitCode))
             return optionExitCode;
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
         if (TryWriteInvalidKindFilterError(options, "references", AllValidReferenceKinds, AllValidKinds))
             return CommandExitCodes.InvalidArgument;
-        if (TryWriteParseError(options, "references"))
+        if (TryWriteParseError(options, "references", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "references"))
             return CommandExitCodes.UsageError;
@@ -143,7 +145,9 @@ public static partial class QueryCommandRunner
     {
         if (!TryParseGraphCommandOptions("callers", cmdArgs, out var options, out var optionExitCode))
             return optionExitCode;
-        if (TryWriteParseError(options, "callers"))
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
+        if (TryWriteParseError(options, "callers", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "callers"))
             return CommandExitCodes.UsageError;
@@ -280,7 +284,9 @@ public static partial class QueryCommandRunner
     {
         if (!TryParseGraphCommandOptions("callees", cmdArgs, out var options, out var optionExitCode))
             return optionExitCode;
-        if (TryWriteParseError(options, "callees"))
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
+        if (TryWriteParseError(options, "callees", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "callees"))
             return CommandExitCodes.UsageError;

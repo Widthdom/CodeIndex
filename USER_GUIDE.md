@@ -1261,6 +1261,14 @@ cdidx search "--open-reports" --path README.md --count  # quoted literal that st
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
 
+`--lang` validates built-in language names, recognized aliases, extension-like
+spellings such as `.cs`, and language IDs registered for the indexed workspace.
+A misspelling such as `cshrap` is a usage error (`E010_USAGE_ERROR`) and reports
+up to three nearby canonical IDs instead of silently returning zero results.
+Use `--allow-unknown-lang` only when querying an unregistered plugin language
+ID; that escape hatch trims surrounding whitespace but otherwise preserves the
+ID's case and punctuation exactly.
+
 Search normalizes literal FTS queries to Unicode NFC before matching. If every
 literal token exceeds SQLite FTS5 unicode61's 1000-character token cap,
 zero-result JSON includes `query_degraded_reason` and `tokens_dropped`. Index
@@ -2513,7 +2521,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Dynamic/declarative graph languages: Crystal, Groovy, Tcl, and Prolog expose conservative declarations, imports, and call relationships. Crystal, Groovy, and Prolog parenthesized calls use the shared extractor; command-style calls are limited to callables declared in the same file. Tcl recognizes command substitutions and common control-command script arguments without treating ordinary `name()` words as calls, while Tcl proc / Prolog predicate bodies preserve caller containers.
   An index created before this graph contract reports `reference_graph_complete=false` and `graph_data_current=false` with `dynamic_reference_graph_contract_stale`; rerun `cdidx index <projectPath>` to refresh affected rows before treating absent edges as authoritative.
 - Scientific and native-extension graphs: Julia, MATLAB, Nim, D, Cython, and Ada emit bounded language-aware import/module, base/type, and call references. Julia macro invocations and Ada procedure-style calls without parentheses are also represented.
-- Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
+- Markdown, JSON/YAML, and CSS: Markdown headings and explicit HTML anchors are indexed as definitions, while local and cross-document fragment links are indexed as path-scoped references. Heading slugs use rendered inline text; explicit HTML IDs preserve exact case and punctuation after HTML entity decoding. JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
 - C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
@@ -2561,7 +2569,7 @@ entries with the unsupported capability, an explanatory message, and
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
 | Solution / application manifest | solution projects and manifest identity/settings | solution project references; application manifests are symbol-only | `.sln` project paths are graph edges for repository structure; use `symbols --lang app_manifest` for Windows manifest metadata. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
-| Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | headings, anchors, selectors, UI elements, generic XML element/attribute paths, schema types/messages where supported | links/assets/components, local anchors, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Generic non-XAML XML emits bounded structural symbols; use `search` for prose and generated markup. |
+| Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | headings, explicit anchors, selectors, UI elements, generic XML element/attribute paths, schema types/messages where supported | links/assets/components, path-scoped local and cross-document fragments, CSS/Sass/Stylus imports, variables, mixins/functions, XAML resources/bindings/handlers, schema references where supported | Markdown fragment references resolve only against headings or explicit anchors in the linked document. Generic non-XAML XML emits bounded structural symbols; use `search` for prose and generated markup. |
 | Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
 | Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
 
@@ -2716,6 +2724,14 @@ locations instead of falling back to same-named type declarations.
 CLI `definition` and `goto` are name-based; use `--kind function` for explicit
 constructors, or a type kind together with `--group-partials` for the logical type
 family.
+Clients must follow the standard LSP lifecycle: send one `initialize` request
+first, optionally send the `initialized` notification after its response, then
+send ordinary requests, finish with one `shutdown` request, and finally send the
+`exit` notification. Requests received before initialization completes return
+JSON-RPC `-32002` (`Server not initialized`). A duplicate `initialize`, or any
+request received after `shutdown`, returns `-32600` (`Invalid Request`);
+out-of-phase notifications are ignored. Sending `exit` before a successful
+`shutdown` terminates the server with a usage error.
 `textDocument/inlayHint` honors the requested LSP range (including its exclusive
 end position) and omits type labels when the indexed return type is already
 written immediately before the symbol name, so explicit field, property, and
@@ -4449,6 +4465,13 @@ cdidx search "--open-reports" --path README.md --count  # `--` で始まる引�
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
 
+`--lang` は組み込み言語名、認識済み alias、`.cs` のような拡張子形式の表記、
+および indexed workspace に登録された language ID を検証します。`cshrap` のような
+入力ミスは 0 件として黙って成功せず、usage error（`E010_USAGE_ERROR`）として近い
+canonical ID を最大3件報告します。未登録 plugin の language ID を検索する場合だけ
+`--allow-unknown-lang` を使ってください。この escape hatch は前後の空白のみを除去し、
+ID の大小文字と句読点はそれ以外そのまま保持します。
+
 literal FTS クエリは照合前に Unicode NFC へ正規化されます。すべての literal
 token が SQLite FTS5 unicode61 の 1000 文字 token 上限を超える場合、0 件
 JSON には `query_degraded_reason` と `tokens_dropped` が含まれます。index
@@ -5647,7 +5670,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - 動的・宣言型言語の graph 対応: Crystal、Groovy、Tcl、Prolog は保守的な宣言、import、call relationship を公開します。Crystal、Groovy、Prolog の括弧付き call は共通 extractor を使い、command-style call は同一ファイルで宣言済みの callable に限定します。Tcl は通常の `name()` word を call とみなさず、command substitution と主要な制御 command の script 引数を認識し、Tcl proc / Prolog predicate の本体では caller container を保持します。
   この graph contract より前に作成された index は `dynamic_reference_graph_contract_stale` とともに `reference_graph_complete=false`、`graph_data_current=false` を報告します。欠落 edge を authoritative とみなす前に `cdidx index <projectPath>` を再実行して対象 row を更新してください。
 - 科学技術・ネイティブ拡張言語のグラフ: Julia、MATLAB、Nim、D、Cython、Ada は、言語構文に応じた import/module、基底型/type、call 参照を上限付きで出力します。Julia の macro invocation と、括弧を伴わない Ada の procedure call も記録します。
-- Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
+- Markdown、JSON/YAML、CSS: Markdown の heading と明示的な HTML anchor は定義として、同一文書・文書間の fragment link は対象 path に限定した参照として索引します。heading slug は表示される inline text から作り、明示的な HTML ID は HTML entity の decode 後も大文字小文字と句読点を正確に保持します。JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` もシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
 - C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。
@@ -5689,7 +5712,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
 | ソリューション / アプリケーションマニフェスト | solution project、manifest identity / setting | `.sln` の project reference。manifest は symbol-only | `.sln` の project path はリポジトリ構造の graph edge です。Windows manifest metadata は `symbols --lang app_manifest` で確認できます。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
-| Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | heading、anchor、selector、UI element、汎用 XML の要素・属性パス、対応 schema type/message | link/asset/component、local anchor、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | 汎用の非 XAML XML は上限付きの構造シンボルを出力します。prose や generated markup には `search` を使ってください。 |
+| Markdown / HTML / CSS / Sass / Stylus / XML / XAML / GraphQL / Protobuf | heading、明示的な anchor、selector、UI element、汎用 XML の要素・属性パス、対応 schema type/message | link/asset/component、path に限定した同一文書・文書間の fragment、CSS/Sass/Stylus の import・variable・mixin/function、XAML resource / binding / handler、対応 schema reference | Markdown の fragment reference は、リンク先文書内の heading または明示的な anchor にのみ解決します。汎用の非 XAML XML は上限付きの構造シンボルを出力します。prose や generated markup には `search` を使ってください。 |
 | Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
 | その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
 
@@ -5841,6 +5864,12 @@ fallback せず、constructor location の集合として返します。
 CLI の `definition` と `goto` は名前ベースなので、明示 constructor には
 `--kind function`、logical type family には type kind と `--group-partials` を
 組み合わせてください。
+client は標準の LSP lifecycle に従う必要があります。最初に `initialize` request を 1 回だけ
+送り、その response 後に必要なら `initialized` notification を送り、通常 request を処理した後、
+`shutdown` request、最後に `exit` notification の順で終了してください。初期化完了前に受信した
+request は JSON-RPC `-32002`（`Server not initialized`）を返します。重複した `initialize`、
+または `shutdown` 後の request は `-32600`（`Invalid Request`）を返し、順序外の notification は
+無視します。成功した `shutdown` より前に `exit` を送ると、server は usage error で終了します。
 `textDocument/inlayHint` は end position を含まない requested LSP range を尊重し、
 indexed return type が symbol name の直前にすでに明記されている場合は type label を
 省略するため、field / property / method の明示型を hint として重複表示しません。

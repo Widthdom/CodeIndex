@@ -2994,7 +2994,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "text"],
+                ["--db", dbPath, "--json", "--lang", "text", "--allow-unknown-lang"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -3020,7 +3020,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "text", "--count"],
+                ["--db", dbPath, "--json", "--lang", "text", "--allow-unknown-lang", "--count"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -3063,7 +3063,7 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.TryGetProperty("unused", out _));
 
             var (unsupportedExitCode, unsupportedStdout, unsupportedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "text"],
+                ["--db", dbPath, "--json", "--lang", "text", "--allow-unknown-lang"],
                 _jsonOptions));
 
             using var unsupportedDocument = ParseJsonOutput(unsupportedStdout);
@@ -7321,7 +7321,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_EmitsLangHintForUnknownLang()
+    public void RunSymbols_RejectsUnknownLangWithSuggestion_Issue4842()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_hint");
         try
@@ -7330,11 +7330,13 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--lang", "nonexistent"],
+                ["--db", dbPath, "--lang", "pyhton"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", stderr);
+            Assert.Contains("unknown language identifier 'pyhton'", stderr);
+            Assert.Contains("Did you mean 'python'", stderr);
         }
         finally
         {
@@ -7343,7 +7345,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDefinition_EmitsLangHintForUnknownLang()
+    public void RunDefinition_RejectsUnknownLangWithSuggestion_Issue4842()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_hint");
         try
@@ -7352,11 +7354,13 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["hello", "--db", dbPath, "--lang", "nonexistent"],
+                ["hello", "--db", dbPath, "--lang", "pyhton"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", stderr);
+            Assert.Contains("unknown language identifier 'pyhton'", stderr);
+            Assert.Contains("Did you mean 'python'", stderr);
         }
         finally
         {

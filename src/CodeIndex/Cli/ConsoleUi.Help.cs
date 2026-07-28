@@ -217,6 +217,7 @@ public static partial class ConsoleUi
         Console.WriteLine("  --limit <n>, --top <n>, --max-results <n>");
         Console.WriteLine("                              Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)");
+        Console.WriteLine("  --allow-unknown-lang       Allow an unregistered plugin language ID and preserve its exact spelling");
         Console.WriteLine("  --path <glob>              Restrict matches to glob-style path patterns (* and ?)");
         WriteHelpLine($"  --query <query>            Pass a query literal, useful when the query starts with '-' (`search`/`find` max {QueryLimits.MaxQueryLength} chars)");
         WriteHelpLine("  --named-query <name>=<query>  search only: add a named ad hoc batch query; repeat to run related searches with grouped compact results");

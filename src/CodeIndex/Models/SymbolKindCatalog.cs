@@ -10,6 +10,7 @@ public static class SymbolKindCatalog
     [
         "accessor",
         "add",
+        "anchor",
         "annotation",
         "assembly",
         "array",

@@ -249,7 +249,8 @@ public static partial class ReferenceExtractor
         SymbolRecord? container,
         string? language = null,
         string? targetQualifier = null,
-        int? sourceLength = null)
+        int? sourceLength = null,
+        string? identitySymbolNameFolded = null)
     {
         var column = nameIndex + 1;
         var dedupeKey = CreateReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container);
@@ -264,9 +265,8 @@ public static partial class ReferenceExtractor
         {
             FileId = fileId,
             SymbolName = name,
-            IdentitySymbolNameFolded = language == "nim"
-                ? NimIdentifierIdentity.Fold(name)
-                : null,
+            IdentitySymbolNameFolded = identitySymbolNameFolded
+                ?? (language == "nim" ? NimIdentifierIdentity.Fold(name) : null),
             ReferenceKind = referenceKind,
             Line = lineNumber,
             Column = column,

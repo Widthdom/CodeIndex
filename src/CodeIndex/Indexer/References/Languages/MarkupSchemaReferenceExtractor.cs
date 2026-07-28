@@ -11,6 +11,7 @@ internal static class MarkupSchemaReferenceExtractor
         public bool InMarkdownFence { get; set; }
         public char MarkdownFenceChar { get; set; }
         public int MarkdownFenceLength { get; set; }
+        public IReadOnlyDictionary<string, string>? MarkdownReferenceTargets { get; set; }
         public bool InHtmlComment { get; set; }
         public string? HtmlRawTextTag { get; set; }
         public int GraphQLBraceDepth { get; set; }
@@ -110,8 +111,16 @@ internal static class MarkupSchemaReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex MarkdownReferenceLinkRegex = new(
-        @"!?\[[^\]\r\n]+\]\[(?<label>[^\]\r\n]*)\]",
+        @"!?\[(?<text>[^\]\r\n]+)\]\[(?<label>[^\]\r\n]*)\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    internal static MarkupState CreateState(string language, string[] lines) =>
+        new()
+        {
+            MarkdownReferenceTargets = language == "markdown"
+                ? BuildMarkdownReferenceTargets(lines)
+                : null,
+        };
 
     public static void EmitReferences(
         string language,
@@ -398,18 +407,7 @@ internal static class MarkupSchemaReferenceExtractor
         var scanLine = StripMarkdownInlineCode(line);
         var definitionMatch = MarkdownReferenceDefinitionRegex.Match(scanLine);
         if (definitionMatch.Success)
-        {
-            AddMarkdownTargetReference(
-                definitionMatch.Groups["target"].Value,
-                definitionMatch.Groups["target"].Index,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                container);
             return;
-        }
 
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MarkdownInlineLinkRegex, scanLine, references))
         {
@@ -428,19 +426,23 @@ internal static class MarkupSchemaReferenceExtractor
         {
             var label = match.Groups["label"].Value.Trim();
             if (label.Length == 0)
-                continue;
+                label = match.Groups["text"].Value.Trim();
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                NormalizeMarkdownAnchor(label),
-                match.Groups["label"].Index,
-                "reference",
-                context,
-                lineNumber,
-                container,
-                "markdown");
+            if (label.Length > 0
+                && state.MarkdownReferenceTargets?.TryGetValue(label, out var target) == true)
+            {
+                AddMarkdownTargetReference(
+                    target,
+                    match.Groups["label"].Success
+                        ? match.Groups["label"].Index
+                        : match.Groups["text"].Index,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    container);
+            }
         }
     }
 
@@ -458,19 +460,19 @@ internal static class MarkupSchemaReferenceExtractor
         if (target.Length == 0)
             return;
 
-        if (target.StartsWith("#", StringComparison.Ordinal))
+        var fragmentIndex = target.IndexOf('#');
+        if (fragmentIndex == 0)
         {
-            ReferenceExtractor.AddReference(
+            AddMarkdownAnchorReference(
+                target[1..],
+                targetIndex,
+                targetQualifier: null,
+                context,
+                lineNumber,
                 references,
                 seen,
                 fileId,
-                NormalizeMarkdownAnchor(target),
-                targetIndex,
-                "reference",
-                context,
-                lineNumber,
-                container,
-                "markdown");
+                container);
             return;
         }
 
@@ -485,6 +487,76 @@ internal static class MarkupSchemaReferenceExtractor
             lineNumber,
             container,
             "markdown");
+
+        if (fragmentIndex > 0
+            && !target.Contains("://", StringComparison.Ordinal)
+            && !target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
+        {
+            AddMarkdownAnchorReference(
+                target[(fragmentIndex + 1)..],
+                targetIndex + fragmentIndex + 1,
+                target[..fragmentIndex],
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                container);
+        }
+    }
+
+    private static void AddMarkdownAnchorReference(
+        string anchor,
+        int targetIndex,
+        string? targetQualifier,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        ReferenceDedupeSet seen,
+        long fileId,
+        SymbolRecord? container)
+    {
+        var explicitAnchorIdentity = MarkdownAnchorIdentity.DecodeExplicitAnchorFragment(anchor);
+        var headingIdentity = MarkdownAnchorIdentity.NormalizeHeadingFragment(anchor);
+        if (explicitAnchorIdentity.Length == 0)
+            return;
+
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            explicitAnchorIdentity,
+            targetIndex,
+            "reference",
+            context,
+            lineNumber,
+            container,
+            "markdown",
+            targetQualifier,
+            sourceLength: anchor.Length,
+            identitySymbolNameFolded: headingIdentity);
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildMarkdownReferenceTargets(string[] lines)
+    {
+        var targets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var scanState = new MarkupState();
+        foreach (var line in lines)
+        {
+            if (TryToggleMarkdownFence(line, scanState) || scanState.InMarkdownFence)
+                continue;
+
+            var match = MarkdownReferenceDefinitionRegex.Match(StripMarkdownInlineCode(line));
+            if (!match.Success)
+                continue;
+
+            var label = match.Groups["label"].Value.Trim();
+            var target = NormalizeMarkdownLinkTarget(match.Groups["target"].Value);
+            if (label.Length > 0 && target.Length > 0)
+                targets[label] = target;
+        }
+
+        return targets;
     }
 
     private static string StripGraphQLComment(string line)
@@ -592,7 +664,7 @@ internal static class MarkupSchemaReferenceExtractor
             return;
 
         if (referenceKind == "reference")
-            target = NormalizeMarkdownAnchor(target);
+            target = MarkdownAnchorIdentity.NormalizeHeadingFragment(target);
 
         AddHtmlReference(references, seen, fileId, target, targetIndex, referenceKind, context, lineNumber, container);
     }
@@ -737,43 +809,6 @@ internal static class MarkupSchemaReferenceExtractor
         if (target.Length >= 2 && target[0] == '<' && target[^1] == '>')
             target = target[1..^1].Trim();
         return target;
-    }
-
-    private static string NormalizeMarkdownAnchor(string value)
-    {
-        var anchor = value.Trim().TrimStart('#').Trim();
-        if (anchor.Length == 0)
-            return string.Empty;
-
-        var chars = new char[anchor.Length];
-        var length = 0;
-        var previousDash = false;
-        foreach (var originalChar in anchor)
-        {
-            var ch = char.ToLowerInvariant(originalChar);
-            if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '-')
-            {
-                chars[length++] = ch;
-                previousDash = ch == '-';
-            }
-            else if (char.IsWhiteSpace(ch) && !previousDash)
-            {
-                chars[length++] = '-';
-                previousDash = true;
-            }
-        }
-
-        var start = 0;
-        while (start < length && chars[start] == '-')
-            start++;
-
-        var endExclusive = length;
-        while (endExclusive > start && chars[endExclusive - 1] == '-')
-            endExclusive--;
-
-        return start == endExclusive
-            ? string.Empty
-            : new string(chars, start, endExclusive - start);
     }
 
     private static void AddReference(

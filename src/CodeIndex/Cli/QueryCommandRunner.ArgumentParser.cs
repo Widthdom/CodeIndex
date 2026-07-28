@@ -27,6 +27,9 @@ public static partial class QueryCommandRunner
         private readonly string? defaultLimitError;
         private int? totalLimit;
         private string? lang;
+        private string? rawLang;
+        private bool allowUnknownLang;
+        private bool languageValidationError;
         private string? kind;
         private string? unusedBucket;
         private string? minUnusedConfidence;
@@ -218,6 +221,7 @@ public static partial class QueryCommandRunner
             var resolvedDbPath = dbResolution.DbPath;
 
             ResolveProjectFilters(resolvedDbPath);
+            ResolveLanguageFilter(resolvedDbPath);
             ValidateParsedOptions();
             ApplySearchSourceOptionDefaults();
             ValidateEnvironmentDefaults();
@@ -265,6 +269,71 @@ public static partial class QueryCommandRunner
                 AddParseError($"Error: duplicate --named-query name '{ConsoleUi.FormatBoundedValue(duplicateNamedQuery.Key)}'. Use unique names so grouped results are unambiguous.");
             if (duplicateConfidenceExplicit && duplicateThresholdExplicit)
                 AddParseError("Error: --duplicate-confidence and --duplicate-threshold cannot be combined; use the preset or the explicit score threshold.");
+        }
+
+        private void ResolveLanguageFilter(string resolvedDbPath)
+        {
+            if (rawLang == null)
+            {
+                if (allowUnknownLang)
+                {
+                    languageValidationError = true;
+                    AddParseError($"Error [{CommandErrorCodes.UsageError}]: --allow-unknown-lang requires --lang <lang>.");
+                }
+                return;
+            }
+
+            var input = rawLang.Trim();
+            var primaryRoot = s_batchReader != null && dbPathExplicit
+                ? ResolveProjectRootForDbPath(resolvedDbPath, dbPathExplicit).Root
+                : ResolveProjectFilterRoot(resolvedDbPath, dbPathExplicit).Root;
+            var queryRoots = workspaceDbPaths
+                .Select(path => ResolveProjectRootForDbPath(DbPathResolver.NormalizeDbPath(path), dbPathExplicit: true).Root)
+                .Prepend(primaryRoot)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var queryRoot in queryRoots)
+            {
+                foreach (var (alias, registeredCanonical) in DbReader.GetQueryLanguageAliases(queryRoot))
+                    aliases.TryAdd(alias, registeredCanonical);
+            }
+            var lookupKey = DbReader.NormalizeQueryLanguageLookupKey(input);
+            if (lookupKey.Length == 0)
+            {
+                languageValidationError = true;
+                AddParseError(
+                    $"Error [{CommandErrorCodes.UsageError}]: --lang must contain at least one letter or digit; got '{ConsoleUi.FormatBoundedValue(input)}'.");
+                return;
+            }
+            if (aliases.TryGetValue(lookupKey, out var canonical))
+            {
+                lang = canonical;
+                return;
+            }
+
+            if (allowUnknownLang)
+            {
+                // An unregistered plugin ID is an explicit escape hatch. Keep its spelling
+                // intact (apart from surrounding whitespace) so punctuation and case still
+                // match the exact value stored in files.lang.
+                // 未登録 plugin ID は明示的な escape hatch として扱い、前後の空白以外は
+                // 変更しない。句読点と大小文字を files.lang の保存値へ正確に一致させる。
+                lang = input;
+                return;
+            }
+
+            var suggestions = ConsoleUi.FindClosestMatches(lookupKey, aliases.Keys)
+                .Select(candidate => aliases[candidate])
+                .Distinct(StringComparer.Ordinal)
+                .Take(3)
+                .ToArray();
+            var suggestionText = suggestions.Length == 0
+                ? string.Empty
+                : $" Did you mean {string.Join(", ", suggestions.Select(value => $"'{ConsoleUi.FormatBoundedValue(value)}'"))}?";
+            languageValidationError = true;
+            AddParseError(
+                $"Error [{CommandErrorCodes.UsageError}]: unknown language identifier '{ConsoleUi.FormatBoundedValue(input)}'.{suggestionText} " +
+                "Use --allow-unknown-lang only for an unregistered plugin language ID.");
         }
 
         private void ApplySearchSourceOptionDefaults()
@@ -316,6 +385,8 @@ public static partial class QueryCommandRunner
                 TotalLimit = totalLimit,
                 LimitExplicit = limitExplicit,
                 Lang = lang,
+                AllowUnknownLang = allowUnknownLang,
+                LanguageValidationError = languageValidationError,
                 Kind = kind,
                 UnusedBucket = unusedBucket,
                 MinUnusedConfidence = minUnusedConfidence,

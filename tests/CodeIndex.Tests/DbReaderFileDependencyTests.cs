@@ -117,6 +117,183 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void MarkdownFragmentsResolveHeadingAndExplicitAnchorDefinitionsWithoutNameOnlyDependencies_Issue4846()
+    {
+        InsertIndexedFile(
+            "docs/issue4846/target.md",
+            "markdown",
+            """
+            # Error codes
+
+            <a id="custom-anchor"></a>
+            <a id="api.v2"></a>
+            <a id="apiv2"></a>
+            <a id="CaseID"></a>
+            <a id="A&amp;B"></a>
+
+            ## [Linked API](https://example.test) &amp; `SDK` <span>Guide</span>
+
+            [Setext API](https://example.test) &amp; <em>SDK</em>
+            ---
+
+            ## _Emphasized_ API
+
+            &lt;SDK&gt; _Guide_
+            ---
+            """);
+        InsertIndexedFile(
+            "docs/issue4846/unrelated.md",
+            "markdown",
+            """
+            # Error codes
+
+            ## Local target
+            """);
+        InsertIndexedFile(
+            "docs/issue4846/source.md",
+            "markdown",
+            """
+            # Source
+
+            [local](#local-target)
+            [cross](target.md#error-codes)
+            [explicit](target.md#custom-anchor)
+            [punctuated](target.md#api.v2)
+            [plain](target.md#apiv2)
+            [case-sensitive](target.md#Case%49D)
+            [wrong-case](target.md#caseid)
+            [entity](target.md#A&amp;B)
+            [inline-heading](target.md#linked-api-sdk-guide)
+            [setext-heading](target.md#setext-api-sdk)
+            [emphasis-heading](target.md#emphasized-api)
+            [entity-heading](target.md#sdk-guide)
+            [broken](target.md#missing-heading)
+
+            ## Local target
+            """);
+
+        var definition = Assert.Single(_reader.GetDefinitions(
+            "error-codes",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"]));
+        Assert.Equal("Error codes", definition.Name);
+        Assert.Equal("heading", definition.Kind);
+        Assert.Single(_reader.GetDefinitions(
+            "Error codes",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
+        Assert.Equal(
+            1,
+            _reader.CountDefinitionsTotal(
+                "error-codes",
+                lang: "markdown",
+                pathPatterns: ["docs/issue4846/target.md"]).Count);
+        Assert.Equal(
+            1,
+            _reader.CountSearchSymbolsTotal(
+                "error-codes",
+                lang: "markdown",
+                pathPatterns: ["docs/issue4846/target.md"]).Count);
+        Assert.Equal(
+            1,
+            _reader.CountSearchSymbols(
+                "error-codes",
+                lang: "markdown",
+                pathPatterns: ["docs/issue4846/target.md"]));
+        Assert.True(_writer.AllFoldedColumnValuesMatchCurrentFold());
+        Assert.Single(_reader.GetDefinitions(
+            "linked-api-sdk-guide",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
+        Assert.Single(_reader.GetDefinitions(
+            "setext-api-sdk",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
+        Assert.Single(_reader.GetDefinitions(
+            "emphasized-api",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
+        Assert.Single(_reader.GetDefinitions(
+            "sdk-guide",
+            lang: "markdown",
+            pathPatterns: ["docs/issue4846/target.md"],
+            exact: true));
+
+        using (var crossDocumentShape = _db.Connection.CreateCommand())
+        {
+            crossDocumentShape.CommandText = """
+                SELECT r.target_qualifier || '|' ||
+                       markdown_resolve_path(source_file.path, r.target_qualifier) || '|' ||
+                       target.name_folded
+                FROM symbol_references AS r
+                JOIN files AS source_file ON source_file.id = r.file_id
+                JOIN files AS target_file
+                  ON target_file.path = markdown_resolve_path(source_file.path, r.target_qualifier)
+                JOIN symbols AS target
+                  ON target.file_id = target_file.id
+                 AND target.name_folded = r.symbol_name_folded
+                WHERE source_file.path = 'docs/issue4846/source.md'
+                  AND r.symbol_name_folded = 'error-codes';
+                """;
+            Assert.Equal(
+                "target.md|docs/issue4846/target.md|error-codes",
+                Convert.ToString(crossDocumentShape.ExecuteScalar()));
+        }
+
+        var markdownReferences = _reader.SearchReferences(
+            limit: 20,
+            lang: "markdown",
+            referenceKind: "reference",
+            pathPatterns: ["docs/issue4846/source.md"]);
+        foreach (var resolvedName in new[]
+                 {
+                     "local-target",
+                     "error-codes",
+                     "custom-anchor",
+                     "api.v2",
+                     "apiv2",
+                     "CaseID",
+                     "A&B",
+                     "linked-api-sdk-guide",
+                     "setext-api-sdk",
+                     "emphasized-api",
+                     "sdk-guide",
+                 })
+        {
+            var reference = Assert.Single(
+                markdownReferences,
+                candidate => candidate.SymbolName == resolvedName);
+            Assert.True(
+                reference.ResolutionState == "resolved",
+                $"Expected Markdown reference '{resolvedName}' to resolve, but its state was '{reference.ResolutionState}' with {reference.ResolutionCandidateCount} candidates.");
+            Assert.NotNull(reference.TargetSymbolId);
+            Assert.Equal(1, reference.ResolutionCandidateCount);
+        }
+
+        foreach (var unresolvedName in new[] { "caseid", "missing-heading" })
+        {
+            var unresolvedReference = Assert.Single(
+                markdownReferences,
+                candidate => candidate.SymbolName == unresolvedName);
+            Assert.Equal("unresolved", unresolvedReference.ResolutionState);
+            Assert.Null(unresolvedReference.TargetSymbolId);
+            Assert.Equal(0, unresolvedReference.ResolutionCandidateCount);
+        }
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "markdown");
+        Assert.Contains(dependencies, dependency =>
+            dependency.SourcePath == "docs/issue4846/source.md"
+            && dependency.TargetPath == "docs/issue4846/target.md");
+        Assert.DoesNotContain(dependencies, dependency =>
+            dependency.SourcePath == "docs/issue4846/source.md"
+            && dependency.TargetPath == "docs/issue4846/unrelated.md");
+    }
+
+    [Fact]
     public void GetFileDependencies_CapsDenseSymbolSample_Issue3155()
     {
         var sourceFileId = InsertSyntheticDependencyFile("src/DenseCaller.cs");
