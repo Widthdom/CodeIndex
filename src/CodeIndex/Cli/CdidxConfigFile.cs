@@ -588,6 +588,7 @@ internal static class CdidxConfigFile
 
     internal static int RunValidate(string[] args, JsonSerializerOptions jsonOptions)
     {
+        const string usage = "cdidx validate-config [--json]";
         var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
         var json = false;
         var remaining = new List<string>();
@@ -606,7 +607,10 @@ internal static class CdidxConfigFile
                     jsonOptions,
                     "validate-config supports --json only; --json=<format> is not supported.",
                     CommandExitCodes.InvalidArgument,
-                    "use `cdidx validate-config --json`.");
+                    "use `cdidx validate-config --json`.",
+                    usage,
+                    CommandErrorCodes.UsageError,
+                    command: "validate-config");
             }
 
             remaining.Add(arg);
@@ -618,7 +622,10 @@ internal static class CdidxConfigFile
                 jsonOptions,
                 "validate-config does not accept positional arguments.",
                 CommandExitCodes.UsageError,
-                "run `cdidx validate-config` from the workspace whose config should be validated.");
+                "run `cdidx validate-config` from the workspace whose config should be validated.",
+                usage,
+                CommandErrorCodes.UsageError,
+                command: "validate-config");
 
         var result = Load(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : CdidxEnvironment.GetProcessEnvironmentVariable(name));
         if (result.Failed)
@@ -628,7 +635,12 @@ internal static class CdidxConfigFile
                 jsonOptions,
                 result.Error ?? "configuration file validation failed.",
                 CommandExitCodes.UsageError,
-                "fix or remove the discovered config file.");
+                "fix or remove the discovered config file.",
+                usage,
+                CommandErrorCodes.ConfigInvalid,
+                "configuration",
+                "validate-config",
+                result.ConfigPath == null ? null : FormatConfigDiagnosticPath(result.ConfigPath));
         }
 
         var configFileFound = result.Loaded;

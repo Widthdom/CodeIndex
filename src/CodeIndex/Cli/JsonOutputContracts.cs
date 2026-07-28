@@ -87,6 +87,9 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("error_code")] string? ErrorCode = null,
     [property: JsonPropertyName("path")] string? Path = null,
     [property: JsonPropertyName("category")] string? Category = null,
+    [property: JsonPropertyName("command")] string? Command = null,
+    [property: JsonPropertyName("exit_code")] int? ExitCode = null,
+    [property: JsonPropertyName("usage")] string? Usage = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DoctorJsonResult(

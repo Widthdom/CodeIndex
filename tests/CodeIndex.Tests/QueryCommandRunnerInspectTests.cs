@@ -1673,12 +1673,18 @@ public partial class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--json=<format> is not supported by outline", stderr, StringComparison.Ordinal);
-        Assert.Contains("outline emits one JSON object", stderr, StringComparison.Ordinal);
-        Assert.Contains("use plain `--json`", stderr, StringComparison.Ordinal);
-        Assert.Contains("paging metadata", stderr, StringComparison.Ordinal);
-        Assert.Contains("next_cursor", stderr, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var error = document.RootElement;
+        Assert.Equal("error", error.GetProperty("status").GetString());
+        Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+        Assert.Equal("usage", error.GetProperty("category").GetString());
+        Assert.Equal("outline", error.GetProperty("command").GetString());
+        Assert.Contains("--json=<format> is not supported by outline", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Contains("outline emits one JSON object", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Contains("use plain `--json`", error.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        Assert.Contains("paging metadata", error.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        Assert.Contains("next_cursor", error.GetProperty("hint").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2157,9 +2163,16 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, mismatchedExitCode);
-            Assert.Equal(string.Empty, mismatchedStdout);
-            Assert.Contains("query scope, filters, or ordering", mismatchedStderr, StringComparison.Ordinal);
-            Assert.Contains("restart required", mismatchedStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, mismatchedStderr);
+            using (var mismatchedDocument = ParseJsonOutput(mismatchedStdout))
+            {
+                var error = mismatchedDocument.RootElement;
+                Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+                Assert.Equal("usage", error.GetProperty("category").GetString());
+                Assert.Equal("outline", error.GetProperty("command").GetString());
+                Assert.Contains("query scope, filters, or ordering", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+                Assert.Contains("restart required", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+            }
 
             var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/many.cs", "--db", dbPath, "--json", "--kind", "function", "--limit", "2", "--cursor", nextCursor!, "--outline-fields", "name,line,kind"],
@@ -2190,9 +2203,16 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, staleExitCode);
-            Assert.Equal(string.Empty, staleStdout);
-            Assert.Contains("index generation changed", staleStderr, StringComparison.Ordinal);
-            Assert.Contains("restart required", staleStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, staleStderr);
+            using (var staleDocument = ParseJsonOutput(staleStdout))
+            {
+                var error = staleDocument.RootElement;
+                Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+                Assert.Equal("usage", error.GetProperty("category").GetString());
+                Assert.Equal("outline", error.GetProperty("command").GetString());
+                Assert.Contains("index generation changed", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+                Assert.Contains("restart required", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+            }
         }
         finally
         {
@@ -2213,8 +2233,13 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("invalid --kind value `missing`", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+            Assert.Equal("usage", error.GetProperty("category").GetString());
+            Assert.Equal("outline", error.GetProperty("command").GetString());
+            Assert.Contains("invalid --kind value `missing`", error.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
         finally
         {
