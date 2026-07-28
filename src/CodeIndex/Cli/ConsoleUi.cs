@@ -126,7 +126,7 @@ public static partial class ConsoleUi
         ("db-checkpoints", "cdidx db checkpoints --list|--delete <name<=128>|--prune [--keep <n>] [--dry-run] [--db <path>] [--json]"),
         ("db-restore", "cdidx db restore <name<=128> [--dry-run] [--db <path>] [--json]"),
         ("db-restore-backups", "cdidx db restore-backups --list|--prune [--keep <n>] [--dry-run] [--db <path>] [--json]"),
-        ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>] [--offset <n>]"),
+        ("diff", $"cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--include-content] [--max-json-bytes <n={DiffCommandRunner.MinDiffJsonBytes}..{DiffCommandRunner.MaxDiffJsonBytes}>] [--limit <n<=10000>] [--offset <n>|--cursor <cursor>]"),
         ("report", "cdidx report --output <bundle.tgz> [--overwrite] [--db <path>] [--json] [--redact-paths] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|compact>] [--compact] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--exact-name] [--count] [--with-paths]"),

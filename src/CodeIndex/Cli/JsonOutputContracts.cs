@@ -460,11 +460,65 @@ internal sealed record DiffJsonResult(
     [property: JsonPropertyName("next_offset")] int? NextOffset = null,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("diagnostics")] List<DiffDiagnosticJsonResult>? Diagnostics = null,
+    [property: JsonPropertyName("records")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<DiffRecordJsonResult>? Records = null,
+    [property: JsonPropertyName("total_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? TotalCount = null,
+    [property: JsonPropertyName("returned_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? ReturnedCount = null,
+    [property: JsonPropertyName("omitted_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? OmittedCount = null,
+    [property: JsonPropertyName("content_included")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ContentIncluded = null,
+    [property: JsonPropertyName("content_policy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContentPolicy = null,
+    [property: JsonPropertyName("max_json_bytes")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxJsonBytes = null,
+    [property: JsonPropertyName("selection_fingerprint")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SelectionFingerprint = null,
+    [property: JsonPropertyName("current_cursor")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CurrentCursor = null,
+    [property: JsonPropertyName("next_cursor")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursor = null,
+    [property: JsonPropertyName("replay")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DiffReplayJsonResult? Replay = null,
+    [property: JsonPropertyName("truncation_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TruncationReason = null,
+    [property: JsonPropertyName("first_omitted_record_bytes")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FirstOmittedRecordBytes = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DiffDiagnosticJsonResult(
     [property: JsonPropertyName("code")] string Code,
     [property: JsonPropertyName("message")] string Message);
+
+internal sealed record DiffRecordJsonResult(
+    [property: JsonPropertyName("area")] string Area,
+    [property: JsonPropertyName("side")] string Side,
+    [property: JsonPropertyName("identity_sha256")] string IdentitySha256,
+    [property: JsonPropertyName("fields")] List<DiffFieldJsonResult> Fields);
+
+internal sealed record DiffFieldJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("value_type")] string ValueType,
+    [property: JsonPropertyName("value")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Value,
+    [property: JsonPropertyName("encoding")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Encoding,
+    [property: JsonPropertyName("sha256")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Sha256,
+    [property: JsonPropertyName("byte_length")] long ByteLength,
+    [property: JsonPropertyName("redacted")] bool Redacted);
+
+internal sealed record DiffReplayJsonResult(
+    [property: JsonPropertyName("cursor_version")] string CursorVersion,
+    [property: JsonPropertyName("selection_fingerprint")] string SelectionFingerprint,
+    [property: JsonPropertyName("current_cursor")] string CurrentCursor,
+    [property: JsonPropertyName("next_cursor")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextCursor,
+    [property: JsonPropertyName("next_page_arguments")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<string>? NextPageArguments,
+    [property: JsonPropertyName("database_arguments_required")] bool DatabaseArgumentsRequired = true);
 
 internal sealed record DiffMetadataDriftJsonResult(
     [property: JsonPropertyName("key")] string Key,
@@ -1037,8 +1091,11 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(DefinitionResult))]
 [JsonSerializable(typeof(Dictionary<string, int>))]
 [JsonSerializable(typeof(Dictionary<string, long>))]
+[JsonSerializable(typeof(DiffFieldJsonResult))]
 [JsonSerializable(typeof(DiffJsonResult))]
 [JsonSerializable(typeof(DiffMetadataDriftJsonResult))]
+[JsonSerializable(typeof(DiffRecordJsonResult))]
+[JsonSerializable(typeof(DiffReplayJsonResult))]
 [JsonSerializable(typeof(DiffSummaryOnlyJsonResult))]
 [JsonSerializable(typeof(DiffSummaryJsonResult))]
 [JsonSerializable(typeof(ExactZeroHintResult))]
