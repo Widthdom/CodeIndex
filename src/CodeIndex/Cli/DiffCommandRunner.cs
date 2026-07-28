@@ -458,7 +458,13 @@ public static class DiffCommandRunner
         DiffRecordPageCollector? collector = null;
         if (options.Detailed && !options.SummaryOnly)
         {
-            collector = new DiffRecordPageCollector(options.Offset, options.Limit, options.IncludeContent);
+            collector = new DiffRecordPageCollector(
+                options.Offset,
+                options.Limit,
+                options.IncludeContent,
+                options.Json
+                    ? options.MaxJsonBytes ?? DefaultDiffJsonBytes
+                    : null);
 
             cancellationToken.ThrowIfCancellationRequested();
             identical &= CollectOrderedRows(
@@ -583,7 +589,7 @@ public static class DiffCommandRunner
                 options.RightDb!,
                 options.IncludeContent);
             currentCursor = DiffCursorCodec.Encode(options.Offset, selectionFingerprint);
-            if (hasMore)
+            if (hasMore && records.Count > 0)
             {
                 nextOffset = checked(options.Offset + records.Count);
                 nextCursor = DiffCursorCodec.Encode(nextOffset.Value, selectionFingerprint);
@@ -594,10 +600,16 @@ public static class DiffCommandRunner
             {
                 diagnostics.Add(new DiffDiagnosticJsonResult(
                     "diff_records_truncated",
-                    hasMore
+                    hasMore && records.Count > 0
                         ? "Detailed diff records were omitted; use replay.next_page_arguments to continue from the next whole record."
+                        : hasMore && options.Limit == 0
+                            ? "Detailed diff records were omitted because --limit is 0; rerun with a positive --limit."
                         : "Detailed diff records before the requested offset were omitted from this page."));
             }
+        }
+        else if (hasMore && options.Limit > 0)
+        {
+            nextOffset = checked(options.Offset + options.Limit);
         }
 
         return new DiffJsonResult(
@@ -1452,12 +1464,20 @@ public static class DiffCommandRunner
         private readonly int _offset;
         private readonly int _limit;
         private readonly bool _includeContent;
+        private readonly int? _materializationByteBudget;
+        private long _materializedRecordBytes;
+        private bool _materializationBudgetReached;
 
-        internal DiffRecordPageCollector(int offset, int limit, bool includeContent)
+        internal DiffRecordPageCollector(
+            int offset,
+            int limit,
+            bool includeContent,
+            int? materializationByteBudget)
         {
             _offset = offset;
             _limit = limit;
             _includeContent = includeContent;
+            _materializationByteBudget = materializationByteBudget;
         }
 
         internal List<DiffRecordJsonResult> Records { get; } = [];
@@ -1465,8 +1485,26 @@ public static class DiffCommandRunner
 
         internal void Add(DiffRowSchema schema, string side, DiffRow row)
         {
-            if (TotalCount >= _offset && Records.Count < _limit)
-                Records.Add(CreateDiffRecord(schema, side, row, _includeContent));
+            if (TotalCount >= _offset &&
+                Records.Count < _limit &&
+                !_materializationBudgetReached)
+            {
+                var record = CreateDiffRecord(schema, side, row, _includeContent);
+                if (_materializationByteBudget is null)
+                {
+                    Records.Add(record);
+                }
+                else
+                {
+                    var recordBytes = JsonSerializer.SerializeToUtf8Bytes(
+                        record,
+                        CliJsonSerializerContext.Default.DiffRecordJsonResult).LongLength;
+                    Records.Add(record);
+                    _materializedRecordBytes = checked(_materializedRecordBytes + recordBytes);
+                    _materializationBudgetReached =
+                        _materializedRecordBytes > _materializationByteBudget.Value;
+                }
+            }
             TotalCount++;
         }
 

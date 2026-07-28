@@ -184,6 +184,44 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_PagedModesOnlyAdvertiseValidAdvancingContinuations_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_continuation_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_continuation_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            for (var i = 0; i < 3; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    leftDb,
+                    $"src/OnlyInLeft{i}.cs",
+                    "csharp",
+                    $"public class OnlyInLeft{i} {{ }}");
+            }
+
+            var (sampleExitCode, sampleOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--limit", "1"]);
+            var (detailedTextExitCode, detailedTextOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--detailed", "--limit", "1"]);
+
+            Assert.Equal(1, sampleExitCode);
+            using var sampleDocument = JsonDocument.Parse(sampleOutput);
+            Assert.True(sampleDocument.RootElement.GetProperty("has_more").GetBoolean());
+            Assert.Equal(1, sampleDocument.RootElement.GetProperty("next_offset").GetInt32());
+            Assert.Equal(1, detailedTextExitCode);
+            Assert.Contains("rerun with --offset 1", detailedTextOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain("rerun with --cursor", detailedTextOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DetailedJsonRedactsSensitiveTextUntilContentIsExplicitlyIncluded_Issue4859()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_private_left");
@@ -326,6 +364,47 @@ public class DiffCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, mismatchExitCode);
             using var mismatchDocument = JsonDocument.Parse(mismatchOutput);
             Assert.Equal("error", mismatchDocument.RootElement.GetProperty("status").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonLimitZeroWithholdsNonAdvancingReplay_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_zero_limit_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_zero_limit_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(
+                leftDb,
+                "src/OnlyInLeft.cs",
+                "csharp",
+                "public class OnlyInLeft { }");
+
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "0"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            Assert.True(root.GetProperty("has_more").GetBoolean());
+            Assert.Empty(root.GetProperty("records").EnumerateArray());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("next_offset").ValueKind);
+            Assert.False(root.TryGetProperty("next_cursor", out _));
+            var replay = root.GetProperty("replay");
+            Assert.False(replay.TryGetProperty("next_cursor", out _));
+            Assert.False(replay.TryGetProperty("next_page_arguments", out _));
+            Assert.Contains(
+                root.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("message").GetString()?.Contains(
+                    "positive --limit",
+                    StringComparison.Ordinal) == true);
         }
         finally
         {
@@ -750,6 +829,16 @@ public class DiffCommandRunnerTests
             Assert.Empty(boundedRoot.GetProperty("records").EnumerateArray());
             Assert.Equal("max_json_bytes", boundedRoot.GetProperty("truncation_reason").GetString());
             Assert.True(boundedRoot.GetProperty("first_omitted_record_bytes").GetInt32() > 0);
+            Assert.Equal(JsonValueKind.Null, boundedRoot.GetProperty("next_offset").ValueKind);
+            Assert.False(boundedRoot.TryGetProperty("next_cursor", out _));
+            var replay = boundedRoot.GetProperty("replay");
+            Assert.False(replay.TryGetProperty("next_cursor", out _));
+            Assert.False(replay.TryGetProperty("next_page_arguments", out _));
+            Assert.Contains(
+                boundedRoot.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("message").GetString()?.Contains(
+                    "increase the byte budget",
+                    StringComparison.OrdinalIgnoreCase) == true);
         }
         finally
         {

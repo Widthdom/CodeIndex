@@ -86,7 +86,7 @@ internal static class DiffResultWriter
         var context = CliJsonSerializerContextFactory.Create(jsonOptions);
         var sourceRecords = result.Records ?? [];
         var low = 0;
-        var high = sourceRecords.Count;
+        var high = GetSerializedRecordCeiling(sourceRecords, budget, context);
         DiffJsonResult? bestResult = null;
         string? bestJson = null;
         while (low <= high)
@@ -163,10 +163,10 @@ internal static class DiffResultWriter
         WriteList("files only in right", result.FilesOnlyInRight);
         if (options.Detailed)
             WriteRecords(result.Records ?? []);
-        if (result.HasMore && result.NextCursor is not null)
-            Console.WriteLine($"  more   : rerun with --cursor {result.NextCursor}");
-        else if (result.HasMore && result.NextOffset is int nextOffset)
+        if (result.HasMore && result.NextOffset is int nextOffset)
             Console.WriteLine($"  more   : rerun with --offset {nextOffset}");
+        else if (result.HasMore && result.Limit == 0)
+            Console.WriteLine("  more   : rerun with a positive --limit");
     }
 
     private static void WriteList(string label, List<string> values)
@@ -209,7 +209,10 @@ internal static class DiffResultWriter
         var totalCount = source.TotalCount ?? sourceRecords.Count;
         var omittedCount = totalCount - returnedCount;
         var hasMore = totalCount > (long)source.Offset + returnedCount;
-        var nextOffset = hasMore ? checked(source.Offset + returnedCount) : default(int?);
+        var canAdvance = hasMore && returnedCount > 0;
+        var nextOffset = canAdvance
+            ? checked(source.Offset + returnedCount)
+            : default(int?);
         var selectionFingerprint = source.SelectionFingerprint
             ?? throw new InvalidOperationException("detailed diff selection fingerprint is missing");
         var currentCursor = source.CurrentCursor
@@ -225,10 +228,14 @@ internal static class DiffResultWriter
         {
             diagnostics.Add(new DiffDiagnosticJsonResult(
                 byteTruncated ? "diff_json_bytes_truncated" : "diff_records_truncated",
-                byteTruncated
+                byteTruncated && returnedCount == 0
+                    ? "No whole detailed diff record fits within --max-json-bytes; increase the byte budget or rerun without --include-content."
+                    : byteTruncated
                     ? "Detailed diff output stopped at a whole-record boundary to honor --max-json-bytes; use replay.next_page_arguments to continue."
-                    : hasMore
+                    : hasMore && returnedCount > 0
                         ? "Detailed diff records were omitted; use replay.next_page_arguments to continue from the next whole record."
+                        : hasMore && options.Limit == 0
+                            ? "Detailed diff records were omitted because --limit is 0; rerun with a positive --limit."
                         : "Detailed diff records before the requested offset were omitted from this page."));
         }
 
@@ -262,6 +269,26 @@ internal static class DiffResultWriter
             MaxJsonBytes = budget,
             FirstOmittedRecordBytes = firstOmittedRecordBytes,
         };
+    }
+
+    private static int GetSerializedRecordCeiling(
+        List<DiffRecordJsonResult> records,
+        int budget,
+        CliJsonSerializerContext context)
+    {
+        long measuredBytes = 0;
+        for (var i = 0; i < records.Count; i++)
+        {
+            var recordBytes = JsonSerializer.SerializeToUtf8Bytes(
+                records[i],
+                context.DiffRecordJsonResult).LongLength;
+            var separatorBytes = i == 0 ? 0 : 1;
+            if (recordBytes + separatorBytes > budget - measuredBytes)
+                return i + 1;
+            measuredBytes += recordBytes + separatorBytes;
+        }
+
+        return records.Count;
     }
 
     private static bool FitsJsonLine(string json, int maxJsonBytes)
