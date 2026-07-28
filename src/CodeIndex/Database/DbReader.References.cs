@@ -177,6 +177,15 @@ public partial class DbReader
         var startLineSql = GetSymbolColumnSql("start_line", "s.line");
         var endLineSql = GetSymbolColumnSql("end_line", "s.line");
         var signatureSql = GetSymbolColumnSql("signature");
+        var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
+            "target_file.lang",
+            "s.kind",
+            "s.name",
+            "s.id",
+            signatureSql,
+            GetSymbolColumnSql("container_name"),
+            GetSymbolColumnSql("container_qualified_name"),
+            GetSymbolColumnSql("family_key"));
         cmd.CommandText = $@"
             SELECT target_file.path,
                    target_file.lang,
@@ -196,6 +205,7 @@ public partial class DbReader
                    {GetSymbolColumnSql("visibility")} AS visibility,
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    s.id AS symbol_id,
+                   {logicalPartialKeySql} AS logical_partial_key,
                    MAX(CASE WHEN r.target_symbol_id = s.id THEN 1 ELSE 0 END) AS authoritative,
                    MIN(candidate.scope_rank) AS scope_rank
             FROM symbol_references AS r
@@ -243,8 +253,9 @@ public partial class DbReader
                     Visibility = GetNullableString(reader, 15),
                     ReturnType = GetNullableString(reader, 16),
                     SymbolId = reader.GetInt64(17),
+                    LogicalPartialKey = GetNullableString(reader, 18),
                 },
-                reader.GetInt32(18) != 0));
+                reader.GetInt32(19) != 0));
         }
 
         var truncated = candidates.Count > maxCandidates;

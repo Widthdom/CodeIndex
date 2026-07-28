@@ -2710,6 +2710,23 @@ but do not speak MCP. It also advertises full `textDocument` sync and
 conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
 `codeLens`, and `inlayHint` providers backed by indexed symbols and references
 where available.
+C# constructor navigation is source-position-aware. For `new Type(...)`,
+`textDocument/definition` and `textDocument/declaration` use the exact indexed
+reference site and invocation arity to select only matching explicit constructor
+symbols. When no explicit constructor is indexed, including implicit constructors
+on partial classes and positional records, they return one stable representative
+type declaration. This is separate from ordinary type-reference navigation, which
+may intentionally return every declaration in one logical partial-type family.
+Static constructors and finalizers are never treated as `new` targets. Primary
+constructor declarations remain eligible beside secondary constructors, generic
+type arity scopes constructor identity, and same-arity overloads remain constructor
+locations instead of falling back to same-named type declarations. Default
+construction of value types remains attached to the type declaration even when
+other explicit constructors exist, and enum and delegate construction remain
+navigable.
+CLI `definition` and `goto` are name-based; use `--kind function` for explicit
+constructors, or a type kind together with `--group-partials` for the logical type
+family.
 Clients must follow the standard LSP lifecycle: send one `initialize` request
 first, optionally send the `initialized` notification after its response, then
 send ordinary requests, finish with one `shutdown` request, and finally send the
@@ -2736,9 +2753,13 @@ capped at 4194304 bytes, the session holds at most 64 live documents and
 16777216 aggregate live-document bytes, and older entries are evicted when a
 budget is exceeded. `textDocument/didChange` processes only the last 64 change
 entries in an oversized `contentChanges` array, preserving the latest full-text
-update without retaining unbounded intermediate edits. Position-based requests
-read the live buffer first, so unsaved edits can drive token lookup without
-writing back to the CodeIndex database.
+update without retaining unbounded intermediate edits. A full-text change whose
+numeric document version is older than or equal to the latest accepted version
+does not replace that live buffer. Position-based requests read the live buffer
+first, so unsaved edits can drive token lookup without writing back to the
+CodeIndex database. `textDocument/documentSymbol` also re-extracts the latest
+accepted live text through the normal language extractor and container pipeline;
+when no live buffer is available, it falls back to indexed symbols.
 Incoming `textDocument.uri` values must be strings, must be absolute `file:`
 URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
@@ -2761,9 +2782,9 @@ strings are capped at 1000 characters before symbol search runs.
 `workspace/symbol` accepts optional numeric `limit` / `maxResults` parameters
 and clamps them to 1000 results. `textDocument/documentSymbol` returns
 hierarchical `DocumentSymbol` children when container metadata is available,
-returns at most 1000 indexed symbols, truncates each `detail` string to 512
-characters with `...`, and trims the tree before the result array exceeds
-524288 JSON bytes.
+returns at most 1000 symbols from the latest accepted live buffer or the index,
+truncates each `detail` string to 512 characters with `...`, and trims the tree
+before the result array exceeds 524288 JSON bytes.
 Both symbol providers advertise work-done progress. Requests may pass bounded
 string or integer `partialResultToken` / `workDoneToken` values. With a partial
 result token, the server sends deterministic `$/progress` notifications capped
@@ -5836,6 +5857,22 @@ MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 
 indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
 `documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
 advertise します。
+C# の constructor navigation は source position を考慮します。`new Type(...)` に
+対する `textDocument/definition` と `textDocument/declaration` は、index 済みの
+正確な reference site と invocation arity を使い、一致する明示 constructor symbol
+だけを選択します。partial class の暗黙 constructor や positional record のように
+明示 constructor が index されていない場合は、安定した代表 type declaration を
+1 件返します。この経路は通常の type-reference navigation と分離されており、後者は
+1 つの logical partial-type family に属する全 declaration を意図的に返す場合があります。
+static constructor と finalizer は `new` の target として扱いません。primary constructor
+declaration は secondary constructor と併存しても候補に残り、generic type arity で
+constructor identity を限定します。同一 arity の overload も同名 type declaration へ
+fallback せず、constructor location の集合として返します。他の明示 constructor が
+存在する場合も value type の default construction は type declaration に結び付けたままにし、
+enum と delegate の construction も navigation 可能な状態を保ちます。
+CLI の `definition` と `goto` は名前ベースなので、明示 constructor には
+`--kind function`、logical type family には type kind と `--group-partials` を
+組み合わせてください。
 client は標準の LSP lifecycle に従う必要があります。最初に `initialize` request を 1 回だけ
 送り、その response 後に必要なら `initialized` notification を送り、通常 request を処理した後、
 `shutdown` request、最後に `exit` notification の順で終了してください。初期化完了前に受信した
@@ -5857,8 +5894,11 @@ open buffer は上限付きの in-memory cache に保持されます。各 docum
 session 全体では最大 64 live documents / 16777216 aggregate live-document bytes に制限され、
 budget を超えた場合は古い entry から evict されます。`textDocument/didChange` は過大な
 `contentChanges` array では最後の 64 change entries だけを処理し、unbounded な intermediate edit を
-保持せずに最新の full-text update を維持します。position-based request は live buffer を先に読むため、
-未保存の編集内容でも CodeIndex database に書き戻さず token lookup に利用できます。
+保持せずに最新の full-text update を維持します。numeric document version が最後に受理した version
+以下の full-text change は、その live buffer を置き換えません。position-based request は live buffer
+を先に読むため、未保存の編集内容でも CodeIndex database に書き戻さず token lookup に利用できます。
+`textDocument/documentSymbol` も最後に受理した live text を通常の language extractor と
+container pipeline で再抽出し、live buffer がない場合は indexed symbol に fallback します。
 受信した `textDocument.uri` は string かつ absolute `file:` URI である必要があり、
 4096 文字を超える場合は URI parse の前に拒否されます。これは MCP resource URI の上限と
 揃えており、エラー応答が過大にならないようにします。
@@ -5878,8 +5918,9 @@ invalid request として拒否します。
 `workspace/symbol` の query string は symbol search を実行する前に 1000 文字で上限をかけます。
 `workspace/symbol` は任意の numeric `limit` / `maxResults` parameter を受け取り、1000 件までに
 clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
-`DocumentSymbol` children を返し、最大 1000 件の indexed symbol を返し、各 `detail` string を
-`...` 付きの 512 文字に切り詰め、result tree が 524288 JSON bytes を超える前に trim します。
+`DocumentSymbol` children を返し、最後に受理した live buffer または index から最大 1000 件の
+symbol を返し、各 `detail` string を `...` 付きの 512 文字に切り詰め、result tree が
+524288 JSON bytes を超える前に trim します。
 両方の symbol provider は work-done progress を advertise します。request は上限付きの string
 または integer の `partialResultToken` / `workDoneToken` を渡せます。partial-result token が
 ある場合、server は決定的な順序の `$/progress` notification を1件あたり最大100 symbol・
