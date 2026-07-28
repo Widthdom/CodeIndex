@@ -463,7 +463,7 @@ public partial class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         out bool isSchemaTooNew,
-        out SqliteException? sqliteException,
+        out Exception? validationException,
         CancellationToken cancellationToken = default)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
         {
@@ -477,7 +477,7 @@ public partial class DbContext : IDisposable
         out message,
         out isNotFound,
         out isSchemaTooNew,
-        out sqliteException,
+        out validationException,
         cancellationToken);
 
     internal static bool TryValidateExistingCodeIndexDb(
@@ -493,12 +493,31 @@ public partial class DbContext : IDisposable
             createConnection,
             openConnection,
             sleep,
+            out message,
+            out isNotFound,
+            out _,
+            cancellationToken);
+
+    internal static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        Func<string, SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep,
+        out string message,
+        out bool isNotFound,
+        out Exception? validationException,
+        CancellationToken cancellationToken = default)
+        => TryValidateExistingCodeIndexDb(
+            dbPath,
+            createConnection,
+            openConnection,
+            sleep,
             requireWritable: true,
             requireSupportedUserVersion: false,
             out message,
             out isNotFound,
             out _,
-            out _,
+            out validationException,
             cancellationToken);
 
     private static bool TryValidateExistingCodeIndexDb(
@@ -511,13 +530,13 @@ public partial class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         out bool isSchemaTooNew,
-        out SqliteException? sqliteException,
+        out Exception? validationException,
         CancellationToken cancellationToken = default)
     {
         message = string.Empty;
         isNotFound = false;
         isSchemaTooNew = false;
-        sqliteException = null;
+        validationException = null;
         cancellationToken.ThrowIfCancellationRequested();
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
@@ -611,7 +630,7 @@ public partial class DbContext : IDisposable
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 14)
         {
-            sqliteException = ex;
+            validationException = ex;
             var category = ClassifyCantOpenFailure(openTarget, ex.SqliteExtendedErrorCode);
             message = FormatDatabaseOpenFailure(category, dbPath);
             isNotFound = category == DatabaseOpenMissingCategory;
@@ -619,12 +638,13 @@ public partial class DbContext : IDisposable
         }
         catch (SqliteException ex)
         {
-            sqliteException = ex;
+            validationException = ex;
             message = $"database is not an existing CodeIndex DB: {dbPath}";
             return false;
         }
         catch (CodeIndexException ex)
         {
+            validationException = ex;
             message = ex.Message;
             return false;
         }

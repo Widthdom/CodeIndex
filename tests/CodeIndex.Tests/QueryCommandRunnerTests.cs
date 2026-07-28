@@ -765,6 +765,34 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunVacuum_NewerSchemaJson_PreservesStructuredClassification_Issue4856()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_newer_schema");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var connection = new SqliteConnection(
+                   new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA user_version = {DbContext.CurrentSchemaVersion | (DbContext.CurrentSchemaVersion + 1)};";
+            command.ExecuteNonQuery();
+        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal(CommandErrorCodes.SchemaTooNew, json.GetProperty("error_code").GetString());
+        Assert.Equal("database_schema_too_new", json.GetProperty("category").GetString());
+        Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+        Assert.DoesNotContain(project.Root, stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunVacuum_RejectsNonCodeIndexDatabase_Issue1631()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_foreign_db");

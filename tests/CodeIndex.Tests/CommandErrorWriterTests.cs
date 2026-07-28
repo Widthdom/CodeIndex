@@ -34,6 +34,39 @@ public class CommandErrorWriterTests
     }
 
     [Theory]
+    [InlineData(CommandErrorCodes.SchemaTooNew, CommandErrorCodes.SchemaTooNew, "database_schema_too_new", CommandExitCodes.DatabaseError)]
+    [InlineData(CommandErrorCodes.DbLocked, CommandErrorCodes.DbLocked, "database_locked", CommandExitCodes.TransientDatabaseError)]
+    public void MaintenanceClassifier_PreservesStructuredDatabaseFailures_Issue4856(
+        string structuredCode,
+        string expectedErrorCode,
+        string expectedCategory,
+        int expectedExitCode)
+    {
+        var sqlite = structuredCode == CommandErrorCodes.DbLocked
+            ? new SqliteException("message wording must not affect classification", 5)
+            : null;
+        var exception = new CodeIndexException(
+            structuredCode,
+            CodeIndexExceptionCategory.Database,
+            "structured database failure",
+            path: "/Users/alice/private/codeindex.db",
+            innerException: sqlite);
+
+        var error = MaintenanceDatabaseErrorClassifier.FromException(
+            "test maintenance",
+            "/Users/alice/private/codeindex.db",
+            showPaths: false,
+            exception);
+
+        Assert.Equal(expectedErrorCode, error.ErrorCode);
+        Assert.Equal(expectedCategory, error.Category);
+        Assert.Equal(expectedExitCode, error.ExitCode);
+        Assert.DoesNotContain("alice", error.Path, StringComparison.Ordinal);
+        if (structuredCode == CommandErrorCodes.DbLocked)
+            Assert.Equal(5, error.SqliteErrorCode);
+    }
+
+    [Theory]
     [InlineData("/Users/alice/private/codeindex.db")]
     [InlineData(@"C:\Users\alice\private\codeindex.db")]
     [InlineData("file:///Users/alice/private/codeindex.db?immutable=1")]

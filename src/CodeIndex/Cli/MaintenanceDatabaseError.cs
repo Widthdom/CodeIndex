@@ -43,14 +43,14 @@ internal static class MaintenanceDatabaseErrorClassifier
         bool showPaths,
         bool isNotFound,
         bool isSchemaTooNew,
-        SqliteException? sqliteException)
+        Exception? validationException)
     {
         if (isNotFound)
             return Create(operation, dbPath, showPaths, MaintenanceDatabaseFailureKind.Missing);
         if (isSchemaTooNew)
             return Create(operation, dbPath, showPaths, MaintenanceDatabaseFailureKind.SchemaTooNew);
-        if (sqliteException != null)
-            return FromException(operation, dbPath, showPaths, sqliteException);
+        if (validationException != null)
+            return FromException(operation, dbPath, showPaths, validationException);
 
         return ProbeFileState(dbPath) switch
         {
@@ -70,7 +70,29 @@ internal static class MaintenanceDatabaseErrorClassifier
     {
         ArgumentNullException.ThrowIfNull(exception);
 
+        var structured = FindCodeIndexException(exception);
+        var structuredKind = structured?.Code switch
+        {
+            CommandErrorCodes.DbNotFound => MaintenanceDatabaseFailureKind.Missing,
+            CommandErrorCodes.DbLocked => MaintenanceDatabaseFailureKind.Locked,
+            CommandErrorCodes.SchemaTooNew => MaintenanceDatabaseFailureKind.SchemaTooNew,
+            CommandErrorCodes.DbNotWritable => MaintenanceDatabaseFailureKind.NotWritable,
+            CommandErrorCodes.DbIntegrityFailed => MaintenanceDatabaseFailureKind.Corrupt,
+            CommandErrorCodes.DbNotDatabase => MaintenanceDatabaseFailureKind.NotDatabase,
+            _ => (MaintenanceDatabaseFailureKind?)null,
+        };
         var sqlite = FindSqliteException(exception);
+        if (structuredKind is { } knownKind)
+        {
+            return Create(
+                operation,
+                dbPath,
+                showPaths,
+                knownKind,
+                sqlite?.SqliteErrorCode,
+                sqlite?.SqliteExtendedErrorCode);
+        }
+
         if (sqlite != null)
         {
             var primaryCode = sqlite.SqliteErrorCode != 0
@@ -102,6 +124,25 @@ internal static class MaintenanceDatabaseErrorClassifier
             return Create(operation, dbPath, showPaths, MaintenanceDatabaseFailureKind.NotDatabase);
 
         return Create(operation, dbPath, showPaths, MaintenanceDatabaseFailureKind.Error);
+    }
+
+    private static CodeIndexException? FindCodeIndexException(Exception exception)
+    {
+        if (exception is CodeIndexException structured)
+            return structured;
+        if (exception is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions)
+            {
+                var nested = FindCodeIndexException(inner);
+                if (nested != null)
+                    return nested;
+            }
+        }
+
+        return exception.InnerException == null
+            ? null
+            : FindCodeIndexException(exception.InnerException);
     }
 
     internal static MaintenanceDatabaseError Create(
