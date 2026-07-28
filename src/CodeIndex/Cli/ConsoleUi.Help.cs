@@ -182,7 +182,6 @@ public static partial class ConsoleUi
         WriteHelpLine("  --version, -V  Show version information");
         WriteHelpLine("  --license  Show licensing, trademark, and commercial-use summary");
         WriteHelpLine("  --completions <bash|zsh|fish|powershell>  Generate a shell completion script");
-
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
         WriteHelpLine("  Use --commits with a project path after normal commits; git diff sees rename/delete paths too.");

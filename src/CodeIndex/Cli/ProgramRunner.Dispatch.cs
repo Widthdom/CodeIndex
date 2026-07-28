@@ -70,7 +70,7 @@ internal static partial class ProgramRunner
             "callees" => a => QueryCommandRunner.RunCallees(a, context.JsonOptions),
             "symbols" => a => QueryCommandRunner.RunSymbols(a, context.JsonOptions),
             "files" => a => QueryCommandRunner.RunFiles(a, context.JsonOptions),
-            "find" => a => QueryCommandRunner.RunFind(a, context.JsonOptions),
+            "find" => a => QueryCommandRunner.RunFind(a, context.JsonOptions, context.CancellationToken),
             "excerpt" => a => QueryCommandRunner.RunExcerpt(a, context.JsonOptions),
             "map" => a => QueryCommandRunner.RunMap(a, context.JsonOptions),
             "inspect" => a => QueryCommandRunner.RunInspect(a, context.JsonOptions),
