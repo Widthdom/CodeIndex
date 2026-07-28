@@ -3153,7 +3153,8 @@ public partial class DbReaderTests : IDisposable
                     this.GetString();
                 }
 
-                public void Noise(JsonElement json) => json.GetString();
+                public void Noise(JsonElement? json) => json?.GetString();
+                public void Complex(JsonElement json) => (json).GetString();
 
                 public int Parse(string value)
                 {
@@ -3177,7 +3178,20 @@ public partial class DbReaderTests : IDisposable
             includeQualifiedCommonCalls: true);
 
         Assert.Equal(2, defaultReferences.Count);
-        Assert.Equal(4, completeReferences.Count);
+        Assert.Equal(5, completeReferences.Count);
+        Assert.Equal(
+            2,
+            _reader.SearchReferences(
+                "GetStr",
+                lang: "csharp",
+                pathPatterns: ["src/*common_member_graph_fixture*"]).Count);
+        Assert.Equal(
+            5,
+            _reader.SearchReferences(
+                "GetStr",
+                lang: "csharp",
+                pathPatterns: ["src/*common_member_graph_fixture*"],
+                includeQualifiedCommonCalls: true).Count);
         Assert.Equal(
             2,
             _reader.CountSearchReferences(
@@ -3186,7 +3200,7 @@ public partial class DbReaderTests : IDisposable
                 exact: true,
                 pathPatterns: ["src/*common_member_graph_fixture*"]));
         Assert.Equal(
-            4,
+            5,
             _reader.CountSearchReferences(
                 "GetString",
                 lang: "csharp",
@@ -3201,12 +3215,17 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(2, caseInsensitiveReferences.Count);
         Assert.DoesNotContain(
             caseInsensitiveReferences,
-            reference => reference.Context.Contains("json.GetString", StringComparison.Ordinal));
-        Assert.DoesNotContain(defaultReferences, reference => reference.Context.Contains("json.GetString", StringComparison.Ordinal));
+            reference => reference.Context.Contains("json", StringComparison.Ordinal)
+                && reference.Context.Contains("GetString", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            defaultReferences,
+            reference => reference.Context.Contains("json", StringComparison.Ordinal)
+                && reference.Context.Contains("GetString", StringComparison.Ordinal));
         var unresolvedReceiverCalls = completeReferences
-            .Where(reference => reference.Context.Contains("json.GetString", StringComparison.Ordinal))
+            .Where(reference => reference.Context.Contains("json", StringComparison.Ordinal)
+                && reference.Context.Contains("GetString", StringComparison.Ordinal))
             .ToList();
-        Assert.Equal(2, unresolvedReceiverCalls.Count);
+        Assert.Equal(3, unresolvedReceiverCalls.Count);
         Assert.All(
             unresolvedReceiverCalls,
             reference => Assert.Equal("unresolved", reference.ResolutionState));
@@ -3250,15 +3269,29 @@ public partial class DbReaderTests : IDisposable
             exact: true,
             pathPatterns: ["src/*common_member_graph_fixture*"],
             includeQualifiedCommonCalls: true);
+        var partialCallers = _reader.GetCallers(
+            "GetStr",
+            lang: "csharp",
+            pathPatterns: ["src/*common_member_graph_fixture*"]);
+        var completePartialCallers = _reader.GetCallers(
+            "GetStr",
+            lang: "csharp",
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true);
 
         var caller = Assert.Single(callers);
         Assert.Equal("Run", caller.CallerName);
         Assert.Equal(2, caller.ReferenceCount);
+        Assert.Equal(2, Assert.Single(partialCallers).ReferenceCount);
+        Assert.Equal(3, Assert.Single(completePartialCallers, result => result.CallerName == "Run").ReferenceCount);
+        Assert.Equal(1, Assert.Single(completePartialCallers, result => result.CallerName == "Noise").ReferenceCount);
+        Assert.Equal(1, Assert.Single(completePartialCallers, result => result.CallerName == "Complex").ReferenceCount);
         Assert.Equal(3, Assert.Single(completeCallers, result => result.CallerName == "Run").ReferenceCount);
         Assert.Equal(1, Assert.Single(completeCallers, result => result.CallerName == "Noise").ReferenceCount);
+        Assert.Equal(1, Assert.Single(completeCallers, result => result.CallerName == "Complex").ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("GetString", lang: "csharp", exact: true, pathPatterns: ["src/*common_member_graph_fixture*"]));
         Assert.Equal(
-            2,
+            3,
             _reader.CountCallers(
                 "GetString",
                 lang: "csharp",
@@ -3293,6 +3326,17 @@ public partial class DbReaderTests : IDisposable
             exact: true,
             pathPatterns: ["src/*common_member_graph_fixture*"],
             includeQualifiedCommonCalls: true));
+        Assert.Empty(_reader.GetCallees(
+            "Complex",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"]));
+        Assert.Single(_reader.GetCallees(
+            "Complex",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true));
         var defaultParseCallee = Assert.Single(
             _reader.GetCallees("Parse", lang: "csharp", exact: true, pathPatterns: ["src/*common_member_graph_fixture*"]));
         var completeParseCallee = Assert.Single(_reader.GetCallees(
@@ -3323,7 +3367,7 @@ public partial class DbReaderTests : IDisposable
                 null,
                 false),
             result => result.Symbol.Name == "GetString");
-        Assert.Equal(1, hotspot.ReferenceCount);
+        Assert.Equal(2, hotspot.ReferenceCount);
     }
 
 

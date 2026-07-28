@@ -7,6 +7,8 @@ public partial class DbWriter
 {
     internal static Action? HotspotAggregateRefreshExecutingForTesting { get; set; }
     private const string NonTypeReceiverQualifierPrefix = "\u001freceiver:";
+    private const string NonIdentifierReceiverQualifier =
+        NonTypeReceiverQualifierPrefix + "\u001fqualified";
     private const int MaxReferenceLineWindowBatchCount = 32;
 
     private const string MutualRecursionValueSql = """
@@ -1974,7 +1976,8 @@ public partial class DbWriter
         if (graphScope != null)
             graphScope.IsCompleting = true;
         SqliteCommand? createUniqueFamiliesCommand = null;
-        SqliteCommand? refreshCommand = null;
+        SqliteCommand? refreshIdentityCommand = null;
+        SqliteCommand? refreshMutualCommand = null;
         try
         {
             using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
@@ -2022,17 +2025,31 @@ public partial class DbWriter
                                      RefreshScopedReferenceResolutionSql + "\n" +
                                      ExpandReferenceGraphNewMutualScopeSql + "\n";
             }
-            refreshCommand = RentCommand(
-                refreshIdentitySql + (refreshPlan.UseFullRefresh
+            var hotspotReferenceFileIds = GetReferenceGraphRefreshFileIds(
+                refreshPlan.UseFullRefresh,
+                cancellationToken);
+            refreshIdentityCommand = RentCommand(refreshIdentitySql, static _ => { });
+            refreshMutualCommand = RentCommand(
+                refreshPlan.UseFullRefresh
                     ? RefreshMutualRecursionFlagsSql
-                    : RefreshScopedMutualRecursionFlagsSql),
+                    : RefreshScopedMutualRecursionFlagsSql,
                 static _ => { });
             // Stamp inside the same transaction, but before the graph refresh so the
             // public SQLite changes() result continues to describe recursion updates.
             // 同一トランザクション内で先に marker を設定し、公開 changes() は再帰更新件数を維持する。
             MarkReferenceIdentityContractReady();
             cancellationToken.ThrowIfCancellationRequested();
-            refreshCommand.ExecuteNonQuery();
+            refreshIdentityCommand.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
+            // Resolution changes alter the default C# common-call hotspot projection even
+            // when the caller file itself was skipped. Refresh those source-file aggregates
+            // before the recursion statement, which preserves the public changes() contract.
+            // resolution の変更は caller file 自体が skip されても C# common-call の既定
+            // hotspot projection を変えるため、公開 changes() 契約を保つ recursion 文の前に
+            // 対象 source file の aggregate を再集計する。
+            RefreshHotspotReferenceCounts(hotspotReferenceFileIds, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            refreshMutualCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
             if (graphScope != null)
                 ExecuteReferenceGraphScopeSql(ClearReferenceGraphDirtyScopeSql, cancellationToken);
@@ -2045,8 +2062,10 @@ public partial class DbWriter
         }
         finally
         {
-            if (refreshCommand != null)
-                ReleaseCommand(refreshCommand);
+            if (refreshMutualCommand != null)
+                ReleaseCommand(refreshMutualCommand);
+            if (refreshIdentityCommand != null)
+                ReleaseCommand(refreshIdentityCommand);
             if (createUniqueFamiliesCommand != null)
                 ReleaseCommand(createUniqueFamiliesCommand);
             if (graphScope != null)
@@ -2096,12 +2115,24 @@ public partial class DbWriter
         var end = dot - 1;
         while (end >= 0 && char.IsWhiteSpace(context[end]))
             end--;
+        // Preserve a useful simple receiver through null-conditional/null-forgiving
+        // punctuation (`json?.Read()` / `json!.Read()`). More complex receivers receive a
+        // conservative non-null marker below so they can never enter the global fallback.
+        // null conditional / null forgiving の句読点（`json?.Read()` / `json!.Read()`）を
+        // 越えて単純 receiver を保持する。複雑な receiver は下で保守的な non-null marker
+        // を付け、global fallback に入らないようにする。
+        while (end >= 0 && context[end] is '?' or '!')
+        {
+            end--;
+            while (end >= 0 && char.IsWhiteSpace(context[end]))
+                end--;
+        }
         var start = end;
         while (start >= 0 && (char.IsLetterOrDigit(context[start]) || context[start] is '_' or '@'))
             start--;
         var qualifier = context[(start + 1)..(end + 1)].TrimStart('@');
         if (qualifier.Length == 0)
-            return null;
+            return NonIdentifierReceiverQualifier;
         // `this.Member()` is genuinely unqualified with respect to the current container.
         // Other lowercase receivers (for example `service.Process()`) need a non-null marker
         // so the global fallback stays disabled. The resolver may recover a target container

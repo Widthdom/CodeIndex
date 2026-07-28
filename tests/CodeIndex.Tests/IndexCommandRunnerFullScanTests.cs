@@ -4587,6 +4587,84 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_RefreshesHotspotWhenAddedTargetResolvesSkippedCommonCall_Issue4867()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Run(LocalApi api) => api.GetString();
+                }
+                """);
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var initial = OpenNonPoolingConnection(dbPath))
+            {
+                initial.Open();
+                using var command = initial.CreateCommand();
+                command.CommandText = """
+                    SELECT resolution_state
+                    FROM symbol_references
+                    WHERE symbol_name = 'GetString'
+                    """;
+                Assert.Equal("unresolved", command.ExecuteScalar() as string);
+                command.CommandText = """
+                    SELECT COALESCE(SUM(reference_count), 0)
+                    FROM hotspot_reference_counts
+                    WHERE lang = 'csharp'
+                      AND raw_symbol_name = 'GetString'
+                    """;
+                Assert.Equal(0L, command.ExecuteScalar());
+            }
+
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Target.cs"),
+                """
+                public class LocalApi
+                {
+                    public string GetString() => "";
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var verifyCommand = verify.CreateCommand();
+            verifyCommand.CommandText = """
+                SELECT resolution_state
+                FROM symbol_references
+                WHERE symbol_name = 'GetString'
+                """;
+            Assert.Equal("resolved", verifyCommand.ExecuteScalar() as string);
+            verifyCommand.CommandText = """
+                SELECT COALESCE(SUM(reference_count), 0)
+                FROM hotspot_reference_counts
+                WHERE lang = 'csharp'
+                  AND raw_symbol_name = 'GetString'
+                """;
+            Assert.Equal(1L, verifyCommand.ExecuteScalar());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_StampsRefreshedDynamicGraphContractWhenFoldContractRemainsStale_Issue4746()
     {
         var projectRoot = CreateTempProject();

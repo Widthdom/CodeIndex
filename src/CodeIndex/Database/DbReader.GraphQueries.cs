@@ -47,20 +47,8 @@ public partial class DbReader
 
     private static bool ShouldFilterCSharpQualifiedCommonBareMemberQuery(string query, string? lang)
     {
-        if (lang is not null and not "csharp" || SqlNameResolver.HasQualifier(query))
-            return false;
-
-        if (string.IsNullOrWhiteSpace(query))
-            return false;
-
-        var value = query[0] == '@' ? query[1..] : query;
-        if (value.Length == 0 || !(char.IsLetter(value[0]) || value[0] == '_'))
-            return false;
-
-        return value.All(c => char.IsLetterOrDigit(c) || c == '_')
-            && CSharpReferenceExtractor.CommonQualifiedMemberCallNames.Contains(
-                value,
-                StringComparer.OrdinalIgnoreCase);
+        return (lang == null || string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            && !SqlNameResolver.HasQualifier(query);
     }
 
     /// <summary>
