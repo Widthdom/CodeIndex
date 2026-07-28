@@ -231,7 +231,16 @@ internal sealed partial class LspServer : IDisposable
         }
 
         var language = _reader.GetFileByPath(document.IndexedPath)?.Lang;
-        if (string.IsNullOrWhiteSpace(language))
+        if (string.IsNullOrWhiteSpace(language)
+            || !SymbolExtractor.TryExtractBounded(
+                0,
+                language,
+                liveText,
+                MaxDocumentSymbolMaterialization + 1,
+                document.ResolvedPath,
+                _projectRoot ?? document.WorkspaceRoot,
+                cancellationToken,
+                out var liveSymbols))
         {
             return _reader.SearchSymbols(
                 (string?)null,
@@ -239,14 +248,7 @@ internal sealed partial class LspServer : IDisposable
                 pathPatterns: [document.IndexedPath]);
         }
 
-        return SymbolExtractor.Extract(
-                0,
-                language,
-                liveText,
-                document.ResolvedPath,
-                _projectRoot ?? document.WorkspaceRoot,
-                cancellationToken)
-            .Take(MaxDocumentSymbolMaterialization + 1)
+        return liveSymbols
             .Select(symbol => new SymbolResult
             {
                 Path = document.IndexedPath,

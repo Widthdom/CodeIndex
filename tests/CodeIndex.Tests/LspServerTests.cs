@@ -2144,6 +2144,71 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_DocumentSymbol_BoundsDenseLiveExtraction_Issue4851()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_live_bounded");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const string indexedSource = "class IndexedType { }\n";
+            var liveSource = new StringBuilder();
+            for (var i = 0; i < 10_000; i++)
+                liveSource.Append("class Live").Append(i.ToString("D4", CultureInfo.InvariantCulture)).Append(" { }\n");
+
+            var sourcePath = TestProjectHelper.WriteTextFile(projectRoot, "dense.cs", indexedSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dense.cs", "csharp", indexedSource);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, liveSource.ToString(), version: 1)));
+
+            var response = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48515));
+
+            Assert.NotNull(response);
+            var symbols = response!["result"]!.AsArray();
+            Assert.Equal(LspServer.MaxDocumentSymbols, symbols.Count);
+            Assert.Equal("Live0000", symbols[0]!["name"]!.GetValue<string>());
+            Assert.Equal("Live0999", symbols[^1]!["name"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_FallsBackWhenIndexedExtractorIsUnavailable_Issue4851()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_live_extractor_fallback");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const string indexedSource = "class IndexedType { }\n";
+            var sourcePath = TestProjectHelper.WriteTextFile(projectRoot, "sample.custom", indexedSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "sample.custom", "csharp", indexedSource);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using (var command = db.Connection.CreateCommand())
+            {
+                command.CommandText = "UPDATE files SET lang = 'unavailable_issue4851' WHERE path = 'sample.custom'";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, indexedSource, version: 1)));
+
+            var response = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48516));
+
+            Assert.NotNull(response);
+            var indexedType = Assert.Single(response!["result"]!.AsArray());
+            Assert.Equal("IndexedType", indexedType!["name"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_DocumentSymbol_NestsSameStartLongerContainerBeforeChild_Issue3537()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_same_start_container");
