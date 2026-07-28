@@ -80,4 +80,7 @@ internal static class CommandErrorCodes
 
     /// <summary>Indexing committed a usable but incomplete generation because one or more files failed.</summary>
     public const string IndexPartial = "E022_INDEX_PARTIAL";
+
+    /// <summary>SQLite rejected the file as not being a database, or CodeIndex validation rejected its format.</summary>
+    public const string DbNotDatabase = "E023_DB_NOT_DATABASE";
 }

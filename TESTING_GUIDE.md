@@ -350,6 +350,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`, `RunOptimizeFts_LockHeld_ReportsDbLocked`, and `RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
   share seeded databases to verify that optimize dry-run reports sizes, readiness, lock state, recommendations, and planned work while preserving the source bytes and creating no lock artifacts; the same fixtures retain the writable optimize and lock/read-only URI mutation guards.
   `ConsoleUiTests.PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags` keeps the optimize dry-run flag visible in full CLI usage.
+- Issue #4856 maintenance-error coverage spans `CommandErrorWriterTests`, `QueryCommandRunnerTests`, `IndexCommandRunnerTests`, and `DbCommandRunnerTests`.
+  Keep the SQLite primary-code matrix (`5`, `6`, `8`, `11`, `26`), relative/Unix/Windows/file-URI path redaction, missing and invalid-header files, integrity corruption rows, lock contention, valid JSON, and category-specific recovery hints aligned with classifier version `1`.
 - `IndexCommandRunnerTests.Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580`
   runs a rebuild preview as redirected input without `--yes`, verifies live memory phases and samples, and byte-compares the complete project file set before and after so source, DB, WAL, SHM, and other workspace artifacts cannot be changed silently.
 - `IndexCommandRunnerTests.Run_MemoryTrace_ReportsFullScanAndUpdatePhaseBoundaries`
@@ -1252,6 +1254,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`、`RunOptimizeFts_LockHeld_ReportsDbLocked`、`RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
   seed 済み database を共有し、optimize dry-run が size、readiness、lock state、推奨、planned work を報告しつつ source byte を保持し、lock artifact を作成しないことを検証する。同じ fixture で、書き込み版 optimize と lock/read-only URI の mutation guard も維持する。
   `ConsoleUiTests.PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags` は、full CLI usage に optimize dry-run flag が表示され続けることを固定します。
+- Issue #4856 の maintenance-error coverage は `CommandErrorWriterTests`、`QueryCommandRunnerTests`、`IndexCommandRunnerTests`、`DbCommandRunnerTests` にまたがります。
+  SQLite primary-code matrix (`5`、`6`、`8`、`11`、`26`)、relative / Unix / Windows / file-URI path の redaction、missing / invalid-header file、integrity corruption row、lock contention、有効な JSON、category 別 recovery hint を classifier version `1` と同期させてください。
 - `IndexCommandRunnerTests.Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580`
   redirect input で `--yes` なしの rebuild preview を実行し、live memory phase/sample を検証します。実行前後の project file set 全体を byte 比較し、source、DB、WAL、SHM、その他 workspace artifact が暗黙に変更されないことも固定します。
 - `IndexCommandRunnerTests.Run_MemoryTrace_ReportsFullScanAndUpdatePhaseBoundaries`

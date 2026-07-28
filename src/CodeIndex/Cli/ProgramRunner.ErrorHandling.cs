@@ -42,6 +42,7 @@ internal static partial class ProgramRunner
         CommandErrorCodes.SchemaTooNew => CommandExitCodes.DatabaseError,
         CommandErrorCodes.TempStoreExhausted => CommandExitCodes.DatabaseError,
         CommandErrorCodes.DbError => CommandExitCodes.DatabaseError,
+        CommandErrorCodes.DbNotDatabase => CommandExitCodes.DatabaseError,
         CommandErrorCodes.DirectoryNotFound => CommandExitCodes.NotFound,
         CommandErrorCodes.FeatureUnavailable => CommandExitCodes.FeatureUnavailable,
         CommandErrorCodes.UsageError => CommandExitCodes.InvalidArgument,

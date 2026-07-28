@@ -446,6 +446,25 @@ public partial class DbContext : IDisposable
         out bool isNotFound,
         out bool isSchemaTooNew,
         CancellationToken cancellationToken = default)
+        => TryValidateExistingCodeIndexDb(
+            dbPath,
+            requireWritable,
+            requireSupportedUserVersion,
+            out message,
+            out isNotFound,
+            out isSchemaTooNew,
+            out _,
+            cancellationToken);
+
+    internal static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        bool requireWritable,
+        bool requireSupportedUserVersion,
+        out string message,
+        out bool isNotFound,
+        out bool isSchemaTooNew,
+        out SqliteException? sqliteException,
+        CancellationToken cancellationToken = default)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
         {
             var mode = requireWritable ? SqliteConnectionPolicyMode.ReadWrite : SqliteConnectionPolicyMode.ReadOnly;
@@ -458,6 +477,7 @@ public partial class DbContext : IDisposable
         out message,
         out isNotFound,
         out isSchemaTooNew,
+        out sqliteException,
         cancellationToken);
 
     internal static bool TryValidateExistingCodeIndexDb(
@@ -478,6 +498,7 @@ public partial class DbContext : IDisposable
             out message,
             out isNotFound,
             out _,
+            out _,
             cancellationToken);
 
     private static bool TryValidateExistingCodeIndexDb(
@@ -490,11 +511,13 @@ public partial class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         out bool isSchemaTooNew,
+        out SqliteException? sqliteException,
         CancellationToken cancellationToken = default)
     {
         message = string.Empty;
         isNotFound = false;
         isSchemaTooNew = false;
+        sqliteException = null;
         cancellationToken.ThrowIfCancellationRequested();
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
@@ -588,13 +611,15 @@ public partial class DbContext : IDisposable
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 14)
         {
+            sqliteException = ex;
             var category = ClassifyCantOpenFailure(openTarget, ex.SqliteExtendedErrorCode);
             message = FormatDatabaseOpenFailure(category, dbPath);
             isNotFound = category == DatabaseOpenMissingCategory;
             return false;
         }
-        catch (SqliteException)
+        catch (SqliteException ex)
         {
+            sqliteException = ex;
             message = $"database is not an existing CodeIndex DB: {dbPath}";
             return false;
         }
