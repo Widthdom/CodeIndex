@@ -431,6 +431,9 @@ public class CliFlagSchemaTests
         Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "install"), flag => flag.Name == "--dry-run");
         Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "uninstall"), flag => flag.Name == "--dry-run");
         Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "status"), flag => flag.Name == "--dry-run");
+        Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "install"), flag => flag.Name == "--force");
+        Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "uninstall"), flag => flag.Name == "--force");
+        Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "status"), flag => flag.Name == "--force");
 
         var gotoFlags = CliFlagSchema.GetAcceptedFlagNamesForCommand("goto");
         Assert.DoesNotContain("--exact", gotoFlags);
@@ -442,24 +445,43 @@ public class CliFlagSchemaTests
         Assert.Contains("--dry-run", hookHelp, StringComparison.Ordinal);
         Assert.Contains("--project <path>", hookHelp, StringComparison.Ordinal);
         Assert.Contains("Repository/worktree directory used to resolve Git metadata", hookHelp, StringComparison.Ordinal);
+        Assert.Contains("Install: replace an existing chained-hook backup; uninstall: remove an unmanaged pre-commit hook", hookHelp, StringComparison.Ordinal);
         Assert.DoesNotContain("--pretty", hookHelp, StringComparison.Ordinal);
+
+        var (_, indexHelp, _) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("index") ? 1 : 0);
+        Assert.Contains("Bypass the per-database index lock; only use when no other cdidx index is active", indexHelp, StringComparison.Ordinal);
 
         var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
         Assert.Contains("[ \"$cmd\" = \"hooks\" ] && [ \"$nested\" = \"install\" ]", bash, StringComparison.Ordinal);
+        Assert.Contains("[ \"$cmd\" = \"hooks\" ] && [ \"$nested\" = \"uninstall\" ]", bash, StringComparison.Ordinal);
+        Assert.Contains("for ((i=2; i<COMP_CWORD; i++)); do", bash, StringComparison.Ordinal);
+        Assert.Contains("--project) skip_next=1", bash, StringComparison.Ordinal);
+        Assert.DoesNotContain("nested=\"${COMP_WORDS[2]}\"", bash, StringComparison.Ordinal);
         Assert.Contains("--project) if [ \"$cmd\" = \"hooks\" ]; then COMPREPLY=($(compgen -f", bash, StringComparison.Ordinal);
         Assert.DoesNotContain("--project) COMPREPLY=($(compgen -W \"name path\"", bash, StringComparison.Ordinal);
 
         var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
-        Assert.Contains("$subcmd == hooks && $words[3] == install", zsh, StringComparison.Ordinal);
+        Assert.Contains("$subcmd == hooks && $nested == install", zsh, StringComparison.Ordinal);
+        Assert.Contains("$subcmd == hooks && $nested == uninstall", zsh, StringComparison.Ordinal);
+        Assert.Contains("for (( i = 3; i < CURRENT; i++ )); do", zsh, StringComparison.Ordinal);
+        Assert.Contains("(--project) skip_next=1", zsh, StringComparison.Ordinal);
+        Assert.DoesNotContain("$words[3] == install", zsh, StringComparison.Ordinal);
         Assert.Contains("--project[Repository/worktree directory used to resolve Git metadata for the managed hook]:file:_files", zsh, StringComparison.Ordinal);
 
         var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
         Assert.Contains("__fish_seen_subcommand_from hooks; and __fish_seen_subcommand_from install' -l dry-run", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_seen_subcommand_from hooks; and __fish_seen_subcommand_from install' -l force", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_seen_subcommand_from hooks; and __fish_seen_subcommand_from uninstall' -l force", fish, StringComparison.Ordinal);
+        Assert.DoesNotContain("__fish_seen_subcommand_from hooks' -l force", fish, StringComparison.Ordinal);
         Assert.Contains("__fish_seen_subcommand_from hooks' -l project -r -d 'Repository/worktree directory used to resolve Git metadata", fish, StringComparison.Ordinal);
         Assert.DoesNotContain("__fish_seen_subcommand_from hooks' -l project -r -a 'name path'", fish, StringComparison.Ordinal);
 
         var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
         Assert.Contains("$subcmd -eq 'hooks' -and $nested -eq 'install'", powershell, StringComparison.Ordinal);
+        Assert.Contains("$subcmd -eq 'hooks' -and $nested -eq 'uninstall'", powershell, StringComparison.Ordinal);
+        Assert.Contains("if ($skipNestedValue) { $skipNestedValue = $false; continue }", powershell, StringComparison.Ordinal);
+        Assert.Contains("if ($subcommands[$subcmd] -contains $token) { $nested = $token; break }", powershell, StringComparison.Ordinal);
         Assert.Contains("$_ -eq '--project' -and $subcmd -eq 'hooks'", powershell, StringComparison.Ordinal);
         Assert.DoesNotContain("'--project' = @('name', 'path')", powershell, StringComparison.Ordinal);
 

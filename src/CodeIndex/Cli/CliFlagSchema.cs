@@ -607,7 +607,21 @@ internal static class CliFlagSchema
             new() { Name = "--show-paths", Description = "Show full database paths in maintenance diagnostics; paths are redacted by default", PrimaryCommands = Set("index", "backfill-fold", "optimize", "vacuum", "db") },
             new() { Name = "--dry-run-path-limit", ValuePlaceholder = "<n>", Description = "Dry run only: candidate path processing limit before truncated lower-bound estimates", PrimaryCommands = Set("index") },
             new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before maintenance", PrimaryCommands = Set("backfill-fold") },
-            new() { Name = "--force", Description = "Bypass the normal safety guard for index or hook installation", PrimaryCommands = Set("index", "hooks"), Safety = CliOptionSafety.Override },
+            new()
+            {
+                Name = "--force",
+                Description = "Bypass the per-database index lock; only use when no other cdidx index is active",
+                CommandDescriptions = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["hooks"] = "Install: replace an existing chained-hook backup; uninstall: remove an unmanaged pre-commit hook",
+                },
+                PrimaryCommands = Set("index", "hooks"),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["hooks"] = Set("install", "uninstall"),
+                },
+                Safety = CliOptionSafety.Override,
+            },
             new() { Name = "--duration-format", ValuePlaceholder = "<auto|seconds|hms>", Description = "Index elapsed time display format", PrimaryCommands = Set("index") },
             new() { Name = "--max-file-bytes", ValuePlaceholder = "<bytes>", Description = "Override the per-file indexing size limit", PrimaryCommands = Set("index") },
             new() { Name = "--max-symbols-per-file", ValuePlaceholder = "<n>", Description = "Skip file content, symbols, and references when one file emits too many symbols (max 50000)", PrimaryCommands = Set("index") },
