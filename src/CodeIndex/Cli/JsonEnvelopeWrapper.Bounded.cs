@@ -61,6 +61,8 @@ internal static partial class JsonEnvelopeWrapper
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
+        if (command == "find" && IsFindCountResponseRequest(args))
+            return false;
         if (HasArgument(args, "--fields") || HasArgument(args, "--cursor"))
             return true;
         if (command == "languages"
@@ -80,12 +82,41 @@ internal static partial class JsonEnvelopeWrapper
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
+        if (command == "find" && IsFindCountResponseRequest(args))
+            return false;
 
         return HasArgument(args, "--fields")
                || HasArgument(args, "--cursor")
                || (command == "search" && HasEnvelopeFlag(args) && HasJsonArrayOutputSelection(args))
                || (command != "search" && HasEnvelopeFlag(args) && HasArgument(args, "--max-json-bytes"))
                || ShouldAutoWrapBoundedResponse(command, args);
+    }
+
+    private static bool IsFindCountResponseRequest(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--", StringComparison.Ordinal))
+                break;
+            if (string.Equals(args[i], "--query", StringComparison.Ordinal)
+                && i + 1 < args.Length)
+            {
+                i++;
+                continue;
+            }
+            if (string.Equals(args[i], "--count", StringComparison.Ordinal)
+                || string.Equals(args[i], "--format=count", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (string.Equals(args[i], "--format", StringComparison.Ordinal)
+                && i + 1 < args.Length
+                && string.Equals(args[i + 1], "count", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static bool IsSearchAggregateResponseRequest(string[] args)
@@ -166,14 +197,14 @@ internal static partial class JsonEnvelopeWrapper
             && !string.Equals(controls.CursorQueryFingerprint, queryFingerprint, StringComparison.Ordinal))
         {
             return WriteBoundedResponseUsageError(
-                "--cursor does not match this command, query, or filter set.",
+                "cursor_mismatch: --cursor does not match this command, query, or filter set.",
                 "Use next_cursor from the preceding page without changing query, filter, or sort arguments.");
         }
         if (controls.CursorGenerationFingerprint is not null
             && !string.Equals(controls.CursorGenerationFingerprint, snapshot.GenerationFingerprint, StringComparison.Ordinal))
         {
             return WriteBoundedResponseUsageError(
-                "--cursor is stale because the index generation changed.",
+                "cursor_stale: --cursor is stale because the index generation changed.",
                 "Restart pagination without --cursor and use the next_cursor returned by the refreshed index.");
         }
         if (controls.Offset > MaxPageWindow - controls.PageLimit)
@@ -199,7 +230,10 @@ internal static partial class JsonEnvelopeWrapper
                 controls.Fields,
                 controls.Compact,
                 controls.ResumePath,
-                controls.ResumeLine);
+                controls.ResumeLine,
+                controls.ResumeFileOrdinal,
+                controls.ResumeMatchOrdinal,
+                controls.ResumeByteOffset);
             using var executionScope = EnterBoundedExecution(executionContext);
             exitCode = runInner(innerArgs);
         }
@@ -379,8 +413,15 @@ internal static partial class JsonEnvelopeWrapper
             var scanCursor = ReadString(streamTerminal, "next_cursor");
             var emittedAllCapturedRows = count == pageItems.Count;
             var selectedScanCursor = emittedAllCapturedRows ? scanCursor : null;
+            var findScanTerminalAuthoritative = command == "find"
+                                                && streamTerminal?["scan_complete"] is JsonValue;
+            var capturedRowsRemain = !emittedAllCapturedRows && count > 0;
             var hasMore = selectedScanCursor is not null
-                          || count > 0 && nextOffset < totalCount && !paginationWindowExhausted;
+                          || capturedRowsRemain
+                          || !findScanTerminalAuthoritative
+                          && count > 0
+                          && nextOffset < totalCount
+                          && !paginationWindowExhausted;
             metadata["result_count"] = count;
             metadata["returned_count"] = count;
             metadata["total_count"] = totalCount;
@@ -392,7 +433,15 @@ internal static partial class JsonEnvelopeWrapper
             metadata["has_more"] = hasMore;
             metadata["next_cursor"] = selectedScanCursor
                 ?? (hasMore && count > 0
-                    ? FormatResponseCursor(nextOffset, queryFingerprint, snapshot.GenerationFingerprint)
+                    ? FormatResponseCursor(
+                        nextOffset,
+                        queryFingerprint,
+                        snapshot.GenerationFingerprint,
+                        controls.ResumePath,
+                        controls.ResumeLine,
+                        controls.ResumeFileOrdinal,
+                        controls.ResumeMatchOrdinal,
+                        controls.ResumeByteOffset)
                     : null);
             metadata["truncated"] = scanCursor is not null || totalCount > count;
             metadata["pagination_window_limit"] = MaxPageWindow;
@@ -1147,6 +1196,9 @@ internal static partial class JsonEnvelopeWrapper
         string? cursorGenerationFingerprint = null;
         string? resumePath = null;
         int? resumeLine = null;
+        int? resumeFileOrdinal = null;
+        int? resumeMatchOrdinal = null;
+        int? resumeByteOffset = null;
         if (cursor is not null
             && !TryParseResponseCursor(
                 cursor,
@@ -1154,10 +1206,13 @@ internal static partial class JsonEnvelopeWrapper
                 out cursorQueryFingerprint,
                 out cursorGenerationFingerprint,
                 out resumePath,
-                out resumeLine))
+                out resumeLine,
+                out resumeFileOrdinal,
+                out resumeMatchOrdinal,
+                out resumeByteOffset))
         {
             controls = default!;
-            error = "--cursor must be an opaque response:v2 cursor returned as next_cursor.";
+            error = "cursor_malformed: --cursor must be an opaque response:v2 cursor returned as next_cursor.";
             return false;
         }
         controls = new BoundedResponseControls(
@@ -1169,7 +1224,10 @@ internal static partial class JsonEnvelopeWrapper
             cursorQueryFingerprint,
             cursorGenerationFingerprint,
             resumePath,
-            resumeLine);
+            resumeLine,
+            resumeFileOrdinal,
+            resumeMatchOrdinal,
+            resumeByteOffset);
         return true;
     }
 
@@ -1258,7 +1316,10 @@ internal static partial class JsonEnvelopeWrapper
         string queryFingerprint,
         string generationFingerprint,
         string? resumePath = null,
-        int? resumeLine = null)
+        int? resumeLine = null,
+        int? resumeFileOrdinal = null,
+        int? resumeMatchOrdinal = null,
+        int? resumeByteOffset = null)
     {
         var payload = new JsonObject
         {
@@ -1270,6 +1331,12 @@ internal static partial class JsonEnvelopeWrapper
             payload["resume_path"] = resumePath;
         if (resumeLine.HasValue)
             payload["resume_line"] = resumeLine.Value;
+        if (resumeFileOrdinal.HasValue)
+            payload["resume_file_ordinal"] = resumeFileOrdinal.Value;
+        if (resumeMatchOrdinal.HasValue)
+            payload["resume_match_ordinal"] = resumeMatchOrdinal.Value;
+        if (resumeByteOffset.HasValue)
+            payload["resume_byte_offset"] = resumeByteOffset.Value;
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload.ToJsonString()))
             .TrimEnd('=')
             .Replace('+', '-')
@@ -1283,13 +1350,19 @@ internal static partial class JsonEnvelopeWrapper
         out string? queryFingerprint,
         out string? generationFingerprint,
         out string? resumePath,
-        out int? resumeLine)
+        out int? resumeLine,
+        out int? resumeFileOrdinal,
+        out int? resumeMatchOrdinal,
+        out int? resumeByteOffset)
     {
         offset = 0;
         queryFingerprint = null;
         generationFingerprint = null;
         resumePath = null;
         resumeLine = null;
+        resumeFileOrdinal = null;
+        resumeMatchOrdinal = null;
+        resumeByteOffset = null;
         if (cursor.StartsWith(LegacyResponseCursorPrefix, StringComparison.Ordinal))
         {
             var remainder = cursor[LegacyResponseCursorPrefix.Length..];
@@ -1331,13 +1404,56 @@ internal static partial class JsonEnvelopeWrapper
         queryFingerprint = ReadString(payload, "query");
         generationFingerprint = ReadString(payload, "generation");
         resumePath = ReadString(payload, "resume_path");
-        if (payload["resume_line"] is JsonValue resumeValue && resumeValue.TryGetValue<int>(out var parsedResumeLine))
+        if (payload.ContainsKey("resume_line"))
+        {
+            if (payload["resume_line"] is not JsonValue resumeValue
+                || !resumeValue.TryGetValue<int>(out var parsedResumeLine))
+            {
+                return false;
+            }
             resumeLine = parsedResumeLine;
+        }
+        if (payload.ContainsKey("resume_file_ordinal"))
+        {
+            if (payload["resume_file_ordinal"] is not JsonValue fileOrdinalValue
+                || !fileOrdinalValue.TryGetValue<int>(out var parsedFileOrdinal))
+            {
+                return false;
+            }
+            resumeFileOrdinal = parsedFileOrdinal;
+        }
+        if (payload.ContainsKey("resume_match_ordinal"))
+        {
+            if (payload["resume_match_ordinal"] is not JsonValue matchOrdinalValue
+                || !matchOrdinalValue.TryGetValue<int>(out var parsedMatchOrdinal))
+            {
+                return false;
+            }
+            resumeMatchOrdinal = parsedMatchOrdinal;
+        }
+        if (payload.ContainsKey("resume_byte_offset"))
+        {
+            if (payload["resume_byte_offset"] is not JsonValue byteOffsetValue
+                || !byteOffsetValue.TryGetValue<int>(out var parsedByteOffset))
+            {
+                return false;
+            }
+            resumeByteOffset = parsedByteOffset;
+        }
+        var extendedResumeFieldsPresent = resumeFileOrdinal.HasValue
+                                          || resumeMatchOrdinal.HasValue
+                                          || resumeByteOffset.HasValue;
         return IsCursorFingerprint(queryFingerprint)
                && IsCursorFingerprint(generationFingerprint)
                && (resumePath is null || resumePath.Length <= 4096)
                && (!resumeLine.HasValue || resumeLine.Value > 0)
-               && (resumePath is null) == !resumeLine.HasValue;
+               && (resumePath is null) == !resumeLine.HasValue
+               && (!extendedResumeFieldsPresent
+                   || resumePath is not null
+                   && resumeFileOrdinal is >= 0
+                   && resumeByteOffset is >= 0
+                   && resumeMatchOrdinal is null or >= 0)
+               && (!resumeMatchOrdinal.HasValue || resumeByteOffset.HasValue);
     }
 
     private static bool IsCursorFingerprint(string? fingerprint)
@@ -1420,7 +1536,10 @@ internal static partial class JsonEnvelopeWrapper
         string? CursorQueryFingerprint,
         string? CursorGenerationFingerprint,
         string? ResumePath,
-        int? ResumeLine)
+        int? ResumeLine,
+        int? ResumeFileOrdinal,
+        int? ResumeMatchOrdinal,
+        int? ResumeByteOffset)
     {
         public IReadOnlyList<string>? EffectiveFields(string command, string? primaryCollection)
         {
@@ -1507,7 +1626,10 @@ internal static partial class JsonEnvelopeWrapper
         string[] args,
         DbReader reader,
         string resumePath,
-        int resumeLine)
+        int resumeLine,
+        int resumeFileOrdinal,
+        int? resumeMatchOrdinal,
+        int resumeByteOffset)
     {
         var snapshot = BuildResponseSnapshot(reader);
         return (
@@ -1516,7 +1638,10 @@ internal static partial class JsonEnvelopeWrapper
                 BuildResponseFingerprint("find", args),
                 snapshot.GenerationFingerprint,
                 resumePath,
-                resumeLine),
+                resumeLine,
+                resumeFileOrdinal,
+                resumeMatchOrdinal,
+                resumeByteOffset),
             snapshot.ResultStableAt);
     }
 
@@ -1529,12 +1654,89 @@ internal static partial class JsonEnvelopeWrapper
             : 0;
     }
 
-    internal static (string? Path, int? Line) GetBoundedFindResume()
+    internal static (string? Path, int? Line, int? FileOrdinal, int? MatchOrdinal, int? ByteOffset) GetBoundedFindResume()
     {
         var execution = BoundedExecution.Value;
         return execution is not null && string.Equals(execution.Command, "find", StringComparison.Ordinal)
-            ? (execution.ResumePath, execution.ResumeLine)
-            : (null, null);
+            ? (
+                execution.ResumePath,
+                execution.ResumeLine,
+                execution.ResumeFileOrdinal,
+                execution.ResumeMatchOrdinal,
+                execution.ResumeByteOffset)
+            : (null, null, null, null, null);
+    }
+
+    internal static (string? Path, int? Line, int? FileOrdinal, int? MatchOrdinal, int? ByteOffset)
+        GetStandaloneFindResume(string[] args, DbReader reader)
+    {
+        string? cursor = null;
+        var cursorSeen = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--", StringComparison.Ordinal))
+                break;
+            if (string.Equals(args[i], "--query", StringComparison.Ordinal)
+                && i + 1 < args.Length)
+            {
+                i++;
+                continue;
+            }
+            if (args[i].StartsWith("--cursor=", StringComparison.Ordinal))
+            {
+                if (cursorSeen)
+                    throw new FindContinuationException("cursor_malformed", "find count accepts exactly one --cursor value.");
+                cursorSeen = true;
+                cursor = args[i]["--cursor=".Length..];
+                continue;
+            }
+            if (!string.Equals(args[i], "--cursor", StringComparison.Ordinal))
+                continue;
+            if (cursorSeen
+                || i + 1 >= args.Length
+                || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new FindContinuationException("cursor_malformed", "find count requires exactly one non-empty --cursor value.");
+            }
+            cursorSeen = true;
+            cursor = args[++i];
+        }
+        if (cursor is null)
+            return (null, null, null, null, null);
+        if (!TryParseResponseCursor(
+                cursor,
+                out var offset,
+                out var queryFingerprint,
+                out var generationFingerprint,
+                out var resumePath,
+                out var resumeLine,
+                out var resumeFileOrdinal,
+                out var resumeMatchOrdinal,
+                out var resumeByteOffset)
+            || offset != 0
+            || resumePath is null
+            || !resumeLine.HasValue)
+        {
+            throw new FindContinuationException(
+                "cursor_malformed",
+                "find count cursor must be an opaque resumable response:v2 cursor returned as next_cursor.");
+        }
+
+        var expectedQueryFingerprint = BuildResponseFingerprint("find", args);
+        if (!string.Equals(queryFingerprint, expectedQueryFingerprint, StringComparison.Ordinal))
+        {
+            throw new FindContinuationException(
+                "cursor_mismatch",
+                "find count cursor does not match this query, scan mode, or option set.");
+        }
+        var snapshot = BuildResponseSnapshot(reader);
+        if (!string.Equals(generationFingerprint, snapshot.GenerationFingerprint, StringComparison.Ordinal))
+        {
+            throw new FindContinuationException(
+                "cursor_stale",
+                "find count cursor is stale because the index generation changed.");
+        }
+        return (resumePath, resumeLine, resumeFileOrdinal, resumeMatchOrdinal, resumeByteOffset);
     }
 
     internal static int? GetBoundedResponseLimit(string command)
@@ -1613,7 +1815,10 @@ internal static partial class JsonEnvelopeWrapper
         IReadOnlyList<string>? Fields,
         bool Compact,
         string? ResumePath,
-        int? ResumeLine)
+        int? ResumeLine,
+        int? ResumeFileOrdinal,
+        int? ResumeMatchOrdinal,
+        int? ResumeByteOffset)
     {
         public int? ReportedTotalCount { get; set; }
         public bool ReportedTotalCountAuthoritative { get; set; }

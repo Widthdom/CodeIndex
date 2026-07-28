@@ -24,11 +24,17 @@ public partial class McpServer
                 out var queryFingerprint,
                 out var generationFingerprint,
                 out var resumePath,
-                out var resumeLine)
+                out var resumeLine,
+                out var resumeFileOrdinal,
+                out var resumeMatchOrdinal,
+                out var resumeByteOffset)
             || queryFingerprint is null
             || generationFingerprint is null
             || resumePath is not null
-            || resumeLine.HasValue)
+            || resumeLine.HasValue
+            || resumeFileOrdinal.HasValue
+            || resumeMatchOrdinal.HasValue
+            || resumeByteOffset.HasValue)
         {
             return false;
         }

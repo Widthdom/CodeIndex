@@ -31,7 +31,8 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.GetProperty("authoritative_count").GetBoolean());
             Assert.Equal(1, json.GetProperty("line_scan_limit").GetInt32());
             Assert.True(json.GetProperty("terminal_record").GetBoolean());
-            Assert.Equal("increase_line_scan_limit_or_narrow_scope", json.GetProperty("continuation_action").GetString());
+            Assert.Equal("resume_with_next_cursor", json.GetProperty("continuation_action").GetString());
+            Assert.StartsWith("response:v2:", json.GetProperty("next_cursor").GetString(), StringComparison.Ordinal);
         }
         finally
         {

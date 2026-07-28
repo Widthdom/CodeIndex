@@ -12,8 +12,12 @@ public static partial class QueryCommandRunner
     internal const int MaxFindLineScanLimit = 10_000_000;
     private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
-    public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    public static int RunFind(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var preparedFindArgs = PrepareFindArgs(cmdArgs, out var preparationError);
         if (preparationError != null)
         {
@@ -29,7 +33,10 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var findValidationError = ValidateFindArgs(normalizedFindArgs);
+        var parserFindArgs = IsFindCountRequest(normalizedFindArgs)
+            ? StripFindCountCursor(normalizedFindArgs)
+            : normalizedFindArgs;
+        var findValidationError = ValidateFindArgs(parserFindArgs);
         if (findValidationError != null)
         {
             CommandErrorWriter.WriteStderr(findValidationError);
@@ -38,7 +45,7 @@ public static partial class QueryCommandRunner
         }
 
         var options = ParseArgs(
-            normalizedFindArgs,
+            parserFindArgs,
             jsonDefault: false,
             allowNamedQuery: true,
             validateDefaultSnippetLines: false);
@@ -129,6 +136,8 @@ public static partial class QueryCommandRunner
                 FindCountResult counts;
                 try
                 {
+                    var (countResumePath, countResumeLine, countResumeFileOrdinal, countResumeMatchOrdinal, countResumeByteOffset)
+                        = JsonEnvelopeWrapper.GetStandaloneFindResume(cmdArgs, reader);
                     counts = reader.CountFindInFiles(
                         options.Query,
                         options.Lang,
@@ -141,7 +150,17 @@ public static partial class QueryCommandRunner
                         options.Regex,
                         candidateFileLimit,
                         lineLimit,
-                        useIndexedLiteralCandidates: options.All);
+                        useIndexedLiteralCandidates: options.All,
+                        resumePath: countResumePath,
+                        resumeLine: countResumeLine,
+                        resumeFileOrdinal: countResumeFileOrdinal,
+                        resumeMatchOrdinal: countResumeMatchOrdinal,
+                        resumeByteOffset: countResumeByteOffset,
+                        cancellationToken: cancellationToken);
+                }
+                catch (FindContinuationException ex)
+                {
+                    return WriteFindCursorError(ex, jsonOptions, options.Json);
                 }
                 catch (Exception ex) when (options.Regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
                 {
@@ -149,6 +168,7 @@ public static partial class QueryCommandRunner
                         ? WriteFindRegexTimeoutError(timeout, jsonOptions, options.Json)
                         : WriteFindInvalidRegexError(ex, jsonOptions, options.Json);
                 }
+                var countFindResume = BuildFindResumeCursor(cmdArgs, reader, counts.Scan);
                 if (options.Json)
                 {
                     var payload = BuildCountJsonPayload(
@@ -168,7 +188,8 @@ public static partial class QueryCommandRunner
                                     counts.Scan,
                                     counts.Count,
                                     countMode: true,
-                                    resultStableAt: reader.GetPaginationGeneration().StableAt);
+                                    nextCursor: countFindResume.Cursor,
+                                    resultStableAt: countFindResume.ResultStableAt);
                             }
                         });
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -176,13 +197,14 @@ public static partial class QueryCommandRunner
                 else
                 {
                     Console.WriteLine($"{counts.Count}");
-                    WriteFindScanSummary(counts.Scan, countMode: true);
+                    WriteFindScanSummary(counts.Scan, countMode: true, nextCursor: countFindResume.Cursor);
                 }
                 return FindScanExitCode(options, counts.Scan);
             }
 
             var (contextBefore, contextAfter, snippetLines) = ResolveFindContext(options, preparedFindArgs);
-            var (resumePath, resumeLine) = JsonEnvelopeWrapper.GetBoundedFindResume();
+            var (resumePath, resumeLine, resumeFileOrdinal, resumeMatchOrdinal, resumeByteOffset)
+                = JsonEnvelopeWrapper.GetBoundedFindResume();
             FindResults findResults;
             try
             {
@@ -205,7 +227,15 @@ public static partial class QueryCommandRunner
                     JsonEnvelopeWrapper.GetBoundedResponseOffset("find"),
                     useIndexedLiteralCandidates: options.All,
                     resumePath: resumePath,
-                    resumeLine: resumeLine);
+                    resumeLine: resumeLine,
+                    resumeFileOrdinal: resumeFileOrdinal,
+                    resumeMatchOrdinal: resumeMatchOrdinal,
+                    resumeByteOffset: resumeByteOffset,
+                    cancellationToken: cancellationToken);
+            }
+            catch (FindContinuationException ex)
+            {
+                return WriteFindCursorError(ex, jsonOptions, options.Json);
             }
             catch (ArgumentException ex) when (options.Regex)
             {
@@ -320,7 +350,7 @@ public static partial class QueryCommandRunner
                         jsonOptions,
                         findResults.Scan,
                         results.Count,
-                        resultLimitReached: results.Count >= options.Limit,
+                        resultLimitReached: findResults.Scan.ResultLimitReached,
                         commandArgs: cmdArgs);
                 }
             }
@@ -336,7 +366,7 @@ public static partial class QueryCommandRunner
                 CommandErrorWriter.WriteStderr($"({results.Count} matches in {fileCount} files)");
                 WriteFindScanSummary(
                     findResults.Scan,
-                    resultLimitReached: results.Count >= options.Limit,
+                    resultLimitReached: findResults.Scan.ResultLimitReached,
                     nextCursor: findResume.Cursor);
             }
             return FindScanExitCode(options, findResults.Scan);
@@ -367,6 +397,72 @@ public static partial class QueryCommandRunner
             hint: RegexTimeoutPolicy.FindTimeoutHint,
             errorCode: CommandErrorCodes.RegexMatchTimeout,
             category: RegexTimeoutPolicy.RegexTimeoutCategory);
+    }
+
+    private static int WriteFindCursorError(
+        FindContinuationException ex,
+        JsonSerializerOptions jsonOptions,
+        bool json)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            ex.Message,
+            CommandExitCodes.UsageError,
+            "Restart find pagination without --cursor and use an unmodified next_cursor from the preceding page.",
+            errorCode: CommandErrorCodes.UsageError,
+            category: ex.Reason);
+
+    private static string[] StripFindCountCursor(string[] args)
+    {
+        var stripped = new List<string>(args.Length);
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--query", StringComparison.Ordinal)
+                && i + 1 < args.Length)
+            {
+                stripped.Add(args[i]);
+                stripped.Add(args[++i]);
+                continue;
+            }
+            if (args[i].StartsWith("--cursor=", StringComparison.Ordinal))
+                continue;
+            if (string.Equals(args[i], "--cursor", StringComparison.Ordinal))
+            {
+                if (i + 1 < args.Length
+                    && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    i++;
+                continue;
+            }
+            stripped.Add(args[i]);
+        }
+        return [.. stripped];
+    }
+
+    private static bool IsFindCountRequest(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--", StringComparison.Ordinal))
+                break;
+            if (string.Equals(args[i], "--query", StringComparison.Ordinal)
+                && i + 1 < args.Length)
+            {
+                i++;
+                continue;
+            }
+            if (string.Equals(args[i], "--count", StringComparison.Ordinal)
+                || string.Equals(args[i], "--format=count", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (string.Equals(args[i], "--format", StringComparison.Ordinal)
+                && i + 1 < args.Length
+                && string.Equals(args[i + 1], "count", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     internal static string FormatRegexMatchTimeout(TimeSpan timeout) =>
@@ -662,7 +758,7 @@ public static partial class QueryCommandRunner
     {
         var scanComplete = !scan.Truncated && !resultLimitReached;
         payload["terminal_record"] = true;
-        payload["done"] = !scan.Truncated;
+        payload["done"] = scanComplete;
         payload["returned_count"] = returnedCount;
         payload["partial_result"] = scan.Truncated;
         payload["scan_complete"] = scanComplete;
@@ -702,7 +798,9 @@ public static partial class QueryCommandRunner
             };
 
     private static string? FindScanRecoveryGuidance(FindScanSummary scan, bool resultLimitReached)
-        => scan.NextPath is not null && scan.NextLine.HasValue
+        => scan.ResultLimitReached && scan.NextPath is not null && scan.NextLine.HasValue
+            ? "Pass next_cursor back with --cursor to continue at the next match without duplicates or gaps; --limit may be changed for the next page."
+            : scan.NextPath is not null && scan.NextLine.HasValue
             ? "Pass next_cursor back with --cursor to resume after the scan cap without rescanning completed lines; --line-scan-limit may be increased for the next page."
             : scan.TruncationReason switch
             {
@@ -750,9 +848,10 @@ public static partial class QueryCommandRunner
         DbReader reader,
         FindScanSummary scan)
     {
-        if (!scan.Truncated
-            || scan.NextPath is null
-            || !scan.NextLine.HasValue)
+        if (scan.NextPath is null
+            || !scan.NextLine.HasValue
+            || !scan.NextFileOrdinal.HasValue
+            || !scan.NextByteOffset.HasValue)
         {
             return (null, reader.GetPaginationGeneration().StableAt);
         }
@@ -761,7 +860,10 @@ public static partial class QueryCommandRunner
             commandArgs,
             reader,
             scan.NextPath,
-            scan.NextLine.Value);
+            scan.NextLine.Value,
+            scan.NextFileOrdinal.Value,
+            scan.NextMatchOrdinal,
+            scan.NextByteOffset.Value);
         return (cursor.Cursor, cursor.ResultStableAt);
     }
 }

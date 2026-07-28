@@ -20,9 +20,27 @@ streaming NDJSON, or count output instead.
 Candidate-file or line-scan truncation returns partial-result exit code `11`.
 Pass `--allow-partial` only when an incomplete scan may return exit code `0`.
 An ordinary result-limit early stop remains successful, but the row terminal
-sets `scan_complete=false`, `result_limit_reached=true`, and explains how to
-increase `--limit` or narrow the query. Human output writes its scan summary to
-stderr and uses the same partial exit semantics.
+sets `scan_complete=false`, `result_limit_reached=true`, and returns a
+`next_cursor`. Pass it back with `--cursor`; `--limit` may be changed for the
+next page. Human output writes the cursor and scan summary to stderr and uses
+the same partial exit semantics.
+
+Find continuation cursors are opaque and resume at the next match record,
+including when multiple matches share a line, the line contains Unicode, or
+the line is very large. The cursor binds the query, literal/regex mode and
+other result-affecting options, candidate-file ordinal and path, line and match
+ordinal, UTF-8 byte position, source identity, and index generation. Reusing a
+cursor with different options returns `cursor_mismatch`; using it after the
+indexed source changes returns `cursor_stale`; malformed or invalid positions
+return `cursor_malformed`. The final page sets `has_more=false` and
+`next_cursor=null`. A cancelled or regex-timeout request does not advance or
+issue a continuation cursor; retry the last cursor from a successfully
+completed page.
+
+When count mode reaches a scan cap, its `count` is the count for that partial
+scan page and `next_cursor` resumes at the next line boundary. Continue until
+`has_more=false`; summing the page counts yields the complete count for an
+unchanged indexed source.
 
 For scoped `--path` searches, `--format compact` returns locations only. Use
 text or JSON output when context from `--before`, `--after`, or
@@ -47,9 +65,24 @@ NDJSON、count 出力を使ってください。
 candidate-file または line-scan による切り詰めは partial-result 終了コード `11` を
 返します。不完全な scan でも終了コード `0` を許容する場合だけ `--allow-partial` を
 指定してください。通常の result limit による早期停止は成功のままですが、row 終端は
-`scan_complete=false`、`result_limit_reached=true` を設定し、`--limit` を増やすか
-query を絞る方法を示します。human output は scan summary を stderr に出し、同じ
-partial exit semantics を使います。
+`scan_complete=false`、`result_limit_reached=true` と `next_cursor` を返します。
+この値を `--cursor` へ渡して続行してください。次の page では `--limit` を変更できます。
+human output は cursor と scan summary を stderr に出し、同じ partial exit semantics を
+使います。
+
+find continuation cursor は opaque で、同じ行に複数の match がある場合、Unicode を
+含む行、非常に長い行でも、次の match record から再開します。cursor は query、
+literal / regex mode、結果に影響するその他の option、candidate-file ordinal と path、
+line と match ordinal、UTF-8 byte position、source identity、index generation に
+紐づきます。異なる option での再利用は `cursor_mismatch`、indexed source の変更後の
+再利用は `cursor_stale`、不正な形式または位置は `cursor_malformed` を返します。
+最終 page は `has_more=false`、`next_cursor=null` になります。cancel または regex
+timeout になった request は continuation cursor を進めたり新しく発行したりしません。
+正常に完了した直前の page が返した cursor を再試行してください。
+
+count mode が scan cap に達した場合、`count` はその部分 scan page の件数となり、
+`next_cursor` は次の line boundary から再開します。`has_more=false` になるまで続けると、
+変更されていない indexed source では各 page の count の合計が完全な件数になります。
 
 `--path` で scope を限定した検索では、`--format compact` は location のみを返します。
 `--before`、`--after`、`--snippet-lines` の context が必要な場合は text または
