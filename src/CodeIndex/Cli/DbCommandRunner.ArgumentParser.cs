@@ -31,6 +31,7 @@ public static partial class DbCommandRunner
         private bool restoreBackupsPrune;
         private bool restoreBackupsRestore;
         private bool noBackup;
+        private bool keepOptionSeen;
         private int restoreBackupsKeep = DefaultRestoreBackupKeepCount;
         private bool schemaSummaryOnly;
         private int schemaEntryLimit = SchemaEntryLimit;
@@ -206,6 +207,7 @@ public static partial class DbCommandRunner
                     parseError = "--delete requires a checkpoint name";
                     break;
                 case "--keep" when i + 1 < args.Length:
+                    keepOptionSeen = true;
                     if (!restoreBackups && !checkpointsPrune)
                     {
                         parseError = "--keep is only valid with checkpoint or restore-backup pruning";
@@ -263,6 +265,8 @@ public static partial class DbCommandRunner
                 parseError = "--apply is not supported with `cdidx db restore-backups`; `--prune` is the explicit mutation opt-in.";
             if (parseError is null && pruneDryRun && restoreBackups && !restoreBackupsPrune && !restoreBackupsRestore)
                 parseError = "--dry-run is only valid with `cdidx db restore-backups --prune` or `--restore <id>`.";
+            if (parseError is null && keepOptionSeen && restoreBackups && !restoreBackupsPrune)
+                parseError = "--keep is only valid with `cdidx db restore-backups --prune`.";
             if (parseError is null && pruneDryRun && listCheckpoints && !checkpointsDelete && !checkpointsPrune)
                 parseError = "--dry-run is only valid with checkpoint deletion or pruning.";
             if (parseError is null && !schema && schemaSpecificOptionSeen)

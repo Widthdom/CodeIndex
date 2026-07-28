@@ -305,6 +305,55 @@ public sealed class Issue4857ManagedRestoreBackupTests
     }
 
     [Fact]
+    public void RestoreManifestHeaderDoesNotApplyImportArchiveSizeCap()
+    {
+        var fixture = CreateImportedFixture("cdidx_issue4857_managed_size_limit");
+        try
+        {
+            var backupPath = Assert.Single(EnumerateBackupDirectories(fixture.DestinationDb));
+            var manifestPath = Path.Combine(backupPath, "manifest.json");
+            var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+            manifest["database_bytes"] = ExportImportCommandRunner.MaxImportDatabaseBytes + 1;
+            File.WriteAllText(manifestPath, manifest.ToJsonString());
+
+            var (exitCode, json) = RunDbJson(
+                ["restore-backups", "--restore", fixture.BackupId, "--dry-run", "--db", fixture.DestinationDb, "--json"]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.True(json.GetProperty("manifest_valid").GetBoolean());
+            Assert.Contains(
+                json.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("code").GetString() == "restore_backup_size_mismatch");
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void RestoreRejectsKeepOptionWithoutMutatingDestination()
+    {
+        var fixture = CreateImportedFixture("cdidx_issue4857_restore_keep");
+        try
+        {
+            var before = File.ReadAllBytes(fixture.DestinationDb);
+
+            var (exitCode, json) = RunDbJson(
+                ["restore-backups", "--restore", fixture.BackupId, "--keep", "1", "--db", fixture.DestinationDb, "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            Assert.Equal(before, File.ReadAllBytes(fixture.DestinationDb));
+            Assert.Single(EnumerateBackupDirectories(fixture.DestinationDb));
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
     public void RestoreDryRunRejectsInsufficientSpaceWithoutMutatingDestination()
     {
         var fixture = CreateImportedFixture("cdidx_issue4857_restore_space");

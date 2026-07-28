@@ -667,7 +667,6 @@ internal static class ManagedRestoreBackupStore
             || !string.Equals(manifest.DatabaseFile, dbFileName, dbFileNameComparison)
             || !string.Equals(Path.GetFileName(manifest.DatabaseFile), manifest.DatabaseFile, StringComparison.Ordinal)
             || manifest.DatabaseBytes < 0
-            || manifest.DatabaseBytes > ExportImportCommandRunner.MaxImportDatabaseBytes
             || string.IsNullOrWhiteSpace(manifest.DatabaseSha256)
             || manifest.DatabaseSha256.Length != 64
             || manifest.DatabaseSha256.Any(ch => !Uri.IsHexDigit(ch))

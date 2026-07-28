@@ -403,6 +403,7 @@ public static partial class DbCommandRunner
         var restoreTempPath = fullDbPath + ".restore-tmp-" + restorePathSuffix;
         var rollbackPath = Path.Combine(restoreTempPath, "rollback");
         ManagedRestoreBackupInfo? managedBackup = null;
+        var retainRestoreTemp = false;
         DataDirectorySecurity.CreateSensitiveDirectory(restoreTempPath);
         try
         {
@@ -438,9 +439,11 @@ public static partial class DbCommandRunner
         catch (Exception primaryEx)
         {
             DbDiagnosticJsonResult? rollbackFailure = null;
+            retainRestoreTemp = true;
             try
             {
                 RestoreBackedUpFiles(fullDbPath, rollbackPath);
+                retainRestoreTemp = false;
             }
             catch (Exception rollbackEx) when (IsRecoverableRestoreException(rollbackEx))
             {
@@ -462,11 +465,14 @@ public static partial class DbCommandRunner
         }
         finally
         {
-            TryDeleteTemporaryDirectory(
-                restoreTempPath,
-                "restore temporary directory",
-                Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath("."),
-                Path.GetFileName(fullDbPath) + ".restore-tmp-");
+            if (!retainRestoreTemp)
+            {
+                TryDeleteTemporaryDirectory(
+                    restoreTempPath,
+                    "restore temporary directory",
+                    Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath("."),
+                    Path.GetFileName(fullDbPath) + ".restore-tmp-");
+            }
         }
 
         return managedBackup?.BackupPath ?? string.Empty;
