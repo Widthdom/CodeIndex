@@ -267,8 +267,12 @@ internal static class SearchMatchClassifier
 
     private static bool LooksLikeSchemaDescription(string path, string text, int contentStart)
     {
-        if (!string.Equals(path.Replace('\\', '/'), "src/CodeIndex/Mcp/McpToolDefinitions.cs", StringComparison.Ordinal))
+        var normalizedPath = path.Replace('\\', '/');
+        if (normalizedPath is not "src/CodeIndex/Mcp/McpToolDefinitions.cs"
+            and not "src/CodeIndex/Mcp/McpToolCatalog.cs")
+        {
             return false;
+        }
 
         const string descriptionProperty = "[\"description\"]";
         var propertyIndex = text.IndexOf(descriptionProperty, StringComparison.Ordinal);

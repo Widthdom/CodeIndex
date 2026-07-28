@@ -23,20 +23,27 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issue4416()
+    public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issues4416_4864()
     {
         const string schemaLine = "[\"tokenBoundary\"] = new JsonObject { [\"description\"] = \"Use new HttpClient as an example.\" };";
         const string runtimeLine = "var client = new HttpClient();";
 
-        var schema = SearchMatchClassifier.Classify(
+        string[] schemaPaths =
+        [
             "src/CodeIndex/Mcp/McpToolDefinitions.cs",
-            "csharp",
-            1,
-            schemaLine,
-            schemaLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
-            "new HttpClient".Length);
+            "src/CodeIndex/Mcp/McpToolCatalog.cs",
+        ];
+        var schemaFacets = schemaPaths
+            .Select(path => SearchMatchClassifier.Classify(
+                path,
+                "csharp",
+                1,
+                schemaLine,
+                schemaLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
+                "new HttpClient".Length))
+            .ToArray();
         var siblingType = SearchMatchClassifier.Classify(
-            "src/CodeIndex/Mcp/McpToolDefinitions.cs",
+            "src/CodeIndex/Mcp/McpToolCatalog.cs",
             "csharp",
             1,
             schemaLine,
@@ -50,10 +57,10 @@ public partial class QueryCommandRunnerTests
             runtimeLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
             "new HttpClient".Length);
 
-        Assert.Equal(SearchMatchClassifier.SchemaDescription, schema.Origin);
+        Assert.All(schemaFacets, schema => Assert.Equal(SearchMatchClassifier.SchemaDescription, schema.Origin));
         Assert.Equal(SearchMatchClassifier.Code, siblingType.Origin);
         Assert.Equal(SearchMatchClassifier.Code, runtime.Origin);
-        Assert.True(SearchMatchClassifier.IsStringLikeOrigin(schema.Origin));
+        Assert.All(schemaFacets, schema => Assert.True(SearchMatchClassifier.IsStringLikeOrigin(schema.Origin)));
     }
 
     [Fact]
@@ -2045,6 +2052,113 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(
                 SearchMatchClassifier.HelpText,
                 helpRow.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_McpSchemaDescriptionsStayOutOfExecutableRecipeOutputs_Issue4864()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_mcp_schema_origins_4864");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Mcp/McpToolCatalog.cs",
+                "csharp",
+                """
+                var schema = new JsonObject
+                {
+                    ["tokenBoundary"] = new JsonObject { ["description"] = "Use new HttpClient only as an example." }
+                };
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                """
+                using System.Net.Http;
+                var client = new HttpClient();
+                """);
+
+            var (recipeExitCode, recipeStdout, recipeStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/http-client-construction", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+            var (schemaExitCode, schemaStdout, schemaStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "new HttpClient",
+                    "--db", dbPath,
+                    "--exact-substring",
+                    "--origin", "schema_description",
+                    "--json=array",
+                    "--limit", "10",
+                ],
+                _jsonOptions));
+            var (sarifExitCode, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/http-client-construction", "--db", dbPath, "--format", "sarif", "--limit", "10"],
+                _jsonOptions));
+            var (draftExitCode, draftStdout, draftStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/http-client-construction", "--db", dbPath, "--format", "issue-drafts", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, recipeExitCode);
+            Assert.Equal(CommandExitCodes.Success, schemaExitCode);
+            Assert.Equal(CommandExitCodes.Success, sarifExitCode);
+            Assert.Equal(CommandExitCodes.Success, draftExitCode);
+            Assert.Equal(string.Empty, recipeStderr);
+            Assert.Equal(string.Empty, schemaStderr);
+            Assert.Equal(string.Empty, sarifStderr);
+            Assert.Equal(string.Empty, draftStderr);
+
+            using var recipeDocument = ParseJsonOutput(recipeStdout);
+            var recipeRoot = recipeDocument.RootElement;
+            var recipeMetadata = Assert.Single(recipeRoot.GetProperty("recipe").GetProperty("queries").EnumerateArray());
+            var recipeQuery = Assert.Single(recipeRoot.GetProperty("queries").EnumerateArray());
+            var recipeResult = Assert.Single(recipeQuery.GetProperty("results").EnumerateArray());
+            Assert.Equal(1, recipeRoot.GetProperty("result_count").GetInt32());
+            Assert.Equal("src/App.cs", recipeResult.GetProperty("path").GetString());
+            Assert.Contains(
+                SearchMatchClassifier.SchemaDescription,
+                recipeMetadata.GetProperty("exclude_origins").EnumerateArray().Select(value => value.GetString()));
+            Assert.Contains(
+                SearchMatchClassifier.Code,
+                recipeResult.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+
+            using var schemaDocument = ParseJsonOutput(schemaStdout);
+            var schemaResult = Assert.Single(schemaDocument.RootElement.EnumerateArray());
+            Assert.Equal("src/CodeIndex/Mcp/McpToolCatalog.cs", schemaResult.GetProperty("path").GetString());
+            Assert.Contains(
+                SearchMatchClassifier.SchemaDescription,
+                schemaResult.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+            Assert.All(
+                schemaResult.GetProperty("match_facets").EnumerateArray(),
+                facet => Assert.Equal(SearchMatchClassifier.SchemaDescription, facet.GetProperty("origin").GetString()));
+
+            using var sarifDocument = ParseJsonOutput(sarifStdout);
+            var sarifResult = Assert.Single(
+                sarifDocument.RootElement.GetProperty("runs")[0].GetProperty("results").EnumerateArray());
+            Assert.Equal(
+                "src/App.cs",
+                sarifResult.GetProperty("locations")[0]
+                    .GetProperty("physicalLocation")
+                    .GetProperty("artifactLocation")
+                    .GetProperty("uri")
+                    .GetString());
+            Assert.Contains(
+                SearchMatchClassifier.Code,
+                sarifResult.GetProperty("properties").GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+
+            using var draftDocument = ParseJsonOutput(draftStdout);
+            var draftRoot = draftDocument.RootElement;
+            var draft = Assert.Single(draftRoot.GetProperty("drafts").EnumerateArray());
+            var evidence = Assert.Single(draft.GetProperty("evidence").EnumerateArray());
+            Assert.Equal(1, draftRoot.GetProperty("result_count").GetInt32());
+            Assert.Equal("src/App.cs", evidence.GetProperty("path").GetString());
+            Assert.DoesNotContain("McpToolCatalog.cs", draft.GetProperty("body").GetString(), StringComparison.Ordinal);
         }
         finally
         {
