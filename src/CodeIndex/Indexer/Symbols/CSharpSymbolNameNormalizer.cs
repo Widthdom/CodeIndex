@@ -73,6 +73,7 @@ internal static class CSharpSymbolNameNormalizer
 
         var sourceName = string.Equals(name, "Item", StringComparison.Ordinal) ? "this" : name;
         var memberMarker = "." + sourceName;
+        var declarationBodyStart = FindDeclarationBodyStart(signature);
         var searchStart = 0;
         while (searchStart < signature.Length)
         {
@@ -81,6 +82,8 @@ internal static class CSharpSymbolNameNormalizer
                 searchStart,
                 StringComparison.Ordinal);
             if (memberIndex <= 0)
+                return null;
+            if (memberIndex >= declarationBodyStart)
                 return null;
 
             var cursor = memberIndex + memberMarker.Length;
@@ -101,6 +104,22 @@ internal static class CSharpSymbolNameNormalizer
         }
 
         return null;
+    }
+
+    private static int FindDeclarationBodyStart(string signature)
+    {
+        var expressionBodyStart = signature.IndexOf("=>", StringComparison.Ordinal);
+        var blockBodyStart = signature.IndexOf('{');
+        var initializerStart = signature.IndexOf('=');
+        var bodyStart = signature.Length;
+        if (expressionBodyStart >= 0)
+            bodyStart = Math.Min(bodyStart, expressionBodyStart);
+        if (blockBodyStart >= 0)
+            bodyStart = Math.Min(bodyStart, blockBodyStart);
+        if (initializerStart >= 0)
+            bodyStart = Math.Min(bodyStart, initializerStart);
+
+        return bodyStart;
     }
 
     private static bool TryReadExplicitInterfaceMemberArity(

@@ -1947,6 +1947,18 @@ public partial class DbReaderTests
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "Run",
             "Models.Run<T> Run()"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Count",
+            "public int Count => inner.Count;"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Add",
+            "public void Add(Item item) => inner.Add(item);"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "MaxSize",
+            "internal const int MaxSize = Limits.MaxSize;"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Registry",
+            "using Registry = CodeIndex.Indexer.Registry;"));
         Assert.Equal(
             "ifoo.run`1",
             CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
