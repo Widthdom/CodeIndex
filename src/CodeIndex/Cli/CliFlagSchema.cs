@@ -516,6 +516,8 @@ internal static class CliFlagSchema
             new() { Name = "--title", ValuePlaceholder = "<title>", Description = "Suggestions add: optional issue-draft title source", PrimaryCommands = Set("suggestions") },
             new() { Name = "--evidence-path", ValuePlaceholder = "<path>", Description = "Suggestions add: repository-relative evidence path; repeat for multiple paths", PrimaryCommands = Set("suggestions") },
             new() { Name = "--overwrite", Description = "Portable archive, report bundle, or suggestions export: atomically replace an existing output file", PrimaryCommands = Set("export", "report", "suggestions") },
+            new() { Name = "--restore", ValuePlaceholder = "<id>", Description = "DB restore-backups: select a managed backup ID to validate and restore atomically", PrimaryCommands = Set("db") },
+            new() { Name = "--no-backup", Description = "Import/DB restore: explicitly skip creating managed rollback material before replacement", PrimaryCommands = Set("import", "db") },
             new() { Name = "--body", Description = "Include definition body snippets in JSON-capable result rows", PrimaryCommands = Set(BodyCommands) },
             new() { Name = "--body-start", ValuePlaceholder = "<line>", Description = "Inspect: start definition body slice at this 1-based source line", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--body-lines", ValuePlaceholder = "<n>", Description = "Inspect: return at most this many definition body lines", PrimaryCommands = Set(InspectFieldCommands) },

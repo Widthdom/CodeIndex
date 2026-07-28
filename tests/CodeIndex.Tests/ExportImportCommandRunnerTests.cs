@@ -1372,12 +1372,14 @@ public class ExportImportCommandRunnerTests
                         [archivePath, "--db", destinationDb, "--dry-run", "--json"],
                         jsonOptions));
 
-                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
                 Assert.Equal(string.Empty, stderr);
                 using var document = JsonDocument.Parse(stdout);
-                var delta = document.RootElement.GetProperty("destination_delta");
-                Assert.False(delta.GetProperty("comparable").GetBoolean());
-                Assert.Equal("destination_unreadable", delta.GetProperty("status").GetString());
+                Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("pre_replace_backup", document.RootElement.GetProperty("phase").GetString());
+                Assert.Equal(
+                    "import_rollback_backup_unavailable",
+                    document.RootElement.GetProperty("error_code").GetString());
             }
             finally
             {
