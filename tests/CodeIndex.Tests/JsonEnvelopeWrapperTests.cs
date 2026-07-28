@@ -239,6 +239,107 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
+    public void Search_UnboundedEnvelope_KeepsIndexedHeadFromValidatedResponseSnapshot_Issue4854()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("envelope_unbounded_indexed_head_snapshot");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App { void Authenticate() {} }\n");
+            const string snapshotHead = "2222222222222222222222222222222222222222";
+            const string nextHead = "3333333333333333333333333333333333333333";
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues((DbContext.IndexedHeadShaMetaKey, snapshotHead));
+            }
+
+            var hookInvoked = false;
+            JsonEnvelopeWrapper.ResponseSnapshotValidatedForTesting = () =>
+            {
+                hookInvoked = true;
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues((DbContext.IndexedHeadShaMetaKey, nextHead));
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Authenticate", "--db", dbPath, "--json-envelope"],
+                _jsonOptions,
+                "1.0.0"));
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(
+                snapshotHead,
+                document.RootElement
+                    .GetProperty("metadata")
+                    .GetProperty("indexed_at_head_sha")
+                    .GetString());
+            using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(nextHead, verificationDb.GetMetaString(DbContext.IndexedHeadShaMetaKey));
+        }
+        finally
+        {
+            JsonEnvelopeWrapper.ResponseSnapshotValidatedForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunWrapped_UnboundedEnvelope_RejectsRowsWhenIndexGenerationChanges_Issue4854()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("envelope_unbounded_generation_change");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const string snapshotHead = "2222222222222222222222222222222222222222";
+            const string nextHead = "3333333333333333333333333333333333333333";
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues((DbContext.IndexedHeadShaMetaKey, snapshotHead));
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+                "search",
+                ["Authenticate", "--db", dbPath, "--json-envelope"],
+                "1.0.0",
+                _jsonOptions,
+                _ =>
+                {
+                    Console.WriteLine("""{"path":"src/App.cs"}""");
+                    using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                    var writer = new DbWriter(db.Connection);
+                    writer.SetMetaValues((DbContext.IndexedHeadShaMetaKey, nextHead));
+                    return CommandExitCodes.Success;
+                }));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("index generation changed", stderr, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Empty(root.GetProperty("results").EnumerateArray());
+            Assert.Equal(
+                CommandErrorCodes.UsageError,
+                root.GetProperty("metadata").GetProperty("error").GetProperty("error_code").GetString());
+            Assert.Equal(
+                snapshotHead,
+                root.GetProperty("metadata").GetProperty("indexed_at_head_sha").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Search_BoundedEnvelope_KeepsIndexedHeadFromValidatedResponseSnapshot_Issue4854()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("envelope_indexed_head_snapshot");
