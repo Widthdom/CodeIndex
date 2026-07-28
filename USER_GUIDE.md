@@ -2710,6 +2710,23 @@ but do not speak MCP. It also advertises full `textDocument` sync and
 conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
 `codeLens`, and `inlayHint` providers backed by indexed symbols and references
 where available.
+C# constructor navigation is source-position-aware. For `new Type(...)`,
+`textDocument/definition` and `textDocument/declaration` use the exact indexed
+reference site and invocation arity to select only matching explicit constructor
+symbols. When no explicit constructor is indexed, including implicit constructors
+on partial classes and positional records, they return one stable representative
+type declaration. This is separate from ordinary type-reference navigation, which
+may intentionally return every declaration in one logical partial-type family.
+Static constructors and finalizers are never treated as `new` targets. Primary
+constructor declarations remain eligible beside secondary constructors, generic
+type arity scopes constructor identity, and same-arity overloads remain constructor
+locations instead of falling back to same-named type declarations. Default
+construction of value types remains attached to the type declaration even when
+other explicit constructors exist, and enum and delegate construction remain
+navigable.
+CLI `definition` and `goto` are name-based; use `--kind function` for explicit
+constructors, or a type kind together with `--group-partials` for the logical type
+family.
 Clients must follow the standard LSP lifecycle: send one `initialize` request
 first, optionally send the `initialized` notification after its response, then
 send ordinary requests, finish with one `shutdown` request, and finally send the
@@ -5840,6 +5857,22 @@ MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 
 indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
 `documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
 advertise します。
+C# の constructor navigation は source position を考慮します。`new Type(...)` に
+対する `textDocument/definition` と `textDocument/declaration` は、index 済みの
+正確な reference site と invocation arity を使い、一致する明示 constructor symbol
+だけを選択します。partial class の暗黙 constructor や positional record のように
+明示 constructor が index されていない場合は、安定した代表 type declaration を
+1 件返します。この経路は通常の type-reference navigation と分離されており、後者は
+1 つの logical partial-type family に属する全 declaration を意図的に返す場合があります。
+static constructor と finalizer は `new` の target として扱いません。primary constructor
+declaration は secondary constructor と併存しても候補に残り、generic type arity で
+constructor identity を限定します。同一 arity の overload も同名 type declaration へ
+fallback せず、constructor location の集合として返します。他の明示 constructor が
+存在する場合も value type の default construction は type declaration に結び付けたままにし、
+enum と delegate の construction も navigation 可能な状態を保ちます。
+CLI の `definition` と `goto` は名前ベースなので、明示 constructor には
+`--kind function`、logical type family には type kind と `--group-partials` を
+組み合わせてください。
 client は標準の LSP lifecycle に従う必要があります。最初に `initialize` request を 1 回だけ
 送り、その response 後に必要なら `initialized` notification を送り、通常 request を処理した後、
 `shutdown` request、最後に `exit` notification の順で終了してください。初期化完了前に受信した

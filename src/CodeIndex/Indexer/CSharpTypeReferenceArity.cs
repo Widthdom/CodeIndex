@@ -25,6 +25,44 @@ internal static class CSharpTypeReferenceArity
         return cursor < context.Length && context[cursor] == '.';
     }
 
+    internal static int? GetInvocationArgumentCount(
+        string? context,
+        string? symbolName,
+        long? columnNumber)
+    {
+        if (string.IsNullOrWhiteSpace(context) || string.IsNullOrWhiteSpace(symbolName))
+            return null;
+
+        var occurrence = FindClosestIdentifierOccurrence(context, symbolName, columnNumber);
+        if (occurrence < 0)
+            return null;
+
+        var cursor = occurrence + symbolName.Length;
+        if (!SkipCSharpTrivia(context, ref cursor))
+            return null;
+        if (cursor < context.Length && context[cursor] == '<')
+        {
+            if (!TryCountTopLevelTypeArguments(
+                    context,
+                    cursor,
+                    out _,
+                    out var closeAngleIndex))
+            {
+                return null;
+            }
+
+            cursor = closeAngleIndex + 1;
+            if (!SkipCSharpTrivia(context, ref cursor))
+                return null;
+        }
+
+        return cursor < context.Length
+               && context[cursor] == '('
+               && TryCountTopLevelParameters(context, cursor, out var count)
+            ? count
+            : null;
+    }
+
     internal static int? GetDefinitionArity(string? signature, string? symbolName, string? symbolKind)
     {
         if (string.IsNullOrWhiteSpace(symbolName))
@@ -36,6 +74,75 @@ internal static class CSharpTypeReferenceArity
         var occurrence = FindDefinitionIdentifierOccurrence(signature, symbolName, searchStart, symbolKind);
         return occurrence < 0 ? null : ReadArityAfterIdentifier(signature, occurrence, symbolName.Length);
     }
+
+    internal static int? GetConstructorParameterCount(
+        string? signature,
+        string? symbolName,
+        string? symbolKind)
+    {
+        if (string.IsNullOrWhiteSpace(signature) || string.IsNullOrWhiteSpace(symbolName))
+            return null;
+
+        var typeDeclaration = symbolKind is "class" or "struct" or "record";
+        var constructorFunction = string.Equals(symbolKind, "function", StringComparison.Ordinal);
+        if (!typeDeclaration && !constructorFunction)
+            return null;
+
+        var searchStart = typeDeclaration ? FindDeclarationKeywordEnd(signature, symbolKind) : 0;
+        for (var searchAt = Math.Clamp(searchStart, 0, signature.Length);
+             searchAt <= signature.Length - symbolName.Length;)
+        {
+            var occurrence = signature.IndexOf(symbolName, searchAt, StringComparison.Ordinal);
+            if (occurrence < 0)
+                return null;
+            searchAt = occurrence + Math.Max(1, symbolName.Length);
+            if (!IsIdentifierOccurrence(signature, occurrence, symbolName.Length))
+                continue;
+
+            if (constructorFunction)
+            {
+                var previous = occurrence - 1;
+                while (previous >= 0 && char.IsWhiteSpace(signature[previous]))
+                    previous--;
+                if (previous >= 0 && signature[previous] == '~')
+                    return null;
+                if (ContainsIdentifier(signature, "static", occurrence))
+                    return null;
+            }
+
+            var cursor = occurrence + symbolName.Length;
+            if (!SkipCSharpTrivia(signature, ref cursor))
+                return null;
+            if (typeDeclaration && cursor < signature.Length && signature[cursor] == '<')
+            {
+                if (!TryCountTopLevelTypeArguments(
+                        signature,
+                        cursor,
+                        out _,
+                        out var closeAngleIndex))
+                {
+                    return null;
+                }
+
+                cursor = closeAngleIndex + 1;
+                if (!SkipCSharpTrivia(signature, ref cursor))
+                    return null;
+            }
+
+            if (cursor < signature.Length && signature[cursor] == '(')
+                return TryCountTopLevelParameters(signature, cursor, out var count) ? count : null;
+            if (typeDeclaration)
+                return null;
+        }
+
+        return null;
+    }
+
+    internal static bool IsValueTypeDeclaration(string? signature, string? symbolKind)
+        => string.Equals(symbolKind, "struct", StringComparison.Ordinal)
+           || (string.Equals(symbolKind, "record", StringComparison.Ordinal)
+               && !string.IsNullOrWhiteSpace(signature)
+               && ContainsIdentifier(signature, "struct", signature.Length));
 
     private static int FindClosestIdentifierOccurrence(string text, string identifier, long? columnNumber)
     {
@@ -95,6 +202,21 @@ internal static class CSharpTypeReferenceArity
         }
 
         return -1;
+    }
+
+    private static bool ContainsIdentifier(string text, string identifier, int endExclusive)
+    {
+        for (var searchAt = 0; searchAt <= endExclusive - identifier.Length;)
+        {
+            var occurrence = text.IndexOf(identifier, searchAt, StringComparison.Ordinal);
+            if (occurrence < 0 || occurrence >= endExclusive)
+                return false;
+            if (IsIdentifierOccurrence(text, occurrence, identifier.Length))
+                return true;
+            searchAt = occurrence + identifier.Length;
+        }
+
+        return false;
     }
 
     private static int FindDefinitionIdentifierOccurrence(
@@ -240,6 +362,93 @@ internal static class CSharpTypeReferenceArity
                                    && bracketDepth == 0
                                    && braceDepth == 0:
                     arity++;
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryCountTopLevelParameters(string text, int openParenthesis, out int count)
+    {
+        count = 0;
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+        var hasItemContent = false;
+        for (var i = openParenthesis + 1; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c is '"' or '\'')
+            {
+                i = SkipQuotedLiteral(text, i, c);
+                if (i >= text.Length)
+                    return false;
+                hasItemContent = true;
+                continue;
+            }
+            if (c == '/' && i + 1 < text.Length)
+            {
+                if (text[i + 1] == '/')
+                    return false;
+                if (text[i + 1] == '*')
+                {
+                    i = SkipBlockComment(text, i);
+                    if (i >= text.Length)
+                        return false;
+                    continue;
+                }
+            }
+
+            switch (c)
+            {
+                case '(':
+                    parenthesisDepth++;
+                    hasItemContent = true;
+                    break;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    hasItemContent = true;
+                    break;
+                case ')' when bracketDepth == 0 && braceDepth == 0 && angleDepth == 0:
+                    count = hasItemContent ? count + 1 : 0;
+                    return true;
+                case '[':
+                    bracketDepth++;
+                    hasItemContent = true;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    hasItemContent = true;
+                    break;
+                case '{':
+                    braceDepth++;
+                    hasItemContent = true;
+                    break;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    hasItemContent = true;
+                    break;
+                case '<':
+                    angleDepth++;
+                    hasItemContent = true;
+                    break;
+                case '>' when angleDepth > 0:
+                    angleDepth--;
+                    hasItemContent = true;
+                    break;
+                case ',' when parenthesisDepth == 0
+                                   && bracketDepth == 0
+                                   && braceDepth == 0
+                                   && angleDepth == 0:
+                    if (!hasItemContent)
+                        return false;
+                    count++;
+                    hasItemContent = false;
+                    break;
+                default:
+                    hasItemContent |= !char.IsWhiteSpace(c);
                     break;
             }
         }

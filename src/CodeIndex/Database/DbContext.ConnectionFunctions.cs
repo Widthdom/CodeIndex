@@ -98,6 +98,18 @@ public partial class DbContext : IDisposable
             (string? signature, string? identifier, string? symbolKind) =>
                 CSharpTypeReferenceArity.GetDefinitionArity(signature, identifier, symbolKind));
         connection.CreateFunction(
+            "csharp_constructor_parameter_count",
+            (string? signature, string? identifier, string? symbolKind) =>
+                CSharpTypeReferenceArity.GetConstructorParameterCount(signature, identifier, symbolKind));
+        connection.CreateFunction(
+            "csharp_invocation_argument_count",
+            (string? context, string? identifier, long? columnNumber) =>
+                CSharpTypeReferenceArity.GetInvocationArgumentCount(context, identifier, columnNumber));
+        connection.CreateFunction(
+            "csharp_definition_is_value_type",
+            (string? signature, string? symbolKind) =>
+                CSharpTypeReferenceArity.IsValueTypeDeclaration(signature, symbolKind));
+        connection.CreateFunction(
             "csharp_base_identifiers_json",
             (string? signature) =>
                 JsonSerializer.Serialize(
