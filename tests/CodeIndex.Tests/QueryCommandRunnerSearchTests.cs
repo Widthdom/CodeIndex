@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -10299,15 +10300,18 @@ jobs:
             Assert.Equal(1, recovery.GetProperty("start_line").GetInt32());
             Assert.Equal(1, recovery.GetProperty("end_line").GetInt32());
             Assert.Equal(
-                ["cdidx", "excerpt", "dist/data.txt", "--db", Path.GetFullPath(dbPath), "--start", "1", "--end", "1", "--max-line-width", "0", "--json"],
+                ["cdidx", "excerpt", "dist/data.txt", "--db", DiagnosticSanitizer.ForPath(dbPath), "--start", "1", "--end", "1", "--max-line-width", "0", "--json"],
                 recovery.GetProperty("argv").EnumerateArray().Select(argument => argument.GetString()!).ToArray());
             Assert.Equal(OperatingSystem.IsWindows() ? "powershell" : "posix-sh", recovery.GetProperty("command_shell").GetString());
             Assert.True(recovery.GetProperty("command_display_only").GetBoolean());
             var recoveryCommand = recovery.GetProperty("command").GetString();
             Assert.Contains("cdidx excerpt dist/data.txt", recoveryCommand);
             Assert.Contains("--db", recoveryCommand);
-            Assert.Contains(dbPath, recoveryCommand);
+            Assert.DoesNotContain(dbPath, recoveryCommand);
+            Assert.Contains(DiagnosticSanitizer.ForPath(dbPath), recoveryCommand);
             Assert.Contains("--start 1 --end 1 --max-line-width 0 --json", recoveryCommand);
+            Assert.True(recovery.GetProperty("paths_redacted").GetBoolean());
+            Assert.True(recovery.GetProperty("requires_local_path_substitution").GetBoolean());
             Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
             Assert.Contains("TARGET", json.GetProperty("content").GetString());
             Assert.True(json.GetProperty("content").GetString()!.Length <= 96);

@@ -17,7 +17,8 @@ public class ExcerptRecoveryCommandFormatterTests
             path,
             dbPath,
             ["/opt/dot net/dotnet", "/repo/cdidx'build.dll"],
-            RecoveryCommandShell.PosixSh);
+            RecoveryCommandShell.PosixSh,
+            redactPaths: false);
 
         Assert.Equal(
             [
@@ -37,7 +38,9 @@ public class ExcerptRecoveryCommandFormatterTests
             ],
             recovery.Argv);
         Assert.Equal("posix-sh", recovery.CommandShell);
-        Assert.True(recovery.CommandDisplayOnly);
+        Assert.False(recovery.CommandDisplayOnly);
+        Assert.False(recovery.PathsRedacted);
+        Assert.False(recovery.RequiresLocalPathSubstitution);
         Assert.Equal(
             """'/opt/dot net/dotnet' '/repo/cdidx'\''build.dll' excerpt 'src/space '\''quote'\'' $dollar &meta.py' --db 'file:/tmp/db path'\''quote?$x&mode=ro' --start 2 --end 3 --max-line-width 0 --json""",
             recovery.Command);
@@ -55,15 +58,72 @@ public class ExcerptRecoveryCommandFormatterTests
             path,
             dbPath,
             [@"C:\Program Files\dotnet\dotnet.exe", @"C:\repo\cdidx'build.dll"],
-            RecoveryCommandShell.PowerShell);
+            RecoveryCommandShell.PowerShell,
+            redactPaths: false);
 
         Assert.Equal("powershell", recovery.CommandShell);
-        Assert.True(recovery.CommandDisplayOnly);
+        Assert.False(recovery.CommandDisplayOnly);
+        Assert.False(recovery.PathsRedacted);
+        Assert.False(recovery.RequiresLocalPathSubstitution);
         Assert.Equal(
             """& 'C:\Program Files\dotnet\dotnet.exe' 'C:\repo\cdidx''build.dll' excerpt 'src/space ''quote'' $dollar &meta.py' --db 'file:C:\db path''quote?$x&mode=ro' --start 2 --end 3 --max-line-width 0 --json""",
             recovery.Command);
         Assert.Equal(path, recovery.Argv[3]);
         Assert.Equal(dbPath, recovery.Argv[5]);
+    }
+
+    [Theory]
+    [InlineData(
+        "/Users/alice/My Repo/src/space file.cs",
+        "file:/Users/alice/My Repo/.cdidx/codeindex.db?mode=ro",
+        "/Users/alice/.dotnet/dotnet",
+        "/Users/alice/My Repo/cdidx.dll",
+        "dotnet",
+        "space file.cs",
+        "file:.cdidx/codeindex.db?mode=ro")]
+    [InlineData(
+        @"C:\Users\alice\My Repo\src\space file.cs",
+        @"file:C:\Users\alice\My Repo\.cdidx\codeindex.db?mode=ro",
+        @"C:\Users\alice\Program Files\dotnet.exe",
+        @"\\build-server\alice\share\cdidx.dll",
+        "dotnet.exe",
+        "space file.cs",
+        "file:.cdidx/codeindex.db?mode=ro")]
+    [InlineData(
+        @"\\workstation\alice\repo\src\space file.cs",
+        @"file:\\workstation\alice\repo\.cdidx\codeindex.db?mode=ro",
+        @"\\workstation\alice\tools\cdidx.exe",
+        @"C:\Users\alice\repo\cdidx.dll",
+        "cdidx.exe",
+        "space file.cs",
+        "file:.cdidx/codeindex.db?mode=ro")]
+    public void ApplyDbPath_DefaultRedaction_RemovesMachineSpecificAbsolutePaths_Issue4860(
+        string path,
+        string dbPath,
+        string executablePath,
+        string assemblyPath,
+        string expectedExecutable,
+        string expectedSourcePath,
+        string expectedDbPath)
+    {
+        var recovery = FileExcerptResult.CreateRecoveryHint(path, 2, 3);
+
+        ExcerptRecoveryCommandFormatter.ApplyDbPath(
+            recovery,
+            path,
+            dbPath,
+            [executablePath, assemblyPath],
+            RecoveryCommandShell.PowerShell);
+
+        Assert.Equal([expectedExecutable, "cdidx.dll"], recovery.Argv.Take(2));
+        Assert.Equal(expectedSourcePath, recovery.Argv[3]);
+        Assert.Equal(expectedDbPath, recovery.Argv[5]);
+        Assert.True(recovery.CommandDisplayOnly);
+        Assert.True(recovery.PathsRedacted);
+        Assert.True(recovery.RequiresLocalPathSubstitution);
+        Assert.DoesNotContain("alice", recovery.Command, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Users", recovery.Command, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("workstation", recovery.Command, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

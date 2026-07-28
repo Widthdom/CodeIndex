@@ -77,6 +77,12 @@ public static partial class QueryCommandRunner
                     else
                         AddParseError(dataDirError!);
                     break;
+                case "--redact-paths":
+                    redactPaths = true;
+                    break;
+                case "--show-paths":
+                    redactPaths = false;
+                    break;
                 case "--json":
                     if (inlineValue == null)
                     {

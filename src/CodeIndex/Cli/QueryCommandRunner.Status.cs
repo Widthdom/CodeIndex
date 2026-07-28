@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
@@ -54,6 +55,18 @@ public static partial class QueryCommandRunner
 
             Console.WriteLine(BuildEffectiveConfigJson(options, cmdArgs, appVersion).ToJsonString(jsonOptions));
             return CommandExitCodes.Success;
+        }
+        if (options.RedactPaths.HasValue)
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
+                "--redact-paths and --show-paths are only supported with status --config.",
+                CommandExitCodes.UsageError,
+                "Add --config to inspect effective path settings, or remove the path display option.",
+                GetUsageLineOrThrow("status"),
+                CommandErrorCodes.UsageError,
+                category: "usage");
         }
         if (options.StatusLogPath)
         {
@@ -1024,6 +1037,8 @@ public static partial class QueryCommandRunner
 
     private static JsonObject BuildEffectiveConfigJson(QueryCommandOptions options, string[] cmdArgs, string? appVersion)
     {
+        var redactPaths = options.RedactPaths ?? true;
+
         JsonObject Entry<T>(T? value, string source)
         {
             var entry = new JsonObject
@@ -1035,21 +1050,25 @@ public static partial class QueryCommandRunner
             return entry;
         }
 
+        string? PathValue(string? value)
+            => redactPaths && value != null ? DiagnosticSanitizer.ForPath(value) : value;
+
         var staleAfterEnvValue = CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
 
         var payload = new JsonObject
         {
             ["api_version"] = "1",
+            ["redaction"] = JsonSerializer.SerializeToNode(new DoctorRedactionJsonResult(redactPaths, true)),
             ["effective_config"] = new JsonObject
             {
-                ["db_path"] = Entry(options.DbPath, ResolveDbPathConfigSource(options)),
-                ["data_dir"] = Entry(options.DataDir, options.DataDirSource ?? "flag"),
+                ["db_path"] = Entry(PathValue(options.DbPath), ResolveDbPathConfigSource(options)),
+                ["data_dir"] = Entry(PathValue(options.DataDir), options.DataDirSource ?? "flag"),
                 ["limit"] = Entry(options.Limit, ResolveNumericConfigSource(cmdArgs, "--limit", "--top", DefaultLimitEnvironmentVariable)),
                 ["snippet_lines"] = Entry(options.SnippetLines, ResolveNumericConfigSource(cmdArgs, "--snippet-lines", null, DefaultSnippetLinesEnvironmentVariable)),
                 ["max_line_width"] = Entry(options.MaxLineWidth, ResolveNumericConfigSource(cmdArgs, "--max-line-width", null, DefaultMaxLineWidthEnvironmentVariable)),
                 ["json"] = Entry(options.Json, HasOption(cmdArgs, "--json") ? "flag" : "default"),
                 ["stale_after"] = Entry(options.StaleAfter?.ToString() ?? staleAfterEnvValue, options.StaleAfter.HasValue ? "flag" : ResolveEnvSource(StaleAfterEnvironmentVariable)),
-                ["global_tool_log_dir"] = Entry(GlobalToolLog.ResolveLogDirectoryForStatus(), ResolveEnvSource("CDIDX_GLOBAL_TOOL_LOG_DIR")),
+                ["global_tool_log_dir"] = Entry(PathValue(GlobalToolLog.ResolveLogDirectoryForStatus()), ResolveEnvSource("CDIDX_GLOBAL_TOOL_LOG_DIR")),
                 ["version"] = Entry(appVersion ?? ConsoleUi.LoadVersion(), "build"),
             },
         };

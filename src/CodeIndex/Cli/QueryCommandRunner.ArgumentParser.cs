@@ -125,6 +125,7 @@ public static partial class QueryCommandRunner
         private string outputFormat = OutputFormatText;
         private bool outputFormatExplicit;
         private bool statusConfig;
+        private bool? redactPaths;
         private bool limitExplicit;
         private bool snippetLinesExplicit;
         private bool maxLineWidthExplicit;
@@ -480,6 +481,7 @@ public static partial class QueryCommandRunner
                 StatusExplainField = statusExplainField,
                 StatusLogPath = statusLogPath,
                 StatusConfig = statusConfig,
+                RedactPaths = redactPaths,
                 RankMode = rankMode,
                 SymbolSortMode = symbolSortMode,
                 SortValue = sortValue,

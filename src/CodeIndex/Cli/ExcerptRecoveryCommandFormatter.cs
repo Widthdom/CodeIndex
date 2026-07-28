@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using System.Globalization;
 
 namespace CodeIndex.Cli;
@@ -14,18 +15,18 @@ internal static class ExcerptRecoveryCommandFormatter
     private static readonly AsyncLocal<RecoveryInvocation?> ScopedInvocation = new();
     private static readonly RecoveryInvocation DefaultInvocation = new(["cdidx"], ResolveCurrentShell());
 
-    public static void ApplyDbPath(FileExcerptResult excerpt, string dbPath)
+    public static void ApplyDbPath(FileExcerptResult excerpt, string dbPath, bool redactPaths = true)
     {
-        ApplyDbPath(excerpt.ContentRecovery, excerpt.Path, dbPath);
+        ApplyDbPath(excerpt.ContentRecovery, excerpt.Path, dbPath, redactPaths);
     }
 
-    public static void ApplyDbPath(ExcerptRecoveryHint? recovery, string path, string dbPath)
+    public static void ApplyDbPath(ExcerptRecoveryHint? recovery, string path, string dbPath, bool redactPaths = true)
     {
         if (recovery is null)
             return;
 
         var invocation = ScopedInvocation.Value ?? DefaultInvocation;
-        ApplyDbPath(recovery, path, dbPath, invocation.ArgvPrefix, invocation.Shell);
+        ApplyDbPath(recovery, path, dbPath, invocation.ArgvPrefix, invocation.Shell, redactPaths);
     }
 
     internal static void ApplyDbPath(
@@ -33,13 +34,19 @@ internal static class ExcerptRecoveryCommandFormatter
         string path,
         string dbPath,
         IReadOnlyList<string> invocationPrefix,
-        RecoveryCommandShell shell)
+        RecoveryCommandShell shell,
+        bool redactPaths = true)
     {
-        var argv = BuildArgv(path, recovery.StartLine, recovery.EndLine, dbPath, invocationPrefix);
-        recovery.Argv = argv;
-        recovery.Command = RenderDisplayCommand(argv, shell);
+        var resolvedArgv = BuildArgv(path, recovery.StartLine, recovery.EndLine, dbPath, invocationPrefix);
+        var outputArgv = redactPaths
+            ? BuildSupportSafeArgv(resolvedArgv, invocationPrefix.Count, path.StartsWith("-", StringComparison.Ordinal))
+            : resolvedArgv;
+        recovery.Argv = outputArgv;
+        recovery.Command = RenderDisplayCommand(outputArgv, shell);
         recovery.CommandShell = FormatShell(shell);
-        recovery.CommandDisplayOnly = true;
+        recovery.CommandDisplayOnly = redactPaths;
+        recovery.PathsRedacted = redactPaths;
+        recovery.RequiresLocalPathSubstitution = redactPaths && !resolvedArgv.SequenceEqual(outputArgv, StringComparer.Ordinal);
     }
 
     internal static IDisposable UseCurrentProcessInvocation()
@@ -110,6 +117,51 @@ internal static class ExcerptRecoveryCommandFormatter
             ? normalized
             : Path.GetFullPath(normalized);
     }
+
+    private static List<string> BuildSupportSafeArgv(
+        IReadOnlyList<string> resolvedArgv,
+        int invocationPrefixCount,
+        bool hasEndOfOptionsMarker)
+    {
+        var output = resolvedArgv.ToList();
+        for (var index = 0; index < invocationPrefixCount; index++)
+            output[index] = RedactAbsolutePathArgument(output[index]);
+
+        var sourcePathIndex = invocationPrefixCount + (hasEndOfOptionsMarker ? 2 : 1);
+        if (sourcePathIndex < output.Count)
+            output[sourcePathIndex] = RedactAbsolutePathArgument(output[sourcePathIndex]);
+
+        var dbFlagIndex = output.IndexOf("--db");
+        if (dbFlagIndex >= 0 && dbFlagIndex + 1 < output.Count)
+            output[dbFlagIndex + 1] = RedactAbsolutePathArgument(output[dbFlagIndex + 1]);
+
+        return output;
+    }
+
+    private static string RedactAbsolutePathArgument(string value)
+    {
+        if (value.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            var queryIndex = value.IndexOf('?');
+            var pathEnd = queryIndex >= 0 ? queryIndex : value.Length;
+            var path = value["file:".Length..pathEnd];
+            var query = queryIndex >= 0 ? value[queryIndex..] : string.Empty;
+            return "file:" + DiagnosticSanitizer.ForPath(path) + query;
+        }
+
+        return IsAbsolutePathArgument(value)
+            ? DiagnosticSanitizer.ForPath(value)
+            : value;
+    }
+
+    private static bool IsAbsolutePathArgument(string value)
+        => Path.IsPathRooted(value)
+            || value.StartsWith(@"\\", StringComparison.Ordinal)
+            || value.StartsWith("//", StringComparison.Ordinal)
+            || (value.Length >= 3
+                && char.IsAsciiLetter(value[0])
+                && value[1] == ':'
+                && value[2] is '/' or '\\');
 
     private static string QuoteShellArgument(string value, RecoveryCommandShell shell)
     {

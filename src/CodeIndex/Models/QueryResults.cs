@@ -462,6 +462,8 @@ public class ExcerptRecoveryHint
     public string Command { get; set; } = string.Empty;
     public string CommandShell { get; set; } = string.Empty;
     public bool CommandDisplayOnly { get; set; } = true;
+    public bool PathsRedacted { get; set; } = true;
+    public bool RequiresLocalPathSubstitution { get; set; }
 }
 
 public class FileFindResult

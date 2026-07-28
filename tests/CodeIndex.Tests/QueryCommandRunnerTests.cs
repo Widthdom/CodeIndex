@@ -610,10 +610,24 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, stderr);
         using var document = ParseJsonOutput(stdout);
         var effective = document.RootElement.GetProperty("effective_config");
-        Assert.Equal(missingDb, effective.GetProperty("db_path").GetProperty("value").GetString());
+        Assert.Equal(Path.GetFileName(missingDb), effective.GetProperty("db_path").GetProperty("value").GetString());
         Assert.Equal("flag", effective.GetProperty("db_path").GetProperty("source").GetString());
         Assert.Equal(33, effective.GetProperty("limit").GetProperty("value").GetInt32());
         Assert.Equal($"env:{QueryCommandRunner.DefaultLimitEnvironmentVariable}", effective.GetProperty("limit").GetProperty("source").GetString());
+        Assert.True(document.RootElement.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+        Assert.DoesNotContain(Path.GetTempPath(), stdout, StringComparison.Ordinal);
+
+        var (showExitCode, showStdout, showStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--config", "--db", missingDb, "--json", "--show-paths"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, showExitCode);
+        Assert.Equal(string.Empty, showStderr);
+        using var showDocument = ParseJsonOutput(showStdout);
+        Assert.Equal(
+            missingDb,
+            showDocument.RootElement.GetProperty("effective_config").GetProperty("db_path").GetProperty("value").GetString());
+        Assert.False(showDocument.RootElement.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
     }
 
     [Fact]
@@ -660,10 +674,23 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("config_file", staleAfter.GetProperty("source_kind").GetString());
         Assert.Equal("config.json", staleAfter.GetProperty("source_detail").GetString());
         var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
-        Assert.Equal(logDir, logPath.GetProperty("value").GetString());
+        Assert.Equal(Path.GetFileName(logDir), logPath.GetProperty("value").GetString());
         Assert.Equal("config:config.json", logPath.GetProperty("source").GetString());
         Assert.Equal("config_file", logPath.GetProperty("source_kind").GetString());
         Assert.Equal("config.json", logPath.GetProperty("source_detail").GetString());
+        Assert.DoesNotContain(projectRoot, stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunStatus_PathDisplayOptionWithoutConfig_IsUsageError_Issue4860()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--show-paths"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("only supported with status --config", stderr, StringComparison.Ordinal);
     }
 
     [Fact]
