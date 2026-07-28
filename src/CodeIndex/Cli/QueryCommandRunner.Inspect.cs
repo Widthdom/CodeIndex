@@ -247,7 +247,7 @@ public static partial class QueryCommandRunner
                 if (sourceExcerpt != null)
                 {
                     ExcerptRecoveryCommandFormatter.ApplyDbPath(sourceExcerpt, options.DbPath);
-                    sourceExcerpt.SemanticTokens = BuildExcerptSemanticTokens(sourceExcerpt);
+                    sourceExcerpt.SemanticTokens = BuildExcerptSemanticTokens(sourceExcerpt, reader);
                     payload["source_excerpt"] = JsonSerializer.SerializeToNode(sourceExcerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult);
                 }
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
