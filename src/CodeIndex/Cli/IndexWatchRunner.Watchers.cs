@@ -25,14 +25,38 @@ internal static partial class IndexWatchRunner
     private static readonly TimeSpan BackendStartupStabilizationDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan PollingWatchInterval = TimeSpan.FromSeconds(2);
 
+    internal static IReadOnlyCollection<string> CapturePollingSnapshotPathsForTesting(
+        string projectRoot,
+        string ignoreRuleRoot,
+        string resolvedDbPath,
+        bool ignoreCase,
+        bool dbPathExplicit,
+        CancellationToken cancellationToken = default)
+    {
+        using var backend = new PollingWatchBackend(
+            projectRoot,
+            ignoreRuleRoot,
+            resolvedDbPath,
+            ignoreCase,
+            dbPathExplicit);
+        return backend.CaptureSnapshotPaths(cancellationToken);
+    }
+
     private static IWatchBackend CreateWatchBackend(
         string projectRoot,
         string ignoreRuleRoot,
+        string resolvedDbPath,
         bool ignoreCase,
+        bool dbPathExplicit,
         int attempt)
         => WatchBackendFactoryForTesting?.Invoke(projectRoot, ignoreRuleRoot, ignoreCase)
             ?? (attempt > 0 && OperatingSystem.IsMacOS()
-                ? new PollingWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase)
+                ? new PollingWatchBackend(
+                    projectRoot,
+                    ignoreRuleRoot,
+                    resolvedDbPath,
+                    ignoreCase,
+                    dbPathExplicit)
                 : new FileSystemWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase));
 
     private static string ResolveWatchBackendName()
@@ -382,8 +406,11 @@ internal static partial class IndexWatchRunner
 
         private readonly string _projectRoot;
         private readonly string _ignoreRuleRoot;
+        private readonly string _resolvedDbPath;
         private readonly bool _ignoreCase;
+        private readonly bool _dbPathExplicit;
         private readonly StringComparer _pathComparer;
+        private readonly FileIndexer _fileIndexer;
         private CancellationTokenSource? _loopCancellation;
         private Task? _loopTask;
         private Dictionary<string, FileStamp>? _snapshot;
@@ -394,12 +421,23 @@ internal static partial class IndexWatchRunner
         internal PollingWatchBackend(
             string projectRoot,
             string ignoreRuleRoot,
-            bool ignoreCase)
+            string resolvedDbPath,
+            bool ignoreCase,
+            bool dbPathExplicit)
         {
             _projectRoot = Path.GetFullPath(projectRoot);
             _ignoreRuleRoot = Path.GetFullPath(ignoreRuleRoot);
+            _resolvedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(resolvedDbPath));
             _ignoreCase = ignoreCase;
+            _dbPathExplicit = dbPathExplicit;
             _pathComparer = ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            _fileIndexer = new FileIndexer(
+                _projectRoot,
+                ignoreCase,
+                _ignoreRuleRoot,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                internalIndexDatabasePath: _resolvedDbPath);
         }
 
         public string Name => "polling";
@@ -471,6 +509,9 @@ internal static partial class IndexWatchRunner
             _snapshot = next;
         }
 
+        internal IReadOnlyCollection<string> CaptureSnapshotPaths(CancellationToken cancellationToken)
+            => CaptureSnapshot(cancellationToken).Keys.ToArray();
+
         private Dictionary<string, FileStamp> CaptureSnapshot(CancellationToken cancellationToken)
         {
             var snapshot = new Dictionary<string, FileStamp>(_pathComparer);
@@ -484,7 +525,8 @@ internal static partial class IndexWatchRunner
                 foreach (var file in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    AddFileStamp(snapshot, file);
+                    if (ShouldTrackFile(file))
+                        AddFileStamp(snapshot, file);
                 }
 
                 foreach (var childDirectory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(directory))
@@ -492,8 +534,11 @@ internal static partial class IndexWatchRunner
                     cancellationToken.ThrowIfCancellationRequested();
                     try
                     {
-                        if ((File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) == 0)
+                        if ((File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) == 0
+                            && !_fileIndexer.ShouldSkipPath(childDirectory, isDirectory: true))
+                        {
                             pendingDirectories.Push(childDirectory);
+                        }
                     }
                     catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
                     {
@@ -505,6 +550,23 @@ internal static partial class IndexWatchRunner
                 AddFileStamp(snapshot, ignorePath);
 
             return snapshot;
+        }
+
+        private bool ShouldTrackFile(string path)
+        {
+            if (FileIndexer.ClassifyIndexInputInvalidation(_projectRoot, path)
+                != FileIndexer.IndexInputInvalidationKind.None)
+            {
+                return true;
+            }
+
+            return !ShouldIgnoreWatchInternalPath(
+                    _projectRoot,
+                    _resolvedDbPath,
+                    path,
+                    _ignoreCase,
+                    _dbPathExplicit)
+                && !_fileIndexer.ShouldSkipPath(path);
         }
 
         private IEnumerable<string> EnumerateAncestorIgnorePaths()

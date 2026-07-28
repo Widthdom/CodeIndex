@@ -142,6 +142,7 @@ internal static partial class IndexWatchRunner
         var backendGeneration = 0;
         var activeBackendAttempt = -1;
         Exception? startupBackendError = null;
+        Exception? liveBackendError = null;
         IWatchBackend? backend = null;
         string? backendName = null;
         string? startupRecoveryReason = null;
@@ -182,6 +183,8 @@ internal static partial class IndexWatchRunner
 
             void ReportBackendError(int generation, Exception? exception)
             {
+                var failure = exception
+                    ?? new IOException("watch backend reported an unspecified error");
                 lock (baselineStateGate)
                 {
                     if (generation != backendGeneration)
@@ -190,8 +193,14 @@ internal static partial class IndexWatchRunner
                     if (baselineState == 0
                         || (baselineState == 1 && exception is not InternalBufferOverflowException))
                     {
-                        startupBackendError ??= exception
-                            ?? new IOException("watch backend reported an unspecified startup error");
+                        startupBackendError ??= failure;
+                        return;
+                    }
+
+                    if (baselineState == 2
+                        && exception is not InternalBufferOverflowException)
+                    {
+                        liveBackendError ??= failure;
                         return;
                     }
                 }
@@ -213,13 +222,20 @@ internal static partial class IndexWatchRunner
                 {
                     generation = ++backendGeneration;
                     startupBackendError = null;
+                    liveBackendError = null;
                     baselineState = 0;
                 }
 
                 IWatchBackend? candidate = null;
                 try
                 {
-                    candidate = CreateWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase, attempt);
+                    candidate = CreateWatchBackend(
+                        projectRoot,
+                        ignoreRuleRoot,
+                        resolvedDbPath,
+                        ignoreCase,
+                        dbPathExplicit,
+                        attempt);
                     backend = candidate;
                     backendName = candidate.Name;
                     await candidate.StartAsync(
@@ -263,19 +279,23 @@ internal static partial class IndexWatchRunner
                 return startFailure;
             }
 
-            async Task<bool> ReplaceFailedBackendAfterBaselineAsync(Exception failure)
+            async Task<bool> ReplaceFailedBackendAfterBaselineAsync(
+                Exception failure,
+                string recoveryReason,
+                string phase)
             {
                 var failedBackendName = backendName;
                 lock (baselineStateGate)
                 {
                     backendGeneration++;
                     startupBackendError = null;
+                    liveBackendError = null;
                     baselineState = 1;
                 }
 
                 backend?.Dispose();
                 backend = null;
-                startupRecoveryReason = "backend_start_failed";
+                startupRecoveryReason = recoveryReason;
                 var failureDetail = CommandErrorWriter.FormatSanitizedExceptionMessage(failure);
 
                 if (activeBackendAttempt != 0)
@@ -285,7 +305,8 @@ internal static partial class IndexWatchRunner
                         jsonOptions,
                         failedBackendName,
                         startupRecoveryReason,
-                        failureDetail);
+                        failureDetail,
+                        phase);
                     watchExitCode = CommandExitCodes.RuntimeError;
                     return false;
                 }
@@ -296,7 +317,8 @@ internal static partial class IndexWatchRunner
                     failedBackendName,
                     startupRecoveryReason,
                     failureDetail,
-                    baselineCompleted: true);
+                    baselineCompleted: true,
+                    phase: phase);
 
                 var replacementFailure = await StartBackendAttemptAsync(1).ConfigureAwait(false);
                 if (replacementFailure != null)
@@ -306,12 +328,42 @@ internal static partial class IndexWatchRunner
                         jsonOptions,
                         backendName,
                         startupRecoveryReason,
-                        CommandErrorWriter.FormatSanitizedExceptionMessage(replacementFailure));
+                        CommandErrorWriter.FormatSanitizedExceptionMessage(replacementFailure),
+                        phase);
                     watchExitCode = CommandExitCodes.RuntimeError;
                     return false;
                 }
 
                 activeBackendAttempt = 1;
+                Exception? activationFailure;
+                lock (baselineStateGate)
+                {
+                    activationFailure = startupBackendError;
+                    if (activationFailure == null)
+                    {
+                        baselineState = 2;
+                    }
+                    else
+                    {
+                        backendGeneration++;
+                    }
+                }
+
+                if (activationFailure != null)
+                {
+                    backend?.Dispose();
+                    backend = null;
+                    EmitWatchBackendFailure(
+                        baseOptions,
+                        jsonOptions,
+                        backendName,
+                        startupRecoveryReason,
+                        CommandErrorWriter.FormatSanitizedExceptionMessage(activationFailure),
+                        phase);
+                    watchExitCode = CommandExitCodes.RuntimeError;
+                    return false;
+                }
+
                 batcher.RequestFullRescan(failure.Message, startupRecoveryReason);
                 return true;
             }
@@ -408,7 +460,11 @@ internal static partial class IndexWatchRunner
                         startupFailure = startupBackendError;
 
                     if (startupFailure != null
-                        && !await ReplaceFailedBackendAfterBaselineAsync(startupFailure).ConfigureAwait(false))
+                        && !await ReplaceFailedBackendAfterBaselineAsync(
+                                startupFailure,
+                                recoveryReason: "backend_start_failed",
+                                phase: "startup")
+                            .ConfigureAwait(false))
                     {
                         break;
                     }
@@ -455,6 +511,28 @@ internal static partial class IndexWatchRunner
 
             while (ready && !cancellationToken.IsCancellationRequested)
             {
+                Exception? liveFailure;
+                lock (baselineStateGate)
+                {
+                    liveFailure = liveBackendError;
+                    liveBackendError = null;
+                }
+
+                if (liveFailure != null)
+                {
+                    if (!await ReplaceFailedBackendAfterBaselineAsync(
+                            liveFailure,
+                            recoveryReason: "backend_error",
+                            phase: "incremental")
+                        .ConfigureAwait(false))
+                    {
+                        ready = false;
+                        break;
+                    }
+
+                    continue;
+                }
+
                 try
                 {
                     await Task.Delay(PollIntervalMs, cancellationToken).ConfigureAwait(false);
@@ -493,6 +571,13 @@ internal static partial class IndexWatchRunner
 
                 RecordSubRunExitCode(ref watchExitCode, RunPartialUpdate(baseOptions, jsonOptions, batch, resolvedDbPath, cancellationToken));
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Startup cancellation (including a polling snapshot interrupted during fallback)
+            // follows the same terminal-event contract as cancellation in the live loop.
+            // fallback 中の polling snapshot を含む startup cancellation でも、live loop と
+            // 同じ terminal-event 契約に従って stopped を出力する。
         }
         finally
         {

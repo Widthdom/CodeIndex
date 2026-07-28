@@ -237,7 +237,8 @@ internal static partial class IndexWatchRunner
         string? backend,
         string recoveryReason,
         string? reason,
-        bool baselineCompleted = false)
+        bool baselineCompleted = false,
+        string phase = "startup")
         => EmitWatchBackendStartupEvent(
             baseOptions,
             jsonOptions,
@@ -245,16 +246,20 @@ internal static partial class IndexWatchRunner
             backend: backend,
             recoveryReason: recoveryReason,
             reason: reason,
-            humanAction: baselineCompleted
-                ? "switching backend without repeating the baseline; one recovery scan will reconcile the handoff"
-                : "switching backend before the baseline scan");
+            phase: phase,
+            humanAction: phase == "startup"
+                ? baselineCompleted
+                    ? "switching backend without repeating the baseline; one recovery scan will reconcile the handoff"
+                    : "switching backend before the baseline scan"
+                : "switching backend; one recovery scan will reconcile the handoff");
 
     private static void EmitWatchBackendFailure(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         string? backend,
         string recoveryReason,
-        string? reason)
+        string? reason,
+        string phase = "startup")
         => EmitWatchBackendStartupEvent(
             baseOptions,
             jsonOptions,
@@ -262,7 +267,10 @@ internal static partial class IndexWatchRunner
             backend: backend,
             recoveryReason: recoveryReason,
             reason: reason,
-            humanAction: "watch startup stopped before the baseline scan");
+            phase: phase,
+            humanAction: phase == "startup"
+                ? "watch startup stopped before the baseline scan"
+                : "watch stopped because no further backend fallback is available");
 
     private static void EmitWatchBackendStartupEvent(
         IndexCommandOptions baseOptions,
@@ -271,6 +279,7 @@ internal static partial class IndexWatchRunner
         string? backend,
         string recoveryReason,
         string? reason,
+        string phase,
         string humanAction)
     {
         var safeBackend = FormatWatchDiagnosticText(backend) ?? "filesystem_watcher";
@@ -281,7 +290,7 @@ internal static partial class IndexWatchRunner
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
             {
                 Status = status,
-                Phase = "startup",
+                Phase = phase,
                 Backend = safeBackend,
                 RecoveryReason = safeRecoveryReason,
                 Reason = safeReason,
@@ -290,8 +299,12 @@ internal static partial class IndexWatchRunner
         }
 
         var detail = string.IsNullOrEmpty(safeReason) ? string.Empty : $"; {safeReason}";
+        var failureDescription = phase == "startup"
+            ? "startup failed"
+            : "reported a fatal error";
         CommandErrorWriter.WriteStderr(
-            $"[watch] Backend {safeBackend} startup failed (recovery {safeRecoveryReason}{detail}); {humanAction}.");
+            $"[watch] Backend {safeBackend} {failureDescription} "
+            + $"(recovery {safeRecoveryReason}{detail}); {humanAction}.");
     }
 
     private static void EmitWatchOverflow(

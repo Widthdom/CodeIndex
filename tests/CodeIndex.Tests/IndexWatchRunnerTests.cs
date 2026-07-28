@@ -1492,6 +1492,155 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void RunCore_LateFatalBackendError_ReplacesBackendAndRecoversOnce_Issue4858()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        var firstBackend = new FakeWatchBackend("fsevents");
+        var fallbackBackend = new FakeWatchBackend("polling");
+        var backends = new Queue<IndexWatchRunner.IWatchBackend>([firstBackend, fallbackBackend]);
+        var baselineScans = 0;
+        var recoveryScans = 0;
+        try
+        {
+            var options = CreateIssue4858WatchOptions(projectRoot, dbPath);
+            IndexWatchRunner.WatchBackendFactoryForTesting = (_, _, _) => backends.Dequeue();
+            IndexWatchRunner.WatchReadyForTesting = _ =>
+                firstBackend.ReportError(new IOException("late fatal EventStream failure"));
+
+            var capturedOut = RunWatchCoreAndCapture(
+                options,
+                projectRoot,
+                dbPath,
+                cts,
+                baselineScan: () =>
+                {
+                    baselineScans++;
+                    return CommandExitCodes.Success;
+                },
+                recoveryScan: phase =>
+                {
+                    Assert.Equal("incremental", phase);
+                    recoveryScans++;
+                    cts.Cancel();
+                    return CommandExitCodes.Success;
+                },
+                out var exitCode);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, baselineScans);
+            Assert.Equal(1, recoveryScans);
+            Assert.True(firstBackend.Disposed);
+            Assert.True(fallbackBackend.Disposed);
+            var fallbackEvent = FindWatchEvent(capturedOut, "backend_fallback");
+            Assert.Equal("incremental", fallbackEvent.GetProperty("phase").GetString());
+            Assert.Equal("fsevents", fallbackEvent.GetProperty("backend").GetString());
+            Assert.Equal("backend_error", fallbackEvent.GetProperty("recovery_reason").GetString());
+            var overflowEvent = FindWatchEvent(capturedOut, "overflow");
+            Assert.Equal("incremental", overflowEvent.GetProperty("phase").GetString());
+            Assert.Equal("polling", overflowEvent.GetProperty("backend").GetString());
+            Assert.Equal("backend_error", overflowEvent.GetProperty("recovery_reason").GetString());
+        }
+        finally
+        {
+            IndexWatchRunner.WatchBackendFactoryForTesting = null;
+            IndexWatchRunner.WatchReadyForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCore_PollingFallbackCancellation_EmitsStoppedWithoutBaseline_Issue4858()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        var firstBackend = new FakeWatchBackend(
+            "fsevents",
+            new IOException("simulated EventStream start failure"));
+        var pollingBackend = new CancelingWatchBackend("polling", cts);
+        var backends = new Queue<IndexWatchRunner.IWatchBackend>([firstBackend, pollingBackend]);
+        var baselineScans = 0;
+        try
+        {
+            var options = CreateIssue4858WatchOptions(projectRoot, dbPath);
+            IndexWatchRunner.WatchBackendFactoryForTesting = (_, _, _) => backends.Dequeue();
+
+            var capturedOut = RunWatchCoreAndCapture(
+                options,
+                projectRoot,
+                dbPath,
+                cts,
+                baselineScan: () =>
+                {
+                    baselineScans++;
+                    return CommandExitCodes.Success;
+                },
+                recoveryScan: _ => CommandExitCodes.Success,
+                out var exitCode);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(0, baselineScans);
+            Assert.True(firstBackend.Disposed);
+            Assert.True(pollingBackend.Disposed);
+            Assert.Equal(
+                "backend_start_failed",
+                FindWatchEvent(capturedOut, "backend_fallback")
+                    .GetProperty("recovery_reason")
+                    .GetString());
+            Assert.Equal("stopped", FindWatchEvent(capturedOut, "stopped").GetProperty("status").GetString());
+            Assert.DoesNotContain("\"status\":\"watching\"", capturedOut, StringComparison.Ordinal);
+        }
+        finally
+        {
+            IndexWatchRunner.WatchBackendFactoryForTesting = null;
+            IndexWatchRunner.WatchReadyForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PollingSnapshot_PrunesIgnoredAndInternalTrees_Issue4858()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, ".git"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "ignored", "deep"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "bin", "deep"));
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored/\nbin/\n");
+            File.WriteAllText(Path.Combine(projectRoot, ".git", "config"), "[core]\n");
+            File.WriteAllText(dbPath, "not a database");
+            File.WriteAllText(Path.Combine(projectRoot, "ignored", "deep", "hidden.cs"), "class Hidden {}\n");
+            File.WriteAllText(Path.Combine(projectRoot, "bin", "deep", "generated.cs"), "class Generated {}\n");
+            File.WriteAllText(Path.Combine(projectRoot, "visible.cs"), "class Visible {}\n");
+
+            var relativePaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                    projectRoot,
+                    projectRoot,
+                    dbPath,
+                    ignoreCase: false,
+                    dbPathExplicit: true)
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .ToArray();
+
+            Assert.Contains("visible.cs", relativePaths);
+            Assert.Contains(".gitignore", relativePaths);
+            Assert.DoesNotContain(relativePaths, path => path.StartsWith(".git/", StringComparison.Ordinal));
+            Assert.DoesNotContain(relativePaths, path => path.StartsWith(".cdidx/", StringComparison.Ordinal));
+            Assert.DoesNotContain(relativePaths, path => path.StartsWith("ignored/", StringComparison.Ordinal));
+            Assert.DoesNotContain(relativePaths, path => path.StartsWith("bin/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCore_BackendStartFailureAfterFallback_StopsBeforeBaseline_Issue4858()
     {
         var projectRoot = CreateTempProject();
@@ -1737,9 +1886,11 @@ public class IndexWatchRunnerTests
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var backend = new FakeWatchBackend("fsevents");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "hello.py"), "print('hi')\n");
+            IndexWatchRunner.WatchBackendFactoryForTesting = (_, _, _) => backend;
             var options = new IndexCommandOptions
             {
                 ProjectPath = projectRoot,
@@ -1787,6 +1938,7 @@ public class IndexWatchRunnerTests
         }
         finally
         {
+            IndexWatchRunner.WatchBackendFactoryForTesting = null;
             DeleteDirectory(projectRoot);
         }
     }
@@ -1796,9 +1948,11 @@ public class IndexWatchRunnerTests
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var backend = new FakeWatchBackend("fsevents");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "hello.py"), "print('hi')\n");
+            IndexWatchRunner.WatchBackendFactoryForTesting = (_, _, _) => backend;
             var options = new IndexCommandOptions
             {
                 ProjectPath = projectRoot,
@@ -1849,6 +2003,7 @@ public class IndexWatchRunnerTests
         }
         finally
         {
+            IndexWatchRunner.WatchBackendFactoryForTesting = null;
             DeleteDirectory(projectRoot);
         }
     }
@@ -2251,6 +2406,30 @@ public class IndexWatchRunnerTests
 
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class CancelingWatchBackend(
+        string name,
+        CancellationTokenSource cancellation) : IndexWatchRunner.IWatchBackend
+    {
+        public string Name { get; } = name;
+
+        internal bool Disposed { get; private set; }
+
+        public Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken)
+        {
+            cancellation.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public void Dispose()
+        {
+            Disposed = true;
         }
     }
 }
