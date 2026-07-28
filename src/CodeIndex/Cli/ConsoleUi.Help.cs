@@ -182,7 +182,7 @@ public static partial class ConsoleUi
         Console.WriteLine("  --changed-between <old-ref> <new-ref>");
         Console.WriteLine("                              Update only files changed between two git refs (useful after branch switches)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
-        WriteHelpLine("  --watch                    Start the filesystem backend before one baseline scan, then stay running and reindex changes; backend-start retry happens before the baseline, while event loss triggers one recovery rescan; rejects --commits / --changed-between / --files / --dry-run");
+        WriteHelpLine("  --watch                    Start the filesystem backend before one baseline scan, then stay running and reindex changes; macOS falls back from FSEvents to polling without repeating the baseline, while an uncertainty gap triggers one recovery rescan; rejects --commits / --changed-between / --files / --dry-run");
         Console.WriteLine($"  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: {IndexWatchRunner.DefaultDebounceMs}, max {IndexWatchRunner.MaxDebounceMs})");
         WriteHelpLine($"  --watch-pending-path-limit <n>  Watch only: pending changed-path queue limit before falling back to a full rescan (default: {IndexWatchRunner.DefaultWatchPendingPathLimit}, max: {IndexWatchRunner.MaxWatchPendingPathLimit}; also honors {IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable})");
         Console.WriteLine("  --optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files");

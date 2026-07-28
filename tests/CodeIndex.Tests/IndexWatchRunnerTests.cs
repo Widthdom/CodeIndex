@@ -1287,7 +1287,10 @@ public class IndexWatchRunnerTests
         var firstBackend = new FakeWatchBackend(
             "fsevents",
             new IOException("simulated EventStream start failure"));
-        var fallbackBackend = new FakeWatchBackend("fsevents");
+        var fallbackBackend = new FakeWatchBackend(
+            "polling",
+            onStart: () => firstBackend.ReportError(
+                new IOException("stale error from disposed EventStream backend")));
         var backends = new Queue<IndexWatchRunner.IWatchBackend>([firstBackend, fallbackBackend]);
         var baselineScans = 0;
         var recoveryScans = 0;
@@ -1327,8 +1330,55 @@ public class IndexWatchRunnerTests
             Assert.Equal("backend_start_failed", fallbackEvent.GetProperty("recovery_reason").GetString());
             var watchingEvent = FindWatchEvent(capturedOut, "watching");
             Assert.Equal("initial_scan", watchingEvent.GetProperty("phase").GetString());
-            Assert.Equal("fsevents", watchingEvent.GetProperty("backend").GetString());
+            Assert.Equal("polling", watchingEvent.GetProperty("backend").GetString());
             Assert.Equal("backend_start_failed", watchingEvent.GetProperty("recovery_reason").GetString());
+        }
+        finally
+        {
+            IndexWatchRunner.WatchBackendFactoryForTesting = null;
+            IndexWatchRunner.WatchReadyForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCore_AsynchronousStartupError_FallsBackBeforeBaseline_Issue4858()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        var firstBackend = new DeferredStartupErrorWatchBackend("fsevents");
+        var fallbackBackend = new FakeWatchBackend("polling");
+        var backends = new Queue<IndexWatchRunner.IWatchBackend>([firstBackend, fallbackBackend]);
+        var baselineScans = 0;
+        var recoveryScans = 0;
+        try
+        {
+            var options = CreateIssue4858WatchOptions(projectRoot, dbPath);
+            IndexWatchRunner.WatchBackendFactoryForTesting = (_, _, _) => backends.Dequeue();
+            IndexWatchRunner.WatchReadyForTesting = _ => cts.Cancel();
+
+            var capturedOut = RunWatchCoreAndCapture(
+                options,
+                projectRoot,
+                dbPath,
+                cts,
+                baselineScan: () =>
+                {
+                    baselineScans++;
+                    return CommandExitCodes.Success;
+                },
+                recoveryScan: _ =>
+                {
+                    recoveryScans++;
+                    return CommandExitCodes.Success;
+                },
+                out var exitCode);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, baselineScans);
+            Assert.Equal(0, recoveryScans);
+            Assert.Equal("polling", FindWatchEvent(capturedOut, "watching").GetProperty("backend").GetString());
         }
         finally
         {
@@ -1390,6 +1440,58 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void RunCore_BackendFailureDuringBaseline_PreservesBaselineAndRecoversOnce_Issue4858()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        var firstBackend = new FakeWatchBackend("fsevents");
+        var fallbackBackend = new FakeWatchBackend("polling");
+        var backends = new Queue<IndexWatchRunner.IWatchBackend>([firstBackend, fallbackBackend]);
+        var baselineScans = 0;
+        var recoveryScans = 0;
+        try
+        {
+            var options = CreateIssue4858WatchOptions(projectRoot, dbPath);
+            IndexWatchRunner.WatchBackendFactoryForTesting = (_, _, _) => backends.Dequeue();
+            IndexWatchRunner.WatchReadyForTesting = _ => cts.Cancel();
+
+            var capturedOut = RunWatchCoreAndCapture(
+                options,
+                projectRoot,
+                dbPath,
+                cts,
+                baselineScan: () =>
+                {
+                    baselineScans++;
+                    firstBackend.ReportError(new IOException("late EventStream startup failure"));
+                    return CommandExitCodes.Success;
+                },
+                recoveryScan: phase =>
+                {
+                    Assert.Equal("startup", phase);
+                    recoveryScans++;
+                    return CommandExitCodes.Success;
+                },
+                out var exitCode);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, baselineScans);
+            Assert.Equal(1, recoveryScans);
+            Assert.Equal("polling", FindWatchEvent(capturedOut, "watching").GetProperty("backend").GetString());
+            Assert.Equal(
+                "backend_start_failed",
+                FindWatchEvent(capturedOut, "overflow").GetProperty("recovery_reason").GetString());
+        }
+        finally
+        {
+            IndexWatchRunner.WatchBackendFactoryForTesting = null;
+            IndexWatchRunner.WatchReadyForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCore_BackendStartFailureAfterFallback_StopsBeforeBaseline_Issue4858()
     {
         var projectRoot = CreateTempProject();
@@ -1398,7 +1500,7 @@ public class IndexWatchRunnerTests
         var backends = new Queue<IndexWatchRunner.IWatchBackend>(
         [
             new FakeWatchBackend("fsevents", new IOException("first simulated start failure")),
-            new FakeWatchBackend("fsevents", new IOException("second simulated start failure")),
+            new FakeWatchBackend("polling", new IOException("second simulated start failure")),
         ]);
         var baselineScans = 0;
         try
@@ -1423,7 +1525,7 @@ public class IndexWatchRunnerTests
             Assert.Equal(0, baselineScans);
             var failureEvent = FindWatchEvent(capturedOut, "failed");
             Assert.Equal("startup", failureEvent.GetProperty("phase").GetString());
-            Assert.Equal("fsevents", failureEvent.GetProperty("backend").GetString());
+            Assert.Equal("polling", failureEvent.GetProperty("backend").GetString());
             Assert.Equal("backend_start_failed", failureEvent.GetProperty("recovery_reason").GetString());
             Assert.DoesNotContain("\"status\":\"watching\"", capturedOut, StringComparison.Ordinal);
             Assert.Contains("\"status\":\"stopped\"", capturedOut, StringComparison.Ordinal);
@@ -1473,7 +1575,12 @@ public class IndexWatchRunnerTests
             Assert.Equal(1, baselineScans);
             Assert.InRange(recoveryScans, 0, 1);
             Assert.Contains("\"status\":\"watching\"", capturedOut, StringComparison.Ordinal);
-            Assert.Contains("\"backend\":\"fsevents\"", capturedOut, StringComparison.Ordinal);
+            var watchingEvent = FindWatchEvent(capturedOut, "watching");
+            Assert.Contains(
+                watchingEvent.GetProperty("backend").GetString(),
+                ["fsevents", "polling"]);
+            if (watchingEvent.GetProperty("backend").GetString() == "polling")
+                Assert.Contains("\"status\":\"backend_fallback\"", capturedOut, StringComparison.Ordinal);
         }
         finally
         {
@@ -2084,12 +2191,17 @@ public class IndexWatchRunnerTests
     private sealed class FakeWatchBackend : IndexWatchRunner.IWatchBackend
     {
         private readonly Exception? _startException;
+        private readonly Action? _onStart;
         private Action<Exception?>? _reportError;
 
-        internal FakeWatchBackend(string name, Exception? startException = null)
+        internal FakeWatchBackend(
+            string name,
+            Exception? startException = null,
+            Action? onStart = null)
         {
             Name = name;
             _startException = startException;
+            _onStart = onStart;
         }
 
         public string Name { get; }
@@ -2098,12 +2210,17 @@ public class IndexWatchRunnerTests
 
         internal bool Disposed { get; private set; }
 
-        public void Start(Action<string> enqueue, Action<Exception?> reportError)
+        public Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken)
         {
             StartCount++;
             _reportError = reportError;
+            _onStart?.Invoke();
             if (_startException != null)
-                throw _startException;
+                return Task.FromException(_startException);
+            return Task.CompletedTask;
         }
 
         internal void ReportError(Exception exception)
@@ -2115,6 +2232,25 @@ public class IndexWatchRunnerTests
         public void Dispose()
         {
             Disposed = true;
+        }
+    }
+
+    private sealed class DeferredStartupErrorWatchBackend(string name) : IndexWatchRunner.IWatchBackend
+    {
+        public string Name { get; } = name;
+
+        public async Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            reportError(new IOException("asynchronous simulated EventStream start failure"));
+        }
+
+        public void Dispose()
+        {
         }
     }
 }

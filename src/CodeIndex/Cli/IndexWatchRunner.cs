@@ -139,6 +139,8 @@ internal static partial class IndexWatchRunner
 
         var baselineStateGate = new object();
         var baselineState = 0; // 0 = not started, 1 = running, 2 = complete
+        var backendGeneration = 0;
+        var activeBackendAttempt = -1;
         Exception? startupBackendError = null;
         IWatchBackend? backend = null;
         string? backendName = null;
@@ -178,11 +180,15 @@ internal static partial class IndexWatchRunner
                 batcher.Add(fullPath);
             }
 
-            void ReportBackendError(Exception? exception)
+            void ReportBackendError(int generation, Exception? exception)
             {
                 lock (baselineStateGate)
                 {
-                    if (baselineState == 0)
+                    if (generation != backendGeneration)
+                        return;
+
+                    if (baselineState == 0
+                        || (baselineState == 1 && exception is not InternalBufferOverflowException))
                     {
                         startupBackendError ??= exception
                             ?? new IOException("watch backend reported an unspecified startup error");
@@ -200,35 +206,162 @@ internal static partial class IndexWatchRunner
                 batcher.RequestFullRescan(exception?.Message, recoveryReason);
             }
 
-            for (var attempt = 0; attempt < 2 && !cancellationToken.IsCancellationRequested; attempt++)
+            async Task<Exception?> StartBackendAttemptAsync(int attempt)
             {
-                startupBackendError = null;
-                backend = CreateWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase);
-                backendName = backend.Name;
+                int generation;
+                lock (baselineStateGate)
+                {
+                    generation = ++backendGeneration;
+                    startupBackendError = null;
+                    baselineState = 0;
+                }
+
+                IWatchBackend? candidate = null;
                 try
                 {
-                    backend.Start(Enqueue, ReportBackendError);
+                    candidate = CreateWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase, attempt);
+                    backend = candidate;
+                    backendName = candidate.Name;
+                    await candidate.StartAsync(
+                            Enqueue,
+                            exception => ReportBackendError(generation, exception),
+                            cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex) when (IsRecoverableWatchBackendStartException(ex))
                 {
-                    startupBackendError = ex;
+                    lock (baselineStateGate)
+                    {
+                        if (generation == backendGeneration)
+                            startupBackendError ??= ex;
+                    }
                 }
 
                 Exception? startFailure;
                 lock (baselineStateGate)
                 {
-                    startFailure = startupBackendError;
+                    startFailure = generation == backendGeneration
+                        ? startupBackendError
+                        : new IOException("watch backend startup was superseded");
                     if (startFailure == null)
+                    {
                         baselineState = 1;
+                    }
+                    else if (generation == backendGeneration)
+                    {
+                        backendGeneration++;
+                    }
                 }
 
+                if (startFailure != null)
+                {
+                    candidate?.Dispose();
+                    if (ReferenceEquals(backend, candidate))
+                        backend = null;
+                }
+
+                return startFailure;
+            }
+
+            async Task<bool> ReplaceFailedBackendAfterBaselineAsync(Exception failure)
+            {
+                var failedBackendName = backendName;
+                lock (baselineStateGate)
+                {
+                    backendGeneration++;
+                    startupBackendError = null;
+                    baselineState = 1;
+                }
+
+                backend?.Dispose();
+                backend = null;
+                startupRecoveryReason = "backend_start_failed";
+                var failureDetail = CommandErrorWriter.FormatSanitizedExceptionMessage(failure);
+
+                if (activeBackendAttempt != 0)
+                {
+                    EmitWatchBackendFailure(
+                        baseOptions,
+                        jsonOptions,
+                        failedBackendName,
+                        startupRecoveryReason,
+                        failureDetail);
+                    watchExitCode = CommandExitCodes.RuntimeError;
+                    return false;
+                }
+
+                EmitWatchBackendFallback(
+                    baseOptions,
+                    jsonOptions,
+                    failedBackendName,
+                    startupRecoveryReason,
+                    failureDetail,
+                    baselineCompleted: true);
+
+                var replacementFailure = await StartBackendAttemptAsync(1).ConfigureAwait(false);
+                if (replacementFailure != null)
+                {
+                    EmitWatchBackendFailure(
+                        baseOptions,
+                        jsonOptions,
+                        backendName,
+                        startupRecoveryReason,
+                        CommandErrorWriter.FormatSanitizedExceptionMessage(replacementFailure));
+                    watchExitCode = CommandExitCodes.RuntimeError;
+                    return false;
+                }
+
+                activeBackendAttempt = 1;
+                batcher.RequestFullRescan(failure.Message, startupRecoveryReason);
+                return true;
+            }
+
+            void DrainStartupGeneration()
+            {
+                if (!batcher.TryDrainImmediately(
+                        out var startupBatch,
+                        out var startupFullRescan,
+                        out var startupRecoveryScanReason,
+                        out var startupOverflowReason))
+                {
+                    return;
+                }
+
+                if (startupFullRescan)
+                {
+                    EmitWatchOverflow(
+                        baseOptions,
+                        jsonOptions,
+                        startupOverflowReason,
+                        resolvedDbPath,
+                        phase: "startup",
+                        backend: backendName,
+                        recoveryReason: startupRecoveryScanReason);
+                    RecordSubRunExitCode(
+                        ref watchExitCode,
+                        recoveryScan?.Invoke("startup")
+                            ?? RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken, phase: "startup"));
+                }
+                else if (startupBatch.Count > 0)
+                {
+                    RecordSubRunExitCode(
+                        ref watchExitCode,
+                        RunPartialUpdate(baseOptions, jsonOptions, startupBatch, resolvedDbPath, cancellationToken, phase: "startup"));
+                }
+            }
+
+            for (var attempt = 0; attempt < 2 && !cancellationToken.IsCancellationRequested; attempt++)
+            {
+                var startFailure = await StartBackendAttemptAsync(attempt).ConfigureAwait(false);
+
                 if (startFailure == null)
+                {
+                    activeBackendAttempt = attempt;
                     break;
+                }
 
                 startupRecoveryReason = "backend_start_failed";
                 var detail = CommandErrorWriter.FormatSanitizedExceptionMessage(startFailure);
-                backend.Dispose();
-                backend = null;
 
                 if (attempt == 0)
                 {
@@ -260,42 +393,45 @@ internal static partial class IndexWatchRunner
                         ? RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken, phase: "startup")
                         : CommandExitCodes.Success;
                 RecordSubRunExitCode(ref watchExitCode, baselineExitCode);
-                lock (baselineStateGate)
-                    baselineState = 2;
 
                 // Close the startup generation by taking one atomic snapshot. Events arriving
                 // after this boundary remain queued as ordinary live updates, so a continuously
                 // changing workspace cannot prevent the watcher from ever becoming ready.
                 // startup generation は atomic snapshot で閉じる。この境界後の event は通常の
                 // live update として queue に残し、変更が連続する workspace でも ready を妨げない。
-                if (watchExitCode == CommandExitCodes.Success
-                    && !cancellationToken.IsCancellationRequested
-                    && batcher.TryDrainImmediately(
-                        out var startupBatch,
-                        out var startupFullRescan,
-                        out var startupRecoveryScanReason,
-                        out var startupOverflowReason))
+                while (backend != null
+                    && watchExitCode == CommandExitCodes.Success
+                    && !cancellationToken.IsCancellationRequested)
                 {
-                    if (startupFullRescan)
+                    Exception? startupFailure;
+                    lock (baselineStateGate)
+                        startupFailure = startupBackendError;
+
+                    if (startupFailure != null
+                        && !await ReplaceFailedBackendAfterBaselineAsync(startupFailure).ConfigureAwait(false))
                     {
-                        EmitWatchOverflow(
-                            baseOptions,
-                            jsonOptions,
-                            startupOverflowReason,
-                            resolvedDbPath,
-                            phase: "startup",
-                            backend: backendName,
-                            recoveryReason: startupRecoveryScanReason);
-                        RecordSubRunExitCode(
-                            ref watchExitCode,
-                            recoveryScan?.Invoke("startup")
-                                ?? RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken, phase: "startup"));
+                        break;
                     }
-                    else if (startupBatch.Count > 0)
+
+                    DrainStartupGeneration();
+                    if (watchExitCode != CommandExitCodes.Success
+                        || cancellationToken.IsCancellationRequested)
                     {
-                        RecordSubRunExitCode(
-                            ref watchExitCode,
-                            RunPartialUpdate(baseOptions, jsonOptions, startupBatch, resolvedDbPath, cancellationToken, phase: "startup"));
+                        break;
+                    }
+
+                    lock (baselineStateGate)
+                    {
+                        if (startupBackendError == null)
+                        {
+                            // This lock is the startup/ready linearization point. A fatal callback
+                            // before it triggers replacement; one after it is an ordinary live
+                            // backend failure.
+                            // この lock を startup/ready の線形化点とし、それ以前の fatal
+                            // callback は置換、それ以後は live backend failure として扱う。
+                            baselineState = 2;
+                            break;
+                        }
                     }
                 }
             }
@@ -360,6 +496,8 @@ internal static partial class IndexWatchRunner
         }
         finally
         {
+            lock (baselineStateGate)
+                backendGeneration++;
             backend?.Dispose();
         }
 

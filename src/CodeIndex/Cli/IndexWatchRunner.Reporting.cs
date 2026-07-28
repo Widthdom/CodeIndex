@@ -225,7 +225,7 @@ internal static partial class IndexWatchRunner
             OverflowRecovery = "full_rescan_after_debounce",
             WatcherErrorRecovery = "full_rescan_after_debounce",
             BaselineScan = "single_after_backend_start",
-            BackendStartRecovery = "retry_before_baseline",
+            BackendStartRecovery = "fallback_preserve_baseline",
             Cancellation = "cancel_active_sub_run_then_emit_stopped",
             SubRunOutput = "json_quiet_sub_runs",
             McpWatchMode = "unsupported",
@@ -236,7 +236,8 @@ internal static partial class IndexWatchRunner
         JsonSerializerOptions jsonOptions,
         string? backend,
         string recoveryReason,
-        string? reason)
+        string? reason,
+        bool baselineCompleted = false)
         => EmitWatchBackendStartupEvent(
             baseOptions,
             jsonOptions,
@@ -244,7 +245,9 @@ internal static partial class IndexWatchRunner
             backend: backend,
             recoveryReason: recoveryReason,
             reason: reason,
-            humanAction: "retrying before the baseline scan");
+            humanAction: baselineCompleted
+                ? "switching backend without repeating the baseline; one recovery scan will reconcile the handoff"
+                : "switching backend before the baseline scan");
 
     private static void EmitWatchBackendFailure(
         IndexCommandOptions baseOptions,

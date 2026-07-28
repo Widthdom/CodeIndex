@@ -15,17 +15,25 @@ internal static partial class IndexWatchRunner
     {
         string Name { get; }
 
-        void Start(Action<string> enqueue, Action<Exception?> reportError);
+        Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken);
     }
 
     internal static Func<string, string, bool, IWatchBackend>? WatchBackendFactoryForTesting { get; set; }
+    private static readonly TimeSpan BackendStartupStabilizationDelay = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan PollingWatchInterval = TimeSpan.FromSeconds(2);
 
     private static IWatchBackend CreateWatchBackend(
         string projectRoot,
         string ignoreRuleRoot,
-        bool ignoreCase)
+        bool ignoreCase,
+        int attempt)
         => WatchBackendFactoryForTesting?.Invoke(projectRoot, ignoreRuleRoot, ignoreCase)
-            ?? new FileSystemWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase);
+            ?? (attempt > 0 && OperatingSystem.IsMacOS()
+                ? new PollingWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase)
+                : new FileSystemWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase));
 
     private static string ResolveWatchBackendName()
         => OperatingSystem.IsMacOS()
@@ -297,9 +305,13 @@ internal static partial class IndexWatchRunner
 
         public string Name => ResolveWatchBackendName();
 
-        public void Start(Action<string> enqueue, Action<Exception?> reportError)
+        public Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(_watcher != null, this);
+            cancellationToken.ThrowIfCancellationRequested();
 
             var watcher = new FileSystemWatcher(_projectRoot)
             {
@@ -328,6 +340,16 @@ internal static partial class IndexWatchRunner
                 _ignoreRuleRoot,
                 _ignoreCase,
                 enqueue);
+
+            // FileSystemWatcher can report a fatal EventStream startup error asynchronously
+            // just after EnableRaisingEvents succeeds. Keep startup provisional long enough for
+            // that callback to select the fallback before the baseline begins.
+            // EnableRaisingEvents 成功直後に fatal EventStream error が非同期通知される場合が
+            // あるため、この安定化区間までは startup を provisional として扱う。
+            Task.Delay(BackendStartupStabilizationDelay, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            return Task.CompletedTask;
         }
 
         public void Dispose()
@@ -348,6 +370,210 @@ internal static partial class IndexWatchRunner
                 _watcher.Dispose();
                 _watcher = null;
             }
+        }
+    }
+
+    private sealed class PollingWatchBackend : IWatchBackend
+    {
+        private readonly record struct FileStamp(
+            long Length,
+            long LastWriteUtcTicks,
+            long CreationUtcTicks);
+
+        private readonly string _projectRoot;
+        private readonly string _ignoreRuleRoot;
+        private readonly bool _ignoreCase;
+        private readonly StringComparer _pathComparer;
+        private CancellationTokenSource? _loopCancellation;
+        private Task? _loopTask;
+        private Dictionary<string, FileStamp>? _snapshot;
+        private Action<string>? _enqueue;
+        private Action<Exception?>? _reportError;
+        private bool _started;
+
+        internal PollingWatchBackend(
+            string projectRoot,
+            string ignoreRuleRoot,
+            bool ignoreCase)
+        {
+            _projectRoot = Path.GetFullPath(projectRoot);
+            _ignoreRuleRoot = Path.GetFullPath(ignoreRuleRoot);
+            _ignoreCase = ignoreCase;
+            _pathComparer = ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        }
+
+        public string Name => "polling";
+
+        public Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_started, this);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            _snapshot = CaptureSnapshot(cancellationToken);
+            _enqueue = enqueue;
+            _reportError = reportError;
+            _loopCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _loopTask = Task.Run(
+                () => RunLoopAsync(_loopCancellation.Token),
+                CancellationToken.None);
+            _started = true;
+            return Task.CompletedTask;
+        }
+
+        private async Task RunLoopAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(PollingWatchInterval, cancellationToken).ConfigureAwait(false);
+                    PollOnce(cancellationToken);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex) when (CodeIndex.FileSystemTraversalPolicy.IsExpectedTraversalException(ex))
+            {
+                _reportError?.Invoke(ex);
+            }
+        }
+
+        private void PollOnce(CancellationToken cancellationToken)
+        {
+            Dictionary<string, FileStamp> next;
+            try
+            {
+                next = CaptureSnapshot(cancellationToken);
+            }
+            catch (Exception ex) when (CodeIndex.FileSystemTraversalPolicy.IsExpectedTraversalException(ex))
+            {
+                _reportError?.Invoke(ex);
+                return;
+            }
+
+            var previous = _snapshot ?? new Dictionary<string, FileStamp>(_pathComparer);
+            foreach (var (path, stamp) in next)
+            {
+                if (!previous.TryGetValue(path, out var priorStamp) || priorStamp != stamp)
+                    _enqueue?.Invoke(path);
+            }
+
+            foreach (var path in previous.Keys)
+            {
+                if (!next.ContainsKey(path))
+                    _enqueue?.Invoke(path);
+            }
+
+            _snapshot = next;
+        }
+
+        private Dictionary<string, FileStamp> CaptureSnapshot(CancellationToken cancellationToken)
+        {
+            var snapshot = new Dictionary<string, FileStamp>(_pathComparer);
+            var pendingDirectories = new Stack<string>();
+            pendingDirectories.Push(_projectRoot);
+
+            while (pendingDirectories.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var directory = pendingDirectories.Pop();
+                foreach (var file in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    AddFileStamp(snapshot, file);
+                }
+
+                foreach (var childDirectory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(directory))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if ((File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) == 0)
+                            pendingDirectories.Push(childDirectory);
+                    }
+                    catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                    {
+                    }
+                }
+            }
+
+            foreach (var ignorePath in EnumerateAncestorIgnorePaths())
+                AddFileStamp(snapshot, ignorePath);
+
+            return snapshot;
+        }
+
+        private IEnumerable<string> EnumerateAncestorIgnorePaths()
+        {
+            var comparison = _ignoreCase
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (string.Equals(_projectRoot, _ignoreRuleRoot, comparison))
+                yield break;
+
+            var relativeProjectRoot = Path.GetRelativePath(_ignoreRuleRoot, _projectRoot);
+            if (Path.IsPathRooted(relativeProjectRoot)
+                || relativeProjectRoot == ".."
+                || relativeProjectRoot.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || relativeProjectRoot.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                yield break;
+            }
+
+            var directory = Directory.GetParent(_projectRoot);
+            while (directory != null)
+            {
+                yield return Path.Combine(directory.FullName, ".gitignore");
+                yield return Path.Combine(directory.FullName, ".cdidxignore");
+                if (string.Equals(directory.FullName, _ignoreRuleRoot, comparison))
+                    yield break;
+                directory = directory.Parent;
+            }
+        }
+
+        private static void AddFileStamp(Dictionary<string, FileStamp> snapshot, string path)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Exists)
+                {
+                    snapshot[path] = new FileStamp(
+                        info.Length,
+                        info.LastWriteTimeUtc.Ticks,
+                        info.CreationTimeUtc.Ticks);
+                }
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            var cancellation = _loopCancellation;
+            _loopCancellation = null;
+            if (cancellation != null)
+            {
+                cancellation.Cancel();
+                try
+                {
+                    _loopTask?.GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                cancellation.Dispose();
+            }
+
+            _loopTask = null;
+            _snapshot = null;
+            _enqueue = null;
+            _reportError = null;
         }
     }
 }
