@@ -171,10 +171,10 @@ internal static class SearchMatchClassifier
             {
                 if (index >= contentStart && index <= contentEnd)
                 {
-                    if (LooksLikeRegexString(text))
-                        return RegexLiteral;
                     if (LooksLikeSchemaDescription(path, line, text, contentStart, lineContext))
                         return SchemaDescription;
+                    if (LooksLikeRegexString(text))
+                        return RegexLiteral;
                     return LooksLikeHelpText(path, text) ? HelpText : StringLiteral;
                 }
 

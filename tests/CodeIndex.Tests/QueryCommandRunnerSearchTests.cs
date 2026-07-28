@@ -27,7 +27,7 @@ public partial class QueryCommandRunnerTests
     public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issues4416_4864()
     {
         const string schemaLine = "[\"tokenBoundary\"] = new JsonObject { [\"description\"] = \"Use new HttpClient as an example.\" };";
-        const string toolDescriptionLine = "\"Use new HttpClient only as top-level schema prose. \"";
+        const string toolDescriptionLine = "\"Use new HttpClient and review BCL Regex only as top-level schema prose. \"";
         const string toolDescriptionContinuationLine = "+ \"A second new HttpClient example stays prose.\",";
         const string catalogRuntimeLine = "var label = \"new HttpClient\";";
         const string runtimeLine = "var client = new HttpClient();";
@@ -2113,7 +2113,7 @@ public partial class QueryCommandRunnerTests
                 """
                 var tool = CreateToolDefinition(
                     "sample",
-                    "Use new HttpClient only as top-level schema prose. "
+                    "Use new HttpClient and review BCL Regex only as top-level schema prose. "
                     + "A second new HttpClient example stays prose.",
                     new JsonObject
                     {
