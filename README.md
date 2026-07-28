@@ -199,6 +199,17 @@ versioned surfaces are the `cdidx` CLI, CLI JSON output, and `cdidx mcp`
 JSON-RPC interface. There is no public library / SDK API. See
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use).
 
+## CLI JSON Error Contract
+
+Recoverable non-database failures from commands such as `outline`, `hooks`,
+`doctor`, and `validate-config` use one versioned JSON envelope. The envelope
+includes `api_version`, `status`, `message`, `hint`, `error_code`, `category`,
+`command`, `exit_code`, and `usage`, plus only sanitized optional context such
+as `path`. JSON mode writes that envelope to stdout without human prose on
+stderr. Human mode keeps the corresponding `Error`, `Hint`, and `Usage` lines.
+See the [Developer Guide](DEVELOPER_GUIDE.md#cli-recoverable-error-format) for
+the stable code/category mapping.
+
 ## Status JSON Contract
 
 `cdidx status --json` exposes trust, freshness, compatibility, and remediation
@@ -611,6 +622,18 @@ commit し、構造化 `file_errors` を返して partial-result 終了コード
 バージョニング契約の対象は、`cdidx` CLI、CLI JSON 出力、`cdidx mcp` の
 JSON-RPC interface です。公開 library / SDK API は提供していません。詳細は
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use) を参照してください。
+
+## CLI JSON エラー契約
+
+`outline`、`hooks`、`doctor`、`validate-config` などの回復可能な
+非データベース系失敗は、共通のバージョン付き JSON envelope を使います。
+envelope には `api_version`、`status`、`message`、`hint`、`error_code`、
+`category`、`command`、`exit_code`、`usage` を含め、`path` などの任意の
+context は sanitization 済みの値だけを追加します。JSON mode は human 向け
+prose を stderr に混ぜず、envelope を stdout に出力します。human mode は
+対応する `Error`、`Hint`、`Usage` の各行を維持します。安定した code /
+category 対応は
+[開発者ガイド](DEVELOPER_GUIDE.md#cli-の回復可能エラー形式) を参照してください。
 
 ## Status JSON 契約
 

@@ -609,7 +609,7 @@ public class HookCommandRunnerTests
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             var backupWarning = warnings[1];
             Assert.Equal("chained_hook_backup", backupWarning.GetProperty("category").GetString());
-            Assert.Contains("pre-commit.cdidx-chain", backupWarning.GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal("pre-commit.cdidx-chain", backupWarning.GetProperty("path").GetString());
             Assert.Equal("pre-commit.cdidx-chain", backupWarning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to back up existing hook", backupWarning.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
@@ -643,7 +643,7 @@ public class HookCommandRunnerTests
             Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
             var warning = document.RootElement.GetProperty("warnings")[0];
             Assert.Equal("managed_hook", warning.GetProperty("category").GetString());
-            Assert.Equal(hookPath, warning.GetProperty("path").GetString());
+            Assert.Equal("pre-commit", warning.GetProperty("path").GetString());
             Assert.Equal("pre-commit", warning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to delete managed_hook", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
@@ -679,7 +679,7 @@ public class HookCommandRunnerTests
             Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
             var warning = document.RootElement.GetProperty("warnings")[0];
             Assert.Equal("chained_hook_backup", warning.GetProperty("category").GetString());
-            Assert.Equal(chainedHookPath, warning.GetProperty("path").GetString());
+            Assert.Equal("pre-commit.cdidx-chain", warning.GetProperty("path").GetString());
             Assert.Equal("pre-commit.cdidx-chain", warning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to restore chained hook backup", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);

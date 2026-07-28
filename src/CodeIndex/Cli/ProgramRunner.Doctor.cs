@@ -68,7 +68,9 @@ internal static partial class ProgramRunner
                         "--max-json-bytes requires a positive integer.",
                         CommandExitCodes.InvalidArgument,
                         "pass a positive UTF-8 byte limit, for example `--max-json-bytes 16384`.",
-                        usage: GetDoctorUsage());
+                        usage: GetDoctorUsage(),
+                        errorCode: CommandErrorCodes.UsageError,
+                        command: "doctor");
                 }
                 maxJsonBytes = parsed;
                 continue;
@@ -100,7 +102,10 @@ internal static partial class ProgramRunner
                             ? "doctor supports --json only; --json=<format> is not supported."
                             : $"Unknown doctor argument: {arg}",
                         CommandExitCodes.InvalidArgument,
-                        $"use `{GetDoctorUsage()}`.");
+                        $"use `{GetDoctorUsage()}`.",
+                        usage: GetDoctorUsage(),
+                        errorCode: CommandErrorCodes.UsageError,
+                        command: "doctor");
             }
         }
 
@@ -113,7 +118,9 @@ internal static partial class ProgramRunner
                 "doctor environment inventory filters require --env-inventory=full.",
                 CommandExitCodes.InvalidArgument,
                 "add `--env-inventory=full` before filtering by domain, category, or sensitivity.",
-                usage: GetDoctorUsage());
+                usage: GetDoctorUsage(),
+                errorCode: CommandErrorCodes.UsageError,
+                command: "doctor");
         }
         if (maxJsonBytes.HasValue && (!json || envInventory != DoctorEnvironmentInventoryMode.Full))
         {
@@ -123,7 +130,9 @@ internal static partial class ProgramRunner
                 "doctor --max-json-bytes requires --json and --env-inventory=full.",
                 CommandExitCodes.InvalidArgument,
                 "use `cdidx doctor --json --env-inventory=full --max-json-bytes <n>`.",
-                usage: GetDoctorUsage());
+                usage: GetDoctorUsage(),
+                errorCode: CommandErrorCodes.UsageError,
+                command: "doctor");
         }
 
         if (!TryFilterDoctorEnvironmentInventory(
@@ -248,7 +257,9 @@ internal static partial class ProgramRunner
                 $"{flag} requires a non-empty value.",
                 CommandExitCodes.InvalidArgument,
                 $"pass one value reported by `cdidx doctor --env-inventory` for {flag}.",
-                usage: GetDoctorUsage());
+                usage: GetDoctorUsage(),
+                errorCode: CommandErrorCodes.UsageError,
+                command: "doctor");
             return true;
         }
 
@@ -291,7 +302,9 @@ internal static partial class ProgramRunner
                 $"Unknown {flag} value: {value}",
                 CommandExitCodes.InvalidArgument,
                 $"choose one of: {allowed}.",
-                usage: GetDoctorUsage());
+                usage: GetDoctorUsage(),
+                errorCode: CommandErrorCodes.UsageError,
+                command: "doctor");
             return false;
         }
 
@@ -361,7 +374,9 @@ internal static partial class ProgramRunner
                 $"doctor JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {maxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
                 CommandExitCodes.UsageError,
                 "increase --max-json-bytes or narrow the full environment inventory with --env-domain, --env-category, or --env-sensitivity.",
-                usage: GetDoctorUsage());
+                usage: GetDoctorUsage(),
+                errorCode: CommandErrorCodes.UsageError,
+                command: "doctor");
         }
 
         Console.WriteLine(json);

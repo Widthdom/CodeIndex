@@ -2070,7 +2070,7 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 ### Error codes
 
-For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `definition` / `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. A `definition` miss uses `E018_QUERY_NOT_FOUND` and exit code `2`; bounded-envelope controls retain the error under `metadata.error` with an empty `results` array, while an explicitly impossible `--max-json-bytes` cap instead produces a usage error on stderr before any oversized stdout is written. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). Recoverable non-database failures from `outline`, `hooks`, `doctor`, and `validate-config` always use the versioned error envelope with `error_code`, `category`, `command`, `exit_code`, `hint`, and `usage`, plus sanitized optional context. In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `definition` / `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. A `definition` miss uses `E018_QUERY_NOT_FOUND` and exit code `2`; bounded-envelope controls retain the error under `metadata.error` with an empty `results` array, while an explicitly impossible `--max-json-bytes` cap instead produces a usage error on stderr before any oversized stdout is written. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
 
 | Code | When emitted |
 |---|---|
@@ -2096,6 +2096,10 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E020_LINE_OUT_OF_RANGE` | A requested source line falls outside the indexed file's 1-based line range |
 | `E021_SUGGESTION_STORE_UNAVAILABLE` | Suggestion JSON/archive/lock storage could not be resolved, created, read, or written safely |
 | `E022_INDEX_PARTIAL` | Indexing committed successful files but one or more files failed; inspect `file_errors` and rerun after fixing that file |
+| `E023_COMMAND_FAILED` | A recoverable command failed without a more specific published error code |
+| `E024_CONFIG_INVALID` | `validate-config` discovered a configuration file that failed validation |
+| `E025_HOOK_OPERATION_FAILED` | A Git hook operation failed at a platform or filesystem boundary |
+| `E026_NOT_GIT_REPOSITORY` | `hooks` was run outside a Git worktree and no valid `--project` was supplied |
 
 ### Debugging reader errors
 
@@ -5210,7 +5214,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 
 ### エラーコード
 
-スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`definition` / `goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。`definition` の未検出は `E018_QUERY_NOT_FOUND` と終了コード `2` を使い、bounded-envelope control の使用時も空の `results` array と `metadata.error` に error を維持します。明示した `--max-json-bytes` が object を格納できない場合は、上限超過の stdout を書く前に stderr の usage error で終了します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。`outline`、`hooks`、`doctor`、`validate-config` の回復可能な非データベース系失敗は、`error_code`、`category`、`command`、`exit_code`、`hint`、`usage` と sanitization 済みの任意 context を持つバージョン付き error envelope を必ず使います。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`definition` / `goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。`definition` の未検出は `E018_QUERY_NOT_FOUND` と終了コード `2` を使い、bounded-envelope control の使用時も空の `results` array と `metadata.error` に error を維持します。明示した `--max-json-bytes` が object を格納できない場合は、上限超過の stdout を書く前に stderr の usage error で終了します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
 
 | コード | 発行条件 |
 |---|---|
@@ -5236,6 +5240,10 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E020_LINE_OUT_OF_RANGE` | 要求した source line が indexed file の 1-based 行範囲外だった |
 | `E021_SUGGESTION_STORE_UNAVAILABLE` | suggestion JSON / archive / lock の保存先を安全に解決・作成・読み書きできなかった |
 | `E022_INDEX_PARTIAL` | 成功ファイルを commit した一方で1件以上の file が失敗した。`file_errors` を確認して該当 file の修正後に再実行する |
+| `E023_COMMAND_FAILED` | より具体的な公開 error code がない回復可能な command が失敗した |
+| `E024_CONFIG_INVALID` | `validate-config` が検出した設定 file の validation に失敗した |
+| `E025_HOOK_OPERATION_FAILED` | Git hook 操作が platform または filesystem boundary で失敗した |
+| `E026_NOT_GIT_REPOSITORY` | Git worktree 外で `hooks` を実行し、有効な `--project` も指定されていなかった |
 
 ### reader エラーのデバッグ
 
