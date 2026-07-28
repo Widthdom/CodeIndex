@@ -5378,7 +5378,11 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.NotFound, errorExitCode);
             Assert.Equal("error", errorJson.GetProperty("status").GetString());
-            Assert.Contains("database not found", errorJson.GetProperty("message").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotFound, errorJson.GetProperty("error_code").GetString());
+            Assert.Equal("database_missing", errorJson.GetProperty("category").GetString());
+            Assert.Equal("1", errorJson.GetProperty("database_error_classifier_version").GetString());
+            Assert.Equal("<redacted>", errorJson.GetProperty("path").GetString());
+            Assert.True(errorJson.GetProperty("path_redacted").GetBoolean());
             Assert.Contains("Point `--db` at an existing `codeindex.db`", errorJson.GetProperty("hint").GetString());
         }
         finally
