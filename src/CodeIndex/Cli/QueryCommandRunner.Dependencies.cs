@@ -77,7 +77,7 @@ public static partial class QueryCommandRunner
                 JsonEnvelopeWrapper.GetBoundedImpactCollection());
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
-            ApplyBodyRecoveryCommands(analysis.Callers, options.DbPath);
+            ApplyBodyRecoveryCommands(analysis.Callers, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)

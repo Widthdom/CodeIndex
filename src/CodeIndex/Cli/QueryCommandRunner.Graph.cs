@@ -66,7 +66,7 @@ public static partial class QueryCommandRunner
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("references"));
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
-            ApplyBodyRecoveryCommands(results, options.DbPath);
+            ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -205,7 +205,7 @@ public static partial class QueryCommandRunner
             var results = reader.GetCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callers"));
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
-            ApplyBodyRecoveryCommands(results, options.DbPath);
+            ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -344,7 +344,7 @@ public static partial class QueryCommandRunner
             var results = reader.GetCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callees"));
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
-            ApplyBodyRecoveryCommands(results, options.DbPath);
+            ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
