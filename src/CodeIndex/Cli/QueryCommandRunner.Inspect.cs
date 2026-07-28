@@ -239,14 +239,14 @@ public static partial class QueryCommandRunner
                     analysis,
                     queryFingerprint,
                     generation.Fingerprint);
-                ApplyBodyRecoveryCommands(analysis, options.DbPath);
+                ApplyBodyRecoveryCommands(analysis, options.DbPath, options.RedactPaths ?? true);
                 var payload = JsonSerializer.SerializeToNode(analysis, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolAnalysisResult)!.AsObject();
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 if (compactTruncation != null)
                     AddCompactJsonFields(payload, compactLimit, compactTruncation);
                 if (sourceExcerpt != null)
                 {
-                    ExcerptRecoveryCommandFormatter.ApplyDbPath(sourceExcerpt, options.DbPath);
+                    ExcerptRecoveryCommandFormatter.ApplyDbPath(sourceExcerpt, options.DbPath, options.RedactPaths ?? true);
                     sourceExcerpt.SemanticTokens = BuildExcerptSemanticTokens(sourceExcerpt, reader);
                     payload["source_excerpt"] = JsonSerializer.SerializeToNode(sourceExcerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult);
                 }

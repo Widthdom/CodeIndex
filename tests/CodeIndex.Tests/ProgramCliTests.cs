@@ -20,7 +20,7 @@ namespace CodeIndex.Tests;
 public class ProgramCliTests
 {
     [ProductionRuntimeFact]
-    public void ExcerptRecovery_PreservesPrefixAndReplaysOptionLikeMetacharacterArgv_Issue4567()
+    public void ExcerptRecovery_ShowPathsPreservesPrefixAndReplaysOptionLikeMetacharacterArgv_Issue4567_Issue4860()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recovery_argv_4567");
         try
@@ -49,6 +49,7 @@ public class ProgramCliTests
                 "--focus-length",
                 "6",
                 "--json",
+                "--show-paths",
             ]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -72,7 +73,9 @@ public class ProgramCliTests
             Assert.Equal("0", argv[12]);
             Assert.Equal("--json", argv[13]);
             Assert.Equal(OperatingSystem.IsWindows() ? "powershell" : "posix-sh", recovery.GetProperty("command_shell").GetString());
-            Assert.True(recovery.GetProperty("command_display_only").GetBoolean());
+            Assert.False(recovery.GetProperty("command_display_only").GetBoolean());
+            Assert.False(recovery.GetProperty("paths_redacted").GetBoolean());
+            Assert.False(recovery.GetProperty("requires_local_path_substitution").GetBoolean());
             Assert.False(recovery.GetProperty("command").GetString()!.StartsWith("cdidx ", StringComparison.Ordinal));
 
             var (replayExitCode, replayStdout, replayStderr) = RunCliInSubprocess(argv.Skip(2).ToArray());

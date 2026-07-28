@@ -187,10 +187,10 @@ public static partial class QueryCommandRunner
     private static List<string>? CopyTruncationReasons(FileExcerptResult excerpt)
         => excerpt.ContentTruncationReasons.Count > 0 ? [.. excerpt.ContentTruncationReasons] : null;
 
-    private static void ApplyBodyRecoveryCommands(IEnumerable<DefinitionResult> results, string dbPath)
+    private static void ApplyBodyRecoveryCommands(IEnumerable<DefinitionResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
-            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
     }
 
     private static int WriteDefinitionJsonResult(DefinitionResult result, QueryCommandOptions options, ExactQuerySignal? exactSignal, JsonSerializerOptions jsonOptions)
@@ -266,44 +266,44 @@ public static partial class QueryCommandRunner
         definition.Remove("body_content_recovery");
     }
 
-    private static void ApplyBodyRecoveryCommands(IEnumerable<ReferenceResult> results, string dbPath)
+    private static void ApplyBodyRecoveryCommands(IEnumerable<ReferenceResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
-            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
     }
 
-    private static void ApplyBodyRecoveryCommands(IEnumerable<CallerResult> results, string dbPath)
+    private static void ApplyBodyRecoveryCommands(IEnumerable<CallerResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
-            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
     }
 
-    private static void ApplyBodyRecoveryCommands(IEnumerable<CalleeResult> results, string dbPath)
+    private static void ApplyBodyRecoveryCommands(IEnumerable<CalleeResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
-            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
     }
 
-    private static void ApplyBodyRecoveryCommands(IEnumerable<ImpactResult> results, string dbPath)
+    private static void ApplyBodyRecoveryCommands(IEnumerable<ImpactResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
-            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
     }
 
-    private static void ApplyBodyRecoveryCommands(SymbolAnalysisResult result, string dbPath)
+    private static void ApplyBodyRecoveryCommands(SymbolAnalysisResult result, string dbPath, bool redactPaths)
     {
-        ApplyBodyRecoveryCommands(result.Definitions, dbPath);
-        ApplyBodyRecoveryCommands(result.References, dbPath);
-        ApplyBodyRecoveryCommands(result.Callers, dbPath);
-        ApplyBodyRecoveryCommands(result.Callees, dbPath);
+        ApplyBodyRecoveryCommands(result.Definitions, dbPath, redactPaths);
+        ApplyBodyRecoveryCommands(result.References, dbPath, redactPaths);
+        ApplyBodyRecoveryCommands(result.Callers, dbPath, redactPaths);
+        ApplyBodyRecoveryCommands(result.Callees, dbPath, redactPaths);
         if (result.CandidateBundles != null)
         {
             foreach (var bundle in result.CandidateBundles)
             {
-                ApplyBodyRecoveryCommands([bundle.Definition], dbPath);
-                ApplyBodyRecoveryCommands(bundle.References, dbPath);
-                ApplyBodyRecoveryCommands(bundle.Callers, dbPath);
-                ApplyBodyRecoveryCommands(bundle.Callees, dbPath);
+                ApplyBodyRecoveryCommands([bundle.Definition], dbPath, redactPaths);
+                ApplyBodyRecoveryCommands(bundle.References, dbPath, redactPaths);
+                ApplyBodyRecoveryCommands(bundle.Callers, dbPath, redactPaths);
+                ApplyBodyRecoveryCommands(bundle.Callees, dbPath, redactPaths);
             }
         }
     }

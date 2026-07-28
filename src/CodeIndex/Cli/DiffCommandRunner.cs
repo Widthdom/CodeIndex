@@ -10,9 +10,11 @@ namespace CodeIndex.Cli;
 public static class DiffCommandRunner
 {
     internal const int DefaultDiffLimit = DiffCommandOptionsParser.DefaultLimit;
-    internal const int MaxDiffEncodedFieldSampleLength = 1024;
     internal const int MaxDiffComparedRowsPerSide = 1_000_000;
     internal const int MaxDiffComparedRowBytes = 4 * 1024 * 1024;
+    internal const int MinDiffJsonBytes = 4 * 1024;
+    internal const int DefaultDiffJsonBytes = 1024 * 1024;
+    internal const int MaxDiffJsonBytes = 16 * 1024 * 1024;
     internal static int MaxDiffLimit => QueryCommandRunner.NumericFlagUpperBounds["--limit"];
     internal static int? MaxDiffComparedRowsPerSideForTesting { get; set; }
     internal static int? MaxDiffComparedRowBytesForTesting { get; set; }
@@ -26,6 +28,10 @@ public static class DiffCommandRunner
     public static int Run(string[] args, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var options = ParseArgs(args);
+        var errorJsonByteBudget = options.MaxJsonBytes
+            ?? (options.Json && options.Detailed && !options.SummaryOnly
+                ? DefaultDiffJsonBytes
+                : null);
         if (options.ShowHelp)
         {
             ConsoleUi.PrintUsage();
@@ -39,22 +45,48 @@ public static class DiffCommandRunner
                 options.ParseError,
                 CommandExitCodes.UsageError,
                 "Run `cdidx diff <db1> <db2> --help` to see the supported command shape.",
-                CommandErrorCodes.UsageError);
+                CommandErrorCodes.UsageError,
+                errorJsonByteBudget);
 
         var json = options.Json || options.SummaryOnly;
-        var leftUriValidationExitCode = ValidateReadableDbFileUri(options.LeftDb!, json, jsonOptions);
+        var leftUriValidationExitCode = ValidateReadableDbFileUri(
+            options.LeftDb!,
+            json,
+            jsonOptions,
+            errorJsonByteBudget);
         if (leftUriValidationExitCode != null)
             return leftUriValidationExitCode.Value;
 
-        var rightUriValidationExitCode = ValidateReadableDbFileUri(options.RightDb!, json, jsonOptions);
+        var rightUriValidationExitCode = ValidateReadableDbFileUri(
+            options.RightDb!,
+            json,
+            jsonOptions,
+            errorJsonByteBudget);
         if (rightUriValidationExitCode != null)
             return rightUriValidationExitCode.Value;
 
         try
         {
-            var result = CompareDatabases(options, cancellationToken);
+            var result = CompareDatabases(options, jsonOptions, cancellationToken);
+            if (options.CursorSelectionFingerprint is { } cursorSelectionFingerprint
+                && (result.SelectionFingerprint is not { } currentSelectionFingerprint
+                    || !DiffCursorCodec.FixedTimeEquals(
+                        cursorSelectionFingerprint,
+                        currentSelectionFingerprint)))
+            {
+                return DiffResultWriter.WriteCommandError(
+                    options.Json || options.SummaryOnly,
+                    jsonOptions,
+                    "--cursor no longer matches the selected database contents; restart without --cursor",
+                    CommandExitCodes.UsageError,
+                    "Rerun the detailed diff without --cursor to start from the current deterministic record sequence.",
+                    CommandErrorCodes.UsageError,
+                    errorJsonByteBudget);
+            }
 
-            DiffResultWriter.WriteResult(result, options, jsonOptions);
+            var outputExitCode = DiffResultWriter.WriteResult(result, options, jsonOptions);
+            if (outputExitCode.HasValue)
+                return outputExitCode.Value;
 
             if (result.Status == "schema_mismatch")
                 return SchemaMismatchExitCode;
@@ -68,7 +100,8 @@ public static class DiffCommandRunner
                 "diff comparison cancelled before it could complete",
                 CommandExitCodes.CancelledBySignal,
                 "Retry the diff with a smaller database pair or after the cancelling operation completes.",
-                CommandErrorCodes.Interrupted);
+                CommandErrorCodes.Interrupted,
+                errorJsonByteBudget);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
         {
@@ -78,11 +111,16 @@ public static class DiffCommandRunner
                 $"failed to compare databases: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                 UnreadableExitCode,
                 "Pass two readable CodeIndex SQLite database paths.",
-                CommandErrorCodes.DbError);
+                CommandErrorCodes.DbError,
+                errorJsonByteBudget);
         }
     }
 
-    private static int? ValidateReadableDbFileUri(string dbPath, bool json, JsonSerializerOptions jsonOptions)
+    private static int? ValidateReadableDbFileUri(
+        string dbPath,
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        int? maxJsonBytes)
     {
         if (SqliteFileUri.TryValidateBounds(dbPath, out var parseError))
             return null;
@@ -93,7 +131,8 @@ public static class DiffCommandRunner
             $"invalid database file URI: {SqliteFileUri.FormatParseError(parseError)}",
             UnreadableExitCode,
             "Pass two readable CodeIndex SQLite database paths or valid SQLite file URIs.",
-            CommandErrorCodes.DbError);
+            CommandErrorCodes.DbError,
+            maxJsonBytes);
     }
 
     internal static DiffCommandOptions ParseArgs(string[] args)
@@ -107,7 +146,9 @@ public static class DiffCommandRunner
         bool detailed,
         CancellationToken cancellationToken,
         string? leftDisplayPath = null,
-        string? rightDisplayPath = null)
+        string? rightDisplayPath = null,
+        bool includeContent = false,
+        bool emitCursorMetadata = true)
     {
         var options = new DiffCommandOptions
         {
@@ -116,16 +157,34 @@ public static class DiffCommandRunner
             Limit = limit,
             Offset = offset,
             Detailed = detailed,
+            IncludeContent = includeContent,
+            EmitCursorMetadata = emitCursorMetadata,
         };
-        var result = CompareDatabases(options, cancellationToken);
+        var result = CompareDatabasesCore(options, cancellationToken, materializationJsonContext: null);
         return result with
         {
-            LeftDb = leftDisplayPath ?? result.LeftDb,
-            RightDb = rightDisplayPath ?? result.RightDb,
+            LeftDb = leftDisplayPath is null
+                ? result.LeftDb
+                : FormatSensitiveText(leftDisplayPath, options),
+            RightDb = rightDisplayPath is null
+                ? result.RightDb
+                : FormatSensitiveText(rightDisplayPath, options),
         };
     }
 
-    private static DiffJsonResult CompareDatabases(DiffCommandOptions options, CancellationToken cancellationToken)
+    internal static DiffJsonResult CompareDatabases(
+        DiffCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
+        => CompareDatabasesCore(
+            options,
+            cancellationToken,
+            CliJsonSerializerContextFactory.Create(jsonOptions));
+
+    private static DiffJsonResult CompareDatabasesCore(
+        DiffCommandOptions options,
+        CancellationToken cancellationToken,
+        CliJsonSerializerContext? materializationJsonContext)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var leftHeader = ReadHeader(options.LeftDb!);
@@ -133,10 +192,114 @@ public static class DiffCommandRunner
         var rightHeader = ReadHeader(options.RightDb!);
         return leftHeader.SchemaVersion != rightHeader.SchemaVersion
             ? BuildSchemaMismatchDiff(leftHeader, rightHeader, options)
-            : BuildDiff(leftHeader, rightHeader, options, cancellationToken);
+            : BuildDiff(
+                leftHeader,
+                rightHeader,
+                options,
+                materializationJsonContext,
+                cancellationToken);
     }
 
     private const string FilePathRowsSql = "SELECT path FROM files ORDER BY path";
+
+    private static readonly DiffRowSchema FileRowSchema = new(
+        "file",
+        ["path", "language", "size", "lines", "checksum"]);
+    private static readonly DiffRowSchema ChunkRowSchema = new(
+        "chunk",
+        ["path", "chunk_index", "start_line", "end_line", "content"]);
+    private static readonly DiffRowSchema ReferenceLineRowSchema = new(
+        "reference_line",
+        ["path", "line", "context"]);
+    private static readonly DiffRowSchema FileIssueRowSchema = new(
+        "file_issue",
+        ["path", "kind", "line", "message"]);
+    private static readonly DiffRowSchema SymbolRowSchema = new(
+        "symbol",
+        [
+            "path",
+            "kind",
+            "sub_kind",
+            "name",
+            "name_folded",
+            "line",
+            "start_line",
+            "start_column",
+            "end_line",
+            "body_start_line",
+            "body_end_line",
+            "signature",
+            "container_kind",
+            "container_name",
+            "container_qualified_name",
+            "family_key",
+            "visibility",
+            "return_type",
+            "is_metadata_target",
+            "metadata_target_source",
+        ]);
+    private static readonly DiffRowSchema LegacyReferenceRowSchema = new(
+        "reference",
+        [
+            "reference_path",
+            "symbol_name",
+            "symbol_name_folded",
+            "reference_kind",
+            "line",
+            "column",
+            "context",
+            "has_reference_line",
+            "reference_line_path",
+            "reference_line_line",
+            "reference_line_context",
+            "container_kind",
+            "container_name",
+            "container_name_folded",
+        ]);
+    private static readonly DiffRowSchema ReferenceRowSchema = new(
+        "reference",
+        [
+            "reference_path",
+            "symbol_name",
+            "symbol_name_folded",
+            "reference_kind",
+            "line",
+            "column",
+            "context",
+            "has_reference_line",
+            "reference_line_path",
+            "reference_line_line",
+            "reference_line_context",
+            "container_kind",
+            "container_name",
+            "container_name_folded",
+            "source_language",
+            "source_path",
+            "source_kind",
+            "source_container",
+            "source_name",
+            "source_line",
+            "target_qualifier",
+            "resolution_state",
+            "resolution_candidate_count",
+            "is_self_reference",
+            "is_mutual_recursion",
+            "target_symbol_key",
+            "target_language",
+            "target_path",
+            "target_kind",
+            "target_container",
+            "target_name",
+            "target_line",
+            "candidate_scope_rank",
+            "candidate_language",
+            "candidate_path",
+            "candidate_kind",
+            "candidate_container",
+            "candidate_name",
+            "candidate_line",
+            "candidate_signature",
+        ]);
 
     private const string FileRowsSql = """
         SELECT
@@ -284,7 +447,12 @@ public static class DiffCommandRunner
             symbol_references.container_name_folded
         """;
 
-    private static DiffJsonResult BuildDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options, CancellationToken cancellationToken)
+    private static DiffJsonResult BuildDiff(
+        DiffDbHeader left,
+        DiffDbHeader right,
+        DiffCommandOptions options,
+        CliJsonSerializerContext? materializationJsonContext,
+        CancellationToken cancellationToken)
     {
         var summary = new DiffSummaryJsonResult(
             left.FileCount,
@@ -302,13 +470,6 @@ public static class DiffCommandRunner
 
         var filesOnlyInLeft = new List<string>();
         var filesOnlyInRight = new List<string>();
-        var symbolsOnlyInLeft = new List<string>();
-        var symbolsOnlyInRight = new List<string>();
-        var referencesOnlyInLeft = new List<string>();
-        var referencesOnlyInRight = new List<string>();
-        var chunksOnlyInLeft = new List<string>();
-        var chunksOnlyInRight = new List<string>();
-        List<DiffMetadataDriftJsonResult>? metadataDrift = null;
         var diagnostics = new List<DiffDiagnosticJsonResult>();
         var hasMore = false;
         var identical =
@@ -323,8 +484,10 @@ public static class DiffCommandRunner
         var rightSymbolRowsSql = BuildSymbolRowsSql(rightConnection);
         var leftReferenceRowsSql = BuildReferenceRowsSql(leftConnection);
         var rightReferenceRowsSql = BuildReferenceRowsSql(rightConnection);
+        var leftReferenceRowSchema = GetReferenceRowSchema(leftConnection);
+        var rightReferenceRowSchema = GetReferenceRowSchema(rightConnection);
 
-        if (!options.SummaryOnly)
+        if (!options.SummaryOnly && !options.Detailed)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var fileDiff = DiffOrderedStrings(leftConnection, rightConnection, FilePathRowsSql, options.Limit, options.Offset, cancellationToken);
@@ -335,75 +498,206 @@ public static class DiffCommandRunner
             AddPagingDiagnostic(diagnostics, fileDiff.Omitted, fileDiff.HasMore, "file differences", options);
         }
 
-        if (options.Detailed)
+        using DiffRecordPageCollector? collector = options.Detailed && !options.SummaryOnly
+            ? new DiffRecordPageCollector(
+                options.LeftDb!,
+                options.RightDb!,
+                options.Offset,
+                options.Limit,
+                options.IncludeContent,
+                options.Json
+                    ? options.MaxJsonBytes ?? DefaultDiffJsonBytes
+                    : null,
+                materializationJsonContext)
+            : null;
+        if (collector is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var symbolDiff = DiffOrderedRows(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, options.Limit, options.Offset, cancellationToken);
-            symbolsOnlyInLeft = symbolDiff.OnlyInLeft;
-            symbolsOnlyInRight = symbolDiff.OnlyInRight;
-            identical = identical && symbolDiff.Equal;
-            hasMore |= symbolDiff.HasMore;
-            AddPagingDiagnostic(diagnostics, symbolDiff.Omitted, symbolDiff.HasMore, "symbol differences", options);
+            identical &= CollectOrderedRows(
+                leftConnection,
+                rightConnection,
+                FileRowsSql,
+                FileRowsSql,
+                FileRowSchema,
+                FileRowSchema,
+                collector,
+                cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            var referenceDiff = DiffOrderedRows(leftConnection, rightConnection, leftReferenceRowsSql, rightReferenceRowsSql, options.Limit, options.Offset, cancellationToken);
-            referencesOnlyInLeft = referenceDiff.OnlyInLeft;
-            referencesOnlyInRight = referenceDiff.OnlyInRight;
-            identical = identical && referenceDiff.Equal;
-            hasMore |= referenceDiff.HasMore;
-            AddPagingDiagnostic(diagnostics, referenceDiff.Omitted, referenceDiff.HasMore, "reference-edge differences", options);
+            identical &= CollectOrderedRows(
+                leftConnection,
+                rightConnection,
+                leftSymbolRowsSql,
+                rightSymbolRowsSql,
+                SymbolRowSchema,
+                SymbolRowSchema,
+                collector,
+                cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            var chunkDiff = DiffOrderedRows(leftConnection, rightConnection, ChunkRowsSql, ChunkRowsSql, options.Limit, options.Offset, cancellationToken);
-            chunksOnlyInLeft = chunkDiff.OnlyInLeft;
-            chunksOnlyInRight = chunkDiff.OnlyInRight;
-            identical = identical && chunkDiff.Equal;
-            hasMore |= chunkDiff.HasMore;
-            AddPagingDiagnostic(diagnostics, chunkDiff.Omitted, chunkDiff.HasMore, "chunk differences", options);
+            identical &= CollectOrderedRows(
+                leftConnection,
+                rightConnection,
+                leftReferenceRowsSql,
+                rightReferenceRowsSql,
+                leftReferenceRowSchema,
+                rightReferenceRowSchema,
+                collector,
+                cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            var metadataDiff = DiffMetadataRows(leftConnection, rightConnection, options.Limit, options.Offset, cancellationToken);
-            metadataDrift = metadataDiff.Drift;
-            hasMore |= metadataDiff.HasMore;
-            AddPagingDiagnostic(diagnostics, metadataDiff.Omitted, metadataDiff.HasMore, "metadata differences", options);
+            identical &= CollectOrderedRows(
+                leftConnection,
+                rightConnection,
+                ChunkRowsSql,
+                ChunkRowsSql,
+                ChunkRowSchema,
+                ChunkRowSchema,
+                collector,
+                cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            identical &= CollectOrderedRows(
+                leftConnection,
+                rightConnection,
+                ReferenceLineRowsSql,
+                ReferenceLineRowsSql,
+                ReferenceLineRowSchema,
+                ReferenceLineRowSchema,
+                collector,
+                cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            identical &= CollectOrderedRows(
+                leftConnection,
+                rightConnection,
+                FileIssueRowsSql,
+                FileIssueRowsSql,
+                FileIssueRowSchema,
+                FileIssueRowSchema,
+                collector,
+                cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            identical &= CollectMetadataRows(
+                leftConnection,
+                rightConnection,
+                MetaRowsSql,
+                "contract_metadata",
+                collector,
+                cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            _ = CollectMetadataRows(
+                leftConnection,
+                rightConnection,
+                OperationalMetaRowsSql,
+                "operational_metadata",
+                collector,
+                cancellationToken);
         }
 
-        if (identical)
+        if (identical && collector is null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             identical =
                 RowsEqual(leftConnection, rightConnection, FileRowsSql, cancellationToken) &&
-                (options.Detailed || RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken)) &&
+                RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken) &&
                 RowsEqual(leftConnection, rightConnection, ReferenceLineRowsSql, cancellationToken) &&
                 RowsEqual(leftConnection, rightConnection, FileIssueRowsSql, cancellationToken) &&
                 RowsEqual(leftConnection, rightConnection, MetaRowsSql, cancellationToken) &&
-                (options.Detailed || RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, cancellationToken)) &&
-                (options.Detailed || RowsEqual(leftConnection, rightConnection, leftReferenceRowsSql, rightReferenceRowsSql, cancellationToken));
+                RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, cancellationToken) &&
+                RowsEqual(leftConnection, rightConnection, leftReferenceRowsSql, rightReferenceRowsSql, cancellationToken);
         }
 
+        List<DiffRecordJsonResult>? records = null;
+        long? totalCount = null;
+        int? returnedCount = null;
+        long? omittedCount = null;
+        string? selectionFingerprint = null;
+        string? currentCursor = null;
+        string? nextCursor = null;
+        DiffReplayJsonResult? replay = null;
+        string? truncationReason = null;
+        int? nextOffset = null;
         var truncated = diagnostics.Count > 0;
+        if (collector is not null)
+        {
+            records = collector.Records;
+            totalCount = collector.TotalCount;
+            returnedCount = records.Count;
+            omittedCount = collector.TotalCount - records.Count;
+            hasMore = collector.TotalCount > (long)options.Offset + records.Count;
+            truncated = omittedCount > 0;
+            truncationReason = truncated ? "limit_or_offset" : null;
+            if (options.EmitCursorMetadata)
+            {
+                selectionFingerprint = collector.CompleteSelectionFingerprint();
+                currentCursor = DiffCursorCodec.Encode(options.Offset, selectionFingerprint);
+                if (hasMore && records.Count > 0)
+                {
+                    nextOffset = checked(options.Offset + records.Count);
+                    nextCursor = DiffCursorCodec.Encode(nextOffset.Value, selectionFingerprint);
+                }
+
+                replay = BuildReplayMetadata(options, selectionFingerprint, currentCursor, nextCursor);
+            }
+            else if (hasMore && records.Count > 0)
+            {
+                nextOffset = checked(options.Offset + records.Count);
+            }
+            if (truncated)
+            {
+                diagnostics.Add(new DiffDiagnosticJsonResult(
+                    "diff_records_truncated",
+                    hasMore && records.Count > 0 && options.EmitCursorMetadata
+                        ? "Detailed diff records were omitted; use replay.next_page_arguments to continue from the next whole record."
+                        : hasMore && records.Count > 0
+                            ? $"Detailed diff records were omitted; continue from the next whole record with --offset {nextOffset}."
+                        : hasMore && options.Limit == 0
+                            ? "Detailed diff records were omitted because --limit is 0; rerun with a positive --limit."
+                        : "Detailed diff records before the requested offset were omitted from this page."));
+            }
+        }
+        else if (hasMore && options.Limit > 0)
+        {
+            nextOffset = checked(options.Offset + options.Limit);
+        }
+
         return new DiffJsonResult(
             identical ? "identical" : "different",
             identical,
-            left.Path,
-            right.Path,
+            FormatSensitiveText(left.Path, options),
+            FormatSensitiveText(right.Path, options),
             summary,
             filesOnlyInLeft,
             filesOnlyInRight,
-            options.Detailed ? symbolsOnlyInLeft : null,
-            options.Detailed ? symbolsOnlyInRight : null,
-            options.Detailed ? referencesOnlyInLeft : null,
-            options.Detailed ? referencesOnlyInRight : null,
-            options.Detailed ? chunksOnlyInLeft : null,
-            options.Detailed ? chunksOnlyInRight : null,
-            options.Detailed ? metadataDrift : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
             options.Limit,
             options.Offset,
             options.Detailed,
             hasMore,
-            hasMore && options.Limit > 0 ? checked(options.Offset + options.Limit) : null,
+            nextOffset,
             truncated,
-            truncated ? diagnostics : null);
+            diagnostics.Count > 0 ? diagnostics : null,
+            Records: records,
+            TotalCount: totalCount,
+            ReturnedCount: returnedCount,
+            OmittedCount: omittedCount,
+            ContentIncluded: collector is null ? null : options.IncludeContent,
+            ContentPolicy: collector is null ? null : options.IncludeContent ? "included" : "redacted_hashes",
+            MaxJsonBytes: options.MaxJsonBytes,
+            SelectionFingerprint: selectionFingerprint,
+            CurrentCursor: currentCursor,
+            NextCursor: nextCursor,
+            Replay: replay,
+            TruncationReason: truncationReason);
     }
 
     private static void AddPagingDiagnostic(
@@ -439,12 +733,18 @@ public static class DiffCommandRunner
             left.SchemaVersion,
             right.SchemaVersion,
             false);
+        var selectionFingerprint = options.Detailed && options.EmitCursorMetadata
+            ? DiffCursorCodec.CreateSelectionFingerprint(options.LeftDb!, options.RightDb!, options.IncludeContent)
+            : null;
+        var currentCursor = selectionFingerprint is null || !options.EmitCursorMetadata
+            ? null
+            : DiffCursorCodec.Encode(options.Offset, selectionFingerprint);
 
         return new DiffJsonResult(
             "schema_mismatch",
             false,
-            left.Path,
-            right.Path,
+            FormatSensitiveText(left.Path, options),
+            FormatSensitiveText(right.Path, options),
             summary,
             [],
             [],
@@ -457,30 +757,41 @@ public static class DiffCommandRunner
             options.Detailed ? [] : null,
             options.Limit,
             options.Offset,
-            options.Detailed);
+            options.Detailed,
+            Records: options.Detailed ? [] : null,
+            TotalCount: options.Detailed ? 0 : null,
+            ReturnedCount: options.Detailed ? 0 : null,
+            OmittedCount: options.Detailed ? 0 : null,
+            ContentIncluded: options.Detailed ? options.IncludeContent : null,
+            ContentPolicy: options.Detailed ? options.IncludeContent ? "included" : "redacted_hashes" : null,
+            MaxJsonBytes: options.MaxJsonBytes,
+            SelectionFingerprint: selectionFingerprint,
+            CurrentCursor: currentCursor,
+            Replay: selectionFingerprint is null || currentCursor is null
+                ? null
+                : BuildReplayMetadata(options, selectionFingerprint, currentCursor, null));
     }
 
-    private static MetadataRowsDiff DiffMetadataRows(
+    private static bool CollectMetadataRows(
         SqliteConnection leftConnection,
         SqliteConnection rightConnection,
-        int limit,
-        int offset,
+        string sql,
+        string area,
+        DiffRecordPageCollector collector,
         CancellationToken cancellationToken)
     {
         using var leftCommand = leftConnection.CreateCommand();
-        leftCommand.CommandText = OperationalMetaRowsSql;
+        leftCommand.CommandText = sql;
         using var rightCommand = rightConnection.CreateCommand();
-        rightCommand.CommandText = OperationalMetaRowsSql;
+        rightCommand.CommandText = sql;
         using var leftReader = leftCommand.ExecuteReader();
         using var rightReader = rightCommand.ExecuteReader();
 
-        var drift = new List<DiffMetadataDriftJsonResult>(limit);
         var leftRowsRead = 0;
         var rightRowsRead = 0;
         var leftHasValue = TryReadMetadataRow(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
         var rightHasValue = TryReadMetadataRow(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         var equal = true;
-        var differenceCount = 0;
 
         while (leftHasValue || rightHasValue)
         {
@@ -494,9 +805,7 @@ public static class DiffCommandRunner
                 if (!string.Equals(leftValue.Value, rightValue.Value, StringComparison.Ordinal))
                 {
                     equal = false;
-                    if (differenceCount >= offset && drift.Count < limit)
-                        drift.Add(new DiffMetadataDriftJsonResult(leftValue.Key, leftValue.Value, rightValue.Value));
-                    differenceCount++;
+                    collector.AddMetadata(area, leftValue.Key, leftValue.Value, rightValue.Value);
                 }
 
                 leftHasValue = TryReadMetadataRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
@@ -507,32 +816,27 @@ public static class DiffCommandRunner
             equal = false;
             if (comparison < 0)
             {
-                if (differenceCount >= offset && drift.Count < limit)
-                    drift.Add(new DiffMetadataDriftJsonResult(leftValue.Key, leftValue.Value, null));
-                differenceCount++;
+                collector.AddMetadata(area, leftValue.Key, leftValue.Value, null);
                 leftHasValue = TryReadMetadataRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
             }
             else
             {
-                if (differenceCount >= offset && drift.Count < limit)
-                    drift.Add(new DiffMetadataDriftJsonResult(rightValue.Key, null, rightValue.Value));
-                differenceCount++;
+                collector.AddMetadata(area, rightValue.Key, null, rightValue.Value);
                 rightHasValue = TryReadMetadataRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
             }
-
         }
 
-        var hasMore = differenceCount > (long)offset + drift.Count;
-        return new MetadataRowsDiff(equal, drift, hasMore, differenceCount != drift.Count);
+        return equal;
     }
 
-    private static OrderedRowsDiff DiffOrderedRows(
+    private static bool CollectOrderedRows(
         SqliteConnection leftConnection,
         SqliteConnection rightConnection,
         string leftSql,
         string rightSql,
-        int limit,
-        int offset,
+        DiffRowSchema leftSchema,
+        DiffRowSchema rightSchema,
+        DiffRecordPageCollector collector,
         CancellationToken cancellationToken)
     {
         using var leftCommand = leftConnection.CreateCommand();
@@ -542,15 +846,11 @@ public static class DiffCommandRunner
         using var leftReader = leftCommand.ExecuteReader();
         using var rightReader = rightCommand.ExecuteReader();
 
-        var onlyInLeft = new List<string>(limit);
-        var onlyInRight = new List<string>(limit);
         var leftRowsRead = 0;
         var rightRowsRead = 0;
         var leftHasValue = TryReadRow(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
         var rightHasValue = TryReadRow(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
         var equal = true;
-        var leftDifferenceCount = 0;
-        var rightDifferenceCount = 0;
 
         while (leftHasValue || rightHasValue)
         {
@@ -569,27 +869,17 @@ public static class DiffCommandRunner
             equal = false;
             if (comparison < 0)
             {
-                if (leftDifferenceCount >= offset && onlyInLeft.Count < limit)
-                    onlyInLeft.Add(EncodeRow(leftValue.SortValues));
-                leftDifferenceCount++;
+                collector.Add(leftSchema, "left", leftValue);
                 leftHasValue = TryReadRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
             }
             else
             {
-                if (rightDifferenceCount >= offset && onlyInRight.Count < limit)
-                    onlyInRight.Add(EncodeRow(rightValue.SortValues));
-                rightDifferenceCount++;
+                collector.Add(rightSchema, "right", rightValue);
                 rightHasValue = TryReadRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
             }
         }
 
-        var hasMore =
-            leftDifferenceCount > (long)offset + onlyInLeft.Count ||
-            rightDifferenceCount > (long)offset + onlyInRight.Count;
-        var omitted =
-            leftDifferenceCount != onlyInLeft.Count ||
-            rightDifferenceCount != onlyInRight.Count;
-        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight, hasMore, omitted);
+        return equal;
     }
 
     private static OrderedRowsDiff DiffOrderedStrings(
@@ -924,17 +1214,8 @@ public static class DiffCommandRunner
 
     private static string BuildReferenceRowsSql(SqliteConnection connection)
     {
-        if (!TableExists(connection, "symbol_reference_candidates")
-            || !ColumnExists(connection, "symbol_references", "source_symbol_id")
-            || !ColumnExists(connection, "symbol_references", "target_symbol_id")
-            || !ColumnExists(connection, "symbol_references", "target_symbol_key")
-            || !ColumnExists(connection, "symbol_references", "target_qualifier")
-            || !ColumnExists(connection, "symbol_references", "resolution_state")
-            || !ColumnExists(connection, "symbol_references", "resolution_candidate_count")
-            || !ColumnExists(connection, "symbols", "container_qualified_name"))
-        {
+        if (!HasResolvedReferenceRowSchema(connection))
             return LegacyReferenceRowsSql;
-        }
 
         return """
             SELECT
@@ -997,6 +1278,21 @@ public static class DiffCommandRunner
             """;
     }
 
+    private static DiffRowSchema GetReferenceRowSchema(SqliteConnection connection)
+        => HasResolvedReferenceRowSchema(connection)
+            ? ReferenceRowSchema
+            : LegacyReferenceRowSchema;
+
+    private static bool HasResolvedReferenceRowSchema(SqliteConnection connection)
+        => TableExists(connection, "symbol_reference_candidates")
+            && ColumnExists(connection, "symbol_references", "source_symbol_id")
+            && ColumnExists(connection, "symbol_references", "target_symbol_id")
+            && ColumnExists(connection, "symbol_references", "target_symbol_key")
+            && ColumnExists(connection, "symbol_references", "target_qualifier")
+            && ColumnExists(connection, "symbol_references", "resolution_state")
+            && ColumnExists(connection, "symbol_references", "resolution_candidate_count")
+            && ColumnExists(connection, "symbols", "container_qualified_name");
+
     private static string BuildSymbolRowsSql(SqliteConnection connection)
     {
         var metadataTargetExpr = ColumnExists(connection, "symbols", "is_metadata_target")
@@ -1054,39 +1350,164 @@ public static class DiffCommandRunner
             """;
     }
 
-    private static string EncodeRow(object?[] values)
+    internal static DiffReplayJsonResult BuildReplayMetadata(
+        DiffCommandOptions options,
+        string selectionFingerprint,
+        string currentCursor,
+        string? nextCursor,
+        int? effectiveMaxJsonBytes = null)
     {
-        var fields = new string[values.Length];
-        for (var i = 0; i < values.Length; i++)
+        List<string>? nextPageArguments = null;
+        if (nextCursor is not null)
         {
-            var rawValue = values[i];
-            if (rawValue is null or DBNull)
+            nextPageArguments =
+            [
+                "--detailed",
+                "--json",
+                "--limit",
+                options.Limit.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "--cursor",
+                nextCursor,
+            ];
+            if (options.IncludeContent)
+                nextPageArguments.Add("--include-content");
+            var replayMaxJsonBytes = effectiveMaxJsonBytes ?? options.MaxJsonBytes;
+            if (replayMaxJsonBytes.HasValue)
             {
-                fields[i] = "-1:";
-                continue;
+                nextPageArguments.Add("--max-json-bytes");
+                nextPageArguments.Add(replayMaxJsonBytes.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
-
-            var value = Convert.ToString(rawValue, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
-            var encodedValue = EncodeFieldValue(value);
-            fields[i] = encodedValue.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + encodedValue;
         }
 
-        return string.Join("|", fields);
+        return new DiffReplayJsonResult(
+            DiffCursorCodec.Prefix.TrimEnd(':'),
+            selectionFingerprint,
+            currentCursor,
+            nextCursor,
+            nextPageArguments);
     }
 
-    private static string EncodeFieldValue(string value)
+    private static string FormatSensitiveText(string value, DiffCommandOptions options)
     {
-        if (value.Length <= MaxDiffEncodedFieldSampleLength)
+        if (!options.Detailed || options.IncludeContent)
             return value;
 
-        var sample = value[..MaxDiffEncodedFieldSampleLength];
-        var hash = HexEncoding.ToLowerHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
-        return sample
-            + "...[truncated original_length="
-            + value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            + " sha256="
-            + hash
-            + "]";
+        var bytes = Encoding.UTF8.GetBytes(value);
+        var hash = HexEncoding.ToLowerHexString(SHA256.HashData(bytes));
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"sha256:{hash} ({bytes.LongLength} UTF-8 bytes)");
+    }
+
+    private static string CreateDiffRecordIdentity(
+        DiffRowSchema schema,
+        DiffRow row)
+    {
+        if (schema.FieldNames.Length != row.SortValues.Length)
+        {
+            throw new InvalidOperationException(
+                $"diff {schema.Area} row schema expected {schema.FieldNames.Length} fields but read {row.SortValues.Length}.");
+        }
+
+        using var identityHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendIdentityPart(identityHash, schema.Area);
+        for (var i = 0; i < row.SortValues.Length; i++)
+        {
+            var name = schema.FieldNames[i];
+            var value = row.SortValues[i];
+            AppendIdentityPart(identityHash, name);
+            AppendIdentityValue(identityHash, value);
+        }
+
+        return HexEncoding.ToLowerHexString(identityHash.GetHashAndReset());
+    }
+
+    private static DiffRecordJsonResult CreateDiffRecord(
+        DiffRowSchema schema,
+        string side,
+        DiffRow row,
+        string identitySha256,
+        bool includeContent)
+    {
+        var fields = new List<DiffFieldJsonResult>(row.SortValues.Length);
+        for (var i = 0; i < row.SortValues.Length; i++)
+            fields.Add(CreateDiffField(schema.FieldNames[i], row.SortValues[i], includeContent));
+
+        return new DiffRecordJsonResult(
+            schema.Area,
+            side,
+            identitySha256,
+            fields);
+    }
+
+    private static DiffFieldJsonResult CreateDiffField(string name, object? rawValue, bool includeContent)
+    {
+        if (rawValue is null or DBNull)
+            return new DiffFieldJsonResult(name, "null", null, null, null, 0, false);
+
+        if (rawValue is byte[] binary)
+        {
+            return new DiffFieldJsonResult(
+                name,
+                "blob",
+                includeContent ? Convert.ToBase64String(binary) : null,
+                includeContent ? "base64" : null,
+                HexEncoding.ToLowerHexString(SHA256.HashData(binary)),
+                binary.LongLength,
+                !includeContent);
+        }
+
+        var value = Convert.ToString(rawValue, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+        var bytes = Encoding.UTF8.GetBytes(value);
+        var valueType = rawValue is byte or sbyte or short or ushort or int or uint or long or ulong
+            ? "integer"
+            : rawValue is float or double or decimal
+                ? "real"
+                : "text";
+        var redact = valueType == "text" && !includeContent;
+        return new DiffFieldJsonResult(
+            name,
+            valueType,
+            redact ? null : value,
+            redact || valueType != "text" ? null : "utf-8",
+            valueType == "text"
+                ? HexEncoding.ToLowerHexString(SHA256.HashData(bytes))
+                : null,
+            bytes.LongLength,
+            redact);
+    }
+
+    private static void AppendIdentityPart(IncrementalHash hash, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(length, bytes.Length);
+        hash.AppendData(length);
+        hash.AppendData(bytes);
+    }
+
+    private static void AppendIdentityValue(IncrementalHash hash, object? rawValue)
+    {
+        if (rawValue is null or DBNull)
+        {
+            AppendIdentityPart(hash, "null");
+            return;
+        }
+
+        if (rawValue is byte[] binary)
+        {
+            AppendIdentityPart(hash, "blob");
+            Span<byte> length = stackalloc byte[sizeof(int)];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(length, binary.Length);
+            hash.AppendData(length);
+            hash.AppendData(binary);
+            return;
+        }
+
+        AppendIdentityPart(hash, rawValue.GetType().FullName ?? rawValue.GetType().Name);
+        AppendIdentityPart(
+            hash,
+            Convert.ToString(rawValue, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty);
     }
 
     private sealed record OrderedRowsDiff(
@@ -1096,11 +1517,97 @@ public static class DiffCommandRunner
         bool HasMore,
         bool Omitted);
 
-    private sealed record MetadataRowsDiff(
-        bool Equal,
-        List<DiffMetadataDriftJsonResult> Drift,
-        bool HasMore,
-        bool Omitted);
+    private sealed record DiffRowSchema(
+        string Area,
+        string[] FieldNames);
+
+    private sealed class DiffRecordPageCollector : IDisposable
+    {
+        private readonly int _offset;
+        private readonly int _limit;
+        private readonly bool _includeContent;
+        private readonly int? _materializationByteBudget;
+        private readonly CliJsonSerializerContext _materializationJsonContext;
+        private readonly IncrementalHash _selectionHash;
+        private long _materializedRecordBytes;
+        private bool _materializationBudgetReached;
+        private bool _selectionFingerprintCompleted;
+
+        internal DiffRecordPageCollector(
+            string leftDb,
+            string rightDb,
+            int offset,
+            int limit,
+            bool includeContent,
+            int? materializationByteBudget,
+            CliJsonSerializerContext? materializationJsonContext)
+        {
+            _offset = offset;
+            _limit = limit;
+            _includeContent = includeContent;
+            _materializationByteBudget = materializationByteBudget;
+            _materializationJsonContext = materializationJsonContext
+                ?? CliJsonSerializerContext.Default;
+            _selectionHash = DiffCursorCodec.CreateSelectionHash(leftDb, rightDb, includeContent);
+        }
+
+        internal List<DiffRecordJsonResult> Records { get; } = [];
+        internal long TotalCount { get; private set; }
+
+        internal void Add(DiffRowSchema schema, string side, DiffRow row)
+        {
+            var identitySha256 = CreateDiffRecordIdentity(schema, row);
+            DiffCursorCodec.AppendSelectionRecord(
+                _selectionHash,
+                schema.Area,
+                side,
+                identitySha256);
+            if (TotalCount >= _offset &&
+                Records.Count < _limit &&
+                !_materializationBudgetReached)
+            {
+                var record = CreateDiffRecord(
+                    schema,
+                    side,
+                    row,
+                    identitySha256,
+                    _includeContent);
+                if (_materializationByteBudget is null)
+                {
+                    Records.Add(record);
+                }
+                else
+                {
+                    var recordBytes = JsonSerializer.SerializeToUtf8Bytes(
+                        record,
+                        _materializationJsonContext.DiffRecordJsonResult).LongLength;
+                    Records.Add(record);
+                    _materializedRecordBytes = checked(_materializedRecordBytes + recordBytes);
+                    _materializationBudgetReached =
+                        _materializedRecordBytes > _materializationByteBudget.Value;
+                }
+            }
+            TotalCount++;
+        }
+
+        internal string CompleteSelectionFingerprint()
+        {
+            if (_selectionFingerprintCompleted)
+                throw new InvalidOperationException("diff selection fingerprint was already completed");
+
+            _selectionFingerprintCompleted = true;
+            return DiffCursorCodec.CompleteSelectionFingerprint(_selectionHash);
+        }
+
+        internal void AddMetadata(string area, string key, string? leftValue, string? rightValue)
+            => Add(
+                new DiffRowSchema(area, ["key", "left_value", "right_value"]),
+                "changed",
+                new DiffRow([key, leftValue, rightValue]));
+
+        public void Dispose()
+            => _selectionHash.Dispose();
+    }
 
     private sealed record DiffRow(
         object?[] SortValues)
@@ -1130,8 +1637,14 @@ internal sealed class DiffCommandOptions
     public bool Json { get; init; }
     public bool Detailed { get; init; }
     public bool SummaryOnly { get; init; }
+    public bool IncludeContent { get; init; }
     public bool ShowHelp { get; init; }
     public int Limit { get; init; } = 20;
     public int Offset { get; init; }
+    public bool OffsetExplicit { get; init; }
+    public int? MaxJsonBytes { get; init; }
+    public string? Cursor { get; init; }
+    public string? CursorSelectionFingerprint { get; init; }
+    public bool EmitCursorMetadata { get; init; } = true;
     public string? ParseError { get; init; }
 }

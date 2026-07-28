@@ -291,7 +291,8 @@ internal static partial class ExportImportCommandRunner
                 detailed: true,
                 cancellationToken,
                 destinationDbPath,
-                archivePath);
+                archivePath,
+                emitCursorMetadata: false);
             var comparable = comparison.Status != "schema_mismatch";
             return new ImportDestinationDeltaResult(
                 DestinationExists: true,

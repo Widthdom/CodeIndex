@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -651,7 +652,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_JsonBodyRecoveryCommandIncludesActiveDb_Issue3562()
+    public void RunInspect_JsonBodyRecoveryCommandRedactsActiveDbByDefault_Issue3562_Issue4860()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_recovery_db_3562");
         try
@@ -683,10 +684,14 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("--db", recoveryCommand);
             Assert.Contains("file:", recoveryCommand);
             var expectedReadOnlyUri = DbContext.ToReadOnlyUri(dbPath);
-            Assert.Contains(expectedReadOnlyUri, recoveryCommand);
+            Assert.DoesNotContain(expectedReadOnlyUri, recoveryCommand);
+            Assert.DoesNotContain(projectRoot, recoveryCommand);
+            Assert.Contains(DiagnosticSanitizer.ForPath(dbPath), recoveryCommand);
             Assert.Contains("immutable=1", recoveryCommand);
             Assert.Contains("mode=ro", recoveryCommand);
             Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
+            Assert.True(recovery.GetProperty("paths_redacted").GetBoolean());
+            Assert.True(recovery.GetProperty("requires_local_path_substitution").GetBoolean());
         }
         finally
         {
