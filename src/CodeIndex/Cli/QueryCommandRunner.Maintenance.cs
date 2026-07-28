@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -18,12 +19,20 @@ public static partial class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("vacuum", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("vacuum")))
             return CommandExitCodes.UsageError;
-        var explicitDbPathError = BuildExplicitDbPathParseError(options);
-        if (explicitDbPathError != null && explicitDbPathError.Contains(CommandErrorCodes.DbNotFound, StringComparison.Ordinal))
+        if (options.ParseError == null
+            && options.DbPathExplicit
+            && !string.IsNullOrWhiteSpace(options.DbPath)
+            && !SqliteFileUri.StartsWithFileScheme(options.DbPath)
+            && !File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath)))
         {
-            CommandErrorWriter.WriteStderr(explicitDbPathError);
-            CommandErrorWriter.WriteStderr("Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.");
-            return CommandExitCodes.NotFound;
+            return MaintenanceDatabaseErrorWriter.Write(
+                options.Json,
+                jsonOptions,
+                MaintenanceDatabaseErrorClassifier.Create(
+                    "vacuum",
+                    options.DbPath,
+                    options.ShowPaths,
+                    MaintenanceDatabaseFailureKind.Missing));
         }
         if (TryWriteParseError(options, "vacuum"))
             return CommandExitCodes.UsageError;
@@ -33,20 +42,38 @@ public static partial class QueryCommandRunner
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!options.DryRun && DbPathResolver.UriRequestsReadOnly(options.DbPath))
+            {
+                return MaintenanceDatabaseErrorWriter.Write(
+                    options.Json,
+                    jsonOptions,
+                    MaintenanceDatabaseErrorClassifier.Create(
+                        "vacuum",
+                        options.DbPath,
+                        options.ShowPaths,
+                        MaintenanceDatabaseFailureKind.NotWritable));
+            }
+
             if (!DbContext.TryValidateExistingCodeIndexDb(
                     options.DbPath,
                     requireWritable: !options.DryRun,
                     requireSupportedUserVersion: false,
-                    out var validationMessage,
-                    out var isNotFound,
                     out _,
+                    out _,
+                    out _,
+                    out var validationFailure,
+                    out var validationException,
                     cancellationToken))
             {
-                CommandErrorWriter.WriteStderr($"Error [{(isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError)}]: {validationMessage}");
-                CommandErrorWriter.WriteStderr(isNotFound
-                    ? "Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one."
-                    : "Hint: point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx vacuum`.");
-                return isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError;
+                return MaintenanceDatabaseErrorWriter.Write(
+                    options.Json,
+                    jsonOptions,
+                    MaintenanceDatabaseErrorClassifier.FromValidation(
+                        "vacuum",
+                        options.DbPath,
+                        options.ShowPaths,
+                        validationFailure,
+                        validationException));
             }
 
             using var db = new DbContext(
@@ -86,6 +113,20 @@ public static partial class QueryCommandRunner
                 CommandExitCodes.CancelledBySignal,
                 "Retry `cdidx vacuum` after the cancelling operation completes.",
                 errorCode: CommandErrorCodes.Interrupted);
+        }
+        catch (Exception ex)
+        {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
+            return MaintenanceDatabaseErrorWriter.Write(
+                options.Json,
+                jsonOptions,
+                MaintenanceDatabaseErrorClassifier.FromException(
+                    "vacuum",
+                    options.DbPath,
+                    options.ShowPaths,
+                    ex));
         }
     }
 }

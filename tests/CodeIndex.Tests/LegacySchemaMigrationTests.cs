@@ -1049,6 +1049,35 @@ public class LegacySchemaMigrationTests : IDisposable
         }
     }
 
+    [Fact]
+    public void TryValidateExistingCodeIndexDb_PreservesRetryExhaustionForMaintenanceClassifier_Issue4856()
+    {
+        var valid = DbContext.TryValidateExistingCodeIndexDb(
+            _dbPath,
+            _ => new SqliteConnection("Data Source=:memory:"),
+            _ => throw CreateTransientBusyException(),
+            sleep: _ => { },
+            out _,
+            out var isNotFound,
+            out var validationException);
+
+        Assert.False(valid);
+        Assert.False(isNotFound);
+        var structured = Assert.IsType<CodeIndexException>(validationException);
+        Assert.Equal(CommandErrorCodes.DbLocked, structured.Code);
+
+        var error = MaintenanceDatabaseErrorClassifier.FromValidation(
+            "vacuum",
+            _dbPath,
+            showPaths: false,
+            ExistingCodeIndexDbValidationFailure.Exception,
+            validationException);
+        Assert.Equal(CommandErrorCodes.DbLocked, error.ErrorCode);
+        Assert.Equal("database_locked", error.Category);
+        Assert.Equal(CommandExitCodes.TransientDatabaseError, error.ExitCode);
+        Assert.Equal(5, error.SqliteErrorCode);
+    }
+
     private static SqliteException CreateTransientBusyException()
         => CreateSqliteException("busy", 5);
 

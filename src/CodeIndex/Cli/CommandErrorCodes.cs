@@ -92,4 +92,7 @@ internal static class CommandErrorCodes
 
     /// <summary>The requested Git hook operation did not target a Git repository.</summary>
     public const string NotGitRepository = "E026_NOT_GIT_REPOSITORY";
+
+    /// <summary>SQLite rejected the file as not being a database, or CodeIndex validation rejected its format.</summary>
+    public const string DbNotDatabase = "E027_DB_NOT_DATABASE";
 }

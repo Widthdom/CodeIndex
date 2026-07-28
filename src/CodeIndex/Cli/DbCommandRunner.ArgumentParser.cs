@@ -14,6 +14,7 @@ public static partial class DbCommandRunner
     {
         private string dbPath = Path.Combine(".cdidx", "codeindex.db");
         private bool json;
+        private bool showPaths;
         private bool integrityCheck;
         private bool schema;
         private bool prune;
@@ -67,6 +68,9 @@ public static partial class DbCommandRunner
                     break;
                 case "--json":
                     json = true;
+                    break;
+                case "--show-paths":
+                    showPaths = true;
                     break;
                 case "--integrity-check":
                     integrityCheck = true;
@@ -226,7 +230,7 @@ public static partial class DbCommandRunner
                     parseError = "--list is only valid with `cdidx db checkpoints --list`";
                     break;
                 case "--help" or "-h":
-                    return new DbCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json };
+                    return new DbCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, ShowPaths = showPaths };
                 default:
                     if (args[i].StartsWith('-'))
                         parseError = $"db does not support option: '{args[i]}'";
@@ -252,6 +256,12 @@ public static partial class DbCommandRunner
                 parseError = "--dry-run is only valid with a supported preview operation.";
             if (parseError is null && pruneApply && !prune)
                 parseError = "--apply is only valid with `cdidx db prune --apply`.";
+            if (parseError is null
+                && showPaths
+                && (schema || prune || checkpoint || listCheckpoints || restore || restoreBackups))
+            {
+                parseError = "--show-paths is only valid with `cdidx db integrity` or `cdidx db --integrity-check`.";
+            }
         }
 
         private DbCommandOptions BuildOptions()
@@ -260,6 +270,7 @@ public static partial class DbCommandRunner
             {
                 DbPath = dbPath,
                 Json = json,
+                ShowPaths = showPaths,
                 IntegrityCheck = integrityCheck,
                 Schema = schema,
                 Prune = prune,
