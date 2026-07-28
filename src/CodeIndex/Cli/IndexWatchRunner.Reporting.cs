@@ -179,8 +179,12 @@ internal static partial class IndexWatchRunner
         string resolvedDbPath,
         TimeSpan debounce,
         int maxPendingPaths,
-        bool ignoreCase)
+        bool ignoreCase,
+        string? backend,
+        string? recoveryReason)
     {
+        var safeBackend = FormatWatchDiagnosticText(backend) ?? "filesystem_watcher";
+        var safeRecoveryReason = FormatWatchDiagnosticText(recoveryReason);
         if (baseOptions.Json)
         {
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchStartedJsonResult
@@ -191,13 +195,16 @@ internal static partial class IndexWatchRunner
                 Db = "[redacted]",
                 DebounceMs = (int)debounce.TotalMilliseconds,
                 WatchPendingPathLimit = maxPendingPaths,
+                Backend = safeBackend,
+                RecoveryReason = safeRecoveryReason,
                 WatchContract = BuildWatchContract(debounce, maxPendingPaths, ignoreCase),
             }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchStartedJsonResult));
         }
         else
         {
+            var recovery = safeRecoveryReason ?? "none";
             CommandErrorWriter.WriteStderr();
-            CommandErrorWriter.WriteStderr($"[watch] Watching {projectRoot} for changes (debounce {(int)debounce.TotalMilliseconds} ms, pending path limit {maxPendingPaths.ToString("N0", CultureInfo.InvariantCulture)}). Press Ctrl+C to stop.");
+            CommandErrorWriter.WriteStderr($"[watch] Watching {projectRoot} for changes (backend {safeBackend}, recovery {recovery}, debounce {(int)debounce.TotalMilliseconds} ms, pending path limit {maxPendingPaths.ToString("N0", CultureInfo.InvariantCulture)}). Press Ctrl+C to stop.");
         }
     }
 
@@ -217,17 +224,100 @@ internal static partial class IndexWatchRunner
             RenameEvents = "old_and_new_paths",
             OverflowRecovery = "full_rescan_after_debounce",
             WatcherErrorRecovery = "full_rescan_after_debounce",
+            BaselineScan = "single_after_backend_start",
+            BackendStartRecovery = "fallback_preserve_baseline",
             Cancellation = "cancel_active_sub_run_then_emit_stopped",
             SubRunOutput = "json_quiet_sub_runs",
             McpWatchMode = "unsupported",
         };
 
+    private static void EmitWatchBackendFallback(
+        IndexCommandOptions baseOptions,
+        JsonSerializerOptions jsonOptions,
+        string? backend,
+        string recoveryReason,
+        string? reason,
+        bool baselineCompleted = false,
+        string phase = "startup")
+        => EmitWatchBackendStartupEvent(
+            baseOptions,
+            jsonOptions,
+            status: "backend_fallback",
+            backend: backend,
+            recoveryReason: recoveryReason,
+            reason: reason,
+            phase: phase,
+            humanAction: phase == "startup"
+                ? baselineCompleted
+                    ? "switching backend without repeating the baseline; one recovery scan will reconcile the handoff"
+                    : "switching backend before the baseline scan"
+                : "switching backend; one recovery scan will reconcile the handoff");
+
+    private static void EmitWatchBackendFailure(
+        IndexCommandOptions baseOptions,
+        JsonSerializerOptions jsonOptions,
+        string? backend,
+        string recoveryReason,
+        string? reason,
+        string phase = "startup")
+        => EmitWatchBackendStartupEvent(
+            baseOptions,
+            jsonOptions,
+            status: "failed",
+            backend: backend,
+            recoveryReason: recoveryReason,
+            reason: reason,
+            phase: phase,
+            humanAction: phase == "startup"
+                ? "watch startup stopped before the baseline scan"
+                : "watch stopped because no further backend fallback is available");
+
+    private static void EmitWatchBackendStartupEvent(
+        IndexCommandOptions baseOptions,
+        JsonSerializerOptions jsonOptions,
+        string status,
+        string? backend,
+        string recoveryReason,
+        string? reason,
+        string phase,
+        string humanAction)
+    {
+        var safeBackend = FormatWatchDiagnosticText(backend) ?? "filesystem_watcher";
+        var safeRecoveryReason = FormatWatchDiagnosticText(recoveryReason) ?? "backend_start_failed";
+        var safeReason = FormatWatchDiagnosticText(reason);
+        if (baseOptions.Json)
+        {
+            Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
+            {
+                Status = status,
+                Phase = phase,
+                Backend = safeBackend,
+                RecoveryReason = safeRecoveryReason,
+                Reason = safeReason,
+            }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
+            return;
+        }
+
+        var detail = string.IsNullOrEmpty(safeReason) ? string.Empty : $"; {safeReason}";
+        var failureDescription = phase == "startup"
+            ? "startup failed"
+            : "reported a fatal error";
+        CommandErrorWriter.WriteStderr(
+            $"[watch] Backend {safeBackend} {failureDescription} "
+            + $"(recovery {safeRecoveryReason}{detail}); {humanAction}.");
+    }
+
     private static void EmitWatchOverflow(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         string? reason,
-        string resolvedDbPath)
+        string resolvedDbPath,
+        string phase,
+        string? backend,
+        string? recoveryReason)
     {
+        var safeBackend = FormatWatchDiagnosticText(backend) ?? "filesystem_watcher";
+        var safeRecoveryReason = FormatWatchDiagnosticText(recoveryReason) ?? "watcher_error";
         var safeReason = FormatWatchDiagnosticText(reason);
         if (baseOptions.Json)
         {
@@ -235,7 +325,9 @@ internal static partial class IndexWatchRunner
             {
                 Status = "overflow",
                 Reason = safeReason,
-                Phase = "incremental",
+                Phase = phase,
+                Backend = safeBackend,
+                RecoveryReason = safeRecoveryReason,
                 OverflowReason = safeReason,
                 WatchPendingPathLimit = baseOptions.WatchPendingPathLimit,
                 RecoveryCommand = BuildOverflowRecoveryCommand(baseOptions, resolvedDbPath, redactPaths: true),
@@ -244,7 +336,9 @@ internal static partial class IndexWatchRunner
         else
         {
             var detail = string.IsNullOrEmpty(safeReason) ? string.Empty : $" ({safeReason})";
-            CommandErrorWriter.WriteStderr($"[watch] Watcher buffer overflowed{detail}; falling back to full rescan.");
+            CommandErrorWriter.WriteStderr(
+                $"[watch] Watcher backend {safeBackend} requires a full rescan "
+                + $"(recovery {safeRecoveryReason}){detail}.");
         }
     }
 
