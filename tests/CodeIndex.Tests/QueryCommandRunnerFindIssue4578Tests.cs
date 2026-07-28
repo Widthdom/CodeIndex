@@ -78,7 +78,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, limitedStderr);
             using var limitedTerminal = ParseLastNdjsonRecord(limitedStdout);
             var limited = limitedTerminal.RootElement;
-            Assert.True(limited.GetProperty("done").GetBoolean());
+            Assert.False(limited.GetProperty("done").GetBoolean());
             Assert.False(limited.GetProperty("scan_complete").GetBoolean());
             Assert.False(limited.GetProperty("authoritative_rows").GetBoolean());
             Assert.False(limited.GetProperty("partial_result").GetBoolean());
@@ -217,7 +217,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.PartialResult, countExitCode);
             Assert.Contains("authoritative_count=false", countStderr, StringComparison.Ordinal);
-            Assert.Contains("--allow-partial", countStderr, StringComparison.Ordinal);
+            Assert.Contains("continuation_action=resume_with_next_cursor", countStderr, StringComparison.Ordinal);
+            Assert.Contains("next_cursor=response:v2:", countStderr, StringComparison.Ordinal);
 
             var (completeExitCode, _, completeStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--limit", "10"],
@@ -253,8 +254,10 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(1, json.GetProperty("line_scan_limit").GetInt32());
         if (countMode)
         {
-            Assert.Equal("increase_line_scan_limit_or_narrow_scope", json.GetProperty("continuation_action").GetString());
-            Assert.Contains("--allow-partial", json.GetProperty("recovery_guidance").GetString(), StringComparison.Ordinal);
+            Assert.Equal("resume_with_next_cursor", json.GetProperty("continuation_action").GetString());
+            Assert.Contains("--cursor", json.GetProperty("recovery_guidance").GetString(), StringComparison.Ordinal);
+            Assert.StartsWith("response:v2:", json.GetProperty("next_cursor").GetString(), StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(json.GetProperty("result_stable_at").GetString()));
             Assert.False(json.GetProperty("authoritative_count").GetBoolean());
         }
         else

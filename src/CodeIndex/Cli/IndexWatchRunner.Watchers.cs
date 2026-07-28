@@ -11,11 +11,69 @@ namespace CodeIndex.Cli;
 
 internal static partial class IndexWatchRunner
 {
+    internal interface IWatchBackend : IDisposable
+    {
+        string Name { get; }
+
+        Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken);
+    }
+
+    internal static Func<string, string, bool, IWatchBackend>? WatchBackendFactoryForTesting { get; set; }
+    private static readonly TimeSpan BackendStartupStabilizationDelay = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan PollingWatchInterval = TimeSpan.FromSeconds(2);
+
+    internal static IReadOnlyCollection<string> CapturePollingSnapshotPathsForTesting(
+        string projectRoot,
+        string ignoreRuleRoot,
+        string resolvedDbPath,
+        bool ignoreCase,
+        bool dbPathExplicit,
+        CancellationToken cancellationToken = default)
+    {
+        using var backend = new PollingWatchBackend(
+            projectRoot,
+            ignoreRuleRoot,
+            resolvedDbPath,
+            ignoreCase,
+            dbPathExplicit);
+        return backend.CaptureSnapshotPaths(cancellationToken);
+    }
+
+    private static IWatchBackend CreateWatchBackend(
+        string projectRoot,
+        string ignoreRuleRoot,
+        string resolvedDbPath,
+        bool ignoreCase,
+        bool dbPathExplicit,
+        int attempt)
+        => WatchBackendFactoryForTesting?.Invoke(projectRoot, ignoreRuleRoot, ignoreCase)
+            ?? (attempt > 0 && OperatingSystem.IsMacOS()
+                ? new PollingWatchBackend(
+                    projectRoot,
+                    ignoreRuleRoot,
+                    resolvedDbPath,
+                    ignoreCase,
+                    dbPathExplicit)
+                : new FileSystemWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase));
+
+    private static string ResolveWatchBackendName()
+        => OperatingSystem.IsMacOS()
+            ? "fsevents"
+            : OperatingSystem.IsLinux()
+                ? "inotify"
+                : OperatingSystem.IsWindows()
+                    ? "read_directory_changes_w"
+                    : "filesystem_watcher";
+
     private static List<FileSystemWatcher> CreateAncestorIgnoreWatchers(
         string projectRoot,
         string ignoreRuleRoot,
         bool ignoreCase,
-        Action<string> enqueue)
+        Action<string> enqueue,
+        Action<Exception?> reportError)
     {
         var watchers = new List<FileSystemWatcher>();
         var fullProjectRoot = Path.GetFullPath(projectRoot);
@@ -54,6 +112,7 @@ internal static partial class IndexWatchRunner
                     enqueue(e.OldFullPath);
                     enqueue(e.FullPath);
                 };
+                ancestorWatcher.Error += (_, e) => reportError(e.GetException());
                 ancestorWatcher.EnableRaisingEvents = true;
 
                 if (string.Equals(directory.FullName, fullIgnoreRuleRoot, comparison))
@@ -252,4 +311,334 @@ internal static partial class IndexWatchRunner
             : trimmed;
     }
 
+    private sealed class FileSystemWatchBackend : IWatchBackend
+    {
+        private readonly string _projectRoot;
+        private readonly string _ignoreRuleRoot;
+        private readonly bool _ignoreCase;
+        private FileSystemWatcher? _watcher;
+        private List<FileSystemWatcher>? _ancestorIgnoreWatchers;
+
+        internal FileSystemWatchBackend(
+            string projectRoot,
+            string ignoreRuleRoot,
+            bool ignoreCase)
+        {
+            _projectRoot = projectRoot;
+            _ignoreRuleRoot = ignoreRuleRoot;
+            _ignoreCase = ignoreCase;
+        }
+
+        public string Name => ResolveWatchBackendName();
+
+        public Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_watcher != null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var watcher = new FileSystemWatcher(_projectRoot)
+            {
+                IncludeSubdirectories = true,
+                InternalBufferSize = InternalBufferSize,
+                NotifyFilter = NotifyFilters.FileName
+                    | NotifyFilters.DirectoryName
+                    | NotifyFilters.LastWrite
+                    | NotifyFilters.Size,
+            };
+            _watcher = watcher;
+
+            watcher.Created += (_, e) => enqueue(e.FullPath);
+            watcher.Changed += (_, e) => enqueue(e.FullPath);
+            watcher.Deleted += (_, e) => enqueue(e.FullPath);
+            watcher.Renamed += (_, e) =>
+            {
+                enqueue(e.OldFullPath);
+                enqueue(e.FullPath);
+            };
+            watcher.Error += (_, e) => reportError(e.GetException());
+
+            watcher.EnableRaisingEvents = true;
+            _ancestorIgnoreWatchers = CreateAncestorIgnoreWatchers(
+                _projectRoot,
+                _ignoreRuleRoot,
+                _ignoreCase,
+                enqueue,
+                reportError);
+
+            // FileSystemWatcher can report a fatal EventStream startup error asynchronously
+            // just after EnableRaisingEvents succeeds. Keep startup provisional long enough for
+            // that callback to select the fallback before the baseline begins.
+            // EnableRaisingEvents 成功直後に fatal EventStream error が非同期通知される場合が
+            // あるため、この安定化区間までは startup を provisional として扱う。
+            Task.Delay(BackendStartupStabilizationDelay, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            return Task.CompletedTask;
+        }
+
+        public void Dispose()
+        {
+            if (_ancestorIgnoreWatchers != null)
+            {
+                foreach (var ancestorWatcher in _ancestorIgnoreWatchers)
+                {
+                    try { ancestorWatcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
+                    ancestorWatcher.Dispose();
+                }
+                _ancestorIgnoreWatchers = null;
+            }
+
+            if (_watcher != null)
+            {
+                try { _watcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
+                _watcher.Dispose();
+                _watcher = null;
+            }
+        }
+    }
+
+    private sealed class PollingWatchBackend : IWatchBackend
+    {
+        private readonly record struct FileStamp(
+            long Length,
+            long LastWriteUtcTicks,
+            long CreationUtcTicks);
+
+        private readonly string _projectRoot;
+        private readonly string _ignoreRuleRoot;
+        private readonly string _resolvedDbPath;
+        private readonly bool _ignoreCase;
+        private readonly bool _dbPathExplicit;
+        private readonly StringComparer _pathComparer;
+        private readonly FileIndexer _fileIndexer;
+        private CancellationTokenSource? _loopCancellation;
+        private Task? _loopTask;
+        private Dictionary<string, FileStamp>? _snapshot;
+        private Action<string>? _enqueue;
+        private Action<Exception?>? _reportError;
+        private bool _started;
+
+        internal PollingWatchBackend(
+            string projectRoot,
+            string ignoreRuleRoot,
+            string resolvedDbPath,
+            bool ignoreCase,
+            bool dbPathExplicit)
+        {
+            _projectRoot = Path.GetFullPath(projectRoot);
+            _ignoreRuleRoot = Path.GetFullPath(ignoreRuleRoot);
+            _resolvedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(resolvedDbPath));
+            _ignoreCase = ignoreCase;
+            _dbPathExplicit = dbPathExplicit;
+            _pathComparer = ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            _fileIndexer = new FileIndexer(
+                _projectRoot,
+                ignoreCase,
+                _ignoreRuleRoot,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                internalIndexDatabasePath: _resolvedDbPath);
+        }
+
+        public string Name => "polling";
+
+        public Task StartAsync(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_started, this);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            _snapshot = CaptureSnapshot(cancellationToken);
+            _enqueue = enqueue;
+            _reportError = reportError;
+            _loopCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _loopTask = Task.Run(
+                () => RunLoopAsync(_loopCancellation.Token),
+                CancellationToken.None);
+            _started = true;
+            return Task.CompletedTask;
+        }
+
+        private async Task RunLoopAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(PollingWatchInterval, cancellationToken).ConfigureAwait(false);
+                    PollOnce(cancellationToken);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex) when (CodeIndex.FileSystemTraversalPolicy.IsExpectedTraversalException(ex))
+            {
+                _reportError?.Invoke(ex);
+            }
+        }
+
+        private void PollOnce(CancellationToken cancellationToken)
+        {
+            Dictionary<string, FileStamp> next;
+            try
+            {
+                next = CaptureSnapshot(cancellationToken);
+            }
+            catch (Exception ex) when (CodeIndex.FileSystemTraversalPolicy.IsExpectedTraversalException(ex))
+            {
+                _reportError?.Invoke(ex);
+                return;
+            }
+
+            var previous = _snapshot ?? new Dictionary<string, FileStamp>(_pathComparer);
+            foreach (var (path, stamp) in next)
+            {
+                if (!previous.TryGetValue(path, out var priorStamp) || priorStamp != stamp)
+                    _enqueue?.Invoke(path);
+            }
+
+            foreach (var path in previous.Keys)
+            {
+                if (!next.ContainsKey(path))
+                    _enqueue?.Invoke(path);
+            }
+
+            _snapshot = next;
+        }
+
+        internal IReadOnlyCollection<string> CaptureSnapshotPaths(CancellationToken cancellationToken)
+            => CaptureSnapshot(cancellationToken).Keys.ToArray();
+
+        private Dictionary<string, FileStamp> CaptureSnapshot(CancellationToken cancellationToken)
+        {
+            var snapshot = new Dictionary<string, FileStamp>(_pathComparer);
+            var pendingDirectories = new Stack<string>();
+            pendingDirectories.Push(_projectRoot);
+
+            while (pendingDirectories.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var directory = pendingDirectories.Pop();
+                foreach (var file in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(directory))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (ShouldTrackFile(file))
+                        AddFileStamp(snapshot, file);
+                }
+
+                foreach (var childDirectory in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(directory))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if ((File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) == 0
+                            && !_fileIndexer.ShouldSkipPath(childDirectory, isDirectory: true))
+                        {
+                            pendingDirectories.Push(childDirectory);
+                        }
+                    }
+                    catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                    {
+                    }
+                }
+            }
+
+            foreach (var ignorePath in EnumerateAncestorIgnorePaths())
+                AddFileStamp(snapshot, ignorePath);
+
+            return snapshot;
+        }
+
+        private bool ShouldTrackFile(string path)
+        {
+            if (FileIndexer.ClassifyIndexInputInvalidation(_projectRoot, path)
+                != FileIndexer.IndexInputInvalidationKind.None)
+            {
+                return true;
+            }
+
+            return !ShouldIgnoreWatchInternalPath(
+                    _projectRoot,
+                    _resolvedDbPath,
+                    path,
+                    _ignoreCase,
+                    _dbPathExplicit)
+                && !_fileIndexer.ShouldSkipPath(path);
+        }
+
+        private IEnumerable<string> EnumerateAncestorIgnorePaths()
+        {
+            var comparison = _ignoreCase
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (string.Equals(_projectRoot, _ignoreRuleRoot, comparison))
+                yield break;
+
+            var relativeProjectRoot = Path.GetRelativePath(_ignoreRuleRoot, _projectRoot);
+            if (Path.IsPathRooted(relativeProjectRoot)
+                || relativeProjectRoot == ".."
+                || relativeProjectRoot.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || relativeProjectRoot.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                yield break;
+            }
+
+            var directory = Directory.GetParent(_projectRoot);
+            while (directory != null)
+            {
+                yield return Path.Combine(directory.FullName, ".gitignore");
+                yield return Path.Combine(directory.FullName, ".cdidxignore");
+                if (string.Equals(directory.FullName, _ignoreRuleRoot, comparison))
+                    yield break;
+                directory = directory.Parent;
+            }
+        }
+
+        private static void AddFileStamp(Dictionary<string, FileStamp> snapshot, string path)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Exists)
+                {
+                    snapshot[path] = new FileStamp(
+                        info.Length,
+                        info.LastWriteTimeUtc.Ticks,
+                        info.CreationTimeUtc.Ticks);
+                }
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            var cancellation = _loopCancellation;
+            _loopCancellation = null;
+            if (cancellation != null)
+            {
+                cancellation.Cancel();
+                try
+                {
+                    _loopTask?.GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                cancellation.Dispose();
+            }
+
+            _loopTask = null;
+            _snapshot = null;
+            _enqueue = null;
+            _reportError = null;
+        }
+    }
 }

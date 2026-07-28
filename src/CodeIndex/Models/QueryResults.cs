@@ -91,7 +91,11 @@ public readonly record struct FindScanSummary(
     string SearchStrategy = "line_scan",
     string? SearchFallbackReason = null,
     string? NextPath = null,
-    int? NextLine = null);
+    int? NextLine = null,
+    int? NextFileOrdinal = null,
+    int? NextMatchOrdinal = null,
+    int? NextByteOffset = null,
+    bool ResultLimitReached = false);
 
 public readonly record struct FindCountResult(int Count, int FileCount, FindScanSummary Scan);
 
