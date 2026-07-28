@@ -1931,10 +1931,22 @@ public partial class DbReader
         var userVersion = ExecuteScalar("PRAGMA user_version");
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"{userVersion & DbContext.FoldReadyFlag}\n"
-            + $"{TryGetMetaStringInternal("fold_key_version") ?? "no-fold-key-version"}\n"
-            + $"{TryGetMetaStringInternal("fold_key_fingerprint") ?? "no-fold-key-fingerprint"}\n"
-            + $"{TryGetMetaStringInternal(DbWriter.FoldBackfillGraphRefreshPendingMetaKey) ?? "no-fold-backfill-pending"}");
+            $"stored-fold-ready-bit:{userVersion & DbContext.FoldReadyFlag}\n"
+            + $"stored-fold-version:{TryGetMetaStringInternal("fold_key_version") ?? "no-fold-key-version"}\n"
+            + $"stored-fold-fingerprint:{TryGetMetaStringInternal("fold_key_fingerprint") ?? "no-fold-key-fingerprint"}\n"
+            + $"effective-fold-ready:{(_foldReady ? "1" : "0")}\n"
+            + $"runtime-fold-version:{NameFold.Version}\n"
+            + $"runtime-fold-fingerprint:{NameFold.Fingerprint()}\n"
+            + $"fold-backfill-pending:{TryGetMetaStringInternal(DbWriter.FoldBackfillGraphRefreshPendingMetaKey) ?? "no-fold-backfill-pending"}");
+    }
+
+    internal string GetIssuePaginationGenerationIdentity()
+    {
+        var userVersion = ExecuteScalar("PRAGMA user_version");
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"stored-issues-ready-bit:{userVersion & DbContext.IssuesReadyFlag}\n"
+            + $"issues-table-available:{(_hasIssuesTable ? "1" : "0")}");
     }
 
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()

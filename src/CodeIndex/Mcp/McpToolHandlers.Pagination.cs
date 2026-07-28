@@ -70,19 +70,24 @@ public partial class McpServer
 
     private static (string Fingerprint, string? StableAt) BuildMcpGenerationFingerprint(
         DbReader reader,
-        bool includeFoldState = false)
+        bool includeFoldState = false,
+        bool includeIssueState = false)
     {
-        if (!includeFoldState)
+        if (!includeFoldState && !includeIssueState)
             return InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
 
         var generation = reader.GetPaginationGeneration();
+        var components = new List<string>
+        {
+            "mcp-generation:v1",
+            generation.Identity,
+        };
+        if (includeFoldState)
+            components.Add(reader.GetFoldPaginationGenerationIdentity());
+        if (includeIssueState)
+            components.Add(reader.GetIssuePaginationGenerationIdentity());
         return (
-            InspectGraphCursorCodec.BuildQueryFingerprint(
-            [
-                "mcp-generation:v1",
-                generation.Identity,
-                reader.GetFoldPaginationGenerationIdentity(),
-            ]),
+            InspectGraphCursorCodec.BuildQueryFingerprint(components),
             generation.StableAt);
     }
 

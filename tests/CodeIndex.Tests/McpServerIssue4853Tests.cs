@@ -145,6 +145,68 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void DiscoveryTools_BindCursorsToEffectiveReadinessAndRuntimeFoldState_Issue4853()
+    {
+        SeedIssue4853DiscoveryRows(3);
+        var validateArguments = new JsonObject
+        {
+            ["kind"] = "line_too_long",
+            ["path"] = "src/pagination4853",
+            ["limit"] = 1,
+            ["format"] = "compact",
+        };
+        var validateCursor = CallIssue4853Tool(
+            _server,
+            "validate",
+            validateArguments,
+            id: 20)["next_cursor"]!.GetValue<string>();
+
+        string paginationGeneration;
+        using (var reader = new DbReader(_db))
+        {
+            paginationGeneration = reader.GetPaginationGeneration().Identity;
+            var foldGeneration = reader.GetFoldPaginationGenerationIdentity();
+            Assert.Contains(
+                $"effective-fold-ready:{(reader._foldReady ? "1" : "0")}",
+                foldGeneration,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                $"runtime-fold-version:{NameFold.Version}",
+                foldGeneration,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                $"runtime-fold-fingerprint:{NameFold.Fingerprint()}",
+                foldGeneration,
+                StringComparison.Ordinal);
+        }
+
+        var writer = new DbWriter(_db.Connection);
+        writer.ClearReadyFlags();
+        using (var reader = new DbReader(_db))
+        {
+            Assert.Equal(paginationGeneration, reader.GetPaginationGeneration().Identity);
+            Assert.Contains(
+                "stored-issues-ready-bit:0",
+                reader.GetIssuePaginationGenerationIdentity(),
+                StringComparison.Ordinal);
+        }
+
+        using var readinessDemotedServer = new McpServer(
+            _dbPath,
+            "1.0.0-test",
+            dbPathExplicit: true);
+        validateArguments["cursor"] = validateCursor;
+        var stale = CallIssue4853ToolError(
+            readinessDemotedServer,
+            "validate",
+            validateArguments,
+            id: 21);
+        Assert.Equal("index_stale", stale["category"]!.GetValue<string>());
+        Assert.Equal("cursor_stale", stale["error_code"]!.GetValue<string>());
+        Assert.True(stale["retry_safe"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task DiscoveryCursor_IsStatelessAcrossConcurrentClientsAndFitsBoundedResponse_Issue4853()
     {
         SeedIssue4853DiscoveryRows(4);

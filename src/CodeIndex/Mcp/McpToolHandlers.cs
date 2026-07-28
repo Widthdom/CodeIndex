@@ -1213,7 +1213,7 @@ public partial class McpServer
                 },
                 ("path", pathPatterns, PreserveOrder: false),
                 ("exclude-path", excludePaths, PreserveOrder: false));
-            var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
+            var generation = BuildMcpGenerationFingerprint(reader, includeIssueState: true);
             var total = reader.CountIssues(
                 kind,
                 pathPatterns,
