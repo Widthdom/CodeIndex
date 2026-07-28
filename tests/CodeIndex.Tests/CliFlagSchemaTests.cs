@@ -45,6 +45,8 @@ public class CliFlagSchemaTests
                 Assert.True(known.Contains(command), $"{flag.Name} Commands references unknown subcommand '{command}'");
             foreach (var command in flag.AlsoAcceptedBy)
                 Assert.True(known.Contains(command), $"{flag.Name} AlsoAcceptedBy references unknown subcommand '{command}'");
+            foreach (var command in flag.CompletionSubcommands.Keys)
+                Assert.True(known.Contains(command), $"{flag.Name} CompletionSubcommands references unknown command '{command}'");
         }
     }
 
@@ -339,7 +341,17 @@ public class CliFlagSchemaTests
         {
             var name = flag.Name.TrimStart('-');
             foreach (var command in flag.PrimaryCommands)
-                expected.Add((name, command));
+            {
+                if (flag.CompletionSubcommands.TryGetValue(command, out var nestedSubcommands))
+                {
+                    foreach (var nestedSubcommand in nestedSubcommands)
+                        expected.Add((name, $"{command}:{nestedSubcommand}"));
+                }
+                else
+                {
+                    expected.Add((name, command));
+                }
+            }
         }
 
         foreach (var pair in expected)
@@ -379,8 +391,12 @@ public class CliFlagSchemaTests
             resultKinds);
         Assert.True(CliFlagSchema.TryNormalizeOptionValue("search", "--origin", "schema", out var normalizedOrigin));
         Assert.Equal("schema_description", normalizedOrigin);
+        Assert.True(CliFlagSchema.TryNormalizeOptionValue("search", "--origin", "schema-description", out normalizedOrigin));
+        Assert.Equal("schema_description", normalizedOrigin);
         Assert.True(CliFlagSchema.TryNormalizeOptionValue("search", "--result-kind", "callsite", out var normalizedKind));
         Assert.Equal("call_site", normalizedKind);
+        Assert.False(CliFlagSchema.TryNormalizeOptionValue("deps", "--format", "json_graph", out _));
+        Assert.False(CliFlagSchema.TryNormalizeOptionValue("search", "--format", "issue_drafts", out _));
 
         Assert.Contains("--format <text|json|count|compact|sarif|issue-drafts>", ConsoleUi.GetUsageLine("audit"));
         var searchUsage = ConsoleUi.GetUsageLine("search");
@@ -394,6 +410,8 @@ public class CliFlagSchemaTests
         Assert.NotNull(acceptsFormat);
         Assert.Equal(true, acceptsFormat!.Invoke(null, ["audit", "sarif"]));
         Assert.Equal(false, acceptsFormat.Invoke(null, ["audit", "lsp"]));
+        Assert.Equal(false, acceptsFormat.Invoke(null, ["deps", "json_graph"]));
+        Assert.Equal(false, acceptsFormat.Invoke(null, ["search", "issue_drafts"]));
 
         var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
         Assert.Contains("audit) COMPREPLY=($(compgen -W \"text json count compact sarif issue-drafts\"", bash);
@@ -409,7 +427,10 @@ public class CliFlagSchemaTests
     {
         var hookFlags = CliFlagSchema.GetAcceptedFlagNamesForCommand("hooks");
         Assert.Contains("--dry-run", hookFlags);
-        Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks"), flag => flag.Name == "--dry-run");
+        Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks"), flag => flag.Name == "--dry-run");
+        Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "install"), flag => flag.Name == "--dry-run");
+        Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "uninstall"), flag => flag.Name == "--dry-run");
+        Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "status"), flag => flag.Name == "--dry-run");
 
         var gotoFlags = CliFlagSchema.GetAcceptedFlagNamesForCommand("goto");
         Assert.DoesNotContain("--exact", gotoFlags);
@@ -420,7 +441,27 @@ public class CliFlagSchemaTests
             ConsoleUi.PrintCommandUsage("hooks") ? 1 : 0);
         Assert.Contains("--dry-run", hookHelp, StringComparison.Ordinal);
         Assert.Contains("--project <path>", hookHelp, StringComparison.Ordinal);
+        Assert.Contains("Repository/worktree directory used to resolve Git metadata", hookHelp, StringComparison.Ordinal);
         Assert.DoesNotContain("--pretty", hookHelp, StringComparison.Ordinal);
+
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        Assert.Contains("[ \"$cmd\" = \"hooks\" ] && [ \"$nested\" = \"install\" ]", bash, StringComparison.Ordinal);
+        Assert.Contains("--project) if [ \"$cmd\" = \"hooks\" ]; then COMPREPLY=($(compgen -f", bash, StringComparison.Ordinal);
+        Assert.DoesNotContain("--project) COMPREPLY=($(compgen -W \"name path\"", bash, StringComparison.Ordinal);
+
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        Assert.Contains("$subcmd == hooks && $words[3] == install", zsh, StringComparison.Ordinal);
+        Assert.Contains("--project[Repository/worktree directory used to resolve Git metadata for the managed hook]:file:_files", zsh, StringComparison.Ordinal);
+
+        var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
+        Assert.Contains("__fish_seen_subcommand_from hooks; and __fish_seen_subcommand_from install' -l dry-run", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_seen_subcommand_from hooks' -l project -r -d 'Repository/worktree directory used to resolve Git metadata", fish, StringComparison.Ordinal);
+        Assert.DoesNotContain("__fish_seen_subcommand_from hooks' -l project -r -a 'name path'", fish, StringComparison.Ordinal);
+
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        Assert.Contains("$subcmd -eq 'hooks' -and $nested -eq 'install'", powershell, StringComparison.Ordinal);
+        Assert.Contains("$_ -eq '--project' -and $subcmd -eq 'hooks'", powershell, StringComparison.Ordinal);
+        Assert.DoesNotContain("'--project' = @('name', 'path')", powershell, StringComparison.Ordinal);
 
         using var capture = ConsoleCapture.Start(captureOut: true);
         ConsoleUi.PrintFlagUsage(showBanner: false);
@@ -481,7 +522,18 @@ public class CliFlagSchemaTests
             if (!match.Success)
                 continue;
             var flag = match.Groups["flag"].Value;
-            foreach (var subcmd in match.Groups["list"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            var predicate = match.Groups["list"].Value;
+            const string nestedSeparator = "; and __fish_seen_subcommand_from ";
+            var nestedSeparatorIndex = predicate.IndexOf(nestedSeparator, StringComparison.Ordinal);
+            if (nestedSeparatorIndex >= 0)
+            {
+                var command = predicate[..nestedSeparatorIndex].Trim();
+                var nestedSubcommand = predicate[(nestedSeparatorIndex + nestedSeparator.Length)..].Trim();
+                result.Add((flag, $"{command}:{nestedSubcommand}"));
+                continue;
+            }
+
+            foreach (var subcmd in predicate.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                 result.Add((flag, subcmd));
         }
         return result;

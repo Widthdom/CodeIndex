@@ -20,6 +20,7 @@ internal sealed record CliOptionValueDomain
     public required IReadOnlyList<string> CanonicalValues { get; init; }
     public IReadOnlyDictionary<string, string> Aliases { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
+    public bool NormalizeDashAndUnderscore { get; init; }
 
     public string ValuePlaceholder => $"<{string.Join('|', CanonicalValues)}>";
 
@@ -42,8 +43,13 @@ internal sealed record CliOptionValueDomain
         return false;
     }
 
-    private static string NormalizeLookup(string value) =>
-        value.Trim().ToLowerInvariant().Replace("-", "_", StringComparison.Ordinal);
+    private string NormalizeLookup(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return NormalizeDashAndUnderscore
+            ? normalized.Replace("-", "_", StringComparison.Ordinal)
+            : normalized;
+    }
 }
 
 /// <summary>
@@ -64,13 +70,18 @@ internal sealed record CliFlag
     public required string Name { get; init; }
     public string? ShortName { get; init; }
     public string? ValuePlaceholder { get; init; }
+    public bool PlaceholderDefinesValueDomain { get; init; } = true;
     public required string Description { get; init; }
+    public IReadOnlyDictionary<string, string> CommandDescriptions { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
     public CliOptionSafety Safety { get; init; }
     public CliOptionValueDomain? ValueDomain { get; init; }
     public IReadOnlyDictionary<string, CliOptionValueDomain> CommandValueDomains { get; init; } =
         new Dictionary<string, CliOptionValueDomain>(StringComparer.Ordinal);
     public IReadOnlyDictionary<string, string> CommandValuePlaceholders { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
+    public IReadOnlyDictionary<string, IReadOnlySet<string>> CompletionSubcommands { get; init; } =
+        new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
 
     /// <summary>
     /// Commands for which this flag is "primary" — accepted by the parser AND surfaced
@@ -104,6 +115,18 @@ internal sealed record CliFlag
         || CommandValuePlaceholders.Count > 0;
     public bool AppliesTo(string command) => PrimaryCommands.Contains(command);
     public bool IsAcceptedBy(string command) => AppliesTo(command) || AlsoAcceptedBy.Contains(command);
+    public bool AppliesToCompletionContext(string command, string? subcommand)
+    {
+        if (!AppliesTo(command))
+            return false;
+        return !CompletionSubcommands.TryGetValue(command, out var allowedSubcommands)
+               || subcommand is not null && allowedSubcommands.Contains(subcommand);
+    }
+
+    public string GetDescription(string command) =>
+        CommandDescriptions.TryGetValue(command, out var commandDescription)
+            ? commandDescription
+            : Description;
 
     public CliOptionValueDomain? GetValueDomain(string command)
     {
@@ -113,7 +136,9 @@ internal sealed record CliFlag
             return TryBuildPlaceholderDomain(commandPlaceholder);
         if (ValueDomain is not null)
             return ValueDomain;
-        return TryBuildPlaceholderDomain(ValuePlaceholder);
+        return PlaceholderDefinesValueDomain
+            ? TryBuildPlaceholderDomain(ValuePlaceholder)
+            : null;
     }
 
     public string? GetValuePlaceholder(string command)
@@ -319,14 +344,14 @@ internal static class CliFlagSchema
     private static readonly string[] VerboseQueryCommands = ProfileCommands;
     private static readonly string[] TraceCommands = ProfileCommands;
 
-    private static readonly CliOptionValueDomain SearchOriginValueDomain = Values(
+    private static readonly CliOptionValueDomain SearchOriginValueDomain = ValuesWithSeparatorNormalization(
         ["code", "comment", "string_literal", "regex_literal", "help_text", "schema_description", "unknown"],
         ("string", "string_literal"),
         ("regex", "regex_literal"),
         ("help", "help_text"),
         ("schema", "schema_description"));
 
-    private static readonly CliOptionValueDomain SearchResultKindValueDomain = Values(
+    private static readonly CliOptionValueDomain SearchResultKindValueDomain = ValuesWithSeparatorNormalization(
         ["call_site", "declaration", "identifier", "code", "comment", "string_literal", "regex_literal", "help_text", "schema_description", "unknown"],
         ("call", "call_site"),
         ("callsite", "call_site"),
@@ -410,7 +435,12 @@ internal static class CliFlagSchema
             {
                 Name = "--project",
                 ValuePlaceholder = "<name|path>",
+                PlaceholderDefinesValueDomain = false,
                 Description = "Filter to a .sln/.csproj project",
+                CommandDescriptions = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["hooks"] = "Repository/worktree directory used to resolve Git metadata for the managed hook",
+                },
                 PrimaryCommands = Set(PathFilterCommands.Concat(new[] { "index", "hooks" }).ToArray()),
                 CommandValuePlaceholders = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
@@ -563,7 +593,17 @@ internal static class CliFlagSchema
             new() { Name = "--yes", Description = "Confirm --rebuild when stdin is redirected; interactive terminals prompt instead", PrimaryCommands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", PrimaryCommands = Set("index") },
             new() { Name = "--symbols-only", Description = "Build chunks and symbols while skipping reference graph extraction", PrimaryCommands = Set("index") },
-            new() { Name = "--dry-run", Description = "Preview without writing; hooks supports it only for install", PrimaryCommands = Set("index", "hooks", "backfill-fold", "optimize", "vacuum"), Safety = CliOptionSafety.Preview },
+            new()
+            {
+                Name = "--dry-run",
+                Description = "Preview without writing; hooks supports it only for install",
+                PrimaryCommands = Set("index", "hooks", "backfill-fold", "optimize", "vacuum"),
+                CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+                {
+                    ["hooks"] = Set("install"),
+                },
+                Safety = CliOptionSafety.Preview,
+            },
             new() { Name = "--show-paths", Description = "Show full database paths in maintenance diagnostics; paths are redacted by default", PrimaryCommands = Set("index", "backfill-fold", "optimize", "vacuum", "db") },
             new() { Name = "--dry-run-path-limit", ValuePlaceholder = "<n>", Description = "Dry run only: candidate path processing limit before truncated lower-bound estimates", PrimaryCommands = Set("index") },
             new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before maintenance", PrimaryCommands = Set("backfill-fold") },
@@ -615,10 +655,13 @@ internal static class CliFlagSchema
     /// zsh / fish completion generators.
     /// 指定コマンドの補完候補に出すべきフラグ集合（`AlsoAcceptedBy` は含めない）。
     /// </summary>
-    public static IReadOnlyList<CliFlag> GetCompletionFlagsForCommand(string command)
+    public static IReadOnlyList<CliFlag> GetCompletionFlagsForCommand(string command, string? subcommand = null)
     {
-        return All.Where(f => f.AppliesTo(command)).ToList();
+        return All.Where(f => f.AppliesToCompletionContext(command, subcommand)).ToList();
     }
+
+    public static IReadOnlyList<CliFlag> GetHelpFlagsForCommand(string command) =>
+        All.Where(flag => flag.AppliesTo(command)).ToList();
 
     public static IReadOnlyList<(string Heading, IReadOnlyList<CliFlag> Flags)> GetSharedHelpSections()
     {
@@ -772,14 +815,31 @@ internal static class CliFlagSchema
     private static CliOptionValueDomain Values(
         IReadOnlyList<string> canonicalValues,
         params (string Alias, string Canonical)[] aliases)
+        => CreateValues(canonicalValues, normalizeDashAndUnderscore: false, aliases);
+
+    private static CliOptionValueDomain ValuesWithSeparatorNormalization(
+        IReadOnlyList<string> canonicalValues,
+        params (string Alias, string Canonical)[] aliases)
+        => CreateValues(canonicalValues, normalizeDashAndUnderscore: true, aliases);
+
+    private static CliOptionValueDomain CreateValues(
+        IReadOnlyList<string> canonicalValues,
+        bool normalizeDashAndUnderscore,
+        params (string Alias, string Canonical)[] aliases)
     {
         var aliasMap = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (alias, canonical) in aliases)
-            aliasMap[alias.ToLowerInvariant().Replace("-", "_", StringComparison.Ordinal)] = canonical;
+        {
+            var normalizedAlias = alias.ToLowerInvariant();
+            if (normalizeDashAndUnderscore)
+                normalizedAlias = normalizedAlias.Replace("-", "_", StringComparison.Ordinal);
+            aliasMap[normalizedAlias] = canonical;
+        }
         return new CliOptionValueDomain
         {
             CanonicalValues = canonicalValues,
             Aliases = aliasMap,
+            NormalizeDashAndUnderscore = normalizeDashAndUnderscore,
         };
     }
 }

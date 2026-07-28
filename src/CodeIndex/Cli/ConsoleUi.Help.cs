@@ -390,7 +390,7 @@ public static partial class ConsoleUi
         var schemaCommand = GetFlagSchemaCommandName(command);
         var helpFlags = string.Equals(command, schemaCommand, StringComparison.Ordinal)
             && CliFlagSchema.HasAuthoritativeHelpOptions(schemaCommand)
-                ? CliFlagSchema.GetCompletionFlagsForCommand(schemaCommand)
+                ? CliFlagSchema.GetHelpFlagsForCommand(schemaCommand)
                 : [];
         if (helpFlags.Count > 0)
         {
@@ -406,7 +406,7 @@ public static partial class ConsoleUi
                     : flag.GetValuePlaceholder(schemaCommand);
                 var description = projectionFields
                     ? ProjectionFieldRegistry.GetHelpDescription(schemaCommand)
-                    : flag.Description;
+                    : flag.GetDescription(schemaCommand);
                 var token = valuePlaceholder is null ? names : $"{names} {valuePlaceholder}";
                 Console.WriteLine($"  {token}");
                 Console.WriteLine($"      {description}");
@@ -444,7 +444,7 @@ public static partial class ConsoleUi
     private static string RenderUsageLineFromSchema(string command, string usage)
     {
         var schemaCommand = GetFlagSchemaCommandName(command);
-        foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(schemaCommand))
+        foreach (var flag in CliFlagSchema.GetHelpFlagsForCommand(schemaCommand))
         {
             if (flag.ValueDomain is null
                 && flag.CommandValueDomains.Count == 0
