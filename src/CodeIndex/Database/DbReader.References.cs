@@ -21,7 +21,7 @@ public partial class DbReader
     /// Search indexed references such as call sites.
     /// 呼び出し箇所などのインデックス済み参照を検索する。
     /// </summary>
-    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, bool excludeSelfReferences = false, int offset = 0)
+    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, bool excludeSelfReferences = false, int offset = 0, bool includeQualifiedCommonCalls = false)
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         lang = NormalizeQueryLanguage(lang);
@@ -30,7 +30,7 @@ public partial class DbReader
             return new List<ReferenceResult>();
 
         if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
-            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, maxLineWidth, excludeSelfReferences);
+            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, maxLineWidth, excludeSelfReferences, includeQualifiedCommonCalls);
 
         var rawLimit = Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize);
         var rawOffset = 0;
@@ -39,7 +39,7 @@ public partial class DbReader
         var filtered = new List<ReferenceResult>();
         while (filtered.Count < limit)
         {
-            var rawResults = SearchReferencesCore(query, rawLimit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawOffset, maxLineWidth, excludeSelfReferences);
+            var rawResults = SearchReferencesCore(query, rawLimit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawOffset, maxLineWidth, excludeSelfReferences, includeQualifiedCommonCalls);
             if (rawResults.Count == 0)
                 break;
 
@@ -70,9 +70,9 @@ public partial class DbReader
         return filtered.Count <= limit ? filtered : filtered.Take(limit).ToList();
     }
 
-    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth, bool excludeSelfReferences, long? targetSymbolId = null)
+    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth, bool excludeSelfReferences, bool includeQualifiedCommonCalls, long? targetSymbolId = null)
     {
-        using var cmd = CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering: true, excludeSelfReferences, targetSymbolId);
+        using var cmd = CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering: true, excludeSelfReferences, includeQualifiedCommonCalls, targetSymbolId);
         var results = new List<ReferenceResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -127,6 +127,7 @@ public partial class DbReader
             offset,
             maxLineWidth,
             excludeSelfReferences: false,
+            includeQualifiedCommonCalls: false,
             targetSymbolId: symbolId);
     }
 
@@ -151,6 +152,7 @@ public partial class DbReader
             offset: 0,
             includeOrdering: false,
             excludeSelfReferences: false,
+            includeQualifiedCommonCalls: false,
             targetSymbolId: symbolId);
         cmd.CommandText = $"SELECT COUNT(*) FROM ({cmd.CommandText})";
         var raw = cmd.ExecuteScalar();
@@ -265,10 +267,10 @@ public partial class DbReader
         return new ReferencePositionResolution(true, truncated, candidates);
     }
 
-    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true, bool excludeSelfReferences = false)
-        => CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering, excludeSelfReferences, targetSymbolId: null);
+    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true, bool excludeSelfReferences = false, bool includeQualifiedCommonCalls = false)
+        => CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering, excludeSelfReferences, includeQualifiedCommonCalls, targetSymbolId: null);
 
-    private SqliteCommand CreateSearchReferencesCommandCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, bool includeOrdering, bool excludeSelfReferences, long? targetSymbolId)
+    private SqliteCommand CreateSearchReferencesCommandCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, bool includeOrdering, bool excludeSelfReferences, bool includeQualifiedCommonCalls, long? targetSymbolId)
     {
         var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
@@ -426,6 +428,12 @@ public partial class DbReader
                 ? " AND (f.lang = @lang OR f.lang = 'ambiguous_m')"
                 : " AND f.lang = @lang";
         }
+        sql += BuildCSharpBareMemberReferenceFilter(
+            query ?? string.Empty,
+            lang,
+            "f",
+            "r",
+            includeQualifiedCommonCalls);
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
         {
@@ -680,7 +688,7 @@ public partial class DbReader
         return $"{parentQualifiedName}.{name}";
     }
 
-    private QueryCountResult CountSearchReferencesTotalWithUsingStaticFilter(string? query, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact)
+    private QueryCountResult CountSearchReferencesTotalWithUsingStaticFilter(string? query, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool includeQualifiedCommonCalls)
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
@@ -701,7 +709,8 @@ public partial class DbReader
                 excludePathPatterns,
                 excludeTests,
                 exact,
-                rawOffset);
+                rawOffset,
+                includeQualifiedCommonCalls: includeQualifiedCommonCalls);
             using var reader = cmd.ExecuteTrackedReader();
 
             var rawRows = 0;
@@ -727,11 +736,11 @@ public partial class DbReader
         return new QueryCountResult(count, paths.Count, includesSql);
     }
 
-    public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool includeQualifiedCommonCalls = false)
     {
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
-            return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact).Count;
+            return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, includeQualifiedCommonCalls: includeQualifiedCommonCalls).Count;
 
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
@@ -815,6 +824,12 @@ public partial class DbReader
             innerSql += " AND r.reference_kind = @referenceKind";
         if (lang != null)
             innerSql += " AND f.lang = @lang";
+        innerSql += BuildCSharpBareMemberReferenceFilter(
+            query ?? string.Empty,
+            lang,
+            "f",
+            "r",
+            includeQualifiedCommonCalls);
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
             innerSql += $" GROUP BY r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
@@ -854,12 +869,12 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool includeQualifiedCommonCalls = false)
     {
         lang = NormalizeQueryLanguage(lang);
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
-            return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
+            return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, includeQualifiedCommonCalls);
 
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
@@ -957,6 +972,12 @@ public partial class DbReader
             innerSql += " AND r.reference_kind = @referenceKind";
         if (lang != null)
             innerSql += " AND f.lang = @lang";
+        innerSql += BuildCSharpBareMemberReferenceFilter(
+            query ?? string.Empty,
+            lang,
+            "f",
+            "r",
+            includeQualifiedCommonCalls);
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
             innerSql += $" GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";

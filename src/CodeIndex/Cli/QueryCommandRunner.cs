@@ -165,6 +165,7 @@ public sealed class QueryCommandOptions
     public int? MaxJsonBytes { get; init; }
     public bool RawBytes { get; init; }
     public bool RawKinds { get; init; }
+    public bool IncludeQualifiedCommonCalls { get; init; }
     public bool Verbose { get; init; }
     public bool Profile { get; init; }
     public int? SlowQueryMs { get; init; }

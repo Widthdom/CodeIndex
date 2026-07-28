@@ -115,6 +115,7 @@ public static partial class QueryCommandRunner
         private int? maxJsonBytes;
         private bool rawBytes;
         private bool rawKinds;
+        private bool includeQualifiedCommonCalls;
         private bool verbose;
         private bool profile;
         private int? slowQueryMs;
@@ -474,6 +475,7 @@ public static partial class QueryCommandRunner
                 MaxJsonBytes = maxJsonBytes,
                 RawBytes = rawBytes,
                 RawKinds = rawKinds,
+                IncludeQualifiedCommonCalls = includeQualifiedCommonCalls,
                 Verbose = verbose,
                 Profile = profile,
                 SlowQueryMs = slowQueryMs,

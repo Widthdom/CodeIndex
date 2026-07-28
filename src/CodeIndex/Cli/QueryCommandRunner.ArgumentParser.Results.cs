@@ -239,6 +239,9 @@ public static partial class QueryCommandRunner
                 case "--raw-kinds":
                     rawKinds = true;
                     break;
+                case "--include-qualified-common-calls":
+                    includeQualifiedCommonCalls = true;
+                    break;
                 case "--verbose":
                     verbose = true;
                     break;
