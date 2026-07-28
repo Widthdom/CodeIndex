@@ -1039,16 +1039,27 @@ public class LspServerTests
             [
                 "using System.Collections.Generic;",
                 "namespace Sample.Tools;",
-                "internal sealed record App<T>(T Value)",
+                "internal interface IFoo { void Execute(); string Label { get; } }",
+                "internal enum Color { Red, Blue = 2 }",
+                "internal readonly record struct Point(int X);",
+                "internal sealed record App<T>(T Value) : IFoo",
                 "{",
                 "    private const int Count = 1;",
+                "    private int value;",
                 "    public string Name { get; init; } = string.Empty;",
+                "    public event Action Changed;",
                 "    public void Run<TArg>(TArg input) where TArg : notnull",
                 "    {",
+                "        int first = 0, second = 1;",
+                "        this.value = input.GetHashCode();",
                 "        var local = new List<TArg>();",
+                "        var text = $\"{input}\";",
+                "        Changed?.Invoke();",
                 "        Helper(input);",
                 "    }",
-                "    private void Helper(T value) { }",
+                "    void IFoo.Execute() { }",
+                "    string IFoo.Label => Name;",
+                "    private void Helper(T value) { _ = $\"{value}\"; }",
                 "}",
             ]);
             File.WriteAllText(sourcePath, source);
@@ -1073,23 +1084,39 @@ public class LspServerTests
             AssertSemanticToken(tokens, 1, "namespace", 15, 0);
             AssertSemanticToken(tokens, 1, "Sample", 0, 0);
             AssertSemanticToken(tokens, 2, "internal", 16, 0);
-            AssertSemanticToken(tokens, 2, "sealed", 16, 0);
-            AssertSemanticToken(tokens, 2, "record", 15, 0);
-            AssertSemanticToken(tokens, 2, "App", 2, 1);
-            AssertSemanticToken(tokens, 2, "T", 6, 1);
-            AssertSemanticToken(tokens, 2, "Value", 7, 1);
-            AssertSemanticToken(tokens, 4, "private", 16, 0);
-            AssertSemanticToken(tokens, 4, "Count", 23, 1);
-            AssertSemanticToken(tokens, 5, "Name", 9, 1);
-            AssertSemanticToken(tokens, 5, "get", 15, 0);
-            AssertSemanticToken(tokens, 5, "init", 15, 0);
-            AssertSemanticToken(tokens, 6, "Run", 13, 1);
-            AssertSemanticToken(tokens, 6, "TArg", 6, 1);
-            AssertSemanticToken(tokens, 6, "input", 7, 1);
-            AssertSemanticToken(tokens, 6, "where", 15, 0);
-            AssertSemanticToken(tokens, 8, "local", 8, 1);
-            AssertSemanticToken(tokens, 9, "Helper", 13, 0);
-            AssertSemanticToken(tokens, 9, "input", 7, 0);
+            AssertSemanticToken(tokens, 2, "IFoo", 4, 1);
+            AssertSemanticToken(tokens, 3, "Color", 3, 1);
+            AssertSemanticToken(tokens, 3, "Red", 10, 1);
+            AssertSemanticToken(tokens, 3, "Blue", 10, 1);
+            AssertSemanticToken(tokens, 4, "Point", 5, 1);
+            AssertSemanticToken(tokens, 5, "sealed", 16, 0);
+            AssertSemanticToken(tokens, 5, "record", 15, 0);
+            AssertSemanticToken(tokens, 5, "App", 2, 1);
+            AssertSemanticToken(tokens, 5, "T", 6, 1);
+            AssertSemanticToken(tokens, 5, "Value", 7, 1);
+            AssertSemanticToken(tokens, 7, "private", 16, 0);
+            AssertSemanticToken(tokens, 7, "Count", 23, 1);
+            AssertSemanticToken(tokens, 8, "value", 23, 1);
+            AssertSemanticToken(tokens, 9, "Name", 9, 1);
+            AssertSemanticToken(tokens, 9, "get", 15, 0);
+            AssertSemanticToken(tokens, 9, "init", 15, 0);
+            AssertSemanticToken(tokens, 10, "Changed", 11, 1);
+            AssertSemanticToken(tokens, 11, "Run", 13, 1);
+            AssertSemanticToken(tokens, 11, "TArg", 6, 1);
+            AssertSemanticToken(tokens, 11, "input", 7, 1);
+            AssertSemanticToken(tokens, 11, "where", 15, 0);
+            AssertSemanticToken(tokens, 13, "first", 8, 1);
+            AssertSemanticToken(tokens, 13, "second", 8, 1);
+            AssertSemanticToken(tokens, 14, "value", 23, 0);
+            AssertSemanticToken(tokens, 14, "input", 7, 0);
+            AssertSemanticToken(tokens, 15, "local", 8, 1);
+            AssertSemanticToken(tokens, 16, "input", 7, 0);
+            AssertSemanticToken(tokens, 17, "Changed", 11, 0);
+            AssertSemanticToken(tokens, 18, "Helper", 13, 0);
+            AssertSemanticToken(tokens, 20, "Execute", 13, 1);
+            AssertSemanticToken(tokens, 21, "Label", 9, 1);
+            AssertSemanticToken(tokens, 22, "value", 7, 1);
+            AssertSemanticToken(tokens, 22, "value", 7, 0);
             Assert.DoesNotContain(
                 tokens.SelectMany((left, index) => tokens.Skip(index + 1).Select(right => (left, right))),
                 pair =>
@@ -1099,6 +1126,50 @@ public class LspServerTests
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_SemanticTokens_FallsBackToIndexedCSharpSymbolsWhenSourceReadFails_Issue4852()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_semantic_tokens_fallback_4852");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            const string source = "internal sealed class App { public void Run() { } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+
+            JsonObject? response;
+            try
+            {
+                LspServer.PositionFileLengthCheckedForTesting = _ =>
+                    throw new IOException("Injected semantic-token source read failure.");
+                response = HandleInitializedMessage(
+                    server,
+                    CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 48521));
+            }
+            finally
+            {
+                LspServer.PositionFileLengthCheckedForTesting = null;
+            }
+
+            Assert.NotNull(response);
+            var tokens = DecodeSemanticTokens(response!["result"]!["data"]!.AsArray(), source);
+            AssertSemanticToken(tokens, 0, "App", 2, 1);
+            AssertSemanticToken(tokens, 0, "Run", 13, 1);
+        }
+        finally
+        {
+            LspServer.PositionFileLengthCheckedForTesting = null;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

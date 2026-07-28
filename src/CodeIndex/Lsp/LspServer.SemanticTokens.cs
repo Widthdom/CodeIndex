@@ -22,7 +22,11 @@ internal sealed partial class LspServer : IDisposable
     private IEnumerable<SemanticToken> BuildCSharpSemanticTokens(IndexedDocumentContext document)
     {
         if (!TryReadAllPositionLines(document.ResolvedPath, out var sourceLines))
+        {
+            foreach (var indexedToken in BuildIndexedSemanticTokens(document))
+                yield return indexedToken;
             yield break;
+        }
 
         foreach (var token in CSharpSemanticTokenClassifier.Classify(sourceLines, MaxSemanticTokenItems))
         {

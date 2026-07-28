@@ -233,11 +233,24 @@ public static partial class QueryCommandRunner
             ? reader.GetIndexedSourceLinesForSemanticTokens(excerpt.Path)
             : [];
         var classifiesIndexedSource = indexedSourceLines.Count > 0;
+        var includedSourceLines = classifiesIndexedSource
+            ? spans
+                .Where(span => span.SourceLine > 0)
+                .Select(span => span.SourceLine - 1)
+                .ToHashSet()
+            : null;
         var classifiedCSharpTokens = isCSharp
             ? CSharpSemanticTokenClassifier.Classify(
                 classifiesIndexedSource ? indexedSourceLines : lines,
+                CSharpSemanticTokenClassifier.DefaultExcerptTokenLimit,
+                includedSourceLines)
+            : [];
+        var visibleCSharpTokens = isCSharp && classifiesIndexedSource
+            ? CSharpSemanticTokenClassifier.Classify(
+                lines,
                 CSharpSemanticTokenClassifier.DefaultExcerptTokenLimit)
             : [];
+        var csharpTokenRanges = new HashSet<(int Line, int StartColumn, int EndColumn)>();
         foreach (var span in spans)
         {
             if (span.ContentLine <= 0 || span.ContentLine > lines.Length)
@@ -269,15 +282,25 @@ public static partial class QueryCommandRunner
                     var sourceStartColumn = span.SourceStartColumn +
                         token.StartCharacter -
                         classifiedStartColumn;
-                    tokens.Add(new ExcerptSemanticToken
+                    AddCSharpToken(token, sourceStartColumn);
+                }
+
+                if (classifiesIndexedSource)
+                {
+                    foreach (var token in visibleCSharpTokens)
                     {
-                        StartLine = span.SourceLine,
-                        StartColumn = sourceStartColumn,
-                        EndLine = span.SourceLine,
-                        EndColumn = sourceStartColumn + token.Length,
-                        Type = CSharpSemanticTokenClassifier.ToProtocolName(token.Kind),
-                        Modifiers = token.IsDeclaration ? ["declaration"] : [],
-                    });
+                        if (token.Line != span.ContentLine - 1 ||
+                            token.StartCharacter < startColumn ||
+                            token.StartCharacter + token.Length > endColumn)
+                        {
+                            continue;
+                        }
+
+                        var sourceStartColumn = span.SourceStartColumn +
+                            token.StartCharacter -
+                            startColumn;
+                        AddCSharpToken(token, sourceStartColumn);
+                    }
                 }
                 continue;
             }
@@ -306,6 +329,31 @@ public static partial class QueryCommandRunner
                     EndLine = span.SourceLine,
                     EndColumn = sourceEndColumn,
                     Type = ClassifySemanticToken(tokenText),
+                });
+            }
+
+            void AddCSharpToken(
+                ClassifiedCSharpSemanticToken token,
+                int sourceStartColumn)
+            {
+                var sourceEndColumn = sourceStartColumn + token.Length;
+                if (tokens.Count >= CSharpSemanticTokenClassifier.DefaultExcerptTokenLimit ||
+                    !csharpTokenRanges.Add((
+                        span.SourceLine,
+                        sourceStartColumn,
+                        sourceEndColumn)))
+                {
+                    return;
+                }
+
+                tokens.Add(new ExcerptSemanticToken
+                {
+                    StartLine = span.SourceLine,
+                    StartColumn = sourceStartColumn,
+                    EndLine = span.SourceLine,
+                    EndColumn = sourceEndColumn,
+                    Type = CSharpSemanticTokenClassifier.ToProtocolName(token.Kind),
+                    Modifiers = token.IsDeclaration ? ["declaration"] : [],
                 });
             }
         }
