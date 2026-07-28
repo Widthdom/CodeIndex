@@ -118,6 +118,16 @@ public class McpToolContractTests
                 McpServer.MaxMcpQueryCursorCharacters,
                 properties["cursor"]["maxLength"]!.GetValue<int>());
         }
+
+        var validateDescription = GetAdvertisedTools()["validate"]["description"]!.GetValue<string>();
+        Assert.Contains(
+            "authoritative only while `file_issues_data_current` is true",
+            validateDescription,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`file_issues_data_current` が true の間だけ authoritative",
+            validateDescription,
+            StringComparison.Ordinal);
     }
 
     [Fact]

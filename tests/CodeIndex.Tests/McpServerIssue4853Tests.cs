@@ -267,11 +267,17 @@ public partial class McpServerTests
         Assert.True(stale["retry_safe"]!.GetValue<bool>());
 
         validateArguments.Remove("cursor");
-        var degraded = CallIssue4853Tool(
+        var degradedResponse = CallIssue4853ToolResponse(
             readinessDemotedServer,
             "validate",
             validateArguments,
             id: 22);
+        Assert.Null(degradedResponse["error"]);
+        Assert.False(degradedResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+        Assert.Equal(
+            "Validation issue data is not current; results are non-authoritative.",
+            degradedResponse["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var degraded = degradedResponse["result"]!["structuredContent"]!.AsObject();
         Assert.Equal(0, degraded["total_count"]!.GetValue<int>());
         Assert.False(degraded["total_count_authoritative"]!.GetValue<bool>());
         Assert.True(degraded["issues_table_available"]!.GetValue<bool>());

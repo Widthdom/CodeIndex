@@ -1291,11 +1291,15 @@ public partial class McpServer
                     generation,
                     totalCountAuthoritative: issuesDataCurrent);
             }
-            var summary = issues.Count > 0
-                ? $"Found {issues.Count} encoding issue(s)."
-                : total > 0
-                    ? "No more encoding issues found."
-                    : "No encoding issues found.";
+            var summary = !issuesDataCurrent
+                ? issuesTableAvailable
+                    ? "Validation issue data is not current; results are non-authoritative."
+                    : "Validation issue data is unavailable; results are non-authoritative."
+                : issues.Count > 0
+                    ? $"Found {issues.Count} encoding issue(s)."
+                    : total > 0
+                        ? "No more encoding issues found."
+                        : "No encoding issues found.";
             adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         }));
