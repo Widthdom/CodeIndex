@@ -230,8 +230,8 @@ internal sealed partial class LspServer : IDisposable
                 pathPatterns: [document.IndexedPath]);
         }
 
-        var language = FileIndexer.DetectLanguage(document.ResolvedPath);
-        if (language == null)
+        var language = _reader.GetFileByPath(document.IndexedPath)?.Lang;
+        if (string.IsNullOrWhiteSpace(language))
         {
             return _reader.SearchSymbols(
                 (string?)null,

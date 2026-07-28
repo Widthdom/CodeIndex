@@ -430,8 +430,9 @@ must read that live cache before disk so unsaved editor buffers can identify the
 requested token. Provider results remain conservative and index-backed except
 that document symbols for an indexed document may be structurally re-extracted
 from the bounded live buffer through the normal language extractor and container
-pipeline. Other providers return empty arrays or null when the database cannot
-answer safely instead of inventing language-server analysis.
+pipeline, using the indexed file's authoritative language rather than
+re-detecting it from the path. Other providers return empty arrays or null when
+the database cannot answer safely instead of inventing language-server analysis.
 Disk-backed position-line caching must enforce its 4 MiB input limit while
 streaming, not only through a pre-read `Length` check. Bytes beyond the limit
 must never reach text decoding, including when a shared file grows concurrently,
@@ -3632,9 +3633,10 @@ editor integration は標準的な location 形状を直接要求できる。`de
 上限付きの in-memory cache にだけ保持する。position-based provider は未保存 editor buffer から
 request token を特定できるよう disk より先に live cache を読む必要がある。provider result は
 保守的かつ index-backed のままとするが、indexed document の document symbol だけは上限付きの
-live buffer を通常の language extractor と container pipeline で構造的に再抽出できる。それ以外の
-provider は database が安全に答えられない場合、language-server analysis を作り上げず、空配列
-または null を返す。
+live buffer を通常の language extractor と container pipeline で構造的に再抽出できる。このとき
+path から再判定せず、indexed file の authoritative language を使う。それ以外の provider は
+database が安全に答えられない場合、language-server analysis を作り上げず、空配列または null を
+返す。
 disk 上の position-line cache は、事前の `Length` check だけでなく streaming 中も 4 MiB の
 input 上限を強制する必要がある。共有 file が同時に増大する場合も上限超過 byte を text decode に
 渡してはならず、bounded な failure reason は `position_file_too_large` のままとする。

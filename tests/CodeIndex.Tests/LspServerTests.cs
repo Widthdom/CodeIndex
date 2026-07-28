@@ -2113,6 +2113,37 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_DocumentSymbol_UsesIndexedLanguageForLiveContentSensitiveExtension_Issue4851()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_live_indexed_language");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const string indexedSource = "class IndexedType {\npublic:\n    void indexed();\n};\n";
+            const string liveSource = "class LiveType {\npublic:\n    void live();\n};\n";
+            var sourcePath = TestProjectHelper.WriteTextFile(projectRoot, "sample.h", indexedSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "sample.h", "cpp", indexedSource);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, indexedSource, version: 1)));
+            Assert.Null(server.HandleMessage(CreateDidChangeRequest(sourcePath, liveSource, version: 2)));
+
+            var response = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48514));
+
+            Assert.NotNull(response);
+            var liveType = Assert.Single(response!["result"]!.AsArray());
+            Assert.Equal("LiveType", liveType!["name"]!.GetValue<string>());
+            var liveMethod = Assert.Single(liveType["children"]!.AsArray());
+            Assert.Equal("live", liveMethod!["name"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_DocumentSymbol_NestsSameStartLongerContainerBeforeChild_Issue3537()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_same_start_container");
