@@ -63,7 +63,7 @@ public static class DiffCommandRunner
 
         try
         {
-            var result = CompareDatabases(options, cancellationToken);
+            var result = CompareDatabases(options, jsonOptions, cancellationToken);
             if (options.CursorSelectionFingerprint is { } cursorSelectionFingerprint
                 && (result.SelectionFingerprint is not { } currentSelectionFingerprint
                     || !DiffCursorCodec.FixedTimeEquals(
@@ -156,7 +156,7 @@ public static class DiffCommandRunner
             IncludeContent = includeContent,
             EmitCursorMetadata = emitCursorMetadata,
         };
-        var result = CompareDatabases(options, cancellationToken);
+        var result = CompareDatabasesCore(options, cancellationToken, materializationJsonContext: null);
         return result with
         {
             LeftDb = leftDisplayPath is null
@@ -168,7 +168,19 @@ public static class DiffCommandRunner
         };
     }
 
-    private static DiffJsonResult CompareDatabases(DiffCommandOptions options, CancellationToken cancellationToken)
+    internal static DiffJsonResult CompareDatabases(
+        DiffCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
+        => CompareDatabasesCore(
+            options,
+            cancellationToken,
+            CliJsonSerializerContextFactory.Create(jsonOptions));
+
+    private static DiffJsonResult CompareDatabasesCore(
+        DiffCommandOptions options,
+        CancellationToken cancellationToken,
+        CliJsonSerializerContext? materializationJsonContext)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var leftHeader = ReadHeader(options.LeftDb!);
@@ -176,7 +188,12 @@ public static class DiffCommandRunner
         var rightHeader = ReadHeader(options.RightDb!);
         return leftHeader.SchemaVersion != rightHeader.SchemaVersion
             ? BuildSchemaMismatchDiff(leftHeader, rightHeader, options)
-            : BuildDiff(leftHeader, rightHeader, options, cancellationToken);
+            : BuildDiff(
+                leftHeader,
+                rightHeader,
+                options,
+                materializationJsonContext,
+                cancellationToken);
     }
 
     private const string FilePathRowsSql = "SELECT path FROM files ORDER BY path";
@@ -426,7 +443,12 @@ public static class DiffCommandRunner
             symbol_references.container_name_folded
         """;
 
-    private static DiffJsonResult BuildDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options, CancellationToken cancellationToken)
+    private static DiffJsonResult BuildDiff(
+        DiffDbHeader left,
+        DiffDbHeader right,
+        DiffCommandOptions options,
+        CliJsonSerializerContext? materializationJsonContext,
+        CancellationToken cancellationToken)
     {
         var summary = new DiffSummaryJsonResult(
             left.FileCount,
@@ -481,7 +503,8 @@ public static class DiffCommandRunner
                 options.IncludeContent,
                 options.Json
                     ? options.MaxJsonBytes ?? DefaultDiffJsonBytes
-                    : null)
+                    : null,
+                materializationJsonContext)
             : null;
         if (collector is not null)
         {
@@ -603,9 +626,9 @@ public static class DiffCommandRunner
             hasMore = collector.TotalCount > (long)options.Offset + records.Count;
             truncated = omittedCount > 0;
             truncationReason = truncated ? "limit_or_offset" : null;
-            selectionFingerprint = collector.CompleteSelectionFingerprint();
             if (options.EmitCursorMetadata)
             {
+                selectionFingerprint = collector.CompleteSelectionFingerprint();
                 currentCursor = DiffCursorCodec.Encode(options.Offset, selectionFingerprint);
                 if (hasMore && records.Count > 0)
                 {
@@ -706,7 +729,7 @@ public static class DiffCommandRunner
             left.SchemaVersion,
             right.SchemaVersion,
             false);
-        var selectionFingerprint = options.Detailed
+        var selectionFingerprint = options.Detailed && options.EmitCursorMetadata
             ? DiffCursorCodec.CreateSelectionFingerprint(options.LeftDb!, options.RightDb!, options.IncludeContent)
             : null;
         var currentCursor = selectionFingerprint is null || !options.EmitCursorMetadata
@@ -1500,6 +1523,7 @@ public static class DiffCommandRunner
         private readonly int _limit;
         private readonly bool _includeContent;
         private readonly int? _materializationByteBudget;
+        private readonly CliJsonSerializerContext _materializationJsonContext;
         private readonly IncrementalHash _selectionHash;
         private long _materializedRecordBytes;
         private bool _materializationBudgetReached;
@@ -1511,12 +1535,15 @@ public static class DiffCommandRunner
             int offset,
             int limit,
             bool includeContent,
-            int? materializationByteBudget)
+            int? materializationByteBudget,
+            CliJsonSerializerContext? materializationJsonContext)
         {
             _offset = offset;
             _limit = limit;
             _includeContent = includeContent;
             _materializationByteBudget = materializationByteBudget;
+            _materializationJsonContext = materializationJsonContext
+                ?? CliJsonSerializerContext.Default;
             _selectionHash = DiffCursorCodec.CreateSelectionHash(leftDb, rightDb, includeContent);
         }
 
@@ -1549,7 +1576,7 @@ public static class DiffCommandRunner
                 {
                     var recordBytes = JsonSerializer.SerializeToUtf8Bytes(
                         record,
-                        CliJsonSerializerContext.Default.DiffRecordJsonResult).LongLength;
+                        _materializationJsonContext.DiffRecordJsonResult).LongLength;
                     Records.Add(record);
                     _materializedRecordBytes = checked(_materializedRecordBytes + recordBytes);
                     _materializationBudgetReached =

@@ -1246,6 +1246,7 @@ public class ExportImportCommandRunnerTests
             Assert.False(comparison.TryGetProperty("current_cursor", out _));
             Assert.False(comparison.TryGetProperty("next_cursor", out _));
             Assert.False(comparison.TryGetProperty("replay", out _));
+            Assert.False(comparison.TryGetProperty("selection_fingerprint", out _));
             Assert.Equal(1, comparison.GetProperty("next_offset").GetInt32());
             Assert.DoesNotContain("public class Imported", stdout, StringComparison.Ordinal);
             Assert.DoesNotContain("public class Existing", stdout, StringComparison.Ordinal);

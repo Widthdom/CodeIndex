@@ -389,6 +389,109 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void CompareDatabases_PrettyMaterializationUsesActiveJsonSize_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_pretty_bound_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_pretty_bound_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            for (var i = 0; i < 30; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    leftDb,
+                    $"src/PrettyBound{i:00}.cs",
+                    "csharp",
+                    $"public class PrettyBound{i:00} {{ public string Value => \"{new string('x', 128)}\"; }}");
+            }
+
+            var prettyOptions = new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+                WriteIndented = true,
+            };
+            const int byteBudget = DiffCommandRunner.MinDiffJsonBytes;
+            var complete = DiffCommandRunner.CompareDatabases(
+                new DiffCommandOptions
+                {
+                    LeftDb = leftDb,
+                    RightDb = rightDb,
+                    Json = true,
+                    Detailed = true,
+                    Limit = 100,
+                    MaxJsonBytes = DiffCommandRunner.MaxDiffJsonBytes,
+                },
+                prettyOptions,
+                CancellationToken.None);
+            var expectedRetained = GetMaterializedRecordCount(
+                complete.Records ?? [],
+                byteBudget,
+                CliJsonSerializerContextFactory.Create(prettyOptions));
+            var compactRetained = GetMaterializedRecordCount(
+                complete.Records ?? [],
+                byteBudget,
+                CliJsonSerializerContext.Default);
+
+            var bounded = DiffCommandRunner.CompareDatabases(
+                new DiffCommandOptions
+                {
+                    LeftDb = leftDb,
+                    RightDb = rightDb,
+                    Json = true,
+                    Detailed = true,
+                    Limit = 100,
+                    MaxJsonBytes = byteBudget,
+                },
+                prettyOptions,
+                CancellationToken.None);
+
+            Assert.True(expectedRetained < complete.Records!.Count);
+            Assert.True(expectedRetained < compactRetained);
+            Assert.Equal(expectedRetained, bounded.Records!.Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void CompareDatabases_EmbeddedSchemaMismatchOmitsCursorSelectionMetadata_Issue4859()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_embedded_schema_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_embedded_schema_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            ExecuteNonQuery(rightDb, "PRAGMA user_version = 999");
+
+            var result = DiffCommandRunner.CompareDatabases(
+                leftDb,
+                rightDb,
+                limit: 10,
+                offset: 0,
+                detailed: true,
+                CancellationToken.None,
+                emitCursorMetadata: false);
+
+            Assert.Equal("schema_mismatch", result.Status);
+            Assert.Null(result.SelectionFingerprint);
+            Assert.Null(result.CurrentCursor);
+            Assert.Null(result.NextCursor);
+            Assert.Null(result.Replay);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DetailedJsonLimitZeroWithholdsNonAdvancingReplay_Issue4859()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_zero_limit_left");
@@ -1519,6 +1622,24 @@ public class DiffCommandRunnerTests
             record.GetProperty("fields")
                 .EnumerateArray()
                 .Where(field => field.GetProperty("name").GetString() == name));
+
+    private static int GetMaterializedRecordCount(
+        List<DiffRecordJsonResult> records,
+        int byteBudget,
+        CliJsonSerializerContext context)
+    {
+        long materializedBytes = 0;
+        for (var i = 0; i < records.Count; i++)
+        {
+            materializedBytes += JsonSerializer.SerializeToUtf8Bytes(
+                records[i],
+                context.DiffRecordJsonResult).LongLength;
+            if (materializedBytes > byteBudget)
+                return i + 1;
+        }
+
+        return records.Count;
+    }
 
     private (int ExitCode, string Output) RunWithCapturedOut(string[] args, CancellationToken cancellationToken = default)
     {
