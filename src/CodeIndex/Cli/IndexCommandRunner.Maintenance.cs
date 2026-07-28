@@ -88,7 +88,8 @@ public static partial class IndexCommandRunner
             projectPath: null,
             options.DryRun,
             forceLogicalObjectSizeFallbackForTesting,
-            options.ShowPaths);
+            options.ShowPaths,
+            diagnosticDbPath: options.DbPath);
     }
 
     private static int RunOptimizeFtsForDb(
@@ -98,33 +99,36 @@ public static partial class IndexCommandRunner
         string? projectPath,
         bool dryRun = false,
         bool forceLogicalObjectSizeFallbackForTesting = false,
-        bool showPaths = false)
+        bool showPaths = false,
+        string? diagnosticDbPath = null)
     {
+        var errorDbPath = diagnosticDbPath ?? dbPath;
         if (dryRun)
             return RunOptimizeFtsPreviewForDb(
                 dbPath,
                 json,
                 jsonOptions,
                 forceLogicalObjectSizeFallbackForTesting,
-                showPaths);
+                showPaths,
+                errorDbPath);
 
         if (!DbContext.TryValidateExistingCodeIndexDb(
                 dbPath,
                 requireWritable: true,
                 requireSupportedUserVersion: false,
                 out _,
-                out var isNotFound,
-                out var isSchemaTooNew,
+                out _,
+                out _,
+                out var validationFailure,
                 out var validationException))
             return MaintenanceDatabaseErrorWriter.Write(
                 json,
                 jsonOptions,
                 MaintenanceDatabaseErrorClassifier.FromValidation(
                     "optimize",
-                    dbPath,
+                    errorDbPath,
                     showPaths,
-                    isNotFound,
-                    isSchemaTooNew,
+                    validationFailure,
                     validationException));
 
         var stopwatch = Stopwatch.StartNew();
@@ -158,16 +162,20 @@ public static partial class IndexCommandRunner
 
             return CommandExitCodes.Success;
         }
-        catch (IndexLockConflictException)
+        catch (IndexLockConflictException ex)
         {
+            var holderDescription = DescribeLockHolder(ex.Holder);
             return MaintenanceDatabaseErrorWriter.Write(
                 json,
                 jsonOptions,
                 MaintenanceDatabaseErrorClassifier.Create(
                     "optimize",
-                    dbPath,
+                    errorDbPath,
                     showPaths,
-                    MaintenanceDatabaseFailureKind.Locked));
+                    MaintenanceDatabaseFailureKind.Locked,
+                    details: string.IsNullOrEmpty(holderDescription)
+                        ? null
+                        : [holderDescription]));
         }
         catch (Exception ex)
         {
@@ -179,7 +187,7 @@ public static partial class IndexCommandRunner
                 jsonOptions,
                 MaintenanceDatabaseErrorClassifier.FromException(
                     "optimize",
-                    dbPath,
+                    errorDbPath,
                     showPaths,
                     ex));
         }
@@ -190,7 +198,8 @@ public static partial class IndexCommandRunner
         bool json,
         JsonSerializerOptions jsonOptions,
         bool forceLogicalObjectSizeFallbackForTesting,
-        bool showPaths)
+        bool showPaths,
+        string errorDbPath)
     {
         var stopwatch = Stopwatch.StartNew();
         if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
@@ -200,7 +209,7 @@ public static partial class IndexCommandRunner
                 jsonOptions,
                 MaintenanceDatabaseErrorClassifier.Create(
                     "optimize",
-                    dbPath,
+                    errorDbPath,
                     showPaths,
                     MaintenanceDatabaseFailureKind.Missing));
         }
@@ -216,7 +225,7 @@ public static partial class IndexCommandRunner
                     jsonOptions,
                     MaintenanceDatabaseErrorClassifier.Create(
                         "optimize",
-                        dbPath,
+                        errorDbPath,
                         showPaths,
                         MaintenanceDatabaseFailureKind.NotDatabase));
             }
@@ -345,7 +354,7 @@ public static partial class IndexCommandRunner
                 jsonOptions,
                 MaintenanceDatabaseErrorClassifier.FromException(
                     "optimize",
-                    dbPath,
+                    errorDbPath,
                     showPaths,
                     ex));
         }
@@ -539,8 +548,9 @@ public static partial class IndexCommandRunner
                 requireWritable: !options.DryRun,
                 requireSupportedUserVersion: false,
                 out _,
-                out var isNotFound,
-                out var isSchemaTooNew,
+                out _,
+                out _,
+                out var validationFailure,
                 out var validationException))
             return MaintenanceDatabaseErrorWriter.Write(
                 options.Json,
@@ -549,8 +559,7 @@ public static partial class IndexCommandRunner
                     "backfill-fold",
                     options.DbPath,
                     options.ShowPaths,
-                    isNotFound,
-                    isSchemaTooNew,
+                    validationFailure,
                     validationException));
 
         try

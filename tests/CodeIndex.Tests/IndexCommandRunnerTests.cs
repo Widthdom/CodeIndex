@@ -5882,8 +5882,7 @@ public sealed class Caller
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
 
-            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
-            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            using (var holder = IndexLock.Acquire(lockPath, Path.GetDirectoryName(dbPath)!))
             {
                 int previewExitCode;
                 JsonElement previewJson;
@@ -5935,6 +5934,9 @@ public sealed class Caller
                 Assert.Contains("retry with backoff", json.GetProperty("hint").GetString());
                 Assert.Equal("<redacted>", json.GetProperty("path").GetString());
                 Assert.True(json.GetProperty("path_redacted").GetBoolean());
+                var detail = Assert.Single(json.GetProperty("details").EnumerateArray());
+                Assert.Contains($"PID {Environment.ProcessId}", detail.GetString());
+                Assert.DoesNotContain(dbPath, detail.GetString(), StringComparison.Ordinal);
             }
         }
         finally
@@ -5943,6 +5945,73 @@ public sealed class Caller
             DeleteFile(dbPath);
             DeleteFile(lockPath + ".info");
             DeleteFile(lockPath);
+        }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_MissingRelativePath_PreservesCallerSpelling_Issue4856()
+    {
+        var dbPath = $"cdidx_optimize_relative_missing_{Guid.NewGuid():N}.db";
+        try
+        {
+            int exitCode;
+            JsonElement json;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandErrorCodes.DbNotFound, json.GetProperty("error_code").GetString());
+            Assert.Equal(dbPath, json.GetProperty("path").GetString());
+            Assert.False(json.GetProperty("path_redacted").GetBoolean());
+        }
+        finally
+        {
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_IndexOptimizeMissingDatabase_RedactsHumanPreambleUnlessEnabled_Issue4856()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, "private", "missing.db");
+        try
+        {
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams(
+                [projectRoot, "--optimize", "--db", dbPath]);
+            var output = stdout + stderr;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("<redacted>", output);
+            Assert.Contains(CommandErrorCodes.DbNotFound, output);
+            Assert.DoesNotContain(projectRoot, output, StringComparison.Ordinal);
+            Assert.DoesNotContain(dbPath, output, StringComparison.Ordinal);
+
+            var (diagnosticExitCode, diagnosticStdout, diagnosticStderr) = RunAndCaptureStreams(
+                [projectRoot, "--optimize", "--db", dbPath, "--show-paths"]);
+            var diagnosticOutput = diagnosticStdout + diagnosticStderr;
+
+            Assert.Equal(CommandExitCodes.NotFound, diagnosticExitCode);
+            Assert.Contains(projectRoot, diagnosticOutput, StringComparison.Ordinal);
+            Assert.Contains(dbPath, diagnosticOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
         }
     }
 

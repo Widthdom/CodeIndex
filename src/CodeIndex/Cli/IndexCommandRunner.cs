@@ -198,10 +198,20 @@ public static partial class IndexCommandRunner
 
         if (!options.Json && !options.Quiet)
         {
+            var projectDisplayPath = options.OptimizeOnly
+                ? MaintenanceDatabaseErrorClassifier.FormatPathForOutput(
+                    Path.GetFullPath(options.ProjectPath!),
+                    options.ShowPaths)
+                : Path.GetFullPath(options.ProjectPath!);
+            var databaseDisplayPath = options.OptimizeOnly
+                ? MaintenanceDatabaseErrorClassifier.FormatPathForOutput(
+                    resolvedDbPath,
+                    options.ShowPaths)
+                : resolvedDbPath;
             ConsoleUi.PrintBanner();
             CommandOutputWriter.WriteLine();
-            CommandOutputWriter.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath!)}");
-            CommandOutputWriter.WriteLine($"  Output  : {resolvedDbPath}");
+            CommandOutputWriter.WriteLine($"  Project : {projectDisplayPath}");
+            CommandOutputWriter.WriteLine($"  Output  : {databaseDisplayPath}");
             CommandOutputWriter.WriteLine($"  Mode    : {(options.OptimizeOnly ? "optimize" : mode)}");
             CommandOutputWriter.WriteLine();
         }

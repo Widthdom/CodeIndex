@@ -793,6 +793,29 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunVacuum_DirectoryTargetJson_ReportsInaccessibleWithoutRebuildAdvice_Issue4856()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_directory_target");
+        var dbUri = new Uri(project.Root).AbsoluteUri;
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbUri, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal(CommandErrorCodes.DbError, json.GetProperty("error_code").GetString());
+        Assert.Equal("database_inaccessible", json.GetProperty("category").GetString());
+        Assert.Equal("<redacted>", json.GetProperty("path").GetString());
+        Assert.True(json.GetProperty("path_redacted").GetBoolean());
+        Assert.Contains("readable regular database file", json.GetProperty("hint").GetString());
+        Assert.DoesNotContain("--rebuild", json.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(project.Root, stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunVacuum_RejectsNonCodeIndexDatabase_Issue1631()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_foreign_db");

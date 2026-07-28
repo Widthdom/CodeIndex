@@ -12,6 +12,7 @@ internal enum MaintenanceDatabaseFailureKind
     Locked,
     SchemaTooNew,
     NotWritable,
+    Inaccessible,
     Corrupt,
     NotDatabase,
     Error,
@@ -41,16 +42,29 @@ internal static class MaintenanceDatabaseErrorClassifier
         string operation,
         string dbPath,
         bool showPaths,
-        bool isNotFound,
-        bool isSchemaTooNew,
+        ExistingCodeIndexDbValidationFailure validationFailure,
         Exception? validationException)
     {
-        if (isNotFound)
-            return Create(operation, dbPath, showPaths, MaintenanceDatabaseFailureKind.Missing);
-        if (isSchemaTooNew)
-            return Create(operation, dbPath, showPaths, MaintenanceDatabaseFailureKind.SchemaTooNew);
         if (validationException != null)
             return FromException(operation, dbPath, showPaths, validationException);
+
+        if (validationFailure != ExistingCodeIndexDbValidationFailure.None)
+        {
+            var kind = validationFailure switch
+            {
+                ExistingCodeIndexDbValidationFailure.Missing =>
+                    MaintenanceDatabaseFailureKind.Missing,
+                ExistingCodeIndexDbValidationFailure.InvalidDatabase =>
+                    MaintenanceDatabaseFailureKind.NotDatabase,
+                ExistingCodeIndexDbValidationFailure.SchemaTooNew =>
+                    MaintenanceDatabaseFailureKind.SchemaTooNew,
+                ExistingCodeIndexDbValidationFailure.Inaccessible
+                    or ExistingCodeIndexDbValidationFailure.InvalidTarget =>
+                    MaintenanceDatabaseFailureKind.Inaccessible,
+                _ => MaintenanceDatabaseFailureKind.Error,
+            };
+            return Create(operation, dbPath, showPaths, kind);
+        }
 
         return ProbeFileState(dbPath) switch
         {
@@ -183,6 +197,12 @@ internal static class MaintenanceDatabaseErrorClassifier
                 CommandErrorCodes.DbNotWritable,
                 "database_not_writable",
                 CommandExitCodes.DatabaseError),
+            MaintenanceDatabaseFailureKind.Inaccessible => (
+                "database target could not be accessed",
+                "Point `--db` at a readable regular database file, check filesystem permissions, and retry the maintenance command.",
+                CommandErrorCodes.DbError,
+                "database_inaccessible",
+                CommandExitCodes.DatabaseError),
             MaintenanceDatabaseFailureKind.Corrupt => (
                 "database is corrupt",
                 "Run `cdidx db integrity` if the file remains readable, then rebuild with `cdidx index <projectPath> --rebuild` or import a known-good index archive.",
@@ -226,9 +246,15 @@ internal static class MaintenanceDatabaseErrorClassifier
         var bounded = DiagnosticRedactor.BoundDiagnosticText(
             SqliteFileUri.TruncateDiagnosticValue(dbPath),
             PathDiagnosticLimit);
+        if (!showPaths && IsAbsolutePathOrFileUri(bounded))
+        {
+            pathRedacted = true;
+            return DiagnosticRedactor.AngleRedacted;
+        }
+
         var formatted = DiagnosticRedactor.RedactSensitiveText(
             bounded,
-            redactPaths: !showPaths && IsAbsolutePathOrFileUri(bounded));
+            redactPaths: false);
         pathRedacted = !string.Equals(formatted, bounded, StringComparison.Ordinal);
         return formatted;
     }

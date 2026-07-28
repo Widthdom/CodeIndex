@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -68,6 +69,7 @@ public class CommandErrorWriterTests
 
     [Theory]
     [InlineData("/Users/alice/private/codeindex.db")]
+    [InlineData("/Users/alice/private/review-missing.db")]
     [InlineData(@"C:\Users\alice\private\codeindex.db")]
     [InlineData("file:///Users/alice/private/codeindex.db?immutable=1")]
     public void MaintenanceClassifier_RedactsPlatformAbsolutePathsUnlessExplicitlyEnabled_Issue4856(
@@ -76,9 +78,30 @@ public class CommandErrorWriterTests
         var redacted = MaintenanceDatabaseErrorClassifier.FormatPathForOutput(dbPath, showPaths: false);
         var diagnostic = MaintenanceDatabaseErrorClassifier.FormatPathForOutput(dbPath, showPaths: true);
 
-        Assert.NotEqual(dbPath, redacted);
-        Assert.DoesNotContain("alice", redacted, StringComparison.Ordinal);
+        Assert.Equal("<redacted>", redacted);
         Assert.Equal(dbPath, diagnostic);
+    }
+
+    [Theory]
+    [InlineData(nameof(ExistingCodeIndexDbValidationFailure.Inaccessible))]
+    [InlineData(nameof(ExistingCodeIndexDbValidationFailure.InvalidTarget))]
+    public void MaintenanceClassifier_UsesInaccessibleClassificationForPreflightFailures_Issue4856(
+        string validationFailureName)
+    {
+        var validationFailure = Enum.Parse<ExistingCodeIndexDbValidationFailure>(validationFailureName);
+        var error = MaintenanceDatabaseErrorClassifier.FromValidation(
+            "vacuum",
+            "/Users/alice/private/codeindex.db",
+            showPaths: false,
+            validationFailure,
+            validationException: null);
+
+        Assert.Equal(CommandErrorCodes.DbError, error.ErrorCode);
+        Assert.Equal("database_inaccessible", error.Category);
+        Assert.Equal(CommandExitCodes.DatabaseError, error.ExitCode);
+        Assert.Equal("<redacted>", error.Path);
+        Assert.Contains("readable regular database file", error.Hint);
+        Assert.DoesNotContain("--rebuild", error.Hint, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -59,8 +59,9 @@ public static partial class QueryCommandRunner
                     requireWritable: !options.DryRun,
                     requireSupportedUserVersion: false,
                     out _,
-                    out var isNotFound,
-                    out var isSchemaTooNew,
+                    out _,
+                    out _,
+                    out var validationFailure,
                     out var validationException,
                     cancellationToken))
             {
@@ -71,8 +72,7 @@ public static partial class QueryCommandRunner
                         "vacuum",
                         options.DbPath,
                         options.ShowPaths,
-                        isNotFound,
-                        isSchemaTooNew,
+                        validationFailure,
                         validationException));
             }
 

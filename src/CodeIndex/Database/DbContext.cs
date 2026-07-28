@@ -8,6 +8,17 @@ using System.Runtime.ExceptionServices;
 
 namespace CodeIndex.Database;
 
+internal enum ExistingCodeIndexDbValidationFailure
+{
+    None,
+    Missing,
+    Inaccessible,
+    InvalidTarget,
+    InvalidDatabase,
+    SchemaTooNew,
+    Exception,
+}
+
 /// <summary>
 /// Manages SQLite connection and schema initialization.
 /// SQLite接続とスキーマ初期化を管理する。
@@ -454,6 +465,7 @@ public partial class DbContext : IDisposable
             out isNotFound,
             out isSchemaTooNew,
             out _,
+            out _,
             cancellationToken);
 
     internal static bool TryValidateExistingCodeIndexDb(
@@ -463,6 +475,7 @@ public partial class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         out bool isSchemaTooNew,
+        out ExistingCodeIndexDbValidationFailure validationFailure,
         out Exception? validationException,
         CancellationToken cancellationToken = default)
         => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
@@ -477,6 +490,7 @@ public partial class DbContext : IDisposable
         out message,
         out isNotFound,
         out isSchemaTooNew,
+        out validationFailure,
         out validationException,
         cancellationToken);
 
@@ -493,8 +507,12 @@ public partial class DbContext : IDisposable
             createConnection,
             openConnection,
             sleep,
+            requireWritable: true,
+            requireSupportedUserVersion: false,
             out message,
             out isNotFound,
+            out _,
+            out _,
             out _,
             cancellationToken);
 
@@ -517,6 +535,7 @@ public partial class DbContext : IDisposable
             out message,
             out isNotFound,
             out _,
+            out _,
             out validationException,
             cancellationToken);
 
@@ -530,17 +549,20 @@ public partial class DbContext : IDisposable
         out string message,
         out bool isNotFound,
         out bool isSchemaTooNew,
+        out ExistingCodeIndexDbValidationFailure validationFailure,
         out Exception? validationException,
         CancellationToken cancellationToken = default)
     {
         message = string.Empty;
         isNotFound = false;
         isSchemaTooNew = false;
+        validationFailure = ExistingCodeIndexDbValidationFailure.None;
         validationException = null;
         cancellationToken.ThrowIfCancellationRequested();
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
         {
+            validationFailure = ExistingCodeIndexDbValidationFailure.InvalidTarget;
             message = FormatDatabaseOpenFailure(
                 DatabaseOpenInvalidUriCategory,
                 dbPath,
@@ -550,6 +572,7 @@ public partial class DbContext : IDisposable
 
         if (requireWritable && SqliteFileUri.StartsWithFileScheme(dbPath) && SqliteFileUri.RequestsReadOnly(dbPath))
         {
+            validationFailure = ExistingCodeIndexDbValidationFailure.Inaccessible;
             message = $"database must be writable: {dbPath}";
             return false;
         }
@@ -560,6 +583,7 @@ public partial class DbContext : IDisposable
             if (!TryGetLocalPath(dbPath, out var normalized, out var pathFailureReason)
                 || normalized == null)
             {
+                validationFailure = ExistingCodeIndexDbValidationFailure.InvalidTarget;
                 message = FormatDatabaseOpenFailure(
                     DatabaseOpenInvalidUriCategory,
                     dbPath,
@@ -581,6 +605,12 @@ public partial class DbContext : IDisposable
             };
             message = FormatDatabaseOpenFailure(category, dbPath);
             isNotFound = category == DatabaseOpenMissingCategory;
+            validationFailure = preflight switch
+            {
+                DatabasePathProbe.Missing => ExistingCodeIndexDbValidationFailure.Missing,
+                DatabasePathProbe.PermissionDenied => ExistingCodeIndexDbValidationFailure.Inaccessible,
+                _ => ExistingCodeIndexDbValidationFailure.InvalidTarget,
+            };
             return false;
         }
 
@@ -599,6 +629,7 @@ public partial class DbContext : IDisposable
             cmd.CommandText = SqliteCommandPolicy.PragmaSql("application_id");
             if (SqliteCommandPolicy.ReadInt64Scalar(cmd, "pragma application_id") != ApplicationId)
             {
+                validationFailure = ExistingCodeIndexDbValidationFailure.InvalidDatabase;
                 message = $"database is not an existing CodeIndex DB: {dbPath}";
                 return false;
             }
@@ -611,6 +642,7 @@ public partial class DbContext : IDisposable
                 if (unknownBits != 0)
                 {
                     isSchemaTooNew = true;
+                    validationFailure = ExistingCodeIndexDbValidationFailure.SchemaTooNew;
                     message = $"database was written by a newer cdidx schema stamp (user_version {userVersion}); this binary supports up to {CurrentSchemaVersion}: {dbPath}";
                     return false;
                 }
@@ -625,11 +657,13 @@ public partial class DbContext : IDisposable
             if (RequiredCodeIndexTables.All(tables.Contains))
                 return true;
 
+            validationFailure = ExistingCodeIndexDbValidationFailure.InvalidDatabase;
             message = $"database is not an existing CodeIndex DB: {dbPath}";
             return false;
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 14)
         {
+            validationFailure = ExistingCodeIndexDbValidationFailure.Exception;
             validationException = ex;
             var category = ClassifyCantOpenFailure(openTarget, ex.SqliteExtendedErrorCode);
             message = FormatDatabaseOpenFailure(category, dbPath);
@@ -638,12 +672,14 @@ public partial class DbContext : IDisposable
         }
         catch (SqliteException ex)
         {
+            validationFailure = ExistingCodeIndexDbValidationFailure.Exception;
             validationException = ex;
             message = $"database is not an existing CodeIndex DB: {dbPath}";
             return false;
         }
         catch (CodeIndexException ex)
         {
+            validationFailure = ExistingCodeIndexDbValidationFailure.Exception;
             validationException = ex;
             message = ex.Message;
             return false;

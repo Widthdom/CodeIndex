@@ -1070,8 +1070,7 @@ public class LegacySchemaMigrationTests : IDisposable
             "vacuum",
             _dbPath,
             showPaths: false,
-            isNotFound,
-            isSchemaTooNew: false,
+            ExistingCodeIndexDbValidationFailure.Exception,
             validationException);
         Assert.Equal(CommandErrorCodes.DbLocked, error.ErrorCode);
         Assert.Equal("database_locked", error.Category);
