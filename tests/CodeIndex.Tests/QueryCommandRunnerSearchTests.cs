@@ -26,6 +26,9 @@ public partial class QueryCommandRunnerTests
     public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issues4416_4864()
     {
         const string schemaLine = "[\"tokenBoundary\"] = new JsonObject { [\"description\"] = \"Use new HttpClient as an example.\" };";
+        const string toolDescriptionLine = "\"Use new HttpClient only as top-level schema prose. \"";
+        const string toolDescriptionContinuationLine = "+ \"A second new HttpClient example stays prose.\",";
+        const string catalogRuntimeLine = "var label = \"new HttpClient\";";
         const string runtimeLine = "var client = new HttpClient();";
 
         string[] schemaPaths =
@@ -49,6 +52,39 @@ public partial class QueryCommandRunnerTests
             schemaLine,
             schemaLine.IndexOf("JsonObject", StringComparison.Ordinal) + 1,
             "JsonObject".Length);
+        var toolDescriptionContext = new Dictionary<int, string>
+        {
+            [1] = "CreateToolDefinition(",
+            [2] = "\"sample\",",
+            [3] = toolDescriptionLine,
+            [4] = toolDescriptionContinuationLine,
+            [5] = "new JsonObject());",
+            [6] = catalogRuntimeLine,
+        };
+        var toolDescription = SearchMatchClassifier.Classify(
+            "src/CodeIndex/Mcp/McpToolCatalog.cs",
+            "csharp",
+            3,
+            toolDescriptionLine,
+            toolDescriptionLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
+            "new HttpClient".Length,
+            lineContext: toolDescriptionContext);
+        var toolDescriptionContinuation = SearchMatchClassifier.Classify(
+            "src/CodeIndex/Mcp/McpToolCatalog.cs",
+            "csharp",
+            4,
+            toolDescriptionContinuationLine,
+            toolDescriptionContinuationLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
+            "new HttpClient".Length,
+            lineContext: toolDescriptionContext);
+        var catalogRuntime = SearchMatchClassifier.Classify(
+            "src/CodeIndex/Mcp/McpToolCatalog.cs",
+            "csharp",
+            6,
+            catalogRuntimeLine,
+            catalogRuntimeLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
+            "new HttpClient".Length,
+            lineContext: toolDescriptionContext);
         var runtime = SearchMatchClassifier.Classify(
             "src/CodeIndex/Network/ClientFactory.cs",
             "csharp",
@@ -58,7 +94,10 @@ public partial class QueryCommandRunnerTests
             "new HttpClient".Length);
 
         Assert.All(schemaFacets, schema => Assert.Equal(SearchMatchClassifier.SchemaDescription, schema.Origin));
+        Assert.Equal(SearchMatchClassifier.SchemaDescription, toolDescription.Origin);
+        Assert.Equal(SearchMatchClassifier.SchemaDescription, toolDescriptionContinuation.Origin);
         Assert.Equal(SearchMatchClassifier.Code, siblingType.Origin);
+        Assert.Equal(SearchMatchClassifier.StringLiteral, catalogRuntime.Origin);
         Assert.Equal(SearchMatchClassifier.Code, runtime.Origin);
         Assert.All(schemaFacets, schema => Assert.True(SearchMatchClassifier.IsStringLikeOrigin(schema.Origin)));
     }
@@ -2071,10 +2110,14 @@ public partial class QueryCommandRunnerTests
                 "src/CodeIndex/Mcp/McpToolCatalog.cs",
                 "csharp",
                 """
-                var schema = new JsonObject
-                {
-                    ["tokenBoundary"] = new JsonObject { ["description"] = "Use new HttpClient only as an example." }
-                };
+                var tool = CreateToolDefinition(
+                    "sample",
+                    "Use new HttpClient only as top-level schema prose. "
+                    + "A second new HttpClient example stays prose.",
+                    new JsonObject
+                    {
+                        ["tokenBoundary"] = new JsonObject { ["description"] = "Use new HttpClient only as nested schema prose." }
+                    });
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
@@ -2134,8 +2177,10 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(
                 SearchMatchClassifier.SchemaDescription,
                 schemaResult.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+            var schemaFacets = schemaResult.GetProperty("match_facets").EnumerateArray().ToArray();
+            Assert.Equal(3, schemaFacets.Length);
             Assert.All(
-                schemaResult.GetProperty("match_facets").EnumerateArray(),
+                schemaFacets,
                 facet => Assert.Equal(SearchMatchClassifier.SchemaDescription, facet.GetProperty("origin").GetString()));
 
             using var sarifDocument = ParseJsonOutput(sarifStdout);
