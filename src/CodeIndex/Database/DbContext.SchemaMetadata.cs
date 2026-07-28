@@ -55,7 +55,7 @@ public partial class DbContext : IDisposable
            && fingerprint.StartsWith(HotspotFamilyIncompleteMarkerFingerprintPrefix, StringComparison.Ordinal);
     public static string BuildIncompleteHotspotFamilyMarkerFingerprint(string? fingerprint)
         => HotspotFamilyIncompleteMarkerFingerprintPrefix + (string.IsNullOrWhiteSpace(fingerprint) ? "unknown" : fingerprint);
-    public const int CSharpSymbolNameContractVersion = 2;
+    public const int CSharpSymbolNameContractVersion = 3;
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
     public const string CSharpStaticInterfaceSourceEvidenceMetaKey = "csharp_static_interface_source_evidence";
     public const int SqlGraphContractVersion = 1;

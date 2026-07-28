@@ -225,6 +225,11 @@ public static partial class SymbolExtractor
         PatternSymbolEmissionContext context,
         string kind)
     {
+        var csharpExplicitInterfaceIdentityNameFolded = context.Language == "csharp"
+            ? CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                context.Name,
+                context.Match)
+            : null;
         var csharpMetadataTarget = TryClassifyCSharpExtractorMetadataTarget(
             context.Language,
             context.Pattern.Kind,
@@ -242,7 +247,8 @@ public static partial class SymbolExtractor
                     kind,
                     context.Signature,
                     context.PatternMatchLine),
-            csharpMetadataTarget);
+            csharpMetadataTarget,
+            csharpExplicitInterfaceIdentityNameFolded);
 
         if (context.DockerfileStageNames != null && kind == "stage")
             context.DockerfileStageNames.Add(context.Name);
@@ -287,7 +293,8 @@ public static partial class SymbolExtractor
         string? returnType,
         string? familyKey = null,
         string? subKind = null,
-        bool? isMetadataTarget = null)
+        bool? isMetadataTarget = null,
+        string? identityNameFolded = null)
     {
         var startLine = context.LineIndex + 1;
         AddSymbolRecord(
@@ -300,6 +307,7 @@ public static partial class SymbolExtractor
                 FileId = context.FileId,
                 Kind = kind,
                 Name = name,
+                IdentityNameFolded = identityNameFolded,
                 Line = startLine,
                 StartLine = startLine,
                 StartColumn = startColumn,

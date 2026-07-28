@@ -1185,7 +1185,7 @@ public static partial class SymbolExtractor
             // qualifier 側ではなく末尾のメンバー名を event 名として捕捉しなければならない。
             // BodyStyle.Brace を使い、同一行/次行どちらの accessor block も通常の brace-range
             // 経路で扱う。
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
@@ -1218,7 +1218,7 @@ public static partial class SymbolExtractor
             // / `Inner`。正規表現は最初の `(` で止まるので、末尾の `.Append(...)` /
             // `.Consume()` チェーンはキャプチャされない）として
             // 明示的インターフェースメソッドに化けないようにする。
-            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w@.<>:]+\.\w+\s*{CSharpMethodTypeParameterListPattern}[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w@.<>:]+\.\w+\s*{CSharpMethodTypeParameterListPattern}[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\.(?<name>{CSharpIdentifierPattern})\s*(?<explicitTypeParameters>{CSharpMethodTypeParameterListPattern})[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
             // short property name (Value) is recorded as name, consistent with how the method row
@@ -1227,10 +1227,15 @@ public static partial class SymbolExtractor
             // 上の明示的インターフェースメソッド行と同じ構造で、修飾子は非キャプチャにしてショート名
             // (Value) のみを name として記録する。メソッド側が Dispose / CompareTo を返すのと揃える。
             // Closes #333.
-            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\.(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (expression body), e.g. string IThing.Name => "x";
             // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
-            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\.(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            // Explicit interface indexer implementation. The display name stays `Item`, while
+            // the captured qualifier becomes part of the persisted exact-query identity.
+            // 明示的インターフェース indexer 実装。表示名は `Item` のままにし、捕捉した
+            // qualifier は永続化する完全一致 query identity に含める。
+            new("function",  new Regex($@"^\s*(?![?:])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\.(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Indexer (this[...]) — `partial` is legal on indexers since C# 13 (extended partial
             // member support), so accept it alongside the other modifiers. Otherwise every
             // `partial` indexer declaration would be silently dropped from symbols / definition /

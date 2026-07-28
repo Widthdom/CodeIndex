@@ -1871,6 +1871,184 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void SearchSymbols_ExplicitInterfaceExactIdentityAndShortAliasStayDistinct_Issue4866()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_explicit_interface_identity_4866");
+        var dbPath = Path.Combine(project.Root, "codeindex.db");
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        const string path = "src/ExplicitMembers.cs";
+        const string content = """
+            namespace Demo;
+
+            public interface IFoo
+            {
+                void Run<T>(T value);
+                int Value { get; }
+                event System.EventHandler Changed;
+                string this[int index] { get; }
+            }
+
+            public interface IBar
+            {
+                void Run<TLeft, TRight>(TLeft left, TRight right);
+            }
+
+            public sealed class Service : IFoo, IBar
+            {
+                void IFoo.Run<TValue>(TValue value) { }
+                void IBar.Run<TLeft, TRight>(TLeft left, TRight right) { }
+                int IFoo.Value => 1;
+                event System.EventHandler IFoo.Changed { add { } remove { } }
+                string IFoo.this[int index] => index.ToString();
+                public void Run<T>(T value) { }
+                public void CallPublicRun() { Run(1); }
+            }
+            """;
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = content.Length,
+            Lines = content.Count(ch => ch == '\n') + 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = content.Count(ch => ch == '\n') + 1,
+                Content = content,
+            },
+        ]);
+        var symbols = SymbolExtractor.Extract(fileId, "csharp", content, filePath: path);
+        SymbolExtractor.ApplyFamilyScope(symbols, FileIndexer.DeriveFallbackFamilyScopeKey(path));
+        writer.InsertSymbols(symbols);
+        writer.InsertReferences(ReferenceExtractor.Extract(fileId, "csharp", content, symbols, path: path));
+        var rewritten = writer.BackfillFoldedColumns(rewriteAll: true);
+        Assert.True(rewritten.Symbols > 0);
+        Assert.True(writer.MarkFoldReady());
+        writer.MarkCSharpSymbolNameContractReady();
+        writer.MarkGraphReady();
+
+        using var reader = new DbReader(db.Connection);
+        Assert.Equal(
+            DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            reader.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+        Assert.Equal(
+            "ifoo.run`1",
+            CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded("IFoo.Run<T>"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Run",
+            "Models.Run Run()"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Run",
+            "Models.Run<T> Run()"));
+        Assert.Equal(
+            "ifoo.run`1",
+            CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                "Run",
+                "Models.Run<T> IFoo.Run<TValue>(TValue value)"));
+        Assert.True(SqlNameResolver.HasQualifier("IFoo.Run<T>"));
+        using (var identityCommand = db.Connection.CreateCommand())
+        {
+            identityCommand.CommandText = """
+                SELECT name_folded
+                FROM symbols
+                WHERE signature LIKE 'void IFoo.Run%'
+                """;
+            Assert.Equal("ifoo.run`1", identityCommand.ExecuteScalar());
+        }
+
+        var fooRun = Assert.Single(reader.SearchSymbols(
+            "IFoo.Run<T>",
+            lang: "csharp",
+            exact: true));
+        Assert.Equal("Run", fooRun.Name);
+        Assert.StartsWith("void IFoo.Run<TValue>", fooRun.Signature, StringComparison.Ordinal);
+
+        var sameArityAlias = Assert.Single(reader.SearchSymbols(
+            "IFoo.Run<TRenamed>",
+            lang: "csharp",
+            exact: true));
+        Assert.Equal(fooRun.SymbolId, sameArityAlias.SymbolId);
+
+        var barRun = Assert.Single(reader.SearchSymbols(
+            "IBar.Run<TLeft, TRight>",
+            lang: "csharp",
+            exact: true));
+        Assert.StartsWith("void IBar.Run", barRun.Signature, StringComparison.Ordinal);
+        Assert.NotEqual(fooRun.SymbolId, barRun.SymbolId);
+
+        var interfaceDeclaration = Assert.Single(reader.SearchSymbols(
+            "IFoo.Run",
+            lang: "csharp",
+            exact: true));
+        Assert.Equal("interface", interfaceDeclaration.ContainerKind);
+        Assert.NotEqual(fooRun.SymbolId, interfaceDeclaration.SymbolId);
+        Assert.Contains(
+            reader.SearchSymbols("Run", limit: 20, lang: "csharp", exact: true),
+            result => result.SymbolId == fooRun.SymbolId);
+
+        var valueResults = reader.SearchSymbols("IFoo.Value", lang: "csharp", exact: true);
+        Assert.Equal(2, valueResults.Count);
+        Assert.Equal(2, valueResults.Select(result => result.SymbolId).Distinct().Count());
+        Assert.Contains(valueResults, result => result.ContainerKind == "interface");
+        Assert.Contains(valueResults, result => result.ContainerKind == "class");
+
+        var eventResults = reader.SearchSymbols("IFoo.Changed", lang: "csharp", exact: true);
+        Assert.Equal(2, eventResults.Count);
+        Assert.Equal(2, eventResults.Select(result => result.SymbolId).Distinct().Count());
+
+        var itemResults = reader.SearchSymbols("IFoo.Item", lang: "csharp", exact: true);
+        Assert.Equal(2, itemResults.Count);
+        Assert.Equal(2, itemResults.Select(result => result.SymbolId).Distinct().Count());
+        Assert.Single(reader.SearchSymbols("IFoo.this", lang: "csharp", exact: true));
+        Assert.Single(reader.SearchSymbols("IFoo.Run<T>", lang: "csharp", exact: false));
+
+        var definitions = reader.GetDefinitions(
+            "IFoo.Run<T>",
+            lang: "csharp",
+            exact: true);
+        Assert.Single(definitions);
+        Assert.Equal(fooRun.SymbolId, definitions[0].SymbolId);
+        Assert.Equal(1, reader.CountDefinitionsTotal(
+            "IFoo.Run<T>",
+            lang: "csharp",
+            exact: true).Count);
+
+        var analysis = reader.AnalyzeSymbol(
+            "IFoo.Run<T>",
+            lang: "csharp",
+            exact: true);
+        Assert.Single(analysis.Definitions);
+        Assert.Equal(fooRun.SymbolId, analysis.Definitions[0].SymbolId);
+        Assert.Empty(analysis.References);
+        Assert.Empty(reader.SearchReferences(
+            "IFoo.Run<T>",
+            lang: "csharp",
+            exact: true));
+        Assert.NotEmpty(reader.SearchReferences(
+            "Run",
+            lang: "csharp",
+            exact: true));
+
+        var outline = reader.GetOutline(path);
+        Assert.NotNull(outline);
+        Assert.Contains(
+            outline!.Symbols,
+            symbol => symbol.Name == "Run"
+                && symbol.Signature?.StartsWith("void IFoo.Run<TValue>", StringComparison.Ordinal) == true);
+        Assert.Contains(
+            outline.Symbols,
+            symbol => symbol.Name == "Item"
+                && symbol.Signature?.Contains("IFoo.this", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public void SearchSymbols_ReturnsRichMetadataWhenAvailable()
     {
         var results = _reader.SearchSymbols("fetchData");

@@ -97,7 +97,7 @@ public partial class DbWriter
         var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var symbols = RentCommand(
             """
-            SELECT s.id, s.name, s.name_folded, f.lang, s.kind
+            SELECT s.id, s.name, s.name_folded, f.lang, s.kind, s.signature
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.name IS NOT NULL
@@ -113,6 +113,7 @@ public partial class DbWriter
                     reader.GetString(1),
                     reader.IsDBNull(3) ? null : reader.GetString(3),
                     reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
                     markdownSymbolIdentityFolds);
                 var actual = reader.IsDBNull(2) ? null : reader.GetString(2);
                 if (!string.Equals(actual, expected, StringComparison.Ordinal))
@@ -379,17 +380,17 @@ public partial class DbWriter
 
         var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
-        var rows = new List<(long Id, string Name, string? Lang, string Kind)>();
+        var rows = new List<(long Id, string Name, string? Lang, string Kind, string? Signature)>();
         var selectSql = rewriteAll
             ? """
-              SELECT s.id, s.name, f.lang, s.kind
+              SELECT s.id, s.name, f.lang, s.kind, s.signature
               FROM symbols s
               JOIN files f ON f.id = s.file_id
               WHERE s.name IS NOT NULL AND s.id > @lastSymbolId
               ORDER BY s.id
               """
             : """
-              SELECT s.id, s.name, f.lang, s.kind
+              SELECT s.id, s.name, f.lang, s.kind, s.signature
               FROM symbols s
               JOIN files f ON f.id = s.file_id
               WHERE s.name IS NOT NULL AND s.name_folded IS NULL
@@ -411,7 +412,8 @@ public partial class DbWriter
                     reader.GetInt64(0),
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.GetString(3)));
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
             }
         }
         finally
@@ -441,6 +443,7 @@ public partial class DbWriter
                     row.Name,
                     row.Lang,
                     row.Kind,
+                    row.Signature,
                     markdownSymbolIdentityFolds);
                 pId.Value = row.Id;
                 update.ExecuteNonQuery();
@@ -512,6 +515,7 @@ public partial class DbWriter
         string name,
         string? lang,
         string kind,
+        string? signature,
         IReadOnlyDictionary<long, string> markdownSymbolIdentityFolds)
     {
         if (lang == "markdown"
@@ -519,6 +523,14 @@ public partial class DbWriter
             && markdownSymbolIdentityFolds.TryGetValue(symbolId, out var identity))
         {
             return identity;
+        }
+
+        if (lang == "csharp")
+        {
+            var explicitInterfaceIdentity =
+                CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(name, signature);
+            if (explicitInterfaceIdentity != null)
+                return explicitInterfaceIdentity;
         }
 
         return DbReader.FoldNameForLanguage(name, lang);

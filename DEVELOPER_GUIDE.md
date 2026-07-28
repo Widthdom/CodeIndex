@@ -1143,6 +1143,17 @@ are globally unique are aggregated once into the connection-local
 fallbacks. Create that temp table in a separate prepared command before preparing the refresh;
 SQLite resolves referenced tables while preparing every statement in a command batch.
 
+For C# explicit-interface members, `symbols.name` remains the short display/discovery alias,
+while `symbols.name_folded` stores the normalized interface qualifier plus terminal method
+generic arity. Kind and normalized signature remain independent columns in the canonical symbol
+row, so identity comparisons retain qualifier, member kind, arity, and signature without
+changing outline or LSP display names. Exact qualified queries normalize generic parameter names
+to arity and map indexer spellings `this` and `Item` together; unqualified exact queries use the
+short-name alias for discovery and therefore may return explicit and public members. Fold
+validation/backfill reconstructs the qualified identity from the persisted signature, and a
+`CSharpSymbolNameContractVersion` change forces unchanged C# files to be reindexed before that
+identity is trusted.
+
 `inspect` / MCP `analyze_symbol` treats each returned definition as a separate identity
 bundle. Candidate selectors expose the persisted symbol ID plus qualified/container name,
 signature, language, kind, path, and line. Identity-scoped reference/caller/callee queries
@@ -4407,6 +4418,17 @@ connection-local な `temp.reference_unique_symbol_families` table へ1回だけ
 C# attribute fallback で共有します。この temp table は refresh command を prepare する前に別の
 prepared command で作成してください。SQLite は command batch の全statementをprepareする時点で
 参照tableを解決します。
+
+C# の明示的 interface member では、`symbols.name` は短い表示用 / discovery alias のままにし、
+`symbols.name_folded` に正規化した interface qualifier と末尾 method の generic arity を
+保存します。kind と正規化済み signature は canonical symbol row の独立した列に保持するため、
+outline や LSP の表示名を変えずに qualifier、member kind、arity、signature を identity 比較へ
+残せます。修飾した完全一致 query は generic parameter 名を arity に正規化し、indexer の
+`this` と `Item` を同じ表記として扱います。非修飾の完全一致 query は短い名前の discovery
+alias を使うため、明示的実装と public member の両方を返す場合があります。fold の検証 /
+backfill は永続化済み signature から修飾 identity を復元し、
+`CSharpSymbolNameContractVersion` の変更時には、その identity を信頼する前に未変更の C# file
+も再 index します。
 
 `inspect` / MCP `analyze_symbol` は返された各定義を別々の identity bundle として
 扱います。candidate selector は永続化した symbol ID に加え、qualified/container name、
