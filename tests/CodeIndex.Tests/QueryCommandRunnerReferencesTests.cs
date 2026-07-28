@@ -1899,7 +1899,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["MissingSymbol", "--db", dbPath, "--lang", "text"],
+                ["MissingSymbol", "--db", dbPath, "--lang", "text", "--allow-unknown-lang"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);

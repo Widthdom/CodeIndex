@@ -1539,9 +1539,9 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_FormatSarifEmitsResultsArray()
+    public void RunSearch_FormatSarifReportsCompletionForLimitedCompleteEmptyAndMergedRuns_Issue4844()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_sarif");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_sarif_4844");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1551,18 +1551,17 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 "public class App { void Run() { Authenticate(); } }");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            var (completeExitCode, completeStdout, completeStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Authenticate", "--db", dbPath, "--format", "sarif"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("2.1.0", root.GetProperty("version").GetString());
-            var run = root.GetProperty("runs")[0];
-            var rule = Assert.Single(run.GetProperty("tool").GetProperty("driver").GetProperty("rules").EnumerateArray());
-            var result = Assert.Single(run.GetProperty("results").EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, completeExitCode);
+            Assert.Equal(string.Empty, completeStderr);
+            using var completeDocument = ParseJsonOutput(completeStdout);
+            Assert.Equal("2.1.0", completeDocument.RootElement.GetProperty("version").GetString());
+            var completeRun = completeDocument.RootElement.GetProperty("runs")[0];
+            var rule = Assert.Single(completeRun.GetProperty("tool").GetProperty("driver").GetProperty("rules").EnumerateArray());
+            var result = Assert.Single(completeRun.GetProperty("results").EnumerateArray());
 
             Assert.Equal("search", rule.GetProperty("id").GetString());
             Assert.Equal("cdidx search", rule.GetProperty("name").GetString());
@@ -1575,11 +1574,197 @@ public partial class QueryCommandRunnerTests
             var region = result.GetProperty("locations")[0].GetProperty("physicalLocation").GetProperty("region");
             Assert.Equal(33, region.GetProperty("startColumn").GetInt32());
             Assert.Equal(45, region.GetProperty("endColumn").GetInt32());
+            AssertAdHocSearchSarifCompletion(
+                completeRun,
+                sourceResultCount: 1,
+                returnedResultCount: 1,
+                resultLimit: 20,
+                truncated: false);
+
+            for (var i = 1; i < 126; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/app{i:D3}.cs",
+                    "csharp",
+                    $"public class App{i:D3} {{ void Run() {{ Authenticate(); }} }}");
+            }
+
+            var (limitedExitCode, limitedStdout, limitedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "Authenticate",
+                    "--db", dbPath,
+                    "--format", "sarif",
+                    "--limit", "1",
+                    "--path", "src/**",
+                    "--exclude-tests",
+                    "--origin", "code",
+                ],
+                _jsonOptions));
+            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingNeedle", "--db", dbPath, "--format", "sarif", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, limitedExitCode);
+            Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+            Assert.Equal(string.Empty, limitedStderr);
+            Assert.Equal(string.Empty, emptyStderr);
+            using var limitedDocument = ParseJsonOutput(limitedStdout);
+            using var emptyDocument = ParseJsonOutput(emptyStdout);
+            var limitedRun = limitedDocument.RootElement.GetProperty("runs")[0];
+            var emptyRun = emptyDocument.RootElement.GetProperty("runs")[0];
+            Assert.Single(limitedRun.GetProperty("results").EnumerateArray());
+            Assert.Empty(emptyRun.GetProperty("results").EnumerateArray());
+            AssertAdHocSearchSarifCompletion(
+                limitedRun,
+                sourceResultCount: 126,
+                returnedResultCount: 1,
+                resultLimit: 1,
+                truncated: true);
+            var limitedReplayCommand = limitedRun.GetProperty("properties").GetProperty("replay_command").GetString();
+            Assert.Contains("--path 'src/**'", limitedReplayCommand, StringComparison.Ordinal);
+            Assert.Contains("--exclude-tests", limitedReplayCommand, StringComparison.Ordinal);
+            Assert.Contains("--origin code", limitedReplayCommand, StringComparison.Ordinal);
+            AssertAdHocSearchSarifCompletion(
+                emptyRun,
+                sourceResultCount: 0,
+                returnedResultCount: 0,
+                resultLimit: 1,
+                truncated: false);
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/repeat.cs",
+                "csharp",
+                "public class RepeatFixture { void Run() { OccurrenceNeedle(); OccurrenceNeedle(); OccurrenceNeedle(); OccurrenceNeedle(); } }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/dash.cs",
+                "csharp",
+                "public class DashFixture { // -TODO\n}");
+            var (expandedExitCode, expandedStdout, expandedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["OccurrenceNeedle", "--db", dbPath, "--format", "sarif", "--exact-substring", "--origin", "code", "--limit", "2"],
+                _jsonOptions));
+            var (rawFtsExitCode, rawFtsStdout, rawFtsStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate OR OccurrenceNeedle", "--db", dbPath, "--format", "sarif", "--fts", "--limit", "1"],
+                _jsonOptions));
+            var (dashExitCode, dashStdout, dashStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--", "-TODO", "--db", dbPath, "--format", "sarif", "--exact-substring", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, expandedExitCode);
+            Assert.Equal(CommandExitCodes.Success, rawFtsExitCode);
+            Assert.Equal(CommandExitCodes.Success, dashExitCode);
+            Assert.Equal(string.Empty, expandedStderr);
+            Assert.Equal(string.Empty, rawFtsStderr);
+            Assert.Equal(string.Empty, dashStderr);
+            using var expandedDocument = ParseJsonOutput(expandedStdout);
+            using var rawFtsDocument = ParseJsonOutput(rawFtsStdout);
+            using var dashDocument = ParseJsonOutput(dashStdout);
+            var expandedRun = expandedDocument.RootElement.GetProperty("runs")[0];
+            AssertAdHocSearchSarifCompletion(
+                expandedRun,
+                sourceResultCount: 4,
+                returnedResultCount: 2,
+                resultLimit: 2,
+                truncated: true);
+            var rawFtsReplayCommand = rawFtsDocument.RootElement.GetProperty("runs")[0]
+                .GetProperty("properties")
+                .GetProperty("replay_command")
+                .GetString();
+            Assert.Contains("--fts", rawFtsReplayCommand, StringComparison.Ordinal);
+            Assert.DoesNotContain("--raw-fts", rawFtsReplayCommand, StringComparison.Ordinal);
+            var dashReplayCommand = dashDocument.RootElement.GetProperty("runs")[0]
+                .GetProperty("properties")
+                .GetProperty("replay_command")
+                .GetString();
+            Assert.Contains("search --query -TODO", dashReplayCommand, StringComparison.Ordinal);
+
+            for (var i = 0; i <= DbReader.MaxGuardedSearchCandidates; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/guard{i:D4}.cs",
+                    "csharp",
+                    $"public class GuardFixture{i:D4} {{ void Run() {{ GuardNeedle(); Continue(); }} }}");
+            }
+            var (guardedExitCode, guardedStdout, guardedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["GuardNeedle", "--db", dbPath, "--format", "sarif", "--exact-substring", "--reject-after", "NeverPresent", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.True(
+                guardedExitCode == CommandExitCodes.Success,
+                $"Expected guarded SARIF success, got {guardedExitCode}: {guardedStderr}");
+            Assert.Equal(string.Empty, guardedStderr);
+            using var guardedDocument = ParseJsonOutput(guardedStdout);
+            var guardedRun = guardedDocument.RootElement.GetProperty("runs")[0];
+            Assert.Single(guardedRun.GetProperty("results").EnumerateArray());
+            AssertAdHocSearchSarifCompletion(
+                guardedRun,
+                sourceResultCount: 1,
+                returnedResultCount: 1,
+                resultLimit: 1,
+                truncated: true,
+                sourceResultCountAuthoritative: false);
+            Assert.Contains(
+                "--reject-after NeverPresent",
+                guardedRun.GetProperty("properties").GetProperty("replay_command").GetString(),
+                StringComparison.Ordinal);
+
+            var mergedDocumentJson = "{\"version\":\"2.1.0\",\"runs\":["
+                + completeRun.GetRawText()
+                + ","
+                + limitedRun.GetRawText()
+                + ","
+                + emptyRun.GetRawText()
+                + "]}";
+            using var mergedDocument = ParseJsonOutput(mergedDocumentJson);
+            var mergedRuns = mergedDocument.RootElement.GetProperty("runs");
+            Assert.Equal(3, mergedRuns.GetArrayLength());
+            AssertAdHocSearchSarifCompletion(mergedRuns[0], 1, 1, 20, truncated: false);
+            AssertAdHocSearchSarifCompletion(mergedRuns[1], 126, 1, 1, truncated: true);
+            AssertAdHocSearchSarifCompletion(mergedRuns[2], 0, 0, 1, truncated: false);
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    private static void AssertAdHocSearchSarifCompletion(
+        JsonElement run,
+        int sourceResultCount,
+        int returnedResultCount,
+        int resultLimit,
+        bool truncated,
+        bool sourceResultCountAuthoritative = true)
+    {
+        var omittedResultCount = sourceResultCount - returnedResultCount;
+        var properties = run.GetProperty("properties");
+        Assert.Equal("search", properties.GetProperty("format").GetString());
+        Assert.Equal(1, properties.GetProperty("query_count").GetInt32());
+        Assert.Equal(sourceResultCount, properties.GetProperty("source_result_count").GetInt32());
+        Assert.Equal(sourceResultCountAuthoritative, properties.GetProperty("source_result_count_authoritative").GetBoolean());
+        Assert.Equal(returnedResultCount, properties.GetProperty("result_count").GetInt32());
+        Assert.Equal(resultLimit, properties.GetProperty("limit_per_query").GetInt32());
+        Assert.False(properties.GetProperty("cursoring_available").GetBoolean());
+        Assert.Contains("--format sarif", properties.GetProperty("replay_command").GetString(), StringComparison.Ordinal);
+
+        var truncation = properties.GetProperty("truncation");
+        Assert.Equal(truncated, truncation.GetProperty("truncated").GetBoolean());
+        Assert.Equal(truncated ? 1 : 0, truncation.GetProperty("truncated_query_count").GetInt32());
+        Assert.Equal(omittedResultCount, truncation.GetProperty("minimum_omitted_result_count").GetInt32());
+
+        var query = Assert.Single(properties.GetProperty("queries").EnumerateArray());
+        Assert.Equal("ad-hoc", query.GetProperty("name").GetString());
+        Assert.Equal(sourceResultCount, query.GetProperty("source_result_count").GetInt32());
+        Assert.Equal(sourceResultCountAuthoritative, query.GetProperty("source_result_count_authoritative").GetBoolean());
+        Assert.Equal(returnedResultCount, query.GetProperty("result_count").GetInt32());
+        Assert.Equal(resultLimit, query.GetProperty("result_limit").GetInt32());
+        Assert.Equal(truncated, query.GetProperty("truncated").GetBoolean());
+        Assert.Equal(omittedResultCount, query.GetProperty("minimum_omitted_result_count").GetInt32());
+        Assert.Equal(JsonValueKind.Null, query.GetProperty("next_cursor").ValueKind);
+        Assert.Contains("--format sarif", query.GetProperty("replay_command").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -10008,16 +10193,14 @@ jobs:
         }
     }
 
-    // `search --lang csarp` previously emitted "No results found." with no language hint
-    // — RunSearch never called WriteLangHint. Round-2 wires WriteLangHint into the zero-
-    // result branch and lets it fall back to ReferenceExtractor.GetSupportedLanguages()
-    // when the typo'd value matches no indexed language (#1582).
-    // 従来 `search --lang csarp` は "No results found." だけ表示し、RunSearch から
-    // WriteLangHint を呼んでいなかった。round-2 で zero-result 分岐に WriteLangHint を
-    // 配線し、index 済み言語にマッチしない場合は ReferenceExtractor.GetSupportedLanguages()
-    // にフォールバックして提案を出すようにした (#1582)。
+    // `search --lang csarp` originally gained a post-query hint in #1582. Query language
+    // validation now fails before execution and preserves the closest-language guidance
+    // without reporting a misleading successful zero-result search (#4842).
+    // `search --lang csarp` は #1582 で query 後の hint を得た。現在は query 実行前の
+    // language validation で失敗し、成功した 0 件検索と誤認させずに近い言語候補を
+    // 維持する (#4842)。
     [Fact]
-    public void RunSearch_LangTypo_SuggestsClosestLanguage_Issue1582()
+    public void RunSearch_LangTypo_FailsWithClosestLanguage_Issue1582_Issue4842()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_lang_typo");
         try
@@ -10033,10 +10216,11 @@ jobs:
                 ["nothing_matches_xyzzy", "--db", dbPath, "--lang", "csarp"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
-            Assert.Contains("No results found.", stderr);
-            Assert.Contains("Did you mean: --lang csharp?", stderr);
+            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", stderr);
+            Assert.Contains("unknown language identifier 'csarp'", stderr);
+            Assert.Contains("Did you mean 'csharp'", stderr);
         }
         finally
         {

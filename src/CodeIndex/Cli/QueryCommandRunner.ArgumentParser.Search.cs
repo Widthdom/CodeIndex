@@ -24,10 +24,14 @@ public static partial class QueryCommandRunner
                         // DB の `files.lang` はすべて lowercase なので、SQL filter と WriteLangHint が一致する。
                         // さらに `py` のような短縮エイリアスを正規名へ畳み込み、Python 利用時の慣用入力で
                         // 意図せず 0 件になる事故を避ける。
+                        rawLang = langValue;
                         lang = NormalizeLangFilterValue(langValue);
                     }
                     else
                         AddParseError(langError!);
+                    break;
+                case "--allow-unknown-lang":
+                    allowUnknownLang = true;
                     break;
                 case "--query":
                     if (!allowNamedQuery)

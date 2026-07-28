@@ -269,6 +269,217 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_NoOpRepairsVersion4MarkdownCandidates_Issue4846()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "source.md"),
+                "# Source\n\n[target](target.md#error-codes)\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "target.md"),
+                "# Error codes\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "unrelated.md"),
+                "# Error codes\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal(5, DbContext.ReferenceIdentityContractVersion);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DELETE FROM symbol_reference_candidates
+                    WHERE reference_id = (
+                        SELECT r.id
+                        FROM symbol_references AS r
+                        JOIN files AS source_file ON source_file.id = r.file_id
+                        WHERE source_file.path = 'source.md'
+                          AND r.reference_kind = 'reference'
+                          AND r.symbol_name = 'error-codes'
+                    );
+
+                    INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+                    SELECT r.id, target.id, 0
+                    FROM symbol_references AS r
+                    JOIN files AS source_file ON source_file.id = r.file_id
+                    CROSS JOIN symbols AS target
+                    JOIN files AS target_file ON target_file.id = target.file_id
+                    WHERE source_file.path = 'source.md'
+                      AND r.reference_kind = 'reference'
+                      AND r.symbol_name = 'error-codes'
+                      AND target.kind = 'heading'
+                      AND target.name_folded = 'error-codes'
+                      AND target_file.path IN ('target.md', 'unrelated.md');
+
+                    UPDATE symbol_references
+                    SET target_symbol_id = NULL,
+                        target_symbol_key = NULL,
+                        resolution_state = 'ambiguous',
+                        resolution_candidate_count = 2
+                    WHERE id = (
+                        SELECT r.id
+                        FROM symbol_references AS r
+                        JOIN files AS source_file ON source_file.id = r.file_id
+                        WHERE source_file.path = 'source.md'
+                          AND r.reference_kind = 'reference'
+                          AND r.symbol_name = 'error-codes'
+                    );
+
+                    UPDATE codeindex_meta
+                    SET value = '4'
+                    WHERE key = @key;
+                    """;
+                command.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
+                command.ExecuteNonQuery();
+            }
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "source.md", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+
+            using var verification = new SqliteConnection($"Data Source={dbPath}");
+            verification.Open();
+            using var markerCommand = verification.CreateCommand();
+            markerCommand.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            markerCommand.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
+            Assert.Equal("5", Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+
+            using var resolutionCommand = verification.CreateCommand();
+            resolutionCommand.CommandText = """
+                SELECT target_file.path || '|' || reference.resolution_state || '|' ||
+                       reference.resolution_candidate_count
+                FROM symbol_references AS reference
+                JOIN files AS source_file ON source_file.id = reference.file_id
+                JOIN symbols AS target ON target.id = reference.target_symbol_id
+                JOIN files AS target_file ON target_file.id = target.file_id
+                WHERE source_file.path = 'source.md'
+                  AND reference.reference_kind = 'reference'
+                  AND reference.symbol_name = 'error-codes'
+                """;
+            Assert.Equal(
+                "target.md|resolved|1",
+                Convert.ToString(resolutionCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+
+            using var candidateCommand = verification.CreateCommand();
+            candidateCommand.CommandText = """
+                SELECT target_file.path
+                FROM symbol_reference_candidates AS candidate
+                JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+                JOIN files AS source_file ON source_file.id = reference.file_id
+                JOIN symbols AS target ON target.id = candidate.symbol_id
+                JOIN files AS target_file ON target_file.id = target.file_id
+                WHERE source_file.path = 'source.md'
+                  AND reference.reference_kind = 'reference'
+                  AND reference.symbol_name = 'error-codes'
+                """;
+            Assert.Equal(
+                "target.md",
+                Convert.ToString(candidateCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_TargetOnlyMarkdownAnchorChangesRefreshExactReferences_Issue4846()
+    {
+        var projectRoot = CreateTempProject();
+        var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        var observedScopes = new List<DbWriter.ReferenceGraphRefreshScopeStats>();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "source.md"),
+                "# Source\n\n[case](target.md#CaseID)\n[punctuation](target.md#api.v2)\n");
+            var targetPath = Path.Combine(projectRoot, "target.md");
+            File.WriteAllText(targetPath, "# Target\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            AssertMarkdownReferenceResolution(dbPath, "CaseID", "unresolved", 0);
+            AssertMarkdownReferenceResolution(dbPath, "api.v2", "unresolved", 0);
+
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats =>
+            {
+                observedScopes.Add(stats);
+                previousScopeHook?.Invoke(stats);
+            };
+
+            File.WriteAllText(
+                targetPath,
+                "# Target\n\n<a id=\"CaseID\"></a>\n<a id=\"api.v2\"></a>\n");
+            File.SetLastWriteTimeUtc(targetPath, DateTime.UtcNow.AddSeconds(2));
+            var (addExitCode, addJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "target.md", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, addExitCode);
+            Assert.Equal(1, addJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            var addScope = Assert.Single(observedScopes);
+            Assert.False(addScope.UsedFullRefresh);
+            Assert.Equal(2, addScope.DirtyReferenceCount);
+            AssertMarkdownReferenceResolution(dbPath, "CaseID", "resolved", 1);
+            AssertMarkdownReferenceResolution(dbPath, "api.v2", "resolved", 1);
+
+            observedScopes.Clear();
+            File.WriteAllText(targetPath, "# Target\n");
+            File.SetLastWriteTimeUtc(targetPath, DateTime.UtcNow.AddSeconds(4));
+            var (removeExitCode, removeJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "target.md", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, removeExitCode);
+            Assert.Equal(1, removeJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            var removeScope = Assert.Single(observedScopes);
+            Assert.False(removeScope.UsedFullRefresh);
+            Assert.Equal(2, removeScope.DirtyReferenceCount);
+            AssertMarkdownReferenceResolution(dbPath, "CaseID", "unresolved", 0);
+            AssertMarkdownReferenceResolution(dbPath, "api.v2", "unresolved", 0);
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static void AssertMarkdownReferenceResolution(
+        string dbPath,
+        string symbolName,
+        string expectedState,
+        int expectedCandidateCount)
+    {
+        SqliteConnection.ClearAllPools();
+        using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT reference.resolution_state || '|' || reference.resolution_candidate_count
+            FROM symbol_references AS reference
+            JOIN files AS source_file ON source_file.id = reference.file_id
+            WHERE source_file.path = 'source.md'
+              AND reference.reference_kind = 'reference'
+              AND reference.symbol_name = @symbolName
+            """;
+        command.Parameters.AddWithValue("@symbolName", symbolName);
+        Assert.Equal(
+            $"{expectedState}|{expectedCandidateCount.ToString(CultureInfo.InvariantCulture)}",
+            Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
     public void Run_UpdateMode_RefreshesMutualRecursionOncePerBatchIncludingDeleteOnly()
     {
         var projectRoot = CreateTempProject();

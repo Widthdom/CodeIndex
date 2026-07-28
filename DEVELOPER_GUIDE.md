@@ -438,6 +438,17 @@ across live-text eviction and are cleared by `didClose`, so an evicted newer
 version cannot be replaced by a stale change. Other providers return empty
 arrays or null when the database cannot answer safely instead of inventing
 language-server analysis.
+`LspServer` uses one lock-protected lifecycle state machine across ordinary
+dispatch, the cancellation fast path, and queue-overload responses. Its phases
+are before-initialize, initializing, running, shutdown, and exited. Only the
+first `initialize` request can enter initialization. The transport reserves each
+frame's lifecycle action in receive order. Under the output gate, the serialized
+initialize response and the transition to running share one publication boundary:
+the state changes immediately before the frame write starts. Shutdown changes
+phase before waiting for active dispatches, then disposes an owned query context
+and reader exactly once.
+After shutdown, requests receive `-32600`, notifications are ignored, and only
+the `exit` notification completes the normal lifecycle.
 Disk-backed position-line caching must enforce its 4 MiB input limit while
 streaming, not only through a pre-read `Length` check. Bytes beyond the limit
 must never reach text decoding, including when a shared file grows concurrently,
@@ -650,6 +661,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 |---|---|---|
 | `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
 | `add` | Dockerfile `ADD` destination paths | Dependency/file-flow search symbol |
+| `anchor` | Explicit Markdown HTML anchors, preserving exact ID case and punctuation after HTML entity decoding | Definition target for path-scoped Markdown fragment references |
 | `annotation` | Annotation declarations or annotation-like language constructs | Metadata/search symbol |
 | `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
 | `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
@@ -671,7 +683,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
 | `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
-| `heading` | Markdown headings and language section markers such as C# regions, Python module docstrings, and JavaScript/TypeScript `@module` docblocks | Outline symbol |
+| `heading` | Markdown headings and language section markers such as C# regions, Python module docstrings, and JavaScript/TypeScript `@module` docblocks | Outline symbol; Markdown headings are definition targets for path-scoped fragment references |
 | `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directives | Context/search symbol |
 | `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
@@ -1571,6 +1583,7 @@ access.
 | `--count --json` envelope | Count-only JSON for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, and `unused` is a single automation-oriented object. It always includes `count`, applied `query_context`, freshness metadata (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags `degraded` / `authoritative_count`; commands with matched-file totals also include `files` and the older `file_count` compatibility alias. `file_count` carries the same value as `files`, remains for compatibility, and is not scheduled for removal before the next major release. `unused --count --json` also includes `returned_bucket_counts`, `returned_contract_domain_counts`, and `summary.by_bucket` / `summary.by_confidence` / `summary.by_contract_domain`. `authoritative_count=false` means a readiness or graph/exact trust signal made the count non-authoritative, while the freshness fields describe the indexed snapshot used for the count. |
 | Search row selection | Row-producing plain-search and recipe paths share `ApplySearchOutputSelection`: `--first-per-file` and fixed-seed deterministic `--sample` run before the effective per-query / remaining total limit. Sample fetch envelopes are sized from at least the requested sample target. Aggregate/compact query DTOs, plain compact roots, run summaries, issue-draft source DTOs, NDJSON terminals, and bounded array-envelope stream terminals expose `source_total`, `selected_total`, `returned`, `selector_omitted_count`, and `limit_omitted_count`; `source_total_authoritative` / `source_total_lower_bound` distinguish complete populations from bounded observations. Guard filters, origin/facet post-filters, exhausted candidate windows, and recipe file-reject post-filters force lower-bound authority. Their ordered `selectors` entries preserve each stage's input/output/omission counts plus sample size, mode, and seed, while nullable `selection_reason` / `selection_omitted_count` remain compatibility summaries. Bounded plain-search selection is computed once and its selected page is reused by compact/envelope serialization. Search `query_context.row_selectors` records the applied selector configuration. Selection-only omission updates matched/omitted lower bounds without setting `truncated`, `has_more`, or `next_cursor`. When a later limit truncates selected rows, limit truncation remains visible but `next_cursor` is suppressed because raw database cursors cannot preserve selector state; incoming `--cursor` values are rejected with either selector for the same reason. Generated compact and issue-draft replay commands retain the selector. Count, aggregation, named-query, recipe-list, results-only, metadata-free array, unsupported formatted, and summary-only compact shapes reject `--first-per-file` / `--sample`, while every recipe shape rejects grouped-only `--per-file-limit`. |
 | Search selection edge cases | Issue-draft roots independently retain per-query `selection_accounting`, including zero-draft and exhausted-total-limit queries. Byte-bounded compact and array envelopes rewrite `returned` to the emitted row count while preserving logical `limit_omitted_count`; hard-cap omissions remain separate in `metadata.byte_limit_omitted_count`. |
+| Ad-hoc search SARIF | `search <query> --format sarif` stores completion metadata on each SARIF run. The run and its single `queries[]` summary report `source_result_count`, `source_result_count_authoritative`, emitted `result_count`, the applied `limit_per_query` / `result_limit`, conservative `minimum_omitted_result_count`, and `truncated` state. Source and emitted counts use the final SARIF result/location unit, including exact-search occurrence expansion. Guarded searches retain their bounded candidate budget instead of failing during a completion recount; their source count is an explicitly non-authoritative lower bound and their truncation state remains conservative. Facet-filtered exact searches use an exhaustive source count rather than the display candidate window. Ad-hoc search does not expose a continuation cursor, so `cursoring_available` is `false` and `next_cursor` is null; a shell-quoted `replay_command` preserves option-like queries and active search controls. The completion vocabulary intentionally matches recipe SARIF, and empty runs carry the same fields with zero counts. |
 | Ad-hoc issue-draft selection | `search --format issue-drafts` reads the complete filtered ad-hoc population, then applies `--first-per-file`, deterministic `--sample`, and `min(--limit, --total-limit)` in that order. Guarded searches retain their finite candidate inspection contract: `source_total_count` is omitted, `source_minimum_count` reports the observed lower bound, `source_total_count_authoritative=false`, `source_fetch_limit` reports the bounded fetch, and `truncated=true` preserves incomplete-population state. Existing `result_count`, `result_limit`, `omitted_count`, and `truncated` fields describe the returned selection accurately; additive `source_total_count`, `returned_count`, `limit_per_query`, `total_limit`, `first_per_file`, and `sample` fields make the applied contract auditable. Replay commands are serialized from normalized parsed options, use POSIX-safe single-quote escaping, and retain raw/exact/prefix modes, path/language/facet/guard filters, selection controls, evidence formatting, duplicate preflight, and issue hints. |
 | Recipe SARIF | `search --recipe <name> --format sarif` emits one result per bounded recipe result. Rule IDs use `recipe/query`; standard `fingerprints.cdidx/v1` values are derived from the normalized source location; result properties preserve recipe/query identity, severity, confidence, and per-query truncation; run properties preserve scope, applied result limits, aggregate counts, and conservative omitted-result metadata. Bound SARIF with `--limit` / `--total-limit`; row selectors such as `--sample`, `--first-per-file`, and `--per-file-limit` are rejected instead of being silently ignored. Recipe severity maps `critical` / `high` to `error`, `medium` to `warning`, and `low` / `info` to `note`. |
 | Recipe classifier output | Recipe run JSON may add `audit_classifications` to individual `CompactSearchResult` rows when a recipe classifier can classify the hit, and query/count payloads may add `classifier_counts` when classified rows are present. These fields are additive; use them to separate triage domains such as DTO/result-wrapper `.Result` properties versus Task/ValueTask blocking waits without changing the raw search query. |
@@ -3131,6 +3144,14 @@ Downstream users can add lightweight language support without rebuilding
   the extracted JSON to a fixture. The source and expectation files are capped
   at 4 MiB each.
 
+Query-side `--lang` resolution uses this same workspace-aware extension and
+extractor registry rather than a separate built-in list. Registered language
+IDs, aliases, and extension-like spellings resolve to the registry's canonical
+ID. Unknown values fail with `E010_USAGE_ERROR` and bounded edit-distance
+suggestions; `--allow-unknown-lang` is the explicit escape hatch for an
+unregistered plugin ID and preserves its trimmed spelling through the database
+filter.
+
 Minimal examples:
 
 ```yaml
@@ -3645,6 +3666,15 @@ indexed symbol に fallback する。numeric document-version tombstone は live
 後も上限付きで保持し、`didClose` で消去するため、evict 済みの新しい version を stale change が
 置き換えることはない。それ以外の provider は database が安全に答えられない場合、
 language-server analysis を作り上げず、空配列または null を返す。
+`LspServer` は通常 dispatch、cancellation fast path、queue-overload response の全経路で、
+1 つの lock 保護された lifecycle state machine を使う。phase は before-initialize、
+initializing、running、shutdown、exited である。最初の `initialize` request だけが初期化へ
+遷移できる。transport は各 frame の lifecycle action を受信順で予約する。output gate の下で、
+serialize 済み initialize response と running への遷移は 1 つの公開境界を共有し、frame の
+書き込み開始直前に state を変更する。shutdown は active dispatch の完了待ちより先に phase を
+変更し、その後に所有する query context と reader を正確に 1 回だけ破棄する。shutdown 後の
+request は `-32600` を返し、notification は無視し、`exit` notification だけが正常な lifecycle を
+完了させる。
 disk 上の position-line cache は、事前の `Length` check だけでなく streaming 中も 4 MiB の
 input 上限を強制する必要がある。共有 file が同時に増大する場合も上限超過 byte を text decode に
 渡してはならず、bounded な failure reason は `position_file_too_large` のままとする。
@@ -3832,6 +3862,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 |---|---|---|
 | `accessor` | owning property から別 symbol として抽出される accessor declaration | Search/filter symbol |
 | `add` | Dockerfile `ADD` の destination path | dependency / file-flow search symbol |
+| `anchor` | HTML entity の decode 後も ID の大文字小文字と句読点を正確に保持する Markdown 内の明示的な HTML anchor | path に限定した Markdown fragment reference の定義対象 |
 | `annotation` | annotation declaration または annotation-like な言語構文 | Metadata/search symbol |
 | `async_function` | JavaScript / TypeScript の async function declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `async_generator` | JavaScript / TypeScript の async generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
@@ -3853,7 +3884,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
 | `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
 | `generator` | JavaScript / TypeScript generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
-| `heading` | Markdown heading、C# region、Python module docstring、JavaScript / TypeScript `@module` docblock などの language section marker | Outline symbol |
+| `heading` | Markdown heading、C# region、Python module docstring、JavaScript / TypeScript `@module` docblock などの language section marker | Outline symbol。Markdown heading は path に限定した fragment reference の定義対象 |
 | `hook` | JavaScript / TypeScript React custom hook binding | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directive | Context/search symbol |
 | `import` | import、using directive、alias、package include | Search/filter symbol |
@@ -4798,6 +4829,7 @@ help はすべてこのレジストリを参照します。field 名は大文字
 | `--count --json` envelope | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`impact`、`unused` の count-only JSON は単一の自動化向け object です。常に `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、`indexed_at`、`freshness_available`）、trust flag の `degraded` / `authoritative_count` を含みます。matched-file total を持つ command は `files` と古い互換 alias の `file_count` も含みます。`file_count` は `files` と同じ値を持つ互換用 field として残り、少なくとも次の major release までは削除予定はありません。`unused --count --json` は `returned_bucket_counts`、`returned_contract_domain_counts`、`summary.by_bucket` / `summary.by_confidence` / `summary.by_contract_domain` も含みます。`authoritative_count=false` は readiness または graph/exact trust signal により count が authoritative ではないことを示し、freshness field は count に使った index snapshot を説明します。 |
 | search row selection | row を返す plain search / recipe path は `ApplySearchOutputSelection` を共有し、`--first-per-file` と固定 seed の決定的な `--sample` を、有効な query ごとの limit / 残り total limit より先に適用します。sample 用 fetch envelope は少なくとも要求 sample 数を基準に sizing します。aggregate / compact の query DTO、plain compact root、run summary、issue-draft の source DTO、NDJSON terminal、bounded array envelope の stream terminal は `source_total`、`selected_total`、`returned`、`selector_omitted_count`、`limit_omitted_count` を公開し、`source_total_authoritative` / `source_total_lower_bound` で完全な population と bounded な観測を区別します。guard filter、origin / facet の後段 filter、candidate window の枯渇、recipe の file-reject 後段 filter は lower-bound authority にします。適用順の `selectors` entry は各段階の input / output / omission count と sample の size / mode / seed を保持し、nullable な `selection_reason` / `selection_omitted_count` は互換用 summary として維持します。bounded plain-search selection は一度だけ計算し、その selected page を compact / envelope serialize で再利用します。search の `query_context.row_selectors` は適用済み selector 設定を記録します。selection だけによる省略は matched / omitted の lower bound を更新しますが、`truncated`、`has_more`、`next_cursor` は設定しません。後続の limit が選択済み row を truncate する場合、limit truncation は表示しますが raw database cursor は selector state を保持できないため `next_cursor` を抑止し、同じ理由で selector と受け取った `--cursor` の併用も拒否します。compact / issue-draft の生成 replay command は selector を保持します。count、aggregation、named-query、recipe-list、results-only、metadata を持たない array、非対応 formatted、summary-only compact の shape は `--first-per-file` / `--sample` を拒否し、すべての recipe shape は grouped 専用の `--per-file-limit` を拒否します。 |
 | search selection の edge case | issue-draft の root は query ごとの `selection_accounting` を独立して保持するため、draft が 0 件の場合や total limit を使い切った query も accounting を失いません。byte 上限付き compact / array envelope は `returned` を実際の出力 row 数へ更新し、論理的な `limit_omitted_count` を保持します。hard cap による省略は `metadata.byte_limit_omitted_count` で別に報告します。 |
+| ad-hoc search SARIF | `search <query> --format sarif` は completion metadata を SARIF の各 run に格納します。run と単一の `queries[]` summary は `source_result_count`、`source_result_count_authoritative`、出力済み `result_count`、適用された `limit_per_query` / `result_limit`、保守的な `minimum_omitted_result_count`、`truncated` state を返します。source / emitted count は exact search の occurrence 展開を含む最終的な SARIF result / location 単位を使用します。guard 付き search は completion の再計数で失敗せず bounded candidate budget を維持し、source count を明示的に non-authoritative な lower bound として返して truncation state を保守的に保ちます。facet filter 付き exact search は表示用 candidate window ではなく exhaustive な source count を使います。ad-hoc search は継続 cursor を公開しないため、`cursoring_available` は `false`、`next_cursor` は null となり、shell quote 済みの `replay_command` が option のような query と有効な search control を保持します。completion vocabulary は意図的に recipe SARIF と共通化し、空 run も count が 0 の同じ field を保持します。 |
 | ad-hoc issue-draft selection | `search --format issue-drafts` は filter 済みの ad-hoc 母集団全体を読み、`--first-per-file`、決定的な `--sample`、`min(--limit, --total-limit)` の順に適用します。guard 付き検索は有限の candidate inspection 契約を維持し、`source_total_count` を省略し、観測下限を `source_minimum_count`、非 authoritative 状態を `source_total_count_authoritative=false`、bounded fetch を `source_fetch_limit` で報告し、母集団が未完了であることを `truncated=true` で保持します。既存の `result_count`、`result_limit`、`omitted_count`、`truncated` field は返却 selection を正確に表し、additive な `source_total_count`、`returned_count`、`limit_per_query`、`total_limit`、`first_per_file`、`sample` field により適用済み契約を監査できます。replay command は正規化済み parse option から serialize し、POSIX-safe な単一引用符 escape を使い、raw / exact / prefix mode、path / language / facet / guard filter、selection control、evidence formatting、duplicate preflight、issue hint を維持します。 |
 | Recipe SARIF | `search --recipe <name> --format sarif` は、上限付き recipe result ごとに result を1件出力します。rule ID は `recipe/query` を使い、標準の `fingerprints.cdidx/v1` は正規化済み source location から導出します。result properties は recipe/query identity、severity、confidence、query ごとの truncation を保持し、run properties は scope、適用済み result limit、集計 count、保守的な omitted-result metadata を保持します。SARIF の上限には `--limit` / `--total-limit` を使い、`--sample`、`--first-per-file`、`--per-file-limit` のような row selector は黙って無視せず拒否します。recipe severity は `critical` / `high` を `error`、`medium` を `warning`、`low` / `info` を `note` に対応付けます。 |
 | Recipe classifier output | recipe classifier が hit を分類できる場合、recipe run JSON は個別の `CompactSearchResult` row に `audit_classifications` を追加することがあり、分類済み row がある query / count payload は `classifier_counts` を追加することがあります。これらは additive field です。raw search query を変えずに、DTO / result-wrapper の `.Result` property と Task / ValueTask の blocking wait などの triage domain を分離するために使います。 |
@@ -5743,6 +5775,13 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
   source と expectation file はそれぞれ 4 MiB に制限されます。
+
+query 側の `--lang` 解決は、別の組み込み一覧ではなく、この workspace-aware な
+extension / extractor registry を共有します。登録済み language ID、alias、拡張子形式の
+表記は registry の canonical ID に解決されます。未知の値は上限付き edit-distance 候補を
+伴う `E010_USAGE_ERROR` になり、未登録 plugin ID には明示的な escape hatch
+`--allow-unknown-lang` を使います。この場合、前後空白を除いた表記を database filter まで
+保持します。
 
 最小例:
 

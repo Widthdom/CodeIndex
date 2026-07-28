@@ -21,9 +21,11 @@ public static partial class QueryCommandRunner
             allowNamedQuery: true,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
         if (TryWriteUnsupportedOptionError("definition", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("definition"), options.Query))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "definition"))
+        if (TryWriteParseError(options, "definition", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "definition", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
@@ -297,9 +299,11 @@ public static partial class QueryCommandRunner
         var all = cmdArgs.Any(arg => arg == "--all");
         var filteredArgs = cmdArgs.Where(arg => arg != "--all").ToArray();
         var options = ParseArgs(filteredArgs, jsonDefault: true, allowNamedQuery: true);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
         if (TryWriteUnsupportedOptionError("goto", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("goto"), options.Query))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "goto"))
+        if (TryWriteParseError(options, "goto", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "goto", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;

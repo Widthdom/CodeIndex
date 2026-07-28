@@ -313,12 +313,14 @@ internal sealed partial class LspServer : IDisposable
         Stream output,
         SemaphoreSlim outputGate,
         JsonObject response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? responsePublicationStarting = null)
     {
         await outputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var payload = response.ToJsonString(_jsonOptions);
+            responsePublicationStarting?.Invoke();
             if (await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
                 return;
 
@@ -360,12 +362,27 @@ internal sealed partial class LspServer : IDisposable
 
     public void Dispose()
     {
-        _ = _shutdownRequested;
-        if (_ownedQueryDb != null)
+        lock (_sessionStateGate)
         {
-            _reader.Dispose();
-            _ownedQueryDb.Dispose();
-            _ownedQueryDb = null;
+            _sessionState = LspSessionState.Exited;
+            while (_activeSessionDispatches != 0)
+                Monitor.Wait(_sessionStateGate);
         }
+
+        DisposeOwnedResourcesOnce();
+    }
+
+    private void DisposeOwnedResourcesOnce()
+    {
+        if (Interlocked.Exchange(ref _ownedResourcesDisposed, 1) != 0)
+            return;
+
+        var ownedQueryDb = Interlocked.Exchange(ref _ownedQueryDb, null);
+        if (ownedQueryDb == null)
+            return;
+
+        _reader.Dispose();
+        ownedQueryDb.Dispose();
+        Interlocked.Increment(ref _ownedResourceDisposeCount);
     }
 }

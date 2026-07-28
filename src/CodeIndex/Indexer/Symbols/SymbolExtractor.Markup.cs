@@ -378,13 +378,14 @@ public static partial class SymbolExtractor
     {
         // Markdown headings are the closest thing to navigable symbols in docs files.
         // Markdown の見出しは、ドキュメント内でナビゲート可能な symbol に最も近い。
-        IReadOnlyDictionary<string, string>? referenceTargets = null;
         List<SymbolRecord>? symbols = null;
         Stack<(int Level, int SymbolIndex)>? headingStack = null;
+        var usedHeadingIdentities = new HashSet<string>(StringComparer.Ordinal);
         var inFence = false;
         var fenceChar = '\0';
         var fenceLength = 0;
         var fenceSymbolIndex = -1;
+        var inHtmlComment = false;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -431,6 +432,14 @@ public static partial class SymbolExtractor
             if (inFence)
                 continue;
 
+            AddMarkdownExplicitAnchorSymbols(
+                fileId,
+                lines[i],
+                i + 1,
+                headingStack,
+                ref inHtmlComment,
+                ref symbols);
+
             if (i + 1 < lines.Length
                 && TryParseMarkdownSetextHeading(lines[i], lines[i + 1], out var setextLevel, out var setextHeadingText))
             {
@@ -446,6 +455,9 @@ public static partial class SymbolExtractor
                     FileId = fileId,
                     Kind = "heading",
                     Name = setextHeadingText,
+                    IdentityNameFolded = MarkdownAnchorIdentity.CreateUniqueHeadingIdentity(
+                        setextHeadingText,
+                        usedHeadingIdentities),
                     Line = i + 1,
                     StartLine = i + 1,
                     EndLine = i + 2,
@@ -463,16 +475,12 @@ public static partial class SymbolExtractor
 
                 (symbols ??= []).Add(setextSymbol);
                 (headingStack ??= new Stack<(int Level, int SymbolIndex)>()).Push((setextLevel, symbols.Count - 1));
-                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
                 i++;
                 continue;
             }
 
             if (!TryParseMarkdownHeading(lines[i], out var level, out var headingText))
-            {
-                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
                 continue;
-            }
 
             while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= level)
             {
@@ -486,6 +494,9 @@ public static partial class SymbolExtractor
                 FileId = fileId,
                 Kind = "heading",
                 Name = headingText,
+                IdentityNameFolded = MarkdownAnchorIdentity.CreateUniqueHeadingIdentity(
+                    headingText,
+                    usedHeadingIdentities),
                 Line = i + 1,
                 StartLine = i + 1,
                 EndLine = i + 1,
@@ -503,7 +514,6 @@ public static partial class SymbolExtractor
 
             (symbols ??= []).Add(symbol);
             (headingStack ??= new Stack<(int Level, int SymbolIndex)>()).Push((level, symbols.Count - 1));
-            AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
         }
 
         while (headingStack is { Count: > 0 })
@@ -516,93 +526,194 @@ public static partial class SymbolExtractor
         return symbols ?? [];
     }
 
-    private static IReadOnlyDictionary<string, string> BuildMarkdownReferenceDefinitionTargets(string[] lines)
-    {
-        if (!LinesContain(lines, "]:", StringComparison.Ordinal))
-            return EmptyMarkdownReferenceDefinitionTargets;
-
-        Dictionary<string, string>? targets = null;
-        var inFence = false;
-        var fenceChar = '\0';
-        var fenceLength = 0;
-
-        foreach (var line in lines)
-        {
-            if (TryToggleMarkdownFence(line, inFence, fenceChar, fenceLength, out var nextFenceChar, out var nextFenceLength, out _))
-            {
-                inFence = nextFenceLength > 0;
-                fenceChar = nextFenceChar;
-                fenceLength = nextFenceLength;
-                continue;
-            }
-
-            if (inFence)
-                continue;
-
-            if (line.Contains("]:", StringComparison.Ordinal))
-            {
-                foreach (Match match in Regex.EnumerateMatches(MarkdownReferenceDefinitionRegex, line))
-                {
-                    targets ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    targets[match.Groups["label"].ValueSpan.Trim().ToString()] = match.Groups["target"].ValueSpan.Trim().ToString();
-                }
-            }
-        }
-
-        return targets ?? EmptyMarkdownReferenceDefinitionTargets;
-    }
-
-    private static void AddMarkdownReferenceSymbols(
+    private static void AddMarkdownExplicitAnchorSymbols(
         long fileId,
         string line,
         int lineNumber,
-        ref List<SymbolRecord>? symbols,
-        string[] allLines,
-        ref IReadOnlyDictionary<string, string>? referenceTargets)
+        Stack<(int Level, int SymbolIndex)>? headingStack,
+        ref bool inHtmlComment,
+        ref List<SymbolRecord>? symbols)
     {
-        if (line.Contains("](", StringComparison.Ordinal))
+        for (var index = 0; index < line.Length;)
         {
-            foreach (Match match in Regex.EnumerateMatches(MarkdownLocalAnchorLinkRegex, line))
-                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, match.Value, lineNumber, ref symbols);
-        }
-
-        if (line.Contains("]:", StringComparison.Ordinal))
-        {
-            foreach (Match match in Regex.EnumerateMatches(MarkdownLocalAnchorReferenceRegex, line))
-                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, match.Value, lineNumber, ref symbols);
-        }
-
-        if (!line.Contains("][", StringComparison.Ordinal))
-            return;
-
-        foreach (Match match in Regex.EnumerateMatches(MarkdownReferenceLinkRegex, line))
-        {
-            var label = match.Groups["label"].ValueSpan.Trim().ToString();
-            if (label.Length == 0)
+            if (inHtmlComment)
+            {
+                var commentEnd = line.IndexOf("-->", index, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return;
+                inHtmlComment = false;
+                index = commentEnd + 3;
                 continue;
+            }
 
-            referenceTargets ??= BuildMarkdownReferenceDefinitionTargets(allLines);
-            if (referenceTargets.TryGetValue(label, out var target) && target.TrimStart().StartsWith("#", StringComparison.Ordinal))
-                AddMarkdownReferenceSymbol(fileId, target, match.Value, lineNumber, ref symbols);
+            if (line.AsSpan(index).StartsWith("<!--", StringComparison.Ordinal))
+            {
+                inHtmlComment = true;
+                index += 4;
+                continue;
+            }
+
+            if (line[index] == '`')
+            {
+                var delimiterLength = 1;
+                while (index + delimiterLength < line.Length
+                       && line[index + delimiterLength] == '`')
+                {
+                    delimiterLength++;
+                }
+
+                var closing = line.IndexOf(
+                    new string('`', delimiterLength),
+                    index + delimiterLength,
+                    StringComparison.Ordinal);
+                index = closing >= 0
+                    ? closing + delimiterLength
+                    : index + delimiterLength;
+                continue;
+            }
+
+            if (!IsMarkdownAnchorTagStart(line, index)
+                || !TryFindMarkdownTagEnd(line, index, out var tagEnd))
+            {
+                index++;
+                continue;
+            }
+
+            AddMarkdownExplicitAnchorTagSymbols(
+                fileId,
+                line,
+                lineNumber,
+                index,
+                tagEnd,
+                headingStack,
+                ref symbols);
+            index = tagEnd + 1;
         }
     }
 
-    private static void AddMarkdownReferenceSymbol(long fileId, string target, string signature, int lineNumber, ref List<SymbolRecord>? symbols)
-    {
-        var normalizedTarget = NormalizeMarkdownAnchorTarget(target);
-        if (normalizedTarget.Length == 0)
-            return;
+    private static bool IsMarkdownAnchorTagStart(string line, int index) =>
+        line[index] == '<'
+        && index + 2 < line.Length
+        && line[index + 1] is 'a' or 'A'
+        && (char.IsWhiteSpace(line[index + 2]) || line[index + 2] is '>' or '/');
 
-        (symbols ??= []).Add(new SymbolRecord
+    private static bool TryFindMarkdownTagEnd(string line, int tagStart, out int tagEnd)
+    {
+        var quote = '\0';
+        for (var index = tagStart + 2; index < line.Length; index++)
         {
-            FileId = fileId,
-            Kind = "reference",
-            Name = normalizedTarget,
-            Line = lineNumber,
-            StartLine = lineNumber,
-            EndLine = lineNumber,
-            Signature = signature.Trim(),
-        });
+            var current = line[index];
+            if (quote != '\0')
+            {
+                if (current == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (current is '"' or '\'')
+            {
+                quote = current;
+                continue;
+            }
+
+            if (current == '>')
+            {
+                tagEnd = index;
+                return true;
+            }
+        }
+
+        tagEnd = -1;
+        return false;
+    }
+
+    private static void AddMarkdownExplicitAnchorTagSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        int tagStart,
+        int tagEnd,
+        Stack<(int Level, int SymbolIndex)>? headingStack,
+        ref List<SymbolRecord>? symbols)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        var index = tagStart + 2;
+        while (index < tagEnd)
+        {
+            while (index < tagEnd && (char.IsWhiteSpace(line[index]) || line[index] == '/'))
+                index++;
+            if (index >= tagEnd)
+                break;
+
+            var nameStart = index;
+            while (index < tagEnd && IsHtmlAttrNameChar(line[index]))
+                index++;
+            if (index == nameStart)
+            {
+                index++;
+                continue;
+            }
+
+            var attributeName = line.AsSpan(nameStart, index - nameStart);
+            while (index < tagEnd && char.IsWhiteSpace(line[index]))
+                index++;
+            if (index >= tagEnd || line[index] != '=')
+                continue;
+
+            index++;
+            while (index < tagEnd && char.IsWhiteSpace(line[index]))
+                index++;
+            if (index >= tagEnd)
+                break;
+
+            var quote = line[index] is '"' or '\'' ? line[index++] : '\0';
+            var valueStart = index;
+            if (quote == '\0')
+            {
+                while (index < tagEnd && !char.IsWhiteSpace(line[index]) && line[index] != '>')
+                    index++;
+            }
+            else
+            {
+                while (index < tagEnd && line[index] != quote)
+                    index++;
+            }
+
+            var valueEnd = index;
+            if (quote != '\0' && index < tagEnd)
+                index++;
+
+            if (!attributeName.Equals("id", StringComparison.OrdinalIgnoreCase)
+                && !attributeName.Equals("name", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var identity = MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(
+                line[valueStart..valueEnd]);
+            if (identity.Length == 0 || !identities.Add(identity))
+                continue;
+
+            var symbol = new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "anchor",
+                Name = identity,
+                IdentityNameFolded = identity,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = lineNumber,
+                Signature = line[tagStart..(tagEnd + 1)].Trim(),
+            };
+            if (headingStack is { Count: > 0 } && symbols != null)
+            {
+                var parent = symbols[headingStack.Peek().SymbolIndex];
+                symbol.ContainerKind = "heading";
+                symbol.ContainerName = parent.Name;
+            }
+
+            (symbols ??= []).Add(symbol);
+        }
     }
 
     private static bool TryToggleMarkdownFence(
@@ -739,17 +850,6 @@ public static partial class SymbolExtractor
 
         headingText = headingSpan.ToString();
         return true;
-    }
-
-    private static string NormalizeMarkdownAnchorTarget(string target)
-    {
-        var normalized = target.AsSpan().Trim();
-        if (normalized.Length >= 2 && normalized[0] == '<' && normalized[^1] == '>')
-            normalized = normalized[1..^1].Trim();
-
-        return normalized.StartsWith("#", StringComparison.Ordinal)
-            ? normalized[1..].ToString()
-            : normalized.ToString();
     }
 
     private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string rawText, string[] lines)
@@ -2633,11 +2733,6 @@ public static partial class SymbolExtractor
         }
         return lo + 1;
     }
-
-    private static readonly Regex MarkdownLocalAnchorLinkRegex = new(@"(?<!\!)\[[^\]]+\]\(\s*(?<target>#[^) \t]+)\s*\)", RegexOptions.Compiled);
-    private static readonly Regex MarkdownLocalAnchorReferenceRegex = new(@"(?<!\!)\[[^\]]+\]:\s*(?<target>#[^\s>]+)", RegexOptions.Compiled);
-    private static readonly Regex MarkdownReferenceDefinitionRegex = new(@"^\s{0,3}\[(?<label>[^\]]+)\]:\s*(?<target>.+?)\s*$", RegexOptions.Compiled);
-    private static readonly Regex MarkdownReferenceLinkRegex = new(@"(?<!\!)\[[^\]]+\]\[(?<label>[^\]]*)\]", RegexOptions.Compiled);
 
     private static readonly string[] HtmlRawTextElementNames = ["script", "style", "textarea", "title"];
 

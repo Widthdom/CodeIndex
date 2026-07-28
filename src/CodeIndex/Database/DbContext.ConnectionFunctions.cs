@@ -32,6 +32,11 @@ public partial class DbContext : IDisposable
             "markdown_resolve_path",
             (string? sourcePath, string? targetPath) => DbReader.ResolveMarkdownDependencyPath(sourcePath, targetPath));
         connection.CreateFunction(
+            "markdown_normalize_fragment",
+            (string? fragment) => fragment == null
+                ? null
+                : MarkdownAnchorIdentity.NormalizeHeadingFragment(fragment));
+        connection.CreateFunction(
             "python_import_resolves",
             (string? sourcePath, string? targetPath, string? referenceName, string? referenceKind, string? context, long? columnNumber, string? signature) =>
                 PythonImportBindingResolver.ResolvesDependency(sourcePath, targetPath, referenceName, referenceKind, context, columnNumber, signature));

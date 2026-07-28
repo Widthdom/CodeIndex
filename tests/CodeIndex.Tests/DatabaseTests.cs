@@ -422,7 +422,7 @@ public class DatabaseTests : IDisposable
             candidateSql,
             StringComparison.Ordinal);
         Assert.Equal(
-            12,
+            14,
             candidateSql.Split(
                 "FROM temp.reference_graph_dirty_references AS dirty_reference",
                 StringSplitOptions.None).Length - 1);
@@ -433,7 +433,7 @@ public class DatabaseTests : IDisposable
                 "INSERT INTO symbol_reference_candidates",
                 StringComparison.Ordinal))
             .ToArray();
-        Assert.Equal(12, candidateInserts.Length);
+        Assert.Equal(14, candidateInserts.Length);
         foreach (var statement in candidateInserts)
         {
             var plan = ReadQueryPlanDetails(_db.Connection, statement);

@@ -94,9 +94,10 @@ public partial class DbWriter
 
     public bool AllFoldedColumnValuesMatchCurrentFold()
     {
+        var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var symbols = RentCommand(
             """
-            SELECT s.name, s.name_folded, f.lang
+            SELECT s.id, s.name, s.name_folded, f.lang, s.kind
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.name IS NOT NULL
@@ -107,10 +108,13 @@ public partial class DbWriter
             using var reader = symbols.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
-                var expected = DbReader.FoldNameForLanguage(
-                    reader.GetString(0),
-                    reader.IsDBNull(2) ? null : reader.GetString(2));
-                var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var expected = FoldPersistedSymbolName(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.GetString(4),
+                    markdownSymbolIdentityFolds);
+                var actual = reader.IsDBNull(2) ? null : reader.GetString(2);
                 if (!string.Equals(actual, expected, StringComparison.Ordinal))
                     return false;
             }
@@ -124,7 +128,7 @@ public partial class DbWriter
             @"
                 SELECT r.symbol_name, r.symbol_name_folded,
                        r.container_name, r.container_name_folded,
-                       f.lang
+                       f.lang, r.reference_kind
                 FROM symbol_references r
                 JOIN files f ON f.id = r.file_id
                 WHERE r.symbol_name IS NOT NULL OR r.container_name IS NOT NULL",
@@ -136,9 +140,10 @@ public partial class DbWriter
             {
                 if (!reader.IsDBNull(0))
                 {
-                    var expected = DbReader.FoldNameForLanguage(
+                    var expected = FoldPersistedReferenceName(
                         reader.GetString(0),
-                        reader.IsDBNull(4) ? null : reader.GetString(4));
+                        reader.IsDBNull(4) ? null : reader.GetString(4),
+                        reader.GetString(5));
                     var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
                     if (!string.Equals(actual, expected, StringComparison.Ordinal))
                         return false;
@@ -372,18 +377,19 @@ public partial class DbWriter
         if (phase == "references")
             return 0;
 
+        var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
-        var rows = new List<(long Id, string Name, string? Lang)>();
+        var rows = new List<(long Id, string Name, string? Lang, string Kind)>();
         var selectSql = rewriteAll
             ? """
-              SELECT s.id, s.name, f.lang
+              SELECT s.id, s.name, f.lang, s.kind
               FROM symbols s
               JOIN files f ON f.id = s.file_id
               WHERE s.name IS NOT NULL AND s.id > @lastSymbolId
               ORDER BY s.id
               """
             : """
-              SELECT s.id, s.name, f.lang
+              SELECT s.id, s.name, f.lang, s.kind
               FROM symbols s
               JOIN files f ON f.id = s.file_id
               WHERE s.name IS NOT NULL AND s.name_folded IS NULL
@@ -404,7 +410,8 @@ public partial class DbWriter
                 rows.Add((
                     reader.GetInt64(0),
                     reader.GetString(1),
-                    reader.IsDBNull(2) ? null : reader.GetString(2)));
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.GetString(3)));
             }
         }
         finally
@@ -429,7 +436,12 @@ public partial class DbWriter
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                pFolded.Value = DbReader.FoldNameForLanguage(row.Name, row.Lang);
+                pFolded.Value = FoldPersistedSymbolName(
+                    row.Id,
+                    row.Name,
+                    row.Lang,
+                    row.Kind,
+                    markdownSymbolIdentityFolds);
                 pId.Value = row.Id;
                 update.ExecuteNonQuery();
                 if (rewriteAll)
@@ -445,13 +457,88 @@ public partial class DbWriter
         return rows.Count;
     }
 
+    private Dictionary<long, string> BuildMarkdownSymbolIdentityFoldMap()
+    {
+        var identities = new Dictionary<long, string>();
+        var usedHeadingIdentitiesByFile = new Dictionary<long, HashSet<string>>();
+        var select = RentCommand(
+            """
+            SELECT s.id, s.file_id, s.kind, s.name
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.lang = 'markdown'
+              AND s.kind IN ('heading', 'anchor')
+              AND s.name IS NOT NULL
+            ORDER BY s.file_id, COALESCE(s.start_line, s.line), s.id
+            """,
+            static _ => { });
+        try
+        {
+            using var reader = select.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var symbolId = reader.GetInt64(0);
+                var fileId = reader.GetInt64(1);
+                var kind = reader.GetString(2);
+                var name = reader.GetString(3);
+                if (kind == "heading")
+                {
+                    if (!usedHeadingIdentitiesByFile.TryGetValue(fileId, out var usedHeadingIdentities))
+                    {
+                        usedHeadingIdentities = new HashSet<string>(StringComparer.Ordinal);
+                        usedHeadingIdentitiesByFile.Add(fileId, usedHeadingIdentities);
+                    }
+
+                    identities.Add(
+                        symbolId,
+                        MarkdownAnchorIdentity.CreateUniqueHeadingIdentity(name, usedHeadingIdentities));
+                }
+                else
+                {
+                    identities.Add(symbolId, MarkdownAnchorIdentity.NormalizeExplicitAnchorDefinition(name));
+                }
+            }
+        }
+        finally
+        {
+            ReleaseCommand(select);
+        }
+
+        return identities;
+    }
+
+    private static string FoldPersistedSymbolName(
+        long symbolId,
+        string name,
+        string? lang,
+        string kind,
+        IReadOnlyDictionary<long, string> markdownSymbolIdentityFolds)
+    {
+        if (lang == "markdown"
+            && (kind == "heading" || kind == "anchor")
+            && markdownSymbolIdentityFolds.TryGetValue(symbolId, out var identity))
+        {
+            return identity;
+        }
+
+        return DbReader.FoldNameForLanguage(name, lang);
+    }
+
+    private static string FoldPersistedReferenceName(string name, string? lang, string referenceKind)
+    {
+        if (lang == "markdown" && referenceKind == "reference")
+            return MarkdownAnchorIdentity.NormalizeHeadingFragment(name);
+
+        return DbReader.FoldNameForLanguage(name, lang);
+    }
+
     private int BackfillReferenceFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
-        var rows = new List<(long Id, string? SymbolName, string? ContainerName, string? Lang)>();
+        var rows = new List<(long Id, string? SymbolName, string? ContainerName, string? Lang, string ReferenceKind)>();
         var selectSql = rewriteAll
             ? """
-              SELECT r.id, r.symbol_name, r.container_name, f.lang
+              SELECT r.id, r.symbol_name, r.container_name, f.lang, r.reference_kind
               FROM symbol_references r
               JOIN files f ON f.id = r.file_id
               WHERE r.id > @lastReferenceId
@@ -459,7 +546,7 @@ public partial class DbWriter
               ORDER BY r.id
               """
             : """
-              SELECT r.id, r.symbol_name, r.container_name, f.lang
+              SELECT r.id, r.symbol_name, r.container_name, f.lang, r.reference_kind
               FROM symbol_references r
               JOIN files f ON f.id = r.file_id
               WHERE (r.symbol_name IS NOT NULL AND r.symbol_name_folded IS NULL)
@@ -482,7 +569,8 @@ public partial class DbWriter
                     reader.GetInt64(0),
                     reader.IsDBNull(1) ? null : reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3)));
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.GetString(4)));
             }
         }
         finally
@@ -514,7 +602,7 @@ public partial class DbWriter
                 cancellationToken.ThrowIfCancellationRequested();
                 pSymbolNameFolded.Value = row.SymbolName == null
                     ? DBNull.Value
-                    : DbReader.FoldNameForLanguage(row.SymbolName, row.Lang);
+                    : FoldPersistedReferenceName(row.SymbolName, row.Lang, row.ReferenceKind);
                 pContainerNameFolded.Value = row.ContainerName == null
                     ? DBNull.Value
                     : DbReader.FoldNameForLanguage(row.ContainerName, row.Lang);

@@ -23,9 +23,11 @@ public static partial class QueryCommandRunner
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
+        using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
+            options.Lang);
         if (TryWriteUnsupportedOptionError("unused", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("unused")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "unused"))
+        if (TryWriteParseError(options, "unused", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "unused", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
