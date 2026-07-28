@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -1230,10 +1231,20 @@ public class ExportImportCommandRunnerTests
             var comparison = delta.GetProperty("comparison");
             Assert.Equal(1, comparison.GetProperty("limit").GetInt32());
             Assert.Equal(0, comparison.GetProperty("offset").GetInt32());
-            Assert.NotEmpty(comparison.GetProperty("symbols_only_in_left").EnumerateArray());
-            Assert.NotEmpty(comparison.GetProperty("symbols_only_in_right").EnumerateArray());
-            Assert.NotEmpty(comparison.GetProperty("chunks_only_in_left").EnumerateArray());
-            Assert.NotEmpty(comparison.GetProperty("chunks_only_in_right").EnumerateArray());
+            var record = Assert.Single(comparison.GetProperty("records").EnumerateArray());
+            Assert.Equal("file", record.GetProperty("area").GetString());
+            Assert.True(record.GetProperty("side").GetString() is "left" or "right");
+            Assert.False(string.IsNullOrEmpty(record.GetProperty("identity_sha256").GetString()));
+            Assert.Contains(
+                record.GetProperty("fields").EnumerateArray(),
+                field =>
+                    field.GetProperty("name").GetString() == "path"
+                    && field.GetProperty("redacted").GetBoolean());
+            Assert.True(comparison.GetProperty("has_more").GetBoolean());
+            Assert.Equal(1, comparison.GetProperty("returned_count").GetInt32());
+            Assert.True(comparison.GetProperty("omitted_count").GetInt64() > 0);
+            Assert.DoesNotContain("public class Imported", stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("public class Existing", stdout, StringComparison.Ordinal);
         }
         finally
         {
@@ -1302,9 +1313,20 @@ public class ExportImportCommandRunnerTests
                 .GetProperty("destination_delta")
                 .GetProperty("comparison");
             Assert.False(comparison.GetProperty("identical").GetBoolean());
+            var expectedPathHash = Convert.ToHexString(
+                    SHA256.HashData(Encoding.UTF8.GetBytes("src/WalOnly.cs")))
+                .ToLowerInvariant();
             Assert.Contains(
-                comparison.GetProperty("files_only_in_left").EnumerateArray(),
-                item => item.GetString() == "src/WalOnly.cs");
+                comparison.GetProperty("records").EnumerateArray(),
+                record =>
+                    record.GetProperty("area").GetString() == "file"
+                    && record.GetProperty("side").GetString() == "left"
+                    && record.GetProperty("fields").EnumerateArray().Any(
+                        field =>
+                            field.GetProperty("name").GetString() == "path"
+                            && field.GetProperty("sha256").GetString() == expectedPathHash
+                            && field.GetProperty("redacted").GetBoolean()));
+            Assert.DoesNotContain("src/WalOnly.cs", stdout, StringComparison.Ordinal);
         }
         finally
         {
