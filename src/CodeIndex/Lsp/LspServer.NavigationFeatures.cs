@@ -136,20 +136,14 @@ internal sealed partial class LspServer : IDisposable
         if (!TryResolveIndexedDocument(root, out var document))
             return new JsonObject { ["data"] = new JsonArray() };
 
-        var lineCache = new Dictionary<int, string?>();
-        var symbols = GetDocumentSymbols(document.IndexedPath, MaxSemanticTokenItems)
-            .Where(symbol => !string.IsNullOrWhiteSpace(symbol.Name))
-            .Take(MaxSemanticTokenItems)
-            .Select(symbol => BuildSemanticToken(document, symbol, lineCache))
-            .Where(token => token.HasValue)
-            .Select(token => token!.Value)
-            .OrderBy(token => token.Line)
-            .ThenBy(token => token.StartCharacter)
-            .ToList();
-        IEnumerable<SemanticToken> lexicalTokens = string.Equals(Path.GetExtension(document.ResolvedPath), ".cs", StringComparison.OrdinalIgnoreCase)
-            ? BuildCSharpLexicalSemanticTokens(document, lineCache)
-            : [];
-        symbols = RemoveOverlappingSemanticTokens(lexicalTokens.Concat(symbols))
+        var isCSharp = string.Equals(
+            Path.GetExtension(document.ResolvedPath),
+            ".cs",
+            StringComparison.OrdinalIgnoreCase);
+        var symbols = isCSharp
+            ? BuildCSharpSemanticTokens(document).ToList()
+            : BuildIndexedSemanticTokens(document);
+        symbols = symbols
             .OrderBy(token => token.Line)
             .ThenBy(token => token.StartCharacter)
             .ToList();
@@ -170,6 +164,20 @@ internal sealed partial class LspServer : IDisposable
         }
 
         return new JsonObject { ["data"] = data };
+    }
+
+    private List<SemanticToken> BuildIndexedSemanticTokens(IndexedDocumentContext document)
+    {
+        var lineCache = new Dictionary<int, string?>();
+        return GetDocumentSymbols(document.IndexedPath, MaxSemanticTokenItems)
+            .Where(symbol => !string.IsNullOrWhiteSpace(symbol.Name))
+            .Take(MaxSemanticTokenItems)
+            .Select(symbol => BuildSemanticToken(document, symbol, lineCache))
+            .Where(token => token.HasValue)
+            .Select(token => token!.Value)
+            .OrderBy(token => token.Line)
+            .ThenBy(token => token.StartCharacter)
+            .ToList();
     }
 
     private JsonArray InlayHint(JsonElement root)

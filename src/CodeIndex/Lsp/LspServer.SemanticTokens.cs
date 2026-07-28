@@ -11,6 +11,7 @@ using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
 using CodeIndex.Security;
+using CodeIndex.Semantics;
 
 namespace CodeIndex.Lsp;
 
@@ -18,207 +19,24 @@ internal sealed partial class LspServer : IDisposable
 {
     private readonly record struct SemanticToken(int Line, int StartCharacter, int Length, int TokenType, int TokenModifiers);
 
-    private static IEnumerable<SemanticToken> RemoveOverlappingSemanticTokens(IEnumerable<SemanticToken> candidates)
+    private IEnumerable<SemanticToken> BuildCSharpSemanticTokens(IndexedDocumentContext document)
     {
-        var selected = new List<SemanticToken>();
-        foreach (var candidate in candidates)
+        if (!TryReadAllPositionLines(document.ResolvedPath, out var sourceLines))
         {
-            if (selected.Any(existing =>
-                    existing.Line == candidate.Line &&
-                    existing.StartCharacter < candidate.StartCharacter + candidate.Length &&
-                    candidate.StartCharacter < existing.StartCharacter + existing.Length))
-            {
-                continue;
-            }
-
-            selected.Add(candidate);
-            if (selected.Count == MaxSemanticTokenItems)
-                break;
+            foreach (var indexedToken in BuildIndexedSemanticTokens(document))
+                yield return indexedToken;
+            yield break;
         }
-        return selected;
-    }
 
-    private static readonly HashSet<string> CSharpModifiers = new(StringComparer.Ordinal)
-    {
-        "abstract", "async", "const", "extern", "file", "internal", "override", "partial",
-        "private", "protected", "public", "readonly", "required", "sealed", "static", "unsafe", "virtual", "volatile",
-    };
-
-    private static readonly HashSet<string> CSharpKeywords = new(StringComparer.Ordinal)
-    {
-        "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked", "class", "continue",
-        "decimal", "default", "delegate", "do", "double", "else", "enum", "event", "explicit", "false", "finally",
-        "fixed", "float", "for", "foreach", "goto", "if", "implicit", "in", "int", "interface", "is", "lock",
-        "long", "namespace", "new", "null", "object", "operator", "out", "params", "record", "ref", "return", "sbyte",
-        "short", "sizeof", "stackalloc", "string", "struct", "switch", "this", "throw", "true", "try", "typeof",
-        "uint", "ulong", "unchecked", "using", "ushort", "void", "while", "with", "yield",
-    };
-
-    private IEnumerable<SemanticToken> BuildCSharpLexicalSemanticTokens(
-        IndexedDocumentContext document,
-        Dictionary<int, string?> lineCache)
-    {
-        var inBlockComment = false;
-        var stringMode = CSharpStringMode.None;
-        var rawQuoteCount = 0;
-        var ordinaryQuote = '\0';
-        for (var line = 0; line < MaxSemanticTokenItems; line++)
+        foreach (var token in CSharpSemanticTokenClassifier.Classify(sourceLines, MaxSemanticTokenItems))
         {
-            if (!TryReadPositionLineCached(document.ResolvedPath, line, lineCache, out var sourceLine))
-                yield break;
-
-            for (var index = 0; index < sourceLine.Length;)
-            {
-                if (inBlockComment)
-                {
-                    var end = sourceLine.IndexOf("*/", index, StringComparison.Ordinal);
-                    if (end < 0)
-                        break;
-                    inBlockComment = false;
-                    index = end + 2;
-                    continue;
-                }
-
-                if (stringMode == CSharpStringMode.Raw)
-                {
-                    var end = FindRawStringEnd(sourceLine, index, rawQuoteCount);
-                    if (end < 0)
-                        break;
-                    stringMode = CSharpStringMode.None;
-                    index = end;
-                    continue;
-                }
-
-                if (stringMode == CSharpStringMode.Verbatim)
-                {
-                    var end = sourceLine.IndexOf('"', index);
-                    if (end < 0)
-                        break;
-                    if (end + 1 < sourceLine.Length && sourceLine[end + 1] == '"')
-                    {
-                        index = end + 2;
-                        continue;
-                    }
-                    stringMode = CSharpStringMode.None;
-                    index = end + 1;
-                    continue;
-                }
-
-                if (stringMode == CSharpStringMode.Ordinary)
-                {
-                    if (sourceLine[index] == '\\')
-                    {
-                        index = Math.Min(index + 2, sourceLine.Length);
-                        continue;
-                    }
-                    if (sourceLine[index++] == ordinaryQuote)
-                        stringMode = CSharpStringMode.None;
-                    continue;
-                }
-
-                if (index + 1 < sourceLine.Length && sourceLine[index] == '/' && sourceLine[index + 1] == '/')
-                    break;
-                if (index + 1 < sourceLine.Length && sourceLine[index] == '/' && sourceLine[index + 1] == '*')
-                {
-                    inBlockComment = true;
-                    index += 2;
-                    continue;
-                }
-                var quoteCount = CountConsecutive(sourceLine, index, '"');
-                if (quoteCount >= 3)
-                {
-                    stringMode = CSharpStringMode.Raw;
-                    rawQuoteCount = quoteCount;
-                    index += quoteCount;
-                    continue;
-                }
-                if (sourceLine[index] == '@' && index + 1 < sourceLine.Length && sourceLine[index + 1] == '"')
-                {
-                    stringMode = CSharpStringMode.Verbatim;
-                    index += 2;
-                    continue;
-                }
-                if (sourceLine[index] == '@' && index + 2 < sourceLine.Length && sourceLine[index + 1] == '$' && sourceLine[index + 2] == '"')
-                {
-                    stringMode = CSharpStringMode.Verbatim;
-                    index += 3;
-                    continue;
-                }
-                if (sourceLine[index] is '\'' or '"')
-                {
-                    stringMode = CSharpStringMode.Ordinary;
-                    ordinaryQuote = sourceLine[index];
-                    index++;
-                    continue;
-                }
-                if (!IsCSharpIdentifierStart(sourceLine[index]))
-                {
-                    index++;
-                    continue;
-                }
-
-                var start = index++;
-                while (index < sourceLine.Length && IsTokenChar(sourceLine[index]))
-                    index++;
-                var word = sourceLine[start..index].TrimStart('@');
-                if (CSharpModifiers.Contains(word))
-                    yield return new SemanticToken(line, start, index - start, 16, 0);
-                else if (CSharpKeywords.Contains(word))
-                    yield return new SemanticToken(line, start, index - start, 15, 0);
-                else if (IsCSharpNamespaceComponent(sourceLine, start))
-                    yield return new SemanticToken(line, start, index - start, 0, 0);
-            }
+            yield return new SemanticToken(
+                token.Line,
+                token.StartCharacter,
+                token.Length,
+                CSharpSemanticTokenClassifier.ToLspTokenType(token.Kind),
+                token.IsDeclaration ? 1 << 0 : 0);
         }
-    }
-
-    private static bool IsCSharpIdentifierStart(char value) => char.IsLetter(value) || value is '_' or '@';
-
-    private enum CSharpStringMode
-    {
-        None,
-        Ordinary,
-        Verbatim,
-        Raw,
-    }
-
-    private static int CountConsecutive(string text, int start, char value)
-    {
-        var index = start;
-        while (index < text.Length && text[index] == value)
-            index++;
-        return index - start;
-    }
-
-    private static int FindRawStringEnd(string line, int start, int quoteCount)
-    {
-        for (var index = start; index < line.Length; index++)
-        {
-            if (line[index] == '"' && CountConsecutive(line, index, '"') >= quoteCount)
-                return index + quoteCount;
-        }
-        return -1;
-    }
-
-    private static bool IsCSharpNamespaceComponent(string line, int start)
-    {
-        var trimmedStart = line.Length - line.AsSpan().TrimStart().Length;
-        var trimmedLine = line.AsSpan(trimmedStart);
-        var nameStart = trimmedLine.StartsWith("global using ", StringComparison.Ordinal)
-            ? trimmedStart + "global using ".Length
-            : trimmedLine.StartsWith("using ", StringComparison.Ordinal)
-                ? trimmedStart + "using ".Length
-                : trimmedLine.StartsWith("namespace ", StringComparison.Ordinal)
-                    ? trimmedStart + "namespace ".Length
-                    : -1;
-        if (nameStart < 0 || start < nameStart)
-            return false;
-
-        var semicolon = line.IndexOf(';', nameStart);
-        var brace = line.IndexOf('{', nameStart);
-        var nameEnd = new[] { semicolon, brace }.Where(value => value >= 0).DefaultIfEmpty(line.Length).Min();
-        var alias = line.IndexOf('=', nameStart, Math.Max(0, nameEnd - nameStart));
-        var qualifiedNameStart = alias >= 0 ? alias + 1 : nameStart;
-        return start >= qualifiedNameStart && start < nameEnd;
     }
 
     private SemanticToken? BuildSemanticToken(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?> lineCache)

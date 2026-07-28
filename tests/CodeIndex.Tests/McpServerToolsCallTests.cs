@@ -3749,14 +3749,16 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Map_HeadMetadataUsesMapSnapshot_Issue4573()
+    public void ToolsCall_Map_HeadMetadataUsesMapSnapshot_Issue4573_Issue4854()
     {
+        var legacyFullScanHead = new string('0', 40);
         var initialHead = new string('a', 40);
         var nextHead = new string('b', 40);
         var initialTimestamp = DateTimeOffset.Parse("2026-07-17T01:02:03Z", CultureInfo.InvariantCulture);
         var nextTimestamp = initialTimestamp.AddMinutes(1);
         var writer = new DbWriter(_db.Connection);
         writer.SetMetaValues(
+            (DbContext.IndexedHeadCommitMetaKey, legacyFullScanHead),
             (DbContext.IndexedHeadShaMetaKey, initialHead),
             (DbContext.IndexedHeadTimestampMetaKey, initialTimestamp.ToString("O", CultureInfo.InvariantCulture)));
         RepoMapBuilder.HeadMetadataCapturedForTesting.Value = () => writer.SetMetaValues(
@@ -3770,6 +3772,7 @@ public partial class McpServerTests
             var response = _server.HandleMessage(request)!;
             var structured = response["result"]!["structuredContent"]!;
 
+            Assert.NotEqual(legacyFullScanHead, structured["indexed_head_sha"]!.GetValue<string>());
             Assert.Equal(initialHead, structured["indexed_head_sha"]!.GetValue<string>());
             Assert.Equal(initialTimestamp, structured["indexed_head_timestamp"]!.GetValue<DateTimeOffset>());
             Assert.Equal(initialHead, structured["head_freshness"]!["indexed_head"]!.GetValue<string>());
@@ -5188,6 +5191,8 @@ public partial class McpServerTests
         var count = countResponse["result"]!["structuredContent"]!;
         Assert.Equal("count", count["format"]!.GetValue<string>());
         Assert.Equal(1, count["count"]!.GetValue<int>());
+        Assert.False(count["truncated"]!.GetValue<bool>());
+        Assert.False(count["more_available"]!.GetValue<bool>());
         Assert.Null(count["issues"]);
     }
 

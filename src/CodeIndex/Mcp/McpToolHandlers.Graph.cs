@@ -391,10 +391,66 @@ public partial class McpServer
             return CreateToolErrorResponse(id, sinceError!);
         var orderBySize = args?["orderBySize"]?.GetValue<bool>() ?? false;
         var rawBytes = args?["rawBytes"]?.GetValue<bool>() ?? false;
-
-        return WithDbReader(id, args, reader =>
+        var includeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
+        var rawCursor = args?["cursor"]?.GetValue<string>();
+        McpQueryCursor? cursor = null;
+        if (rawCursor is not null && !TryParseMcpQueryCursor(rawCursor, out cursor))
         {
-            var results = reader.ListFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, since, orderBySize || rawBytes);
+            return CreateMcpCursorError(
+                id,
+                "files",
+                "cursor_malformed",
+                "cursor must be an opaque response:v2 next_cursor returned by files.",
+                stale: false);
+        }
+
+        return WithDbReader(id, args, reader => reader.RunInReadSnapshot(() =>
+        {
+            var queryFingerprint = BuildMcpQueryFingerprint(
+                "files",
+                limit,
+                "full",
+                new Dictionary<string, string?>
+                {
+                    ["query"] = query,
+                    ["lang"] = lang,
+                    ["since"] = since?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+                    ["exclude-tests"] = excludeTests ? "true" : "false",
+                    ["include-generated"] = includeGenerated ? "true" : "false",
+                    ["order-by-size"] = orderBySize ? "true" : "false",
+                    ["raw-bytes"] = rawBytes ? "true" : "false",
+                },
+                ("path", pathPatterns, PreserveOrder: false),
+                ("exclude-path", excludePaths, PreserveOrder: false));
+            var generation = InspectGraphCursorCodec.BuildGenerationFingerprint(reader);
+            var total = reader.CountListFiles(
+                query,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                since).Count;
+            if (ValidateMcpQueryCursor(
+                    id,
+                    "files",
+                    cursor,
+                    queryFingerprint,
+                    generation.Fingerprint,
+                    total) is JsonObject cursorError)
+            {
+                return cursorError;
+            }
+            var offset = cursor?.Offset ?? 0;
+            var results = reader.ListFiles(
+                query,
+                limit,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                since,
+                orderBySize || rawBytes,
+                offset);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -408,6 +464,14 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddMcpPaginationEnvelope(
+                    payload,
+                    total,
+                    returnedCount: 0,
+                    offset,
+                    limit,
+                    queryFingerprint,
+                    generation);
                 if (rawBytes)
                 {
                     payload["raw_bytes_payload_supported"] = false;
@@ -429,6 +493,14 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            AddMcpPaginationEnvelope(
+                structured,
+                total,
+                results.Count,
+                offset,
+                limit,
+                queryFingerprint,
+                generation);
             if (rawBytes)
             {
                 structured["raw_bytes_payload_supported"] = false;
@@ -436,7 +508,7 @@ public partial class McpServer
             }
             adjustments.ApplyTo(structured);
             return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "file"), structured);
-        });
+        }));
     }
 
     private JsonNode ExecuteMap(JsonNode? id, JsonNode? args)
