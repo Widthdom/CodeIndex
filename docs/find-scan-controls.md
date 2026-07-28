@@ -40,7 +40,9 @@ completed page.
 When count mode reaches a scan cap, its `count` is the count for that partial
 scan page and `next_cursor` resumes at the next line boundary. Continue until
 `has_more=false`; summing the page counts yields the complete count for an
-unchanged indexed source.
+unchanged indexed source. Because a resumed page contains only its segment of
+the total, every resumed count page keeps `authoritative_count=false`, including
+the final page.
 
 For scoped `--path` searches, `--format compact` returns locations only. Use
 text or JSON output when context from `--before`, `--after`, or
@@ -83,6 +85,8 @@ timeout になった request は continuation cursor を進めたり新しく発
 count mode が scan cap に達した場合、`count` はその部分 scan page の件数となり、
 `next_cursor` は次の line boundary から再開します。`has_more=false` になるまで続けると、
 変更されていない indexed source では各 page の count の合計が完全な件数になります。
+再開後の page は全体の一部分だけを含むため、最終 page を含むすべての再開 count page で
+`authoritative_count=false` のままになります。
 
 `--path` で scope を限定した検索では、`--format compact` は location のみを返します。
 `--before`、`--after`、`--snippet-lines` の context が必要な場合は text または

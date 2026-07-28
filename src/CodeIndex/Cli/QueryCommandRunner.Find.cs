@@ -134,10 +134,12 @@ public static partial class QueryCommandRunner
             if (options.CountOnly)
             {
                 FindCountResult counts;
+                var resumedCountPage = false;
                 try
                 {
                     var (countResumePath, countResumeLine, countResumeFileOrdinal, countResumeMatchOrdinal, countResumeByteOffset)
                         = JsonEnvelopeWrapper.GetStandaloneFindResume(cmdArgs, reader);
+                    resumedCountPage = countResumePath is not null;
                     counts = reader.CountFindInFiles(
                         options.Query,
                         options.Lang,
@@ -192,12 +194,21 @@ public static partial class QueryCommandRunner
                                     resultStableAt: countFindResume.ResultStableAt);
                             }
                         });
+                    if (resumedCountPage)
+                    {
+                        payload["degraded"] = true;
+                        payload["authoritative_count"] = false;
+                    }
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
                     Console.WriteLine($"{counts.Count}");
-                    WriteFindScanSummary(counts.Scan, countMode: true, nextCursor: countFindResume.Cursor);
+                    WriteFindScanSummary(
+                        counts.Scan,
+                        countMode: true,
+                        resumedCountPage: resumedCountPage,
+                        nextCursor: countFindResume.Cursor);
                 }
                 return FindScanExitCode(options, counts.Scan);
             }
@@ -816,6 +827,7 @@ public static partial class QueryCommandRunner
         FindScanSummary scan,
         bool resultLimitReached = false,
         bool countMode = false,
+        bool resumedCountPage = false,
         string? nextCursor = null)
     {
         var summary = $"scanned {scan.FilesScanned}/{scan.CandidateFiles} candidate files, {ConsoleUi.Counted(scan.LinesScanned, "line")}";
@@ -831,7 +843,7 @@ public static partial class QueryCommandRunner
         var scanComplete = !scan.Truncated && !resultLimitReached;
         summary += $"; scan_complete={scanComplete.ToString().ToLowerInvariant()}";
         summary += countMode
-            ? $"; authoritative_count={(!scan.Truncated).ToString().ToLowerInvariant()}"
+            ? $"; authoritative_count={(!scan.Truncated && !resumedCountPage).ToString().ToLowerInvariant()}"
             : $"; authoritative_rows={scanComplete.ToString().ToLowerInvariant()}";
         var continuationAction = FindScanContinuationAction(scan, resultLimitReached);
         if (continuationAction != null)

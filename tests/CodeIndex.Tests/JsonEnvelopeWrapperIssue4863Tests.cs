@@ -217,6 +217,59 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
     }
 
     [Fact]
+    public void FindAll_CursorIsBoundToRowOrCountScanMode_Issue4863()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("find_cursor_scan_mode_4863");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Rows.txt",
+                "text",
+                "Needle one\nNeedle two\nNeedle three\n");
+            var rowArgs = new[]
+            {
+                "find", "Needle", "--db", dbPath, "--all", "--exact",
+                "--json=ndjson", "--limit", "1",
+            };
+            var rowCursor = Assert.IsType<string>(RunFindPage(rowArgs, cursor: null).NextCursor);
+            var countArgs = new[]
+            {
+                "find", "Needle", "--db", dbPath, "--all", "--exact", "--count",
+                "--json", "--line-scan-limit", "1", "--allow-partial",
+            };
+            var (countExitCode, countStdout, countStderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(countArgs, _jsonOptions, "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            using var countDocument = JsonDocument.Parse(countStdout);
+            var countCursor = Assert.IsType<string>(
+                countDocument.RootElement.GetProperty("next_cursor").GetString());
+
+            AssertCursorFailure(
+                rowArgs.Concat(["--cursor", countCursor]).ToArray(),
+                "cursor_mismatch");
+
+            var (resumeExitCode, resumeStdout, resumeStderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    countArgs.Concat(["--cursor", rowCursor]).ToArray(),
+                    _jsonOptions,
+                    "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.UsageError, resumeExitCode);
+            Assert.Equal(string.Empty, resumeStderr);
+            using var resumeDocument = JsonDocument.Parse(resumeStdout);
+            Assert.Equal(
+                "cursor_mismatch",
+                resumeDocument.RootElement.GetProperty("category").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void FindContinuationIsExposedInHelpAndFlagSchema_Issue4863()
     {
         var cursorFlag = Assert.Single(
@@ -434,6 +487,7 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
                 using var document = JsonDocument.Parse(stdout);
                 var root = document.RootElement;
                 counts.Add(root.GetProperty("count").GetInt32());
+                Assert.False(root.GetProperty("authoritative_count").GetBoolean());
                 cursor = root.GetProperty("next_cursor").GetString();
                 Assert.Equal(root.GetProperty("has_more").GetBoolean(), cursor is not null);
                 Assert.True(counts.Count <= 3, "count cursor page walk did not make forward progress.");
@@ -442,6 +496,40 @@ public sealed class JsonEnvelopeWrapperIssue4863Tests
 
             Assert.Equal(new[] { 2, 1, 1 }, counts);
             Assert.Equal(4, counts.Sum());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--fields", "path")]
+    [InlineData("--max-json-bytes", "4096")]
+    public void FindAll_CountRejectsBoundedRowControls_Issue4863(
+        string control,
+        string value)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("find_count_bounded_control_4863");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Count.txt", "text", "Needle\n");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    [
+                        "find", "Needle", "--db", dbPath, "--all", "--exact",
+                        "--count", "--json", control, value,
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains(
+                "cannot be combined with --count",
+                stdout + stderr,
+                StringComparison.Ordinal);
         }
         finally
         {

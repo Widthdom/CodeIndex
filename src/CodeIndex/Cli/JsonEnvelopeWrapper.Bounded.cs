@@ -61,7 +61,7 @@ internal static partial class JsonEnvelopeWrapper
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
-        if (command == "find" && IsFindCountResponseRequest(args))
+        if (command == "find" && IsStandaloneFindCountContinuationRequest(args))
             return false;
         if (HasArgument(args, "--fields") || HasArgument(args, "--cursor"))
             return true;
@@ -82,8 +82,6 @@ internal static partial class JsonEnvelopeWrapper
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
-        if (command == "find" && IsFindCountResponseRequest(args))
-            return false;
 
         return HasArgument(args, "--fields")
                || HasArgument(args, "--cursor")
@@ -91,6 +89,14 @@ internal static partial class JsonEnvelopeWrapper
                || (command != "search" && HasEnvelopeFlag(args) && HasArgument(args, "--max-json-bytes"))
                || ShouldAutoWrapBoundedResponse(command, args);
     }
+
+    private static bool IsStandaloneFindCountContinuationRequest(string[] args)
+        => IsFindCountResponseRequest(args)
+           && HasArgument(args, "--cursor")
+           && !HasArgument(args, "--fields")
+           && !HasArgument(args, "--max-json-bytes")
+           && !HasCompactOutputSelection(args)
+           && !HasEnvelopeFlag(args);
 
     private static bool IsFindCountResponseRequest(string[] args)
     {
@@ -184,7 +190,8 @@ internal static partial class JsonEnvelopeWrapper
                 CommandExitCodes.UsageError,
                 controls.MaxJsonBytes);
         }
-        if (HasArgument(args, "--count"))
+        if (HasArgument(args, "--count")
+            || command == "find" && IsFindCountResponseRequest(args))
             return WriteBoundedResponseUsageError("Bounded response controls cannot be combined with --count.", "Run --count --json separately for a count-only response, or remove --count to page projected rows.");
         if (command == "map" && ValidateMapProjectionControls(args, controls.Fields) is { } mapProjectionError)
             return WriteBoundedResponseUsageError(mapProjectionError, "Remove the conflicting map filter, or select a collection enabled by --sections.");
@@ -1285,11 +1292,16 @@ internal static partial class JsonEnvelopeWrapper
 
     private static string BuildResponseFingerprint(string command, string[] args)
     {
+        var scanMode = command == "find"
+            ? IsFindCountResponseRequest(args) ? "count" : "rows"
+            : null;
         var normalized = StripResponseOptions(args, stripLimit: true);
         normalized.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
         normalized.RemoveAll(arg => arg is "--allow-partial" or "--results-only" or "--verbose" or "--profile");
         RemoveOptionWithValue(normalized, "--line-scan-limit");
         var input = command + "\0" + string.Join('\0', normalized);
+        if (scanMode is not null)
+            input += "\0scan-mode=" + scanMode;
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(input));
         return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
     }
