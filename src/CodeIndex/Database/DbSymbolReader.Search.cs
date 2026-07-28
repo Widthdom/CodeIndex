@@ -395,6 +395,16 @@ public partial class DbReader
                 }
                 if (SqlNameResolver.HasQualifier(value))
                     AddQualifiedSymbolQueryParameters(cmd, $"query{i}", value);
+                var rustQualifiedExact = ShouldPreserveRustQualifiedExactQuery(value, lang, exact);
+                var rustQualifiedParts = rustQualifiedExact
+                    ? NormalizeRustQualifiedExactQueryParts(value)
+                    : default;
+                if (rustQualifiedParts.QualifiedPath != null)
+                {
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}RustContainer", rustQualifiedParts.ContainerPath ?? string.Empty);
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}RustLeaf", rustQualifiedParts.LeafName ?? string.Empty);
+                    SqliteCommandPolicy.Add(cmd, $"@query{i}RustLeafFolded", NameFold.Fold(rustQualifiedParts.LeafName ?? string.Empty) ?? rustQualifiedParts.LeafName ?? string.Empty);
+                }
                 var swiftBacktickAlias = ComputeSwiftBacktickAlias(value, lang);
                 if (swiftBacktickAlias != null)
                 {

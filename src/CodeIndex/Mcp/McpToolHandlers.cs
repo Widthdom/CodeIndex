@@ -1214,6 +1214,8 @@ public partial class McpServer
                 ("path", pathPatterns, PreserveOrder: false),
                 ("exclude-path", excludePaths, PreserveOrder: false));
             var generation = BuildMcpGenerationFingerprint(reader, includeIssueState: true);
+            var issuesTableAvailable = reader._hasIssuesPhysicalTable;
+            var issuesDataCurrent = reader._hasIssuesTable;
             var total = reader.CountIssues(
                 kind,
                 pathPatterns,
@@ -1259,6 +1261,8 @@ public partial class McpServer
                 },
                 ["summary"] = QueryCommandRunner.BuildValidateIssueSummary(issues),
                 ["top_files"] = BuildTopFileHistogram(issues, issue => issue.Path),
+                ["issues_table_available"] = issuesTableAvailable,
+                ["file_issues_data_current"] = issuesDataCurrent,
             };
             if (countOnly)
             {
@@ -1284,7 +1288,8 @@ public partial class McpServer
                     offset,
                     limit,
                     queryFingerprint,
-                    generation);
+                    generation,
+                    totalCountAuthoritative: issuesDataCurrent);
             }
             var summary = issues.Count > 0
                 ? $"Found {issues.Count} encoding issue(s)."

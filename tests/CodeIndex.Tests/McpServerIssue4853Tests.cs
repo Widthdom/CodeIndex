@@ -145,6 +145,67 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void Symbols_ExactQualifiedRustQueryBindsPaginationTotalParameters_Issue4853()
+    {
+        const string path = "src/pagination4853/lib.rs";
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "rust",
+            Size = 80,
+            Lines = 4,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            Checksum = "issue-4853-rust-qualified",
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "build",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                ContainerKind = "module",
+                ContainerName = "macros",
+                ContainerQualifiedName = "crate::macros",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "build",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                ContainerKind = "module",
+                ContainerName = "other",
+                ContainerQualifiedName = "crate::other",
+            },
+        ]);
+
+        var payload = CallIssue4853Tool(
+            _server,
+            "symbols",
+            new JsonObject
+            {
+                ["query"] = "crate::macros::build",
+                ["lang"] = "rust",
+                ["exactName"] = true,
+                ["limit"] = 1,
+                ["format"] = "compact",
+            },
+            id: 23);
+
+        Assert.Equal(1, payload["total_count"]!.GetValue<int>());
+        Assert.True(payload["total_count_authoritative"]!.GetValue<bool>());
+        var result = Assert.Single(payload["results"]!.AsArray());
+        Assert.Equal("build", result!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void DiscoveryTools_BindCursorsToEffectiveReadinessAndRuntimeFoldState_Issue4853()
     {
         SeedIssue4853DiscoveryRows(3);
@@ -204,6 +265,17 @@ public partial class McpServerTests
         Assert.Equal("index_stale", stale["category"]!.GetValue<string>());
         Assert.Equal("cursor_stale", stale["error_code"]!.GetValue<string>());
         Assert.True(stale["retry_safe"]!.GetValue<bool>());
+
+        validateArguments.Remove("cursor");
+        var degraded = CallIssue4853Tool(
+            readinessDemotedServer,
+            "validate",
+            validateArguments,
+            id: 22);
+        Assert.Equal(0, degraded["total_count"]!.GetValue<int>());
+        Assert.False(degraded["total_count_authoritative"]!.GetValue<bool>());
+        Assert.True(degraded["issues_table_available"]!.GetValue<bool>());
+        Assert.False(degraded["file_issues_data_current"]!.GetValue<bool>());
     }
 
     [Fact]

@@ -161,13 +161,14 @@ public partial class McpServer
         int offset,
         int pageLimit,
         string queryFingerprint,
-        (string Fingerprint, string? StableAt) generation)
+        (string Fingerprint, string? StableAt) generation,
+        bool totalCountAuthoritative = true)
     {
         var nextOffset = checked(offset + returnedCount);
         var hasMore = nextOffset < totalCount;
         payload["returned_count"] = returnedCount;
         payload["total_count"] = totalCount;
-        payload["total_count_authoritative"] = true;
+        payload["total_count_authoritative"] = totalCountAuthoritative;
         payload["omitted_count"] = Math.Max(0, totalCount - returnedCount);
         payload["remaining_count"] = Math.Max(0, totalCount - nextOffset);
         payload["cursor_offset"] = offset;
