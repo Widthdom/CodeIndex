@@ -21,7 +21,8 @@ internal static partial class ExportImportCommandRunner
         string importTargetProjectRoot,
         IReadOnlyList<ImportValidationPhaseResult> validationPhases,
         ImportDestinationDeltaResult destinationDelta,
-        ExportManifest manifest)
+        ExportManifest manifest,
+        ManagedRestoreBackupCreationPreview backupPreview)
     {
         if (importArguments.WantsJson)
         {
@@ -35,8 +36,11 @@ internal static partial class ExportImportCommandRunner
                     importArguments.DryRun,
                     importArguments.PrunePaths,
                     importArguments.PrunePaths ? importTargetProjectRoot : null,
+                    BackupPolicy: importArguments.NoBackup ? "disabled" : "automatic",
+                    BackupWouldBeCreated: backupPreview.WouldCreate,
+                    BackupRequiredSpaceBytes: backupPreview.RequiredSpaceBytes,
                     ReplacementWouldBeAllowed: true,
-                    validationPhases,
+                    ValidationPhases: validationPhases,
                     DestinationDelta: destinationDelta,
                     UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
                     UnknownExtensionFiles: manifest.UnknownExtensionFiles,
@@ -64,7 +68,8 @@ internal static partial class ExportImportCommandRunner
         string fullDbPath,
         string importTargetProjectRoot,
         IReadOnlyList<ImportValidationPhaseResult> validationPhases,
-        ExportManifest manifest)
+        ExportManifest manifest,
+        ManagedRestoreBackupInfo? managedBackup)
     {
         if (importArguments.WantsJson)
         {
@@ -78,7 +83,9 @@ internal static partial class ExportImportCommandRunner
                     DryRun: false,
                     importArguments.PrunePaths,
                     importArguments.PrunePaths ? importTargetProjectRoot : null,
-                    validationPhases,
+                    BackupPolicy: importArguments.NoBackup ? "disabled" : "automatic",
+                    BackupId: managedBackup?.Id,
+                    ValidationPhases: validationPhases,
                     UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
                     UnknownExtensionFiles: manifest.UnknownExtensionFiles,
                     UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
@@ -91,7 +98,9 @@ internal static partial class ExportImportCommandRunner
         else
         {
             Console.WriteLine(FormatImportSuccessMessage(
-                $"Imported CodeIndex database to {fullDbPath}",
+                managedBackup is null
+                    ? $"Imported CodeIndex database to {fullDbPath}"
+                    : $"Imported CodeIndex database to {fullDbPath}; rollback backup ID: {managedBackup.Id}",
                 importArguments.PrunePaths,
                 importTargetProjectRoot));
         }

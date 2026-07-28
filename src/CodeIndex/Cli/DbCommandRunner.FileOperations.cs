@@ -163,19 +163,34 @@ public static partial class DbCommandRunner
         string safeRoot,
         string expectedNamePrefix,
         out string fullPath,
-        out string failureReason)
+        out string failureReason,
+        bool filesystemAwarePrefix = false)
     {
-        var options = new DirectoryCleanupBoundaryOptions(
-            expectedNamePrefix,
-            "target is outside the expected cleanup root",
-            "target name does not match the expected temporary-directory prefix",
-            "target is not a regular temporary directory");
-        return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
-            path,
-            safeRoot,
-            options,
-            out fullPath,
-            out failureReason);
+        try
+        {
+            var nameComparison = filesystemAwarePrefix
+                ? PathCasing.ComparisonFor(safeRoot)
+                : StringComparison.Ordinal;
+            var options = new DirectoryCleanupBoundaryOptions(
+                expectedNamePrefix,
+                "target is outside the expected cleanup root",
+                "target name does not match the expected temporary-directory prefix",
+                "target is not a regular temporary directory",
+                NameComparison: nameComparison);
+            return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
+                path,
+                safeRoot,
+                options,
+                out fullPath,
+                out failureReason,
+                filesystemAwarePrefix ? nameComparison : null);
+        }
+        catch (CodeIndexException ex)
+        {
+            fullPath = string.Empty;
+            failureReason = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
+            return false;
+        }
     }
 
 }
