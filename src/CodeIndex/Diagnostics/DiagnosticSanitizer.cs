@@ -27,25 +27,35 @@ internal static class DiagnosticSanitizer
     }
 
     public static string ForSupportSafePath(string? value)
+        => ForPathValue(value, redactPaths: true);
+
+    public static string ForPathWithSecretsRedacted(string? value)
+        => ForPathValue(value, redactPaths: false);
+
+    private static string ForPathValue(string? value, bool redactPaths)
     {
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
         var trimmed = value.Trim();
         if (!trimmed.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-            return ForPath(DiagnosticRedactor.RedactSensitiveText(trimmed));
+        {
+            var secretsRedacted = DiagnosticRedactor.RedactSensitiveText(trimmed);
+            return redactPaths ? ForPath(secretsRedacted) : secretsRedacted;
+        }
 
         var queryIndex = trimmed.IndexOf('?');
         var pathEnd = queryIndex >= 0 ? queryIndex : trimmed.Length;
         var path = trimmed["file:".Length..pathEnd];
-        var redactedPath = ForPath(DiagnosticRedactor.RedactSensitiveText(path));
+        var secretsRedactedPath = DiagnosticRedactor.RedactSensitiveText(path);
+        var redactedPath = redactPaths ? ForPath(secretsRedactedPath) : secretsRedactedPath;
         if (queryIndex < 0)
             return "file:" + redactedPath;
 
         var query = trimmed[(queryIndex + 1)..];
         var redactedSegments = query
             .Split('&', StringSplitOptions.None)
-            .Select(RedactFileUriQuerySegment);
+            .Select(segment => RedactFileUriQuerySegment(segment, redactPaths));
         return "file:" + redactedPath + "?" + string.Join('&', redactedSegments);
     }
 
@@ -99,25 +109,43 @@ internal static class DiagnosticSanitizer
         }
     }
 
-    private static string RedactFileUriQuerySegment(string segment)
+    private static string RedactFileUriQuerySegment(string segment, bool redactPaths)
     {
-        var secretsRedacted = DiagnosticRedactor.RedactSensitiveText(segment);
-        if (!string.Equals(secretsRedacted, segment, StringComparison.Ordinal))
-            return secretsRedacted;
-
         var equalsIndex = segment.IndexOf('=');
         if (equalsIndex < 0)
-            return DiagnosticRedactor.RedactSensitiveText(segment, "<path>", redactPaths: true);
+        {
+            var decodedSegment = TryUnescapeDataString(segment);
+            var redactedSegment = RedactFileUriQueryComponent(decodedSegment, redactPaths);
+            return !redactPaths && string.Equals(redactedSegment, decodedSegment, StringComparison.Ordinal)
+                ? segment
+                : EscapeFileUriQueryComponent(redactedSegment);
+        }
 
-        var keyPrefix = segment[..(equalsIndex + 1)];
-        var value = segment[(equalsIndex + 1)..];
-        var decodedValue = TryUnescapeDataString(value);
-        var redactedValue = IsAbsolutePath(decodedValue)
-            ? ForPath(decodedValue)
-            : DiagnosticRedactor.RedactSensitiveText(decodedValue, "<path>", redactPaths: true);
-        return string.Equals(redactedValue, decodedValue, StringComparison.Ordinal)
+        var rawKey = segment[..equalsIndex];
+        var rawValue = segment[(equalsIndex + 1)..];
+        var decodedKey = TryUnescapeDataString(rawKey);
+        var decodedValue = TryUnescapeDataString(rawValue);
+        var redactedKey = RedactFileUriQueryComponent(decodedKey, redactPaths);
+        var redactedValue = DiagnosticRedactor.IsSensitiveName(decodedKey)
+            ? "<redacted>"
+            : RedactFileUriQueryComponent(decodedValue, redactPaths);
+        var changed = !string.Equals(redactedKey, decodedKey, StringComparison.Ordinal)
+            || !string.Equals(redactedValue, decodedValue, StringComparison.Ordinal);
+        return !redactPaths && !changed
             ? segment
-            : keyPrefix + redactedValue;
+            : EscapeFileUriQueryComponent(redactedKey) + "=" + EscapeFileUriQueryComponent(redactedValue);
+    }
+
+    private static string RedactFileUriQueryComponent(string value, bool redactPaths)
+    {
+        var secretsRedacted = DiagnosticRedactor.RedactSensitiveText(value);
+        if (!redactPaths)
+            return secretsRedacted;
+        if (secretsRedacted.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return ForSupportSafePath(secretsRedacted);
+        if (IsAbsolutePath(secretsRedacted))
+            return ForPath(secretsRedacted);
+        return DiagnosticRedactor.RedactSensitiveText(secretsRedacted, "<path>", redactPaths: true);
     }
 
     private static string TryUnescapeDataString(string value)
@@ -131,6 +159,11 @@ internal static class DiagnosticSanitizer
             return value;
         }
     }
+
+    private static string EscapeFileUriQueryComponent(string value)
+        => Uri.EscapeDataString(value)
+            .Replace("%3Credacted%3E", "<redacted>", StringComparison.OrdinalIgnoreCase)
+            .Replace("%3Cpath%3E", "<path>", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsAbsolutePath(string value)
         => Path.IsPathRooted(value)

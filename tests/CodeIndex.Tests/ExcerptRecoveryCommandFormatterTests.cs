@@ -152,7 +152,7 @@ public class ExcerptRecoveryCommandFormatterTests
     public void ApplyDbPath_DefaultRedaction_SanitizesFileUriQueryPathsAndSecrets_Issue4860()
     {
         const string dbPath =
-            "file:/tmp/private-workspace/codeindex.db?mode=ro&aux=/Users/alice/private-cache&token=visible4860&encoded=%2FUsers%2Falice%2Fsecret";
+            "file:/tmp/private-workspace/codeindex.db?mode=ro&aux=/Users/alice/private-cache&aux2=/Users/alice/cache-token=visible4860&%74oken=encoded4860&encoded=%2FUsers%2Falice%2Fsecret";
         var recovery = FileExcerptResult.CreateRecoveryHint("src/app.cs", 2, 3);
 
         ExcerptRecoveryCommandFormatter.ApplyDbPath(
@@ -163,12 +163,13 @@ public class ExcerptRecoveryCommandFormatterTests
             RecoveryCommandShell.PosixSh);
 
         Assert.Contains(
-            "file:codeindex.db?mode=ro&aux=private-cache&token=<redacted>&encoded=secret",
+            "file:codeindex.db?mode=ro&aux=private-cache&aux2=cache-token%3D<redacted>&token=<redacted>&encoded=secret",
             recovery.Argv);
         Assert.DoesNotContain("private-workspace", recovery.Command, StringComparison.Ordinal);
         Assert.DoesNotContain("Users", recovery.Command, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alice", recovery.Command, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("visible4860", recovery.Command, StringComparison.Ordinal);
+        Assert.DoesNotContain("encoded4860", recovery.Command, StringComparison.Ordinal);
     }
 
     [Fact]

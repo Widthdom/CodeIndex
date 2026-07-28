@@ -635,7 +635,7 @@ public partial class QueryCommandRunnerTests
     {
         var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}.db");
         var dbUri =
-            $"file:{missingDb}?mode=ro&aux=/Users/alice/private-cache&token=visible4860";
+            $"file:{missingDb}?mode=ro&aux=/Users/alice/private-cache&aux2=/Users/alice/cache-token=visible4860&%74oken=encoded4860";
 
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
             ["--config", "--db", dbUri, "--json"],
@@ -650,12 +650,13 @@ public partial class QueryCommandRunnerTests
             .GetProperty("value")
             .GetString();
         Assert.Equal(
-            $"file:{Path.GetFileName(missingDb)}?mode=ro&aux=private-cache&token=<redacted>",
+            $"file:{Path.GetFileName(missingDb)}?mode=ro&aux=private-cache&aux2=cache-token%3D<redacted>&token=<redacted>",
             dbPath);
         Assert.DoesNotContain(Path.GetTempPath(), stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("Users", stdout, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alice", stdout, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("visible4860", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("encoded4860", stdout, StringComparison.Ordinal);
 
         var (showExitCode, showStdout, showStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
             ["--config", "--db", dbUri, "--json", "--show-paths"],
@@ -666,6 +667,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(missingDb, showStdout, StringComparison.Ordinal);
         Assert.Contains("/Users/alice/private-cache", showStdout, StringComparison.Ordinal);
         Assert.DoesNotContain("visible4860", showStdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("encoded4860", showStdout, StringComparison.Ordinal);
         Assert.Contains("token=\\u003Credacted\\u003E", showStdout, StringComparison.Ordinal);
     }
 

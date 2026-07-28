@@ -1055,7 +1055,7 @@ public static partial class QueryCommandRunner
                 ? null
                 : redactPaths
                     ? DiagnosticSanitizer.ForSupportSafePath(value)
-                    : DiagnosticRedactor.RedactSensitiveText(value);
+                    : DiagnosticSanitizer.ForPathWithSecretsRedacted(value);
 
         var staleAfterEnvValue = CdidxEnvironment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
 
