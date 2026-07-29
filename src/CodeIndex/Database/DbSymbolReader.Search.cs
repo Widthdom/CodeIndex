@@ -156,7 +156,10 @@ public partial class DbReader
         string symbolAlias = "s",
         string fileAlias = "f")
         => _foldReady
-            ? $"({fileAlias}.lang = 'csharp' AND instr({symbolAlias}.name_folded, '.') > 0 AND codeindex_name_fold({symbolAlias}.name) = @{parameterStem}LeafFolded)"
+            && _csharpSymbolNameContractCurrent
+            && _symbolColumns.Contains("display_name_folded")
+            && HasSymbolIndex("idx_symbols_display_name_folded")
+            ? $"({fileAlias}.lang = 'csharp' AND {symbolAlias}.display_name_folded = @{parameterStem}LeafFolded)"
             : $"({fileAlias}.lang = 'csharp' AND {symbolAlias}.name = @{parameterStem}Leaf COLLATE NOCASE)";
 
     private static void AddCSharpExplicitInterfaceIdentityQueryParameter(

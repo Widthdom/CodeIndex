@@ -74,6 +74,12 @@ public partial class DbWriter
             @"
             SELECT
                 (SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL)
+              + (SELECT COUNT(*)
+                 FROM symbols s
+                 JOIN files f ON f.id = s.file_id
+                 WHERE f.lang = 'csharp'
+                   AND instr(s.name_folded, '.') > 0
+                   AND s.display_name_folded IS NULL)
               + (SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
               + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)",
             static _ => { });
@@ -97,7 +103,8 @@ public partial class DbWriter
         var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var symbols = RentCommand(
             """
-            SELECT s.id, s.name, s.name_folded, f.lang, s.kind, s.signature
+            SELECT s.id, s.name, s.name_folded, s.display_name_folded,
+                   f.lang, s.kind, s.signature
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.name IS NOT NULL
@@ -111,12 +118,26 @@ public partial class DbWriter
                 var expected = FoldPersistedSymbolName(
                     reader.GetInt64(0),
                     reader.GetString(1),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
-                    reader.GetString(4),
-                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
                     markdownSymbolIdentityFolds);
                 var actual = reader.IsDBNull(2) ? null : reader.GetString(2);
                 if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                    return false;
+                var foldedDisplay = DbReader.FoldNameForLanguage(
+                    reader.GetString(1),
+                    reader.IsDBNull(4) ? null : reader.GetString(4));
+                var expectedDisplay =
+                    string.Equals(
+                        reader.IsDBNull(4) ? null : reader.GetString(4),
+                        "csharp",
+                        StringComparison.Ordinal)
+                    && !string.Equals(expected, foldedDisplay, StringComparison.Ordinal)
+                        ? foldedDisplay
+                        : null;
+                var actualDisplay = reader.IsDBNull(3) ? null : reader.GetString(3);
+                if (!string.Equals(actualDisplay, expectedDisplay, StringComparison.Ordinal))
                     return false;
             }
         }
@@ -276,6 +297,7 @@ public partial class DbWriter
         bool rewriteAll = false,
         CancellationToken cancellationToken = default)
     {
+        rewriteAll = ResolveFoldBackfillRewriteAll(rewriteAll);
         cancellationToken.ThrowIfCancellationRequested();
         var graphRefreshPending = string.Equals(
             GetMetaString(FoldBackfillGraphRefreshPendingMetaKey),
@@ -319,6 +341,7 @@ public partial class DbWriter
 
     public (int Symbols, int SymbolReferences) CountBackfillFoldedColumns(bool rewriteAll = false)
     {
+        rewriteAll = ResolveFoldBackfillRewriteAll(rewriteAll);
         var phase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
@@ -327,7 +350,16 @@ public partial class DbWriter
             ? "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId"
             : rewriteAll
             ? "SELECT 0"
-            : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
+            : """
+              SELECT COUNT(*)
+              FROM symbols s
+              JOIN files f ON f.id = s.file_id
+              WHERE s.name IS NOT NULL
+                AND (s.name_folded IS NULL
+                     OR (f.lang = 'csharp'
+                         AND instr(s.name_folded, '.') > 0
+                         AND s.display_name_folded IS NULL))
+              """;
         var symbolsUsesCheckpoint = rewriteAll && phase != "references";
         var symbols = RentCommand(
             symbolsSql,
@@ -372,6 +404,19 @@ public partial class DbWriter
         return count > int.MaxValue ? int.MaxValue : (int)count;
     }
 
+    internal bool ResolveFoldBackfillRewriteAll(bool rewriteAll)
+    {
+        if (rewriteAll)
+            return true;
+
+        var currentCSharpContract = DbContext.CSharpSymbolNameContractVersion.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        return !string.Equals(
+            GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey),
+            currentCSharpContract,
+            StringComparison.Ordinal);
+    }
+
     private int BackfillSymbolFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
         var phase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
@@ -393,7 +438,11 @@ public partial class DbWriter
               SELECT s.id, s.name, f.lang, s.kind, s.signature
               FROM symbols s
               JOIN files f ON f.id = s.file_id
-              WHERE s.name IS NOT NULL AND s.name_folded IS NULL
+              WHERE s.name IS NOT NULL
+                AND (s.name_folded IS NULL
+                     OR (f.lang = 'csharp'
+                         AND instr(s.name_folded, '.') > 0
+                         AND s.display_name_folded IS NULL))
               """;
         var select = RentCommand(
             selectSql,
@@ -425,26 +474,43 @@ public partial class DbWriter
             return 0;
 
         var update = RentCommand(
-            "UPDATE symbols SET name_folded = @folded WHERE id = @id",
+            """
+            UPDATE symbols
+            SET name_folded = @folded,
+                display_name_folded = @displayFolded
+            WHERE id = @id
+            """,
             static c =>
             {
                 c.Parameters.Add("@folded", SqliteType.Text);
+                c.Parameters.Add("@displayFolded", SqliteType.Text);
                 c.Parameters.Add("@id", SqliteType.Integer);
             });
         try
         {
             var pFolded = update.Parameters["@folded"];
+            var pDisplayFolded = update.Parameters["@displayFolded"];
             var pId = update.Parameters["@id"];
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                pFolded.Value = FoldPersistedSymbolName(
+                var foldedIdentity = FoldPersistedSymbolName(
                     row.Id,
                     row.Name,
                     row.Lang,
                     row.Kind,
                     row.Signature,
                     markdownSymbolIdentityFolds);
+                var foldedDisplay = DbReader.FoldNameForLanguage(row.Name, row.Lang);
+                pFolded.Value = foldedIdentity;
+                pDisplayFolded.Value =
+                    string.Equals(row.Lang, "csharp", StringComparison.Ordinal)
+                    && !string.Equals(
+                        foldedIdentity,
+                        foldedDisplay,
+                        StringComparison.Ordinal)
+                        ? foldedDisplay
+                        : DBNull.Value;
                 pId.Value = row.Id;
                 update.ExecuteNonQuery();
                 if (rewriteAll)

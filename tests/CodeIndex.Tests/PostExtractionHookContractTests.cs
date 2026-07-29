@@ -136,6 +136,7 @@ public class PostExtractionHookContractTests
                 Kind = "function",
                 Name = "renamed_proc",
                 IdentityNameFolded = "stale",
+                DisplayNameFolded = "stale",
                 Line = 1,
                 StartLine = 1,
                 EndLine = 1,
@@ -173,6 +174,7 @@ public class PostExtractionHookContractTests
         PostExtractionHookMutationMaterializer.RefreshLanguageIdentity("nim", clonedReferences);
 
         Assert.Equal("renamedproc", Assert.Single(symbols).IdentityNameFolded);
+        Assert.Null(Assert.Single(symbols).DisplayNameFolded);
         var reference = Assert.Single(clonedReferences);
         Assert.Equal("renamedproc", reference.IdentitySymbolNameFolded);
         Assert.Equal("Rungraph", reference.IdentityContainerNameFolded);
@@ -212,6 +214,8 @@ public class PostExtractionHookContractTests
         PostExtractionHookMutationMaterializer.RefreshLanguageIdentity("csharp", symbols);
 
         Assert.Equal("ifoo.run", symbols[0].IdentityNameFolded);
+        Assert.Equal("run", symbols[0].DisplayNameFolded);
         Assert.Null(symbols[1].IdentityNameFolded);
+        Assert.Null(symbols[1].DisplayNameFolded);
     }
 }

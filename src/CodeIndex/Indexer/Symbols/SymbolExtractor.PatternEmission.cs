@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Database;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -308,6 +309,9 @@ public static partial class SymbolExtractor
                 Kind = kind,
                 Name = name,
                 IdentityNameFolded = identityNameFolded,
+                DisplayNameFolded = identityNameFolded != null
+                    ? NameFold.Fold(name)
+                    : null,
                 Line = startLine,
                 StartLine = startLine,
                 StartColumn = startColumn,

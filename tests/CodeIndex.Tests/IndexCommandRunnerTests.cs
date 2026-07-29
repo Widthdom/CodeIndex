@@ -6330,6 +6330,99 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunBackfillFold_RewritesPreviousCSharpExplicitInterfaceIdentityContract_Issue4866()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_csharp_v2");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                Assert.True(writer.MarkFoldReady());
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/Explicit.cs",
+                    Lang = "csharp",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "Run",
+                        Signature = "void IFoo.Run() { }",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                ]);
+                writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var output = new StringWriter();
+                try
+                {
+                    Console.SetOut(output);
+                    exitCode = IndexCommandRunner.RunBackfillFold(
+                        ["--db", dbPath, "--json"],
+                        _jsonOptions);
+                    using var document = JsonDocument.Parse(output.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.Equal(1, json.GetProperty("symbols").GetInt32());
+            Assert.True(json.GetProperty("verified").GetBoolean());
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(
+                DbContext.CSharpSymbolNameContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                verifyDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+            using var identity = verifyDb.Connection.CreateCommand();
+            identity.CommandText = """
+                SELECT name_folded, display_name_folded
+                FROM symbols
+                WHERE name = 'Run'
+                """;
+            using var identityReader = identity.ExecuteReader();
+            Assert.True(identityReader.Read());
+            Assert.Equal("ifoo.run", identityReader.GetString(0));
+            Assert.Equal("run", identityReader.GetString(1));
+
+            using var reader = new DbReader(verifyDb.Connection);
+            Assert.Single(reader.SearchSymbols(
+                "IFoo.Run",
+                lang: "csharp",
+                exact: true));
+            Assert.Single(reader.SearchSymbols(
+                "Run",
+                lang: "csharp",
+                exact: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_DryRunReportsEffectiveFoldReadyWhenMetadataStale()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_stale_dry");

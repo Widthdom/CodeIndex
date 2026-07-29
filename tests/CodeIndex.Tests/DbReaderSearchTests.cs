@@ -1951,6 +1951,27 @@ public partial class DbReaderTests
         writer.MarkGraphReady();
 
         using var reader = new DbReader(db.Connection);
+        using (var planCommand = db.Connection.CreateCommand())
+        {
+            planCommand.CommandText = """
+                EXPLAIN QUERY PLAN
+                SELECT s.id
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE s.name_folded = @identity
+                   OR (f.lang = 'csharp' AND s.display_name_folded = @display)
+                """;
+            planCommand.Parameters.AddWithValue("@identity", "run");
+            planCommand.Parameters.AddWithValue("@display", "run");
+            using var planReader = planCommand.ExecuteReader();
+            var plan = new System.Text.StringBuilder();
+            while (planReader.Read())
+                plan.AppendLine(planReader.GetString(3));
+            var planText = plan.ToString();
+            Assert.Contains("idx_symbols_name_folded", planText, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("idx_symbols_display_name_folded", planText, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("SCAN s", planText, StringComparison.OrdinalIgnoreCase);
+        }
         Assert.Equal(
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             reader.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));

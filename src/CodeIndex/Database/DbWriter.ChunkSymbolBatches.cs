@@ -58,7 +58,7 @@ public partial class DbWriter
         TrackReferenceGraphInsertedSymbols(symbols);
         InvalidateReferenceIdentityContractForMutation();
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 20);
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 21);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(symbols.Count, rowsPerStatement),
             namesPerRow: 1);
@@ -248,6 +248,8 @@ public partial class DbWriter
                     symbol.Name,
                     symbol.IdentityNameFolded,
                     foldedNameCache);
+                cmd.Parameters[parameterIndex++].Value = DisplayFoldedNameDbValue(
+                    symbol.DisplayNameFolded);
             }
 
             cmd.ExecuteNonQuery();
@@ -295,7 +297,7 @@ public partial class DbWriter
                     container_kind, container_name, container_qualified_name, family_key,
                     visibility, return_type,
                     is_metadata_target, metadata_target_source,
-                    name_folded
+                    name_folded, display_name_folded
                 )
                 VALUES ");
         var parameterIndex = 0;
@@ -303,7 +305,7 @@ public partial class DbWriter
         {
             if (row > 0)
                 sql.Append(", ");
-            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 20);
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 21);
         }
         return sql.ToString();
     }
@@ -331,6 +333,7 @@ public partial class DbWriter
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
         }

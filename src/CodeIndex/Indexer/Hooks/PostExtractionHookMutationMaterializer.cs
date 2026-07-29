@@ -1,3 +1,4 @@
+using CodeIndex.Database;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Hooks;
@@ -64,7 +65,10 @@ internal static class PostExtractionHookMutationMaterializer
         if (string.Equals(language, "nim", StringComparison.Ordinal))
         {
             foreach (var symbol in symbols)
+            {
                 symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
+                symbol.DisplayNameFolded = null;
+            }
             return;
         }
 
@@ -76,6 +80,9 @@ internal static class PostExtractionHookMutationMaterializer
                     CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                         symbol.Name,
                         symbol.Signature);
+                symbol.DisplayNameFolded = symbol.IdentityNameFolded != null
+                    ? NameFold.Fold(symbol.Name)
+                    : null;
             }
         }
     }
@@ -101,6 +108,7 @@ internal static class PostExtractionHookMutationMaterializer
             SubKind = symbol.SubKind,
             Name = symbol.Name,
             IdentityNameFolded = symbol.IdentityNameFolded,
+            DisplayNameFolded = symbol.DisplayNameFolded,
             Line = symbol.Line,
             StartLine = symbol.StartLine,
             StartColumn = symbol.StartColumn,

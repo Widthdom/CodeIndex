@@ -583,7 +583,7 @@ public static partial class IndexCommandRunner
             // Missing or mismatched fold metadata means persisted keys may have been generated
             // by a different fold algorithm/runtime, so refresh every row from source names.
             // fold metadata 未記録 / 不一致時は全行再計算して version/runtime skew を解消する。
-            var rewriteAll = !foldMetadataCurrentBefore;
+            var rewriteAll = writer.ResolveFoldBackfillRewriteAll(!foldMetadataCurrentBefore);
 
             var symbols = 0;
             var symbolReferences = 0;
@@ -617,6 +617,7 @@ public static partial class IndexCommandRunner
                         "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.",
                         CommandErrorCodes.DbError);
                 }
+                writer.MarkCSharpSymbolNameContractReady();
 
                 transaction.Commit();
                 userVersionAfter = db.GetUserVersion();

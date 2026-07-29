@@ -1274,7 +1274,19 @@ public partial class DbReader : IDisposable
         DateTime? since = null)
     {
         if (_csharpSymbolNameContractCurrent)
-            return null;
+        {
+            if (!_foldReady
+                || (_symbolColumns.Contains("display_name_folded")
+                    && HasSymbolIndex("idx_symbols_display_name_folded"))
+                || !ScopeMayIncludeCSharpFiles(lang, pathPatterns, excludePathPatterns, excludeTests, since))
+            {
+                return null;
+            }
+
+            return BuildExactSymbolSignal(
+                available: false,
+                "idx_symbols_display_name_folded");
+        }
 
         if (!ScopeMayIncludeCSharpFiles(lang, pathPatterns, excludePathPatterns, excludeTests, since))
             return null;

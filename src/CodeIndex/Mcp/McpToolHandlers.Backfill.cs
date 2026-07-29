@@ -47,8 +47,8 @@ public partial class McpServer
                 && storedFoldFingerprint == currentFoldFingerprint;
             foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
             var force = args?["force"]?.GetValue<bool>() ?? false;
-            var rewriteAll = force
-                || !foldMetadataCurrentBefore;
+            var rewriteAll = writer.ResolveFoldBackfillRewriteAll(
+                force || !foldMetadataCurrentBefore);
             var symbols = 0;
             var symbolReferences = 0;
             var totalSymbols = 0;
@@ -74,6 +74,7 @@ public partial class McpServer
                 verified = writer.MarkFoldReady();
                 if (!verified)
                     return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
+                writer.MarkCSharpSymbolNameContractReady();
 
                 transaction.Commit();
                 userVersionAfter = db.GetUserVersion();
