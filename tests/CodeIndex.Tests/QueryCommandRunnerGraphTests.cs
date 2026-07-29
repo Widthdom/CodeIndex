@@ -708,6 +708,41 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void GraphCommands_OptionLikeVerbatimQueriesAreNotSnippetOptions_Issue4882()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_verbatim_snippet_query_4882");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            MarkGraphAndFoldReady(dbPath);
+            var queryForms = new[]
+            {
+                new[] { "--db", dbPath, "--json", "--", "--snippet-lines" },
+                new[] { "--db", dbPath, "--json", "--", "--snippet-lines=3" },
+                new[] { "--db", dbPath, "--json", "--query", "--snippet-lines" },
+            };
+
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                foreach (var args in queryForms)
+                {
+                    var (exitCode, stdout, stderr) = CaptureConsole(
+                        () => RunGraphCommand(command, args, _jsonOptions));
+
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Equal(string.Empty, stderr);
+                    using var document = ParseJsonOutput(stdout);
+                    Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
 
 
 

@@ -458,7 +458,7 @@ public static partial class QueryCommandRunner
         }
 
         if (options.ParseError == null
-            && !TryValidateGraphSnippetLinesOption(command, cmdArgs, options))
+            && !TryValidateGraphSnippetLinesOption(command, options))
         {
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -470,10 +470,9 @@ public static partial class QueryCommandRunner
 
     private static bool TryValidateGraphSnippetLinesOption(
         string command,
-        string[] cmdArgs,
         QueryCommandOptions options)
     {
-        if (!HasOption(cmdArgs, "--snippet-lines") || options.SnippetLines == 0)
+        if (!options.SnippetLinesExplicit || options.SnippetLines == 0)
             return true;
 
         if (!options.IncludeBody)

@@ -1167,6 +1167,7 @@ internal static partial class JsonEnvelopeWrapper
         stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal)
                                   || string.Equals(arg, "--summary-only", StringComparison.Ordinal)
                                   || string.Equals(arg, "--strict-not-found", StringComparison.Ordinal));
+        RemoveOptionWithValue(stripped, "--snippet-lines");
         if (command == "impact")
         {
             stripped.Add("--limit");

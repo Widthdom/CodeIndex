@@ -414,6 +414,7 @@ public static partial class QueryCommandRunner
                 FocusColumn = focusColumn,
                 FocusLength = focusLength,
                 SnippetLines = snippetLines,
+                SnippetLinesExplicit = snippetLinesExplicit,
                 SnippetFocus = snippetFocus,
                 MaxLineWidth = maxLineWidth,
                 PathPatterns = pathPatterns,
