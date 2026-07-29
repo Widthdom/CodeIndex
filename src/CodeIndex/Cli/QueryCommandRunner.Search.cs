@@ -71,6 +71,7 @@ public static partial class QueryCommandRunner
             invocationContext,
             validationArgs,
             CliFlagSchema.GetAcceptedFlagNamesForCommand(invocationContext.ValidationCommandName),
+            options,
             options.Query,
             invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
             return CommandExitCodes.UsageError;
@@ -261,7 +262,7 @@ public static partial class QueryCommandRunner
         var exactSearch = exact || options.TokenBoundary;
         if (options.TokenBoundary && options.RawFts)
         {
-            WriteUsageError(
+            WriteSearchValidationError(
                 "--token-boundary cannot be combined with --fts.",
                 options,
                 "Drop --fts to use exact token-boundary matching, or drop --token-boundary to keep raw FTS5 syntax.");
@@ -269,7 +270,7 @@ public static partial class QueryCommandRunner
         }
         if (exactSearch && options.Prefix)
         {
-            WriteUsageError(
+            WriteSearchValidationError(
                 "--prefix cannot be combined with --exact / --exact-substring / --token-boundary (exact uses instr(), not FTS5 prefix phrases).",
                 options,
                 "Drop --prefix to keep the exact substring path, or drop the exact-mode flag to opt into FTS5 prefix matching.");

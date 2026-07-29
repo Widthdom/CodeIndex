@@ -138,15 +138,23 @@ public static partial class QueryCommandRunner
             && (!invocationContext.StructuredMachineUsageErrors
                 || options.InvocationMachineErrorOutputRequested))
         {
+            if (invocationContext.StructuredMachineUsageErrors)
+            {
+                WriteInvocationUsageError(
+                    StripErrorPrefix(error),
+                    options,
+                    hint,
+                    ExtractErrorCode(error));
+                return;
+            }
+
             CommandErrorWriter.WriteJsonOrHuman(
                 true,
                 jsonOptions,
                 StripErrorPrefix(error),
                 CommandExitCodes.UsageError,
                 hint,
-                invocationContext.StructuredMachineUsageErrors
-                    ? null
-                    : invocationContext.UsageLine,
+                invocationContext.UsageLine,
                 ExtractErrorCode(error),
                 category: "usage",
                 command: invocationContext.CommandName);
@@ -318,13 +326,14 @@ public static partial class QueryCommandRunner
                 StructuredMachineUsageErrors: false),
             cmdArgs,
             supportedOptions,
-            queryLiteral,
-            jsonOptions);
+            queryLiteral: queryLiteral,
+            jsonOptions: jsonOptions);
 
     private static bool TryWriteUnsupportedOptionError(
         QueryCommandInvocationContext invocationContext,
         string[] cmdArgs,
         IEnumerable<string> supportedOptions,
+        QueryCommandOptions? options = null,
         string? queryLiteral = null,
         JsonSerializerOptions? jsonOptions = null)
     {
@@ -335,15 +344,23 @@ public static partial class QueryCommandRunner
             if (jsonOptions != null
                 && ProgramRunner.ContainsJsonOutputFlag(cmdArgs))
             {
+                if (invocationContext.StructuredMachineUsageErrors && options != null)
+                {
+                    WriteInvocationUsageError(
+                        message,
+                        options,
+                        hint,
+                        errorCode);
+                    return;
+                }
+
                 CommandErrorWriter.WriteJsonOrHuman(
                     true,
                     jsonOptions,
                     message,
                     CommandExitCodes.UsageError,
                     hint,
-                    invocationContext.StructuredMachineUsageErrors
-                        ? null
-                        : invocationContext.UsageLine,
+                    invocationContext.UsageLine,
                     errorCode ?? CommandErrorCodes.UsageError,
                     command: commandName);
                 return;

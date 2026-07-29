@@ -22,17 +22,20 @@ public static partial class QueryCommandRunner
     {
         if (subArgs.Length == 0 || subArgs[0].StartsWith("-", StringComparison.Ordinal))
         {
-            var machineOutputRequested = ProgramRunner.ContainsJsonOutputFlag(subArgs);
-            return CommandErrorWriter.WriteJsonOrHuman(
-                machineOutputRequested,
-                jsonOptions,
+            var options = ParseArgs(
+                subArgs,
+                jsonDefault: false,
+                allowNamedQuery: true,
+                allowIssueDraftsFormat: true,
+                applySearchSourceDefaults: true);
+            options.InvocationContext = QueryCommandInvocationContext.Audit;
+            options.InvocationJsonOptions = jsonOptions;
+            options.InvocationMachineErrorOutputRequested = ProgramRunner.ContainsJsonOutputFlag(subArgs);
+            WriteUsageError(
                 "audit requires a recipe name.",
-                CommandExitCodes.UsageError,
-                "pass a recipe name after `cdidx audit`, or run `cdidx recipes` to list built-in recipes.",
-                machineOutputRequested ? null : ConsoleUi.GetUsageLine("audit"),
-                CommandErrorCodes.UsageError,
-                category: "usage",
-                command: "audit");
+                options,
+                "pass a recipe name after `cdidx audit`, or run `cdidx recipes` to list built-in recipes.");
+            return CommandExitCodes.UsageError;
         }
 
         var hasSummaryOnly = false;

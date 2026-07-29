@@ -8533,6 +8533,22 @@ public partial class QueryCommandRunnerTests
             Assert.False(document.RootElement.TryGetProperty("usage", out _));
         }
 
+        foreach (var cappedArgs in new[]
+        {
+            new[] { "--json", "--max-json-bytes", "1" },
+            new[] { "risky-code", "--json", "--max-json-bytes", "1", "--profile" },
+        })
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["audit", .. cappedArgs],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+
         var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => ProgramRunner.Run(
             ["search", "--recipe", "risky-code", "--limit", "not-a-number"],
             _jsonOptions,
@@ -8541,6 +8557,22 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, searchStdout);
         Assert.Contains("Usage: cdidx search ", searchStderr, StringComparison.Ordinal);
         Assert.DoesNotContain("Usage: cdidx audit ", searchStderr, StringComparison.Ordinal);
+
+        foreach (var directSearchArgs in new[]
+        {
+            new[] { "x", "--token-boundary", "--fts" },
+            new[] { "x", "--exact", "--prefix" },
+        })
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", .. directSearchArgs],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.DoesNotContain("Usage:", stderr, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

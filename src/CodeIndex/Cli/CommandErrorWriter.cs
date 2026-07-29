@@ -49,33 +49,23 @@ internal static class CommandErrorWriter
         string? category = null,
         string? command = null,
         string? path = null,
-        JsonObject? additionalJsonProperties = null)
+        JsonObject? additionalJsonProperties = null,
+        bool omitNullUsage = false)
     {
         if (json)
         {
-            var (resolvedErrorCode, resolvedCategory) = ResolveMachineContract(exitCode, errorCode, category);
-            var payload = JsonSerializer.SerializeToNode(
-                new CommandErrorJsonResult(
-                    "error",
-                    message,
-                    hint ?? DefaultHint,
-                    resolvedErrorCode,
-                    path,
-                    resolvedCategory,
-                    command,
-                    exitCode,
-                    usage),
-                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult)!.AsObject();
-            if (usage == null)
-                payload.Remove("usage");
-            if (additionalJsonProperties != null)
-            {
-                foreach (var property in additionalJsonProperties)
-                {
-                    if (!payload.ContainsKey(property.Key))
-                        payload[property.Key] = property.Value?.DeepClone();
-                }
-            }
+            var payload = BuildJsonPayload(
+                jsonOptions,
+                message,
+                exitCode,
+                hint,
+                usage,
+                errorCode,
+                category,
+                command,
+                path,
+                additionalJsonProperties,
+                omitNullUsage);
 
             WriteStdout(payload.ToJsonString(jsonOptions));
             return exitCode;
@@ -83,6 +73,46 @@ internal static class CommandErrorWriter
 
         Write(message, exitCode, hint, usage, errorCode);
         return exitCode;
+    }
+
+    internal static JsonObject BuildJsonPayload(
+        JsonSerializerOptions jsonOptions,
+        string message,
+        int exitCode,
+        string? hint = null,
+        string? usage = null,
+        string? errorCode = null,
+        string? category = null,
+        string? command = null,
+        string? path = null,
+        JsonObject? additionalJsonProperties = null,
+        bool omitNullUsage = false)
+    {
+        var (resolvedErrorCode, resolvedCategory) = ResolveMachineContract(exitCode, errorCode, category);
+        var payload = JsonSerializer.SerializeToNode(
+            new CommandErrorJsonResult(
+                "error",
+                message,
+                hint ?? DefaultHint,
+                resolvedErrorCode,
+                path,
+                resolvedCategory,
+                command,
+                exitCode,
+                usage),
+            CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult)!.AsObject();
+        if (omitNullUsage && usage == null)
+            payload.Remove("usage");
+        if (additionalJsonProperties != null)
+        {
+            foreach (var property in additionalJsonProperties)
+            {
+                if (!payload.ContainsKey(property.Key))
+                    payload[property.Key] = property.Value?.DeepClone();
+            }
+        }
+
+        return payload;
     }
 
     internal static (string ErrorCode, string Category) ResolveMachineContract(
