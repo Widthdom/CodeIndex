@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -87,6 +89,173 @@ public partial class QueryCommandRunnerTests
             foreach (var document in serialLines)
                 document.Dispose();
             foreach (var document in parallelLines)
+                document.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RunBatch_ParallelRefreshesDetachedSnapshotsBetweenItems_Issue4872()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_snapshot_refresh_4872");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var writer = new SqliteConnection(
+            $"Data Source={dbPath};Mode=ReadWrite;Pooling=False");
+        writer.Open();
+        using (var setup = writer.CreateCommand())
+        {
+            setup.CommandText = """
+                PRAGMA journal_mode=WAL;
+                PRAGMA wal_autocheckpoint=0;
+                INSERT INTO files(path, lang, size, lines, checksum, modified)
+                VALUES ('src/Initial.cs', 'csharp', 1, 1, 'initial', CURRENT_TIMESTAMP);
+                """;
+            setup.ExecuteNonQuery();
+        }
+        Assert.True(new FileInfo(dbPath + "-wal").Length > 0);
+
+        using var input = new InteractiveBatchTextReader();
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        using var firstWaveCompleted = new CountdownEvent(2);
+        using var cancellation = new CancellationTokenSource();
+        Task<int>? runTask = null;
+        QueryCommandRunner.BatchParallelCommandCompletedForTesting = lineNumber =>
+        {
+            if (lineNumber <= 2)
+                firstWaveCompleted.Signal();
+        };
+
+        try
+        {
+            runTask = Task.Run(() =>
+            {
+                using var capture = ConsoleCapture.Start(stdout, stderr, input);
+                return QueryCommandRunner.RunBatch(
+                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                    _jsonOptions,
+                    cancellationToken: cancellation.Token);
+            });
+            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            Assert.True(
+                firstWaveCompleted.Wait(TimeSpan.FromSeconds(60)),
+                "The first parallel batch wave did not complete.");
+
+            using (var update = writer.CreateCommand())
+            {
+                update.CommandText = """
+                    INSERT INTO files(path, lang, size, lines, checksum, modified)
+                    VALUES ('src/Updated.cs', 'csharp', 1, 1, 'updated', CURRENT_TIMESTAMP);
+                    """;
+                Assert.Equal(1, update.ExecuteNonQuery());
+            }
+
+            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            input.Complete();
+
+            var exitCode = await runTask.WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr.ToString());
+
+            var lines = ParseJsonLines(stdout.ToString());
+            try
+            {
+                Assert.Equal(5, lines.Count);
+                Assert.Equal(1, lines[0].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(1, lines[1].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(2, lines[2].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(2, lines[3].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+            }
+            finally
+            {
+                foreach (var document in lines)
+                    document.Dispose();
+            }
+        }
+        finally
+        {
+            QueryCommandRunner.BatchParallelCommandCompletedForTesting = null;
+            input.Complete();
+            if (runTask is { IsCompleted: false })
+            {
+                cancellation.Cancel();
+                try
+                {
+                    await runTask.WaitAsync(TimeSpan.FromSeconds(15));
+                }
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void RunBatch_ReaderConstructionFailuresDisposeDetachedSnapshots_Issue4872()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_reader_failure_4872");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var writer = new SqliteConnection(
+            $"Data Source={dbPath};Mode=ReadWrite;Pooling=False");
+        writer.Open();
+        using (var setup = writer.CreateCommand())
+        {
+            setup.CommandText = """
+                PRAGMA journal_mode=WAL;
+                PRAGMA wal_autocheckpoint=0;
+                INSERT INTO files(path, lang, size, lines, checksum, modified)
+                VALUES ('src/Initial.cs', 'csharp', 1, 1, 'initial', CURRENT_TIMESTAMP);
+                """;
+            setup.ExecuteNonQuery();
+        }
+        Assert.True(new FileInfo(dbPath + "-wal").Length > 0);
+
+        var snapshotDirectories = new ConcurrentBag<string>();
+        var readerConstructionAttempts = 0;
+        var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
+        var originalReaderFactory = QueryCommandRunner.BatchParallelReaderFactoryForTesting;
+        DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = snapshotDirectories.Add;
+        QueryCommandRunner.BatchParallelReaderFactoryForTesting = db =>
+        {
+            if (Interlocked.Increment(ref readerConstructionAttempts) == 1)
+                return new DbReader(db);
+            throw new InvalidDataException("Injected parallel batch reader construction failure.");
+        };
+
+        int exitCode;
+        string stdout;
+        string stderr;
+        try
+        {
+            (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                BuildIssue4872BatchInput(6),
+                () => QueryCommandRunner.RunBatch(
+                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                    _jsonOptions));
+        }
+        finally
+        {
+            QueryCommandRunner.BatchParallelReaderFactoryForTesting = originalReaderFactory;
+            DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = originalDirectoryHook;
+        }
+
+        Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.True(Volatile.Read(ref readerConstructionAttempts) >= 3);
+        Assert.True(snapshotDirectories.Count >= 3);
+        Assert.All(snapshotDirectories, path => Assert.False(Directory.Exists(path), path));
+
+        var lines = ParseJsonLines(stdout);
+        try
+        {
+            Assert.Equal(7, lines.Count);
+            Assert.Equal(3, lines.Take(6).Count(
+                line => line.RootElement.GetProperty("exit_code").GetInt32() == CommandExitCodes.RuntimeError));
+        }
+        finally
+        {
+            foreach (var document in lines)
                 document.Dispose();
         }
     }
