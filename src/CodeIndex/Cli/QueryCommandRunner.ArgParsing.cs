@@ -848,22 +848,36 @@ public static partial class QueryCommandRunner
         return (DefaultStaleAfter, null);
     }
 
-    private static bool TryResolveSearchExactMode(QueryCommandOptions options, out bool exact, out string? error)
+    private static bool TryResolveSearchExactMode(
+        QueryCommandOptions options,
+        out bool exact,
+        out string? error,
+        out string? hint)
     {
         if (!TryRejectMultipleExactFlags(options, out error))
         {
             exact = false;
+            hint = "Choose one search matching mode: --fts, --exact-substring, or --token-boundary. Use --exact only as the backward-compatible alias for --exact-substring.";
             return false;
         }
         if (options.ExactName)
         {
             exact = false;
             error = "Error: --exact-name applies to name-based commands (symbols/definition/references/callers/callees/inspect), not search. Use --exact-substring for search, or keep --exact for backward compatibility.";
+            hint = "Use --exact-substring or --token-boundary for literal search matching, or remove the exact-name flag.";
+            return false;
+        }
+        if (options.RawFts && (options.Exact || options.ExactSubstring || options.TokenBoundary))
+        {
+            exact = false;
+            error = "Error: raw FTS mode (--fts) cannot be combined with literal search modes (--exact, --exact-substring, or --token-boundary).";
+            hint = "Remove --fts to use literal/exact-substring matching, or remove the exact-mode flag to keep raw FTS5 syntax.";
             return false;
         }
 
         exact = options.Exact || options.ExactSubstring;
         error = null;
+        hint = null;
         return true;
     }
 

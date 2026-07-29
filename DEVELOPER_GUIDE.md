@@ -1494,6 +1494,9 @@ Literal-safe `search` queries are bounded in the reader before FTS5
 sanitization: maximum 1000 characters and 128 whitespace terms. Keep this guard
 in `DbReader` so CLI, MCP, and direct reader callers share the same failure mode;
 raw `--fts` queries continue to use the raw FTS complexity limits instead.
+The CLI normalizes exact-mode aliases and then rejects raw `--fts` combined with
+`--exact`, `--exact-substring`, or `--token-boundary` before database dispatch.
+This keeps query context and replay output on one matching model.
 
 When you run:
 ```sql
@@ -4860,6 +4863,11 @@ WHERE fts_chunks MATCH 'content:authenticate'
 ```
 
 ### 検索の仕組み
+
+CLI は exact-mode alias を正規化してから、raw `--fts` と `--exact`、
+`--exact-substring`、`--token-boundary` の組み合わせを database dispatch 前に
+拒否します。これにより query context と replay output は 1 つの一致モデルだけを
+保持します。
 
 以下のクエリを実行すると:
 ```sql
