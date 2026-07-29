@@ -165,6 +165,30 @@ public class HookCommandRunnerTests
             using (var document = JsonDocument.Parse(encodingRepair.StdOut))
                 Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
             Assert.Equal(Encoding.UTF8.GetBytes(managedHook), File.ReadAllBytes(hookPath));
+
+            byte[] utf8BomManagedHook =
+            [
+                0xef,
+                0xbb,
+                0xbf,
+                .. Encoding.UTF8.GetBytes(managedHook),
+            ];
+            File.WriteAllBytes(hookPath, utf8BomManagedHook);
+
+            var utf8BomUninstallPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, utf8BomUninstallPreview.ExitCode);
+            using (var document = JsonDocument.Parse(utf8BomUninstallPreview.StdOut))
+            {
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal("delete_managed", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal(utf8BomManagedHook, File.ReadAllBytes(hookPath));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]).ExitCode);
+            Assert.False(File.Exists(hookPath));
         }
         finally
         {
@@ -1051,12 +1075,22 @@ public class HookCommandRunnerTests
             File.WriteAllText(hookPath, new string('x', HookCommandRunner.MaxHookMarkerBytes + 1));
 
             var (statusExit, statusStdout, _) = RunHooksAndCaptureStreams(["status", "--project", projectRoot, "--json"]);
+            var installPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
             var uninstallExit = RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]).ExitCode;
             var installExit = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
 
             Assert.Equal(CommandExitCodes.Success, statusExit);
             using (var document = JsonDocument.Parse(statusStdout))
                 Assert.Equal("custom", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.Success, installPreview.ExitCode);
+            using (var document = JsonDocument.Parse(installPreview.StdOut))
+            {
+                Assert.Equal("chain_existing", document.RootElement.GetProperty("planned_action").GetString());
+                var changes = document.RootElement.GetProperty("planned_changes").EnumerateArray().ToArray();
+                Assert.Equal(JsonValueKind.Null, changes[0].GetProperty("after_sha256").ValueKind);
+                Assert.Equal(JsonValueKind.Null, changes[1].GetProperty("before_sha256").ValueKind);
+            }
             Assert.Equal(CommandExitCodes.UsageError, uninstallExit);
             Assert.Equal(CommandExitCodes.Success, installExit);
             Assert.True(File.Exists(chainedHookPath));

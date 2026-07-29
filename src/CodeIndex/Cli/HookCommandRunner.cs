@@ -18,6 +18,7 @@ public static class HookCommandRunner
     private static readonly byte[] BeginMarkerBytes = Encoding.ASCII.GetBytes(BeginMarker);
     private static readonly byte[] EndMarkerBytes = Encoding.ASCII.GetBytes(EndMarker);
     private static readonly byte[] HookPreambleBytes = Encoding.ASCII.GetBytes("#!/bin/sh");
+    private static readonly byte[] Utf8BomBytes = [0xEF, 0xBB, 0xBF];
     internal const int MaxHookMarkerBytes = 64 * 1024;
     internal static Action<string>? DeleteFileForTesting { get; set; }
     internal static Action<string, string, string?>? ReplaceFileForTesting { get; set; }
@@ -266,7 +267,8 @@ public static class HookCommandRunner
         var hookExists = File.Exists(ioHookPath);
         var chainedHookExists = File.Exists(ioChainedHookPath);
         var chainedHookState = chainedHookExists ? "present" : "absent";
-        var generatedHash = ComputeContentSha256(hookScript);
+        var generatedBytes = Encoding.UTF8.GetBytes(hookScript);
+        var generatedHash = ComputeBytesSha256(generatedBytes);
         if (!hookExists)
         {
             return new HookOperationPlan(
@@ -289,11 +291,15 @@ public static class HookCommandRunner
 
         var existingHook = ReadHookBytesWithinLimit(ioHookPath);
         var analysis = AnalyzeManagedHook(existingHook);
-        var existingHash = ComputeFileSha256(ioHookPath);
+        var existingHash = existingHook is null
+            ? null
+            : ComputeBytesSha256(existingHook);
         var executable = IsExecutableHook(ioHookPath);
         if (analysis.State == "managed")
         {
-            if (IsExactHookScriptFile(ioHookPath, hookScript) && executable)
+            if (existingHook is not null
+                && existingHook.AsSpan().SequenceEqual(generatedBytes)
+                && executable)
             {
                 return new HookOperationPlan(
                     "none",
@@ -344,7 +350,7 @@ public static class HookCommandRunner
                     chainedHookPath,
                     "existing_pre_commit_hook",
                     hookPath,
-                    chainedHookExists ? ComputeFileSha256(ioChainedHookPath) : null,
+                    chainedHookExists ? ComputeFileSha256WithinLimit(ioChainedHookPath) : null,
                     existingHash,
                     chainedHookExists ? IsExecutableHook(ioChainedHookPath) : null,
                     executable),
@@ -473,7 +479,9 @@ public static class HookCommandRunner
 
         var hookContent = ReadHookBytesWithinLimit(ioHookPath);
         var analysis = AnalyzeManagedHook(hookContent);
-        var hookHash = ComputeFileSha256(ioHookPath);
+        var hookHash = hookContent is null
+            ? null
+            : ComputeBytesSha256(hookContent);
         var hookExecutable = IsExecutableHook(ioHookPath);
         UnixFileMode? hookMode = null;
         if (!OperatingSystem.IsWindows())
@@ -495,7 +503,7 @@ public static class HookCommandRunner
 
         if (chainedHookExists)
         {
-            var chainedHash = ComputeFileSha256(ioChainedHookPath);
+            var chainedHash = ComputeFileSha256WithinLimit(ioChainedHookPath);
             return new HookOperationPlan(
                 options.Force && analysis.State != "managed" ? "force_restore_chained" : "restore_chained",
                 "the chained pre-commit hook would be restored",
@@ -883,6 +891,8 @@ public static class HookCommandRunner
     private static bool IsOnlyManagedHookPreamble(ReadOnlySpan<byte> content)
     {
         var trimmed = TrimAsciiWhitespace(content);
+        if (trimmed.StartsWith(Utf8BomBytes))
+            trimmed = TrimAsciiWhitespace(trimmed[Utf8BomBytes.Length..]);
         return trimmed.IsEmpty || trimmed.SequenceEqual(HookPreambleBytes);
     }
 
@@ -893,32 +903,16 @@ public static class HookCommandRunner
             || trimmed.Equals("#!/bin/sh", StringComparison.Ordinal);
     }
 
-    private static string ComputeContentSha256(string content)
-        => ComputeBytesSha256(Encoding.UTF8.GetBytes(content));
-
     private static string ComputeBytesSha256(ReadOnlySpan<byte> content)
         => Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
 
-    private static string ComputeFileSha256(string ioPath)
-    {
-        using var stream = new FileStream(
-            ioPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite,
-            bufferSize: 4096,
-            FileOptions.SequentialScan);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-    }
-
-    private static bool IsExactHookScriptFile(string ioHookPath, string hookScript)
+    private static string? ComputeFileSha256WithinLimit(string ioPath)
     {
         var bytes = DataDirectorySecurity.ReadBytesWithinLimit(
-            ioHookPath,
+            ioPath,
             MaxHookMarkerBytes,
             FileShare.ReadWrite);
-        return bytes is not null
-            && bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(hookScript));
+        return bytes is null ? null : ComputeBytesSha256(bytes);
     }
 
     private static void ReplaceCustomHookWithManagedHook(
