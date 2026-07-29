@@ -126,7 +126,7 @@ public static partial class QueryCommandRunner
         private string? statusExplainField;
         private bool statusLogPath;
         private string outputFormat = OutputFormatText;
-        private string? explicitOutputFormat;
+        private bool countOutputFormatExplicit;
         private bool outputFormatExplicit;
         private bool outputFormatImpliesStructuredOutput;
         private bool statusConfig;
@@ -249,8 +249,8 @@ public static partial class QueryCommandRunner
 
         private void NormalizeOutputMode()
         {
-            if (explicitOutputFormat != null)
-                outputFormat = explicitOutputFormat;
+            if (countOutputFormatExplicit)
+                outputFormat = OutputFormatCount;
             countOnly = countFlagRequested || outputFormat == OutputFormatCount;
             if (outputFormatImpliesStructuredOutput)
                 json = true;

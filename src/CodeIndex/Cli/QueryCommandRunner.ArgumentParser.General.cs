@@ -152,7 +152,7 @@ public static partial class QueryCommandRunner
                         if (TryParseOutputFormat(formatValue!, out var parsedOutputFormat))
                         {
                             outputFormat = parsedOutputFormat;
-                            explicitOutputFormat = parsedOutputFormat;
+                            countOutputFormatExplicit = parsedOutputFormat == OutputFormatCount;
                             outputFormatExplicit = true;
                             if (parsedOutputFormat == OutputFormatCompact)
                                 compact = true;
@@ -164,7 +164,7 @@ public static partial class QueryCommandRunner
                         else if (allowIssueDraftsFormat && string.Equals(formatValue, OutputFormatIssueDrafts, StringComparison.OrdinalIgnoreCase))
                         {
                             outputFormat = OutputFormatIssueDrafts;
-                            explicitOutputFormat = OutputFormatIssueDrafts;
+                            countOutputFormatExplicit = false;
                             outputFormatExplicit = true;
                             outputFormatImpliesStructuredOutput = true;
                         }
