@@ -219,6 +219,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Outline `size` sorting and its `span` alias share one ranking fixture.
   Outline reference and complexity metric sorting share one derived-ranking fixture.
   Outline kind sorting and default source-order field projection share one ranking fixture.
+  Outline projection validation reuses one parser/JSON-error fixture across single and multiple unknown fields, deliberately empty lists, aliases, duplicates, and mixed valid/invalid input; assert that unknown fields form one terminal usage error and do not trigger the empty-selection diagnostic.
   Deps JSON and json-graph byte-limit failures share one SQL graph fixture.
   Deps JSON summary output and json-graph summary rejection share one SQL graph fixture.
   Dependency-cycle coverage must prove that the graph budget is independent of the display limit, SCC ranking remains stable when the page size grows, opaque cursors return the next ranked component, mismatched cursor filters fail closed, and graph-budget exhaustion marks totals as non-authoritative.
@@ -664,7 +665,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `QueryCommandRunnerBatchIssue4723Tests.cs`
   CLI batch coverage for structured command objects, configurable input/output budgets, bounded parallel read overlap, input-order result emission, per-item failure isolation, and cancellation/console restoration. The deterministic overlap test blocks the first worker until the second finishes through batch-only test seams; keep those seams reset in `finally` and do not replace the signal with timing assertions.
 - `QueryCommandRunnerBatchIssue4872Tests.cs`
-  Parallel batch session-reuse coverage. Keep the exact worker-slot session bound, serial/parallel result and input-order parity, between-item detached-snapshot refresh, reader-construction failure cleanup, hot-WAL snapshot fixture, warmup, and the generous 12-item/3-item ratio guard together. The benchmark injects deterministic database-open/schema work through a test seam; its fixed delay models phase cost only, while worker coordination remains signal-driven.
+  Parallel batch session-reuse coverage. Keep the exact worker-slot session bound, serial/parallel result and input-order parity, between-item checkpointed-WAL snapshot and direct-session refresh, validation/reader-construction failure cleanup, hot-WAL snapshot fixture, warmup, and the generous 12-item/3-item ratio guard together. The benchmark injects deterministic database-open/schema work through a test seam; its fixed delay models phase cost only, while worker coordination remains signal-driven.
 - `PropertyBasedParserTests.cs`
   FsCheck-driven property tests for parser-heavy paths called out in issue #1572: `ArgHelper.WantsHelp` and `ProgramRunner.IsProjectPathArg` never throw on arbitrary inputs; `FileIndexer.NormalizePathSeparators` is idempotent under double application; the literal-safe FTS5 sanitizer (`DbReader.SanitizeFtsQuery`) always emits a query that a real in-memory FTS5 virtual table can parse. They complement, not replace, the example-based tests in `ArgHelperTests.cs` / `QueryCommandRunnerTests.cs`.
 - `TestProjectHelper.cs`, `TestDeterminism.cs`, `RepositoryTestPaths.cs`, `TestConsoleLock.cs`
@@ -1144,6 +1145,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   outlineの`size` sortとその`span` aliasは1つのranking fixtureを共有してください。
   outlineのreference metric sortとcomplexity metric sortは1つのderived-ranking fixtureを共有してください。
   outlineのkind sortとdefault source-order field projectionは1つのranking fixtureを共有してください。
+  outline projection validationは、単一・複数の未知field、意図的な空list、alias、重複、valid/invalid混在を1つのparser/JSON-error fixtureで共有してください。未知fieldが1つの終端usage errorを形成し、empty-selection diagnosticを追加で発生させないことを検証してください。
   depsのJSONとjson-graphのbyte-limit failureは1つのSQL graph fixtureを共有してください。
   depsのJSON summary outputとjson-graph summary rejectionは1つのSQL graph fixtureを共有してください。
   dependency-cycle coverage では、graph budget が表示 limit から独立していること、page size を増やしても SCC 順位が安定すること、不透明 cursor が次の順位の component を返すこと、cursor と filter の不一致が fail-closed になること、graph-budget 枯渇時に総件数が non-authoritative と示されることを検証してください。
@@ -1581,7 +1583,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `QueryCommandRunnerBatchIssue4723Tests.cs`
   structured command object、設定可能な input / output budget、上限付き parallel read の重複実行、入力順の result 出力、item ごとの failure isolation、cancellation / console 復元を対象とする CLI batch test です。決定的な overlap test は batch 専用 test seam を通じて第 1 worker を第 2 worker の完了まで block します。seam は `finally` で必ず reset し、signal を timing assertion に置き換えないでください。
 - `QueryCommandRunnerBatchIssue4872Tests.cs`
-  parallel batch の session 再利用を検証します。worker slot 数と一致する厳密な session 上限、serial / parallel の result と入力順 parity、item 間の分離 snapshot 更新、reader 構築失敗時の cleanup、hot-WAL snapshot fixture、warmup、十分に余裕を持たせた 12-item / 3-item ratio guard を一緒に維持してください。benchmark は test seam から決定的な database-open / schema 作業を注入します。固定 delay は phase cost のモデル化だけに使い、worker coordination は引き続き signal で制御します。
+  parallel batch の session 再利用を検証します。worker slot 数と一致する厳密な session 上限、serial / parallel の result と入力順 parity、item 間の checkpoint 済み WAL snapshot / direct session 更新、validation / reader 構築失敗時の cleanup、hot-WAL snapshot fixture、warmup、十分に余裕を持たせた 12-item / 3-item ratio guard を一緒に維持してください。benchmark は test seam から決定的な database-open / schema 作業を注入します。固定 delay は phase cost のモデル化だけに使い、worker coordination は引き続き signal で制御します。
 - `PropertyBasedParserTests.cs`
   issue #1572 で挙げられたパーサー系経路に対する FsCheck 駆動の property テスト: `ArgHelper.WantsHelp` と `ProgramRunner.IsProjectPathArg` が任意入力で例外を投げないこと、`FileIndexer.NormalizePathSeparators` が二重適用で idempotent であること、literal-safe な FTS5 サニタイザ (`DbReader.SanitizeFtsQuery`) が常にインメモリ FTS5 仮想テーブルで parse 可能なクエリを出力すること。`ArgHelperTests.cs` / `QueryCommandRunnerTests.cs` の例ベーステストを置き換えるものではなく補完します。
 - `TestProjectHelper.cs`、`TestDeterminism.cs`、`RepositoryTestPaths.cs`、`TestConsoleLock.cs`

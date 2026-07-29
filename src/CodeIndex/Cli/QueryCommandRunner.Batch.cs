@@ -19,6 +19,7 @@ public static partial class QueryCommandRunner
     internal static Action<int>? BatchParallelItemPreparedForTesting { get; set; }
     internal static Action? BatchParallelSessionOpenedForTesting { get; set; }
     internal static Func<DbContext, DbReader>? BatchParallelReaderFactoryForTesting { get; set; }
+    internal static Action? BatchParallelDatabaseValidatingForTesting { get; set; }
 
     public static int RunBatch(
         string[] cmdArgs,
@@ -159,15 +160,19 @@ public static partial class QueryCommandRunner
         if (parallelism > 1)
         {
             BatchParallelSession? firstSession = null;
+            DbContext? validationDb = null;
             try
             {
-                var validationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
+                validationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
+                BatchParallelDatabaseValidatingForTesting?.Invoke();
                 if (!validationDb.TryValidateIsCodeIndexDb(out var validationReason))
-                {
-                    validationDb.Dispose();
                     return WriteInvalidCodeIndexDbError(dbPath, validationReason, json: false, jsonOptions);
-                }
-                firstSession = BatchParallelSession.FromValidated(dbPath, validationDb);
+                var transferredDb = validationDb;
+                validationDb = null;
+                firstSession = BatchParallelSession.FromValidated(
+                    dbPath,
+                    transferredDb,
+                    cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -182,6 +187,10 @@ public static partial class QueryCommandRunner
             {
                 firstSession?.Dispose();
                 throw;
+            }
+            finally
+            {
+                validationDb?.Dispose();
             }
 
             try
@@ -1996,6 +2005,8 @@ public static partial class QueryCommandRunner
         private readonly string _dbPath;
         private DbContext? _db;
         private DbReader? _reader;
+        private DbConnectionFactory.QueryOnlySnapshotSourceState? _sourceState;
+        private bool _readerUsed;
         private bool _disposed;
 
         public BatchParallelSession(string dbPath)
@@ -2006,23 +2017,27 @@ public static partial class QueryCommandRunner
         private BatchParallelSession(
             string dbPath,
             DbContext validatedDb,
-            DbReader reader)
+            DbReader reader,
+            DbConnectionFactory.QueryOnlySnapshotSourceState? sourceState)
         {
             _dbPath = dbPath;
             _db = validatedDb;
             _reader = reader;
+            _sourceState = sourceState;
         }
 
         public static BatchParallelSession FromValidated(
             string dbPath,
-            DbContext validatedDb)
+            DbContext validatedDb,
+            CancellationToken cancellationToken)
         {
             DbReader? reader = null;
             try
             {
                 reader = CreateReader(validatedDb);
+                var sourceState = CaptureSourceState(dbPath, validatedDb, cancellationToken);
                 BatchParallelSessionOpenedForTesting?.Invoke();
-                return new BatchParallelSession(dbPath, validatedDb, reader);
+                return new BatchParallelSession(dbPath, validatedDb, reader, sourceState);
             }
             catch
             {
@@ -2041,9 +2056,14 @@ public static partial class QueryCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             if (_reader is not null
                 && _db is not null
-                && (!_db.QueryOnlySnapshotRequiresRefresh
-                    || _db.IsQueryOnlySnapshotCurrent(cancellationToken)))
+                && (!_readerUsed
+                    || (_sourceState is { } sourceState
+                        && DbConnectionFactory.IsQuerySourceStateCurrent(
+                            _dbPath,
+                            sourceState,
+                            cancellationToken))))
             {
+                _readerUsed = true;
                 reader = _reader;
                 validationReason = null;
                 return true;
@@ -2066,12 +2086,18 @@ public static partial class QueryCommandRunner
                 }
 
                 replacementReader = CreateReader(replacementDb);
+                var replacementSourceState = CaptureSourceState(
+                    _dbPath,
+                    replacementDb,
+                    cancellationToken);
                 BatchParallelSessionOpenedForTesting?.Invoke();
 
                 var previousReader = _reader;
                 var previousDb = _db;
                 _reader = replacementReader;
                 _db = replacementDb;
+                _sourceState = replacementSourceState;
+                _readerUsed = true;
                 replacementReader = null;
                 replacementDb = null;
                 try
@@ -2110,6 +2136,18 @@ public static partial class QueryCommandRunner
                 _db = null;
             }
         }
+
+        private static DbConnectionFactory.QueryOnlySnapshotSourceState? CaptureSourceState(
+            string dbPath,
+            DbContext db,
+            CancellationToken cancellationToken)
+            => db.QueryOnlySnapshotSourceState
+               ?? (DbConnectionFactory.TryCaptureQuerySourceState(
+                       dbPath,
+                       cancellationToken,
+                       out var sourceState)
+                   ? sourceState
+                   : null);
 
         private static DbReader CreateReader(DbContext db)
             => BatchParallelReaderFactoryForTesting?.Invoke(db) ?? new DbReader(db);

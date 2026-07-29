@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -108,10 +108,13 @@ public partial class QueryCommandRunnerTests
                 PRAGMA wal_autocheckpoint=0;
                 INSERT INTO files(path, lang, size, lines, checksum, modified)
                 VALUES ('src/Initial.cs', 'csharp', 1, 1, 'initial', CURRENT_TIMESTAMP);
+                PRAGMA wal_checkpoint(TRUNCATE);
+                UPDATE files SET checksum = 'initial-hot' WHERE path = 'src/Initial.cs';
                 """;
             setup.ExecuteNonQuery();
         }
         Assert.True(new FileInfo(dbPath + "-wal").Length > 0);
+        var initialDbLength = new FileInfo(dbPath).Length;
 
         using var input = new InteractiveBatchTextReader();
         using var stdout = new StringWriter();
@@ -119,6 +122,129 @@ public partial class QueryCommandRunnerTests
         using var firstWaveCompleted = new CountdownEvent(2);
         using var cancellation = new CancellationTokenSource();
         Task<int>? runTask = null;
+        var openedSessions = 0;
+        QueryCommandRunner.BatchParallelSessionOpenedForTesting =
+            () => Interlocked.Increment(ref openedSessions);
+        QueryCommandRunner.BatchParallelCommandCompletedForTesting = lineNumber =>
+        {
+            if (lineNumber <= 2)
+                firstWaveCompleted.Signal();
+        };
+
+        try
+        {
+            runTask = Task.Run(() =>
+            {
+                using var capture = ConsoleCapture.Start(stdout, stderr, input);
+                return QueryCommandRunner.RunBatch(
+                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                    _jsonOptions,
+                    cancellationToken: cancellation.Token);
+            });
+            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            Assert.True(
+                firstWaveCompleted.Wait(TimeSpan.FromSeconds(60)),
+                "The first parallel batch wave did not complete.");
+
+            using (var update = writer.CreateCommand())
+            {
+                update.CommandText = """
+                    INSERT INTO files(path, lang, size, lines, checksum, modified)
+                    VALUES ('src/Updated.cs', 'csharp', 1, 1, 'updated', CURRENT_TIMESTAMP);
+                    PRAGMA wal_checkpoint(TRUNCATE);
+                    """;
+                update.ExecuteNonQuery();
+            }
+            Assert.Equal(initialDbLength, new FileInfo(dbPath).Length);
+            Assert.Equal(0, new FileInfo(dbPath + "-wal").Length);
+
+            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            input.Complete();
+
+            var exitCode = await runTask.WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr.ToString());
+
+            var lines = ParseJsonLines(stdout.ToString());
+            try
+            {
+                Assert.Equal(5, lines.Count);
+                Assert.Equal(1, lines[0].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(1, lines[1].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(2, lines[2].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(2, lines[3].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(4, Volatile.Read(ref openedSessions));
+            }
+            finally
+            {
+                foreach (var document in lines)
+                    document.Dispose();
+            }
+        }
+        finally
+        {
+            QueryCommandRunner.BatchParallelSessionOpenedForTesting = null;
+            QueryCommandRunner.BatchParallelCommandCompletedForTesting = null;
+            input.Complete();
+            if (runTask is { IsCompleted: false })
+            {
+                cancellation.Cancel();
+                try
+                {
+                    await runTask.WaitAsync(TimeSpan.FromSeconds(15));
+                }
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RunBatch_ParallelRefreshesDirectSessionsBetweenItems_Issue4872()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_direct_refresh_4872");
+        var sourceDbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var source = new SqliteConnection(
+                   $"Data Source={sourceDbPath};Mode=ReadWrite;Pooling=False"))
+        {
+            source.Open();
+            using var checkpoint = source.CreateCommand();
+            checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            checkpoint.ExecuteNonQuery();
+        }
+
+        var dbPath = Path.Combine(project.Root, "direct.db");
+        File.Copy(sourceDbPath, dbPath);
+        using var writer = new SqliteConnection(
+            $"Data Source={dbPath};Mode=ReadWrite;Pooling=False");
+        writer.Open();
+        using (var journalMode = writer.CreateCommand())
+        {
+            journalMode.CommandText = "PRAGMA journal_mode=DELETE";
+            Assert.Equal("delete", Assert.IsType<string>(journalMode.ExecuteScalar()));
+        }
+        using (var setup = writer.CreateCommand())
+        {
+            setup.CommandText = """
+                INSERT INTO files(path, lang, size, lines, checksum, modified)
+                VALUES ('src/Initial.cs', 'csharp', 1, 1, 'initial', CURRENT_TIMESTAMP);
+                """;
+            setup.ExecuteNonQuery();
+        }
+        Assert.Equal("delete", ReadJournalMode(writer));
+
+        using var input = new InteractiveBatchTextReader();
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        using var firstWaveCompleted = new CountdownEvent(2);
+        using var cancellation = new CancellationTokenSource();
+        Task<int>? runTask = null;
+        var openedSessions = 0;
+        QueryCommandRunner.BatchParallelSessionOpenedForTesting =
+            () => Interlocked.Increment(ref openedSessions);
         QueryCommandRunner.BatchParallelCommandCompletedForTesting = lineNumber =>
         {
             if (lineNumber <= 2)
@@ -166,6 +292,7 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(1, lines[1].RootElement.GetProperty("result").GetProperty("files").GetInt32());
                 Assert.Equal(2, lines[2].RootElement.GetProperty("result").GetProperty("files").GetInt32());
                 Assert.Equal(2, lines[3].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(4, Volatile.Read(ref openedSessions));
             }
             finally
             {
@@ -175,6 +302,7 @@ public partial class QueryCommandRunnerTests
         }
         finally
         {
+            QueryCommandRunner.BatchParallelSessionOpenedForTesting = null;
             QueryCommandRunner.BatchParallelCommandCompletedForTesting = null;
             input.Complete();
             if (runTask is { IsCompleted: false })
@@ -189,6 +317,50 @@ public partial class QueryCommandRunnerTests
                 }
             }
         }
+    }
+
+    [Fact]
+    public void RunBatch_InitialValidationFailuresDisposeDetachedSnapshots_Issue4872()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_validation_failure_4872");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var writer = new SqliteConnection(
+            $"Data Source={dbPath};Mode=ReadWrite;Pooling=False");
+        writer.Open();
+        using (var setup = writer.CreateCommand())
+        {
+            setup.CommandText = """
+                PRAGMA journal_mode=WAL;
+                PRAGMA wal_autocheckpoint=0;
+                INSERT INTO files(path, lang, size, lines, checksum, modified)
+                VALUES ('src/Initial.cs', 'csharp', 1, 1, 'initial', CURRENT_TIMESTAMP);
+                """;
+            setup.ExecuteNonQuery();
+        }
+
+        var snapshotDirectories = new ConcurrentBag<string>();
+        var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
+        var originalValidationHook = QueryCommandRunner.BatchParallelDatabaseValidatingForTesting;
+        DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = snapshotDirectories.Add;
+        QueryCommandRunner.BatchParallelDatabaseValidatingForTesting =
+            () => throw new InvalidDataException("Injected parallel batch validation failure.");
+
+        try
+        {
+            Assert.Throws<InvalidDataException>(() => CaptureConsoleWithInput(
+                BuildIssue4872BatchInput(1),
+                () => QueryCommandRunner.RunBatch(
+                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                    _jsonOptions)));
+        }
+        finally
+        {
+            QueryCommandRunner.BatchParallelDatabaseValidatingForTesting = originalValidationHook;
+            DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = originalDirectoryHook;
+        }
+
+        Assert.NotEmpty(snapshotDirectories);
+        Assert.All(snapshotDirectories, path => Assert.False(Directory.Exists(path), path));
     }
 
     [Fact]
@@ -349,4 +521,11 @@ public partial class QueryCommandRunnerTests
             Enumerable.Repeat(
                 """{"command":"unknown"}""",
                 commandCount)) + "\n";
+
+    private static string ReadJournalMode(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode";
+        return Assert.IsType<string>(command.ExecuteScalar());
+    }
 }
