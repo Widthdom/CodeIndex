@@ -1980,45 +1980,64 @@ public partial class DbReaderTests
             CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded("IFoo.Run<T>"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "Run",
-            "Models.Run Run()"));
+            "Models.Run Run()",
+            "function"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "Run",
-            "Models.Run<T> Run()"));
+            "Models.Run<T> Run()",
+            "function"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "Run",
-            "Models.Run[] Run()"));
+            "Models.Run[] Run()",
+            "function"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "Count",
-            "public int Count => inner.Count;"));
+            "public int Count => inner.Count;",
+            "property"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "Add",
-            "public void Add(Item item) => inner.Add(item);"));
+            "public void Add(Item item) => inner.Add(item);",
+            "function"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "MaxSize",
-            "internal const int MaxSize = Limits.MaxSize;"));
+            "internal const int MaxSize = Limits.MaxSize;",
+            "field"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "Registry",
-            "using Registry = CodeIndex.Indexer.Registry;"));
+            "using Registry = CodeIndex.Indexer.Registry;",
+            "import"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Runner",
+            "public class Runner : IFoo.Runner { }",
+            "class"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Run",
+            "void Run<T>() where T : IFoo.Run { }",
+            "function"));
         Assert.Equal(
             "ifoo.run`1",
             CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                 "Run",
-                "Models.Run<T> IFoo.Run<TValue>(TValue value)"));
+                "Models.Run<T> IFoo.Run<TValue>(TValue value)",
+                "function"));
         Assert.Equal(
             "ifoo.changed",
             CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                 "Changed",
-                "event System.EventHandler IFoo . Changed { add { } remove { } }"));
+                "event System.EventHandler IFoo . Changed { add { } remove { } }",
+                "event"));
         Assert.Equal(
             "ifoo.run",
             CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                 "Run",
-                "void IFoo.@Run()"));
+                "void IFoo.@Run()",
+                "function"));
         Assert.Equal(
             "ifoo.this",
             CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                 "this",
-                "void IFoo.@this()"));
+                "void IFoo.@this()",
+                "function"));
         Assert.Equal(
             "ifoo.item",
             CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded(
@@ -2027,7 +2046,8 @@ public partial class DbReaderTests
             "iitemcontract.item",
             CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                 "Item",
-                "int IItemContract . Item => 2;"));
+                "int IItemContract . Item => 2;",
+                "property"));
         Assert.Equal(
             "ifoo.this",
             CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded(

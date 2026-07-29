@@ -79,7 +79,8 @@ internal static class PostExtractionHookMutationMaterializer
                 symbol.IdentityNameFolded =
                     CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                         symbol.Name,
-                        symbol.Signature);
+                        symbol.Signature,
+                        symbol.Kind);
                 symbol.DisplayNameFolded = symbol.IdentityNameFolded != null
                     ? NameFold.Fold(symbol.Name)
                     : null;

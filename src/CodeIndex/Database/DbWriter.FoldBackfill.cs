@@ -594,7 +594,10 @@ public partial class DbWriter
         if (lang == "csharp")
         {
             var explicitInterfaceIdentity =
-                CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(name, signature);
+                CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                    name,
+                    signature,
+                    kind);
             if (explicitInterfaceIdentity != null)
                 return explicitInterfaceIdentity;
         }

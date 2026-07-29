@@ -66,10 +66,17 @@ internal static class CSharpSymbolNameNormalizer
     /// fold 検証・maintenance が、修飾済み language identity を短い discovery alias で
     /// 上書きしないために使用する。
     /// </summary>
-    internal static string? BuildExplicitInterfaceIdentityNameFolded(string name, string? signature)
+    internal static string? BuildExplicitInterfaceIdentityNameFolded(
+        string name,
+        string? signature,
+        string kind)
     {
-        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(signature))
+        if (string.IsNullOrWhiteSpace(name)
+            || string.IsNullOrWhiteSpace(signature)
+            || kind is not ("function" or "property" or "event"))
+        {
             return null;
+        }
 
         // `Item` is only the display alias for an indexer when the declaration itself uses
         // `this[...]`. A legal method/property/event may also be named `Item`, so try the
@@ -83,7 +90,8 @@ internal static class CSharpSymbolNameNormalizer
                 name,
                 signature,
                 sourceName: "this",
-                isIndexer: true);
+                isIndexer: true,
+                kind: kind);
             if (indexerIdentity != null)
                 return indexerIdentity;
         }
@@ -92,14 +100,16 @@ internal static class CSharpSymbolNameNormalizer
             name,
             signature,
             sourceName: name,
-            isIndexer: false);
+            isIndexer: false,
+            kind: kind);
     }
 
     private static string? TryBuildExplicitInterfaceIdentityNameFolded(
         string name,
         string signature,
         string sourceName,
-        bool isIndexer)
+        bool isIndexer,
+        string kind)
     {
         var declarationBodyStart = FindDeclarationBodyStart(signature);
         var searchStart = 0;
@@ -136,7 +146,12 @@ internal static class CSharpSymbolNameNormalizer
             var cursor = memberTokenEnd;
             while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
                 cursor++;
-            if (TryReadExplicitInterfaceMemberArity(signature, cursor, isIndexer, out var arity))
+            if (TryReadExplicitInterfaceMemberArity(
+                    signature,
+                    cursor,
+                    isIndexer,
+                    kind,
+                    out var arity))
             {
                 var qualifierEnd = cursorBeforeMember;
                 while (qualifierEnd > 0 && char.IsWhiteSpace(signature[qualifierEnd - 1]))
@@ -175,6 +190,7 @@ internal static class CSharpSymbolNameNormalizer
         string signature,
         int cursor,
         bool isIndexer,
+        string kind,
         out int arity)
     {
         arity = 0;
@@ -183,11 +199,18 @@ internal static class CSharpSymbolNameNormalizer
 
         if (signature[cursor] != '<')
         {
-            // Reject a matching qualified return/parameter type such as `Models.Run Run()`.
-            // A non-generic explicit member name is followed immediately by its
-            // parameter/indexer list, accessor body, expression body, or terminator.
-            return signature[cursor] is '(' or '{' or '=' or ';'
-                || (isIndexer && signature[cursor] == '[');
+            // Match the suffix required by the persisted row's member kind. In particular,
+            // a function token must lead into its parameter list; accepting `{` here lets a
+            // later base/constraint type such as `class Runner : IFoo.Runner { }` masquerade
+            // as the declaration token.
+            // 永続 row の member kind に対応する suffix だけを受理する。function token は
+            // parameter list へ続く必要があり、`{` を許すと `class Runner : IFoo.Runner { }`
+            // のような後続 base/constraint 型を declaration token と誤認してしまう。
+            if (isIndexer)
+                return kind == "function" && signature[cursor] == '[';
+            if (kind == "function")
+                return signature[cursor] == '(';
+            return signature[cursor] is '{' or '=' or ';';
         }
 
         var typeParameterEnd = FindBalancedTypeArgumentListEnd(signature, cursor);

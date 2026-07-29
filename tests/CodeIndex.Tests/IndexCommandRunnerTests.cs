@@ -6369,6 +6369,16 @@ public sealed class Caller
                         StartLine = 1,
                         EndLine = 1,
                     },
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = "Runner",
+                        Signature = "public class Runner : IFoo.Runner { }",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
                 ]);
                 writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
             }
@@ -6396,7 +6406,7 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.True(json.GetProperty("rewrite_all").GetBoolean());
-            Assert.Equal(2, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(3, json.GetProperty("symbols").GetInt32());
             Assert.True(json.GetProperty("verified").GetBoolean());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
@@ -6421,6 +6431,16 @@ public sealed class Caller
                 WHERE kind = 'namespace'
                 """;
             Assert.Equal(DBNull.Value, namespaceAlias.ExecuteScalar());
+            using var ordinaryTypeIdentity = verifyDb.Connection.CreateCommand();
+            ordinaryTypeIdentity.CommandText = """
+                SELECT name_folded, display_name_folded
+                FROM symbols
+                WHERE kind = 'class'
+                """;
+            using var ordinaryTypeIdentityReader = ordinaryTypeIdentity.ExecuteReader();
+            Assert.True(ordinaryTypeIdentityReader.Read());
+            Assert.Equal("runner", ordinaryTypeIdentityReader.GetString(0));
+            Assert.True(ordinaryTypeIdentityReader.IsDBNull(1));
 
             using var reader = new DbReader(verifyDb.Connection);
             Assert.Single(reader.SearchSymbols(
