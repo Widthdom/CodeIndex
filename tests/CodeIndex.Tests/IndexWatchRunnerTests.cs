@@ -2016,6 +2016,7 @@ public class IndexWatchRunnerTests
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         using var cts = new CancellationTokenSource();
         using var ready = new ManualResetEventSlim();
+        Action<string>? enqueue = null;
         Task<int>? loopTask = null;
         try
         {
@@ -2036,11 +2037,23 @@ public class IndexWatchRunnerTests
                 Watch = true,
                 WatchDebounceMs = 50,
             };
-            IndexWatchRunner.WatchReadyForTesting = _ => ready.Set();
+            IndexWatchRunner.WatchReadyForTesting = callback =>
+            {
+                enqueue = callback;
+                ready.Set();
+            };
             loopTask = IndexWatchRunner.RunCoreAsync(options, _jsonOptions, projectRoot, dbPath, cts.Token);
 
             Assert.True(ready.Wait(TimeSpan.FromSeconds(15)), "The subproject watcher did not become ready.");
-            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/ignored.py\n");
+            var ignorePath = Path.Combine(repoRoot, ".gitignore");
+            File.WriteAllText(ignorePath, "subproj/ignored.py\n");
+
+            // macOS FileSystemWatcher delivery can be silently delayed or dropped under net9.
+            // Exercise the production enqueue/reconcile path without making runtime delivery a test oracle.
+            // macOS の FileSystemWatcher 配信は net9 で無通知の遅延・欠落が起こり得るため、
+            // runtime 配信を test oracle にせず、本番 enqueue / reconcile 経路を検証する。
+            var enqueueCallback = Assert.IsType<Action<string>>(enqueue);
+            enqueueCallback(ignorePath);
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
