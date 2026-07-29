@@ -25,6 +25,7 @@ internal static partial class ProgramRunner
         string? jsonStreamOption = null;
         var jsonRequested = false;
         var prettyRequested = false;
+        var compactRequested = false;
         var resultsOnlyRequested = false;
         var countFlagRequested = false;
         var usesSingleDocumentJsonMode = false;
@@ -84,6 +85,11 @@ internal static partial class ProgramRunner
                 }
                 continue;
             }
+            if (tokenRole != QueryCommandTokenRole.CommandOptionValue && arg == "--compact")
+            {
+                compactRequested = true;
+                continue;
+            }
             if (arg.StartsWith("--format=", StringComparison.Ordinal))
             {
                 if (tokenRole == QueryCommandTokenRole.CommandOptionValue)
@@ -115,11 +121,25 @@ internal static partial class ProgramRunner
         if (ShouldDeferOutputCombinationValidation(args, commandIndex, commandName, outputFormat, jsonStreamMode))
             return true;
 
+        // Audit owns a structured JSON usage-error contract. Once count aliases are
+        // normalized, let its command runner report count-mode conflicts so --json
+        // callers keep receiving a machine-readable error on stdout.
+        if (countModeRequested && string.Equals(commandName, "audit", StringComparison.Ordinal))
+            return true;
+
         if (countFlagRequested
             && outputFormat is not null and not "text" and not "json" and not "count")
         {
             error = $"--count cannot be combined with --format {outputFormat} because count mode supports only text, json, or count output.";
             hint = $"remove --count to keep --format {outputFormat}, or use --format text, json, or count for count output.";
+            usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
+            return false;
+        }
+
+        if (countModeRequested && compactRequested)
+        {
+            error = "Bounded response controls cannot be combined with --count.";
+            hint = "remove --compact to keep count output, or remove --count/--format count to keep compact output.";
             usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
             return false;
         }

@@ -878,11 +878,51 @@ public class ProgramRunnerTests
             Assert.Contains("rightmost CLI value 'count' takes precedence", jsonStderr, StringComparison.Ordinal);
             using var jsonDocument = JsonDocument.Parse(jsonStdout);
             Assert.Equal(1, jsonDocument.RootElement.GetProperty("count").GetInt32());
+
+            var (projectionExitCode, projectionStdout, projectionStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(
+                    ["Needle", "--db", dbPath, "--format", "count", "--search-fields", "path"],
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            Assert.Equal(CommandExitCodes.Success, projectionExitCode);
+            Assert.Empty(projectionStderr);
+            using var projectionDocument = JsonDocument.Parse(projectionStdout);
+            Assert.Equal(1, projectionDocument.RootElement.GetProperty("count").GetInt32());
+
+            var (modifierExitCode, modifierStdout, modifierStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    ["hotspots", "--format", "count", "--compact"],
+                    appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.UsageError, modifierExitCode);
+            Assert.Empty(modifierStdout);
+            Assert.Contains(
+                "Bounded response controls cannot be combined with --count.",
+                modifierStderr,
+                StringComparison.Ordinal);
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunAudit_CountConflictWithJsonRetainsStructuredUsageError_Issue4878()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["audit", "risky-code", "--count", "--format", "sarif", "--json"],
+            new JsonSerializerOptions(JsonSerializerDefaults.Web),
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("audit", document.RootElement.GetProperty("command").GetString());
+        Assert.Equal(CommandErrorCodes.UsageError, document.RootElement.GetProperty("error_code").GetString());
+        Assert.Contains(
+            "--count cannot be combined with --format sarif",
+            document.RootElement.GetProperty("message").GetString(),
+            StringComparison.Ordinal);
     }
 
     [Theory]
