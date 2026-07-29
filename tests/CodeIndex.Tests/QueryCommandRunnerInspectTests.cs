@@ -1842,6 +1842,110 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Json_YamlSequenceHierarchyRetainsDepthAcrossPages_Issue4873()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_yaml_sequence_hierarchy_4873");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var lines = new List<string>
+            {
+                "jobs:",
+                "  build:",
+                "    steps:",
+            };
+            for (var index = 0; index < 14; index++)
+                lines.Add($"      - run: echo {index}");
+            lines.AddRange(
+            [
+                "      - name: Upload",
+                "        with:",
+                "          path: artifacts",
+            ]);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                ".github/workflows/release.yml",
+                "yaml",
+                string.Join('\n', lines));
+
+            var outlineFields = "name,path,container_name,depth,line,start_line,end_line";
+            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                [
+                    ".github/workflows/release.yml",
+                    "--db", dbPath,
+                    "--json",
+                    "--sort", "source",
+                    "--limit", "19",
+                    "--outline-fields", outlineFields
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, firstExitCode);
+            Assert.Equal(string.Empty, firstStderr);
+            using var firstDocument = ParseJsonOutput(firstStdout);
+            var firstJson = firstDocument.RootElement;
+            var firstSymbols = firstJson.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Equal(20, firstJson.GetProperty("total_symbol_count").GetInt32());
+            Assert.Equal(19, firstJson.GetProperty("returned_symbol_count").GetInt32());
+            Assert.True(firstJson.GetProperty("has_more").GetBoolean());
+            Assert.DoesNotContain(firstSymbols, symbol =>
+                symbol.GetProperty("name").GetString() is "jobs.build.steps[14]" or "jobs.build.steps[14].path");
+            Assert.Equal(
+                new[] { "jobs", "jobs.build", "jobs.build.steps" },
+                firstSymbols.Take(3).Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+
+            var steps = Assert.Single(firstSymbols, symbol =>
+                symbol.GetProperty("name").GetString() == "jobs.build.steps");
+            Assert.Equal(2, steps.GetProperty("depth").GetInt32());
+            Assert.Equal("jobs.build", steps.GetProperty("container_name").GetString());
+
+            var with = Assert.Single(firstSymbols, symbol =>
+                symbol.GetProperty("name").GetString() == "jobs.build.steps[14].with");
+            Assert.Equal("jobs.build.steps[14].with", with.GetProperty("path").GetString());
+            Assert.Equal("jobs.build.steps", with.GetProperty("container_name").GetString());
+            Assert.Equal(3, with.GetProperty("depth").GetInt32());
+            Assert.Equal(19, with.GetProperty("line").GetInt32());
+
+            var nextCursor = firstJson.GetProperty("next_cursor").GetString();
+            Assert.StartsWith("page:v1:", nextCursor, StringComparison.Ordinal);
+            var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                [
+                    ".github/workflows/release.yml",
+                    "--db", dbPath,
+                    "--json",
+                    "--sort", "source",
+                    "--limit", "19",
+                    "--cursor", nextCursor!,
+                    "--outline-fields", outlineFields
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, secondExitCode);
+            Assert.Equal(string.Empty, secondStderr);
+            using var secondDocument = ParseJsonOutput(secondStdout);
+            var secondJson = secondDocument.RootElement;
+            var path = Assert.Single(secondJson.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(20, secondJson.GetProperty("total_symbol_count").GetInt32());
+            Assert.Equal(1, secondJson.GetProperty("returned_symbol_count").GetInt32());
+            Assert.Equal(19, secondJson.GetProperty("cursor_offset").GetInt32());
+            Assert.False(secondJson.GetProperty("has_more").GetBoolean());
+            Assert.Equal("jobs.build.steps[14].with.path", path.GetProperty("name").GetString());
+            Assert.Equal("jobs.build.steps[14].with.path", path.GetProperty("path").GetString());
+            Assert.Equal("jobs.build.steps[14].with", path.GetProperty("container_name").GetString());
+            Assert.Equal(4, path.GetProperty("depth").GetInt32());
+            Assert.Equal(20, path.GetProperty("line").GetInt32());
+            Assert.Equal(20, path.GetProperty("start_line").GetInt32());
+            Assert.Equal(20, path.GetProperty("end_line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_CompactJson_CapsSymbolsAndReportsTruncation_Issue3009()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_compact_json");
