@@ -363,47 +363,16 @@ public static class DiffCommandRunner
             file_issues.message
         """;
 
-    private const string ContractMetaRowsSql = """
+    private const string ReadinessProvenanceMetaRowsSql = """
         SELECT
             key,
             value
         FROM codeindex_meta
         WHERE
-            key = 'hotspot_family_version'
-            OR key = 'hotspot_family_marker_fingerprint'
-            OR key LIKE 'hotspot_family_version_%'
-            OR key LIKE 'hotspot_family_marker_fingerprint_%'
-            OR key = 'csharp_symbol_name_contract_version'
-            OR key = 'sql_graph_contract_version'
-            OR key LIKE 'symbol_extractor_version_%'
-            OR key LIKE 'metadata_target_version_%'
-        ORDER BY
-            key,
-            value
-        """;
-
-    private const string ProvenanceMetaRowsSql = """
-        SELECT
-            key,
-            value
-        FROM codeindex_meta
-        WHERE
-            key = 'indexed_project_root'
-            OR key = 'indexed_follow_symlinks_policy'
-            OR key = 'indexed_head_commit'
-            OR key = 'indexed_head_commit_branch'
-            OR key = 'indexed_head_sha'
-            OR key = 'indexed_head_branch'
-            OR key = 'commit_scoped_fresh_head_sha'
-            OR key = 'workspace_path_case_sensitive'
-            OR key = 'unknown_extension_file_count'
-            OR key = 'unknown_extension_file_paths_json'
-            OR key = 'unknown_extension_files_truncated'
-            OR key = 'unknown_extension_file_path_limit'
-            OR key = 'unknown_extension_extension_counts_json'
-            OR key = 'unknown_extension_category_counts_json'
-            OR key = 'unknown_extension_groups_json'
-            OR key = 'cdidx_writer_version'
+            key <> 'indexed_head_timestamp'
+            AND key <> 'last_full_scan_elapsed_ms'
+            AND key NOT LIKE 'last_index_run_%'
+            AND key NOT LIKE 'last_failed_index_run_%'
         ORDER BY
             key,
             value
@@ -416,7 +385,9 @@ public static class DiffCommandRunner
         FROM codeindex_meta
         WHERE
             key = 'indexed_head_timestamp'
+            OR key = 'last_full_scan_elapsed_ms'
             OR key LIKE 'last_index_run_%'
+            OR key LIKE 'last_failed_index_run_%'
         ORDER BY
             key,
             value
@@ -514,8 +485,7 @@ public static class DiffCommandRunner
         bool chunkRowsEqual;
         bool referenceLineRowsEqual;
         bool fileIssueRowsEqual;
-        bool contractMetadataEqual;
-        bool provenanceMetadataEqual;
+        bool readinessProvenanceMetadataEqual;
         bool volatileTelemetryEqual;
         if (collector is not null)
         {
@@ -586,19 +556,10 @@ public static class DiffCommandRunner
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            contractMetadataEqual = CollectMetadataRows(
+            readinessProvenanceMetadataEqual = CollectMetadataRows(
                 leftConnection,
                 rightConnection,
-                ContractMetaRowsSql,
-                "contract_metadata",
-                collector,
-                cancellationToken);
-
-            cancellationToken.ThrowIfCancellationRequested();
-            provenanceMetadataEqual = CollectMetadataRows(
-                leftConnection,
-                rightConnection,
-                ProvenanceMetaRowsSql,
+                ReadinessProvenanceMetaRowsSql,
                 "readiness_provenance_metadata",
                 collector,
                 cancellationToken);
@@ -620,47 +581,58 @@ public static class DiffCommandRunner
         }
         else
         {
+            var countBasedDataDifference =
+                left.FileCount != right.FileCount
+                || left.SymbolCount != right.SymbolCount
+                || left.ReferenceCount != right.ReferenceCount;
+            if (countBasedDataDifference)
+            {
+                fileRowsEqual = left.FileCount == right.FileCount;
+                symbolRowsEqual = left.SymbolCount == right.SymbolCount;
+                referenceRowsEqual = left.ReferenceCount == right.ReferenceCount;
+                chunkRowsEqual = true;
+                referenceLineRowsEqual = true;
+                fileIssueRowsEqual = true;
+            }
+            else
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                fileRowsEqual = RowsEqual(leftConnection, rightConnection, FileRowsSql, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                symbolRowsEqual = RowsEqual(
+                    leftConnection,
+                    rightConnection,
+                    leftSymbolRowsSql,
+                    rightSymbolRowsSql,
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                referenceRowsEqual = RowsEqual(
+                    leftConnection,
+                    rightConnection,
+                    leftReferenceRowsSql,
+                    rightReferenceRowsSql,
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                chunkRowsEqual = RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                referenceLineRowsEqual = RowsEqual(
+                    leftConnection,
+                    rightConnection,
+                    ReferenceLineRowsSql,
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                fileIssueRowsEqual = RowsEqual(
+                    leftConnection,
+                    rightConnection,
+                    FileIssueRowsSql,
+                    cancellationToken);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
-            fileRowsEqual = RowsEqual(leftConnection, rightConnection, FileRowsSql, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            symbolRowsEqual = RowsEqual(
+            readinessProvenanceMetadataEqual = RowsEqual(
                 leftConnection,
                 rightConnection,
-                leftSymbolRowsSql,
-                rightSymbolRowsSql,
-                cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            referenceRowsEqual = RowsEqual(
-                leftConnection,
-                rightConnection,
-                leftReferenceRowsSql,
-                rightReferenceRowsSql,
-                cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            chunkRowsEqual = RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            referenceLineRowsEqual = RowsEqual(
-                leftConnection,
-                rightConnection,
-                ReferenceLineRowsSql,
-                cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            fileIssueRowsEqual = RowsEqual(
-                leftConnection,
-                rightConnection,
-                FileIssueRowsSql,
-                cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            contractMetadataEqual = RowsEqual(
-                leftConnection,
-                rightConnection,
-                ContractMetaRowsSql,
-                cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            provenanceMetadataEqual = RowsEqual(
-                leftConnection,
-                rightConnection,
-                ProvenanceMetaRowsSql,
+                ReadinessProvenanceMetaRowsSql,
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             volatileTelemetryEqual = RowsEqual(
@@ -678,12 +650,8 @@ public static class DiffCommandRunner
         AddDifferenceReason(dataReasons, fileIssueRowsEqual, "file_issue_rows_changed");
         AddDifferenceReason(
             readinessProvenanceReasons,
-            contractMetadataEqual,
-            "contract_metadata_changed");
-        AddDifferenceReason(
-            readinessProvenanceReasons,
-            provenanceMetadataEqual,
-            "provenance_metadata_changed");
+            readinessProvenanceMetadataEqual,
+            "readiness_provenance_metadata_changed");
         AddDifferenceReason(
             telemetryReasons,
             volatileTelemetryEqual,

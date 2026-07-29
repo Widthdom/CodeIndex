@@ -209,6 +209,7 @@ public class DiffCommandRunnerTests
             SetMeta(rightDb, "last_index_run_duration_ms", "123");
             SetMeta(rightDb, "last_index_run_mode", "incremental");
             SetMeta(rightDb, "last_index_run_bytes_read", "0");
+            SetMeta(rightDb, DbContext.LastFullScanElapsedMsMetaKey, "456");
 
             var (semanticExitCode, semanticOutput) = RunWithCapturedOut(
                 [leftDb, rightDb, "--summary-only"]);
@@ -257,12 +258,18 @@ public class DiffCommandRunnerTests
             using (var telemetryDetailedDocument = JsonDocument.Parse(telemetryDetailedOutput))
             {
                 Assert.Equal(
-                    5,
+                    6,
                     GetRecords(telemetryDetailedDocument.RootElement, "volatile_telemetry_metadata").Count);
             }
 
             SetMeta(leftDb, "hotspot_family_version", "left-readiness");
             SetMeta(rightDb, "hotspot_family_version", "right-readiness");
+            SetMeta(leftDb, DbContext.IndexCompletenessMetaKey, "complete");
+            SetMeta(rightDb, DbContext.IndexCompletenessMetaKey, "incomplete");
+            SetMeta(leftDb, DbContext.IndexIncompleteReasonsMetaKey, null);
+            SetMeta(rightDb, DbContext.IndexIncompleteReasonsMetaKey, """["symbols_only"]""");
+            SetMeta(leftDb, DbContext.ReferenceIdentityContractVersionMetaKey, "5");
+            SetMeta(rightDb, DbContext.ReferenceIdentityContractVersionMetaKey, "6");
             var (readinessExitCode, readinessOutput) = RunWithCapturedOut(
                 [leftDb, rightDb, "--summary-only"]);
             var (dataOnlyExitCode, dataOnlyOutput) = RunWithCapturedOut(
@@ -272,7 +279,7 @@ public class DiffCommandRunnerTests
             using (var readinessDocument = JsonDocument.Parse(readinessOutput))
             {
                 Assert.Contains(
-                    "readiness_provenance:contract_metadata_changed",
+                    "readiness_provenance:readiness_provenance_metadata_changed",
                     readinessDocument.RootElement.GetProperty("summary").GetProperty("difference_reasons")
                         .EnumerateArray()
                         .Select(item => item.GetString()));
@@ -1041,17 +1048,46 @@ public class DiffCommandRunnerTests
         {
             var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
             var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
-            TestProjectHelper.InsertIndexedFile(leftDb, "src/A.cs", "csharp", "public class A { }");
-            TestProjectHelper.InsertIndexedFile(leftDb, "src/B.cs", "csharp", "public class B { }");
-            TestProjectHelper.InsertIndexedFile(rightDb, "src/A.cs", "csharp", "public class A { }");
-            TestProjectHelper.InsertIndexedFile(rightDb, "src/B.cs", "csharp", "public class B { }");
-            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = 1;
+            for (var i = 0; i < 11; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    leftDb,
+                    $"src/File{i:00}.cs",
+                    "csharp",
+                    $"public class File{i:00} {{ }}");
+                TestProjectHelper.InsertIndexedFile(
+                    rightDb,
+                    $"src/File{i:00}.cs",
+                    "csharp",
+                    $"public class File{i:00} {{ }}");
+            }
+            ExecuteNonQuery(
+                rightDb,
+                """
+                INSERT INTO files (path, lang, size, lines, checksum, modified)
+                VALUES ('src/C.cs', 'csharp', 1, 1, 'c', '2026-01-01T00:00:00Z');
+                """);
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = 10;
 
+            var (differentExitCode, differentOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--summary-only"]);
+
+            Assert.Equal(1, differentExitCode);
+            using (var differentDocument = JsonDocument.Parse(differentOutput))
+            {
+                Assert.Contains(
+                    "data:file_rows_changed",
+                    differentDocument.RootElement.GetProperty("summary").GetProperty("difference_reasons")
+                        .EnumerateArray()
+                        .Select(item => item.GetString()));
+            }
+
+            ExecuteNonQuery(rightDb, "DELETE FROM files WHERE path = 'src/C.cs';");
             var (exitCode, stdout, stderr) = RunWithCapturedStreams([leftDb, rightDb]);
 
             Assert.Equal(3, exitCode);
             Assert.Equal(string.Empty, stdout);
-            Assert.Contains("diff left row comparison exceeded the safety budget of 1 rows", stderr);
+            Assert.Contains("diff left row comparison exceeded the safety budget of 10 rows", stderr);
         }
         finally
         {
