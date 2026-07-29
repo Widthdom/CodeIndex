@@ -4571,6 +4571,49 @@ public partial class McpServerTests
         Assert.Contains("日本語 Ω", structured["content"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("src/empty-range.txt", "", 1, 1, 0)]
+    [InlineData("src/out-of-range.txt", "one\ntwo\nthree", 10, 12, 3)]
+    public void ToolsCall_Excerpt_EmptyResultsRetainRangeRecoveryMetadata_Issue4877(
+        string path,
+        string content,
+        int requestedStartLine,
+        int requestedEndLine,
+        int totalLines)
+    {
+        InsertIndexedFile(path, "text", content);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "excerpt",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = path,
+                    ["startLine"] = requestedStartLine,
+                    ["endLine"] = requestedEndLine,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!.AsObject();
+
+        Assert.Equal(path, structured["path"]!.GetValue<string>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(requestedStartLine, structured["requestedStartLine"]!.GetValue<int>());
+        Assert.Equal(requestedEndLine, structured["requestedEndLine"]!.GetValue<int>());
+        Assert.True(structured.ContainsKey("effectiveStartLine"));
+        Assert.True(structured.ContainsKey("effectiveEndLine"));
+        Assert.Null(structured["effectiveStartLine"]);
+        Assert.Null(structured["effectiveEndLine"]);
+        Assert.Equal(totalLines, structured["totalLines"]!.GetValue<int>());
+        Assert.NotNull(structured["recovery_hint"]);
+    }
+
     [Fact]
     public void ToolsCall_Excerpt_ClampsLongSingleLineContent()
     {

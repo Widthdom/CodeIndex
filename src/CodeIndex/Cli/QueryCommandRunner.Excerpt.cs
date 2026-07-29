@@ -318,7 +318,7 @@ public static partial class QueryCommandRunner
                 clampRange = true;
                 continue;
             }
-            if (argument is "--end" or "--end-line")
+            if (argument == "--end")
             {
                 prepared.Add(argument);
                 if (i + 1 < args.Length)
@@ -332,7 +332,7 @@ public static partial class QueryCommandRunner
 
             var equalsIndex = argument.IndexOf('=');
             if (equalsIndex > 0
-                && argument[..equalsIndex] is "--end" or "--end-line")
+                && argument[..equalsIndex] == "--end")
             {
                 var value = argument[(equalsIndex + 1)..];
                 endAtEof = string.Equals(value, "eof", StringComparison.OrdinalIgnoreCase);

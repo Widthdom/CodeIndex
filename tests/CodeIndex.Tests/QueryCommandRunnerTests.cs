@@ -4722,6 +4722,15 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(CommandErrorCodes.LineOutOfRange, inlineNegativeStderr);
         Assert.Contains("requested line -1", inlineNegativeStderr);
 
+        var (numericAliasExitCode, numericAliasStdout, numericAliasStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt", "--db", dbPath, "--start", "1", "--end-line", "eof"],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.UsageError, numericAliasExitCode);
+        Assert.Equal(string.Empty, numericAliasStdout);
+        Assert.Contains("eof", numericAliasStderr);
+        Assert.Contains("--end-line", numericAliasStderr);
+
         var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(
             () => QueryCommandRunner.RunExcerpt(
                 ["docs/empty.txt", "--db", dbPath, "--start", "1", "--end", "eof", "--json"],
