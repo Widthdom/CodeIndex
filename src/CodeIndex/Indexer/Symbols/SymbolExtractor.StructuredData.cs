@@ -419,6 +419,7 @@ public static partial class SymbolExtractor
 
             var isSequenceItem = trimmed[0] == '-'
                 && (trimmed.Length == 1 || char.IsWhiteSpace(trimmed[1]));
+            var mappingIndent = indent;
             if (isSequenceItem)
             {
                 while (stack != null && stack.Count > 0 && indent <= stack[^1].Indent)
@@ -434,7 +435,12 @@ public static partial class SymbolExtractor
                     $"{sequenceParent}[{sequenceIndex}]",
                     sequenceSymbolParent));
 
-                var sequenceValue = trimmed[1..].TrimStart();
+                var rawSequenceValue = trimmed[1..];
+                var sequenceValueStart = rawSequenceValue.TrimStart();
+                mappingIndent = indent + 1 + rawSequenceValue.Length - sequenceValueStart.Length;
+                var sequenceValue = StripYamlInlineComment(sequenceValueStart).Trim();
+                if (!sequenceValue.IsEmpty && (sequenceValue[0] == '|' || sequenceValue[0] == '>'))
+                    blockScalarIndent = indent;
                 if (sequenceValue.IsEmpty
                     || sequenceValue[0] == '#'
                     || line.IndexOf(':') < 0)
@@ -494,7 +500,7 @@ public static partial class SymbolExtractor
             }
             else if (isContainer)
             {
-                (stack ??= []).Add(new YamlPathFrame(indent, path, path));
+                (stack ??= []).Add(new YamlPathFrame(mappingIndent, path, path));
             }
         }
 

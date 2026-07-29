@@ -1060,6 +1060,8 @@ public partial class SymbolExtractorTests
     {
         const string content = """
             - &first
+              env:
+                FOO: bar
               name: Build
               with:
                 path: |
@@ -1067,6 +1069,8 @@ public partial class SymbolExtractorTests
             - *first
             -
             - null
+            - |
+              phantom: text
             - name: Final
               nested:
                 value: yes
@@ -1077,12 +1081,17 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "yaml", content);
 
-        Assert.Equal(9, symbols.Count);
-        Assert.DoesNotContain(symbols, symbol => symbol.Name is "[0]" or "[1]" or "[2]" or "[3]" or "[4]");
+        Assert.Equal(11, symbols.Count);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name is "[0]" or "[1]" or "[2]" or "[3]" or "[4]" or "[5]");
 
         var firstName = Assert.Single(symbols, symbol => symbol.Name == "[0].name");
         Assert.Null(firstName.ContainerName);
         Assert.Equal("[0]", firstName.ContainerQualifiedName);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "[0].env.FOO"
+            && symbol.ContainerName == "[0].env"
+            && symbol.ContainerQualifiedName == "[0].env");
 
         var firstWith = Assert.Single(symbols, symbol => symbol.Name == "[0].with");
         Assert.Equal("namespace", firstWith.Kind);
@@ -1092,17 +1101,17 @@ public partial class SymbolExtractorTests
         var firstPath = Assert.Single(symbols, symbol => symbol.Name == "[0].with.path");
         Assert.Equal("[0].with", firstPath.ContainerName);
         Assert.Equal("[0].with", firstPath.ContainerQualifiedName);
-        Assert.Equal(4, firstPath.Line);
-        Assert.Equal(4, firstPath.StartLine);
-        Assert.Equal(4, firstPath.EndLine);
+        Assert.Equal(6, firstPath.Line);
+        Assert.Equal(6, firstPath.StartLine);
+        Assert.Equal(6, firstPath.EndLine);
 
-        var finalName = Assert.Single(symbols, symbol => symbol.Name == "[4].name");
+        var finalName = Assert.Single(symbols, symbol => symbol.Name == "[5].name");
         Assert.Null(finalName.ContainerName);
-        Assert.Equal("[4]", finalName.ContainerQualifiedName);
+        Assert.Equal("[5]", finalName.ContainerQualifiedName);
         Assert.Contains(symbols, symbol =>
-            symbol.Name == "[4].nested.value"
-            && symbol.ContainerName == "[4].nested"
-            && symbol.ContainerQualifiedName == "[4].nested");
+            symbol.Name == "[5].nested.value"
+            && symbol.ContainerName == "[5].nested"
+            && symbol.ContainerQualifiedName == "[5].nested");
 
         Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "defaults");
         Assert.Contains(symbols, symbol =>
@@ -1111,6 +1120,7 @@ public partial class SymbolExtractorTests
             && symbol.ContainerQualifiedName == "defaults");
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "copy");
         Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("ignored", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("phantom", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -12845,6 +12855,8 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.DependencyLockContractVersion, SymbolExtractor.GetContractVersion("dependency_lock"));
         Assert.True(SymbolExtractor.DependencyLockContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
+        Assert.Equal(SymbolExtractor.YamlContractVersion, SymbolExtractor.GetContractVersion("yaml"));
+        Assert.True(SymbolExtractor.YamlContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);
