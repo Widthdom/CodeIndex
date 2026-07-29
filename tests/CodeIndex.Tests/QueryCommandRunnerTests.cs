@@ -4640,6 +4640,23 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("eof", eof.GetProperty("requested_end_mode").GetString());
         Assert.False(eof.GetProperty("range_clamped").GetBoolean());
 
+        var (duplicateExitCode, duplicateStdout, duplicateStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                [
+                    "docs/range.txt", "--db", dbPath, "--start", "1",
+                    "--end", "eof", "--end-line", "2", "--json", "--no-semantic-tokens",
+                ],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, duplicateExitCode);
+        Assert.Contains("--end specified more than once", duplicateStderr);
+        using (var duplicateDocument = JsonDocument.Parse(duplicateStdout))
+        {
+            var duplicate = duplicateDocument.RootElement;
+            Assert.Equal(2, duplicate.GetProperty("requested_end_line").GetInt32());
+            Assert.Equal(2, duplicate.GetProperty("effective_end_line").GetInt32());
+            Assert.Equal("numeric", duplicate.GetProperty("requested_end_mode").GetString());
+        }
+
         var clamped = RunSuccess(
             "docs/range.txt", "--db", dbPath, "--start", "28", "--end", "999",
             "--clamp", "--json", "--no-semantic-tokens");
@@ -4683,6 +4700,22 @@ public partial class QueryCommandRunnerTests
             Assert.True(recovery.GetProperty("end_at_eof_supported").GetBoolean());
             Assert.True(recovery.GetProperty("clamp_supported").GetBoolean());
             Assert.Equal(3, recovery.GetProperty("suggested_end_line").GetInt32());
+        }
+
+        var (startOvershootExitCode, startOvershootStdout, startOvershootStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt", "--db", dbPath, "--start", "99", "--end", "100", "--json"],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.InvalidArgument, startOvershootExitCode);
+        Assert.Equal(string.Empty, startOvershootStderr);
+        Assert.DoesNotContain("--end eof", startOvershootStdout);
+        using (var startOvershootDocument = JsonDocument.Parse(startOvershootStdout))
+        {
+            var recovery = startOvershootDocument.RootElement.GetProperty("range_recovery");
+            Assert.False(recovery.GetProperty("end_at_eof_supported").GetBoolean());
+            Assert.True(recovery.GetProperty("clamp_supported").GetBoolean());
+            Assert.Equal(3, recovery.GetProperty("suggested_start_line").GetInt32());
+            Assert.Equal(JsonValueKind.Null, recovery.GetProperty("suggested_end_line").ValueKind);
         }
 
         var (inlineExitCode, inlineStdout, inlineStderr) = CaptureConsole(

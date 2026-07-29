@@ -318,13 +318,16 @@ public static partial class QueryCommandRunner
                 clampRange = true;
                 continue;
             }
-            if (argument == "--end")
+            if (argument is "--end" or "--end-line")
             {
+                var acceptsEof = argument == "--end";
                 prepared.Add(argument);
+                endAtEof = false;
                 if (i + 1 < args.Length)
                 {
                     var value = args[++i];
-                    endAtEof = string.Equals(value, "eof", StringComparison.OrdinalIgnoreCase);
+                    endAtEof = acceptsEof
+                        && string.Equals(value, "eof", StringComparison.OrdinalIgnoreCase);
                     prepared.Add(endAtEof ? eofSentinel : value);
                 }
                 continue;
@@ -332,10 +335,12 @@ public static partial class QueryCommandRunner
 
             var equalsIndex = argument.IndexOf('=');
             if (equalsIndex > 0
-                && argument[..equalsIndex] == "--end")
+                && argument[..equalsIndex] is "--end" or "--end-line")
             {
+                var option = argument[..equalsIndex];
                 var value = argument[(equalsIndex + 1)..];
-                endAtEof = string.Equals(value, "eof", StringComparison.OrdinalIgnoreCase);
+                endAtEof = option == "--end"
+                    && string.Equals(value, "eof", StringComparison.OrdinalIgnoreCase);
                 prepared.Add(endAtEof
                     ? argument[..(equalsIndex + 1)] + eofSentinel
                     : argument);
@@ -370,14 +375,18 @@ public static partial class QueryCommandRunner
         int requestedEndLine,
         int totalLines,
         string message)
-        => CommandErrorWriter.WriteJsonOrHuman(
+    {
+        var startBeyondEof = totalLines > 0 && requestedStartLine > totalLines;
+        return CommandErrorWriter.WriteJsonOrHuman(
             options.Json,
             jsonOptions,
             message,
             CommandExitCodes.InvalidArgument,
             totalLines == 0
                 ? "The indexed file has no one-based line range to read."
-                : $"Use `--end eof` to read through line {totalLines}, or add `--clamp` to explicitly clamp numeric overshoot.",
+                : startBeyondEof
+                    ? $"Use `--start {totalLines}` or earlier, or add `--clamp` to explicitly clamp the range to the indexed file."
+                    : $"Use `--end eof` to read through line {totalLines}, or add `--clamp` to explicitly clamp numeric overshoot.",
             GetUsageLineOrThrow("excerpt"),
             CommandErrorCodes.LineOutOfRange,
             category: "range",
@@ -390,11 +399,13 @@ public static partial class QueryCommandRunner
                 ["range_recovery"] = new JsonObject
                 {
                     ["strict_numeric_default"] = true,
-                    ["end_at_eof_supported"] = true,
+                    ["end_at_eof_supported"] = totalLines > 0 && !startBeyondEof,
                     ["clamp_supported"] = true,
-                    ["suggested_end_line"] = totalLines > 0 ? totalLines : null,
+                    ["suggested_start_line"] = startBeyondEof ? totalLines : null,
+                    ["suggested_end_line"] = totalLines > 0 && !startBeyondEof ? totalLines : null,
                 },
             });
+    }
 
     private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(
         FileExcerptResult excerpt,
