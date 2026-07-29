@@ -8676,20 +8676,22 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, symbol => symbol.Kind == "property" && symbol.Name == "_people");
     }
 
-    [Fact]
-    public void Extract_CSharp_LargeMultilineFieldSignature_StripsLineCommentsBeforeSummarizing_Issue4865()
+    [Theory]
+    [InlineData("private string")]
+    [InlineData("private static readonly string")]
+    [InlineData("private const string")]
+    public void Extract_CSharp_LargeMultilineFieldSignatures_StripLineCommentsBeforeSummarizing_Issue4865(
+        string declarationPrefix)
     {
         var largeInitializer = string.Join(
-            ",\n",
-            Enumerable.Range(0, 160).Select(index => $"            \"value-{index:D3}\""));
+            " +\n",
+            Enumerable.Range(0, 160).Select(index => $"                \"value-{index:D3}\""));
         var content = $$"""
             public sealed class CommentedFields
             {
-                private string A = "a", // keep the following declarator visible
+                {{declarationPrefix}} A = "a", // keep the following declarator visible
                     B =
-                    string.Concat(
-            {{largeInitializer}},
-                        "end");
+            {{largeInitializer}};
             }
             """;
 
@@ -8697,7 +8699,7 @@ public partial class SymbolExtractorTests
 
         var field = Assert.Single(symbols.Where(symbol => symbol.Name == "A"));
         Assert.Equal("field", field.Kind);
-        Assert.Equal("private string A = …, B = …;", field.Signature);
+        Assert.Equal($"{declarationPrefix} A = …, B = …;", field.Signature);
         Assert.DoesNotContain("keep the following", field.Signature, StringComparison.Ordinal);
         Assert.DoesNotContain("value-000", field.Signature, StringComparison.Ordinal);
     }

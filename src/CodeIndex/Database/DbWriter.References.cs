@@ -554,7 +554,7 @@ public partial class DbWriter
               WHERE source.id = r.source_symbol_id
                 AND source_file.lang = 'csharp'
                 AND target_file.lang = 'csharp'
-                AND target.kind = 'property'
+                AND target.kind IN ('field', 'property')
                 AND target.container_qualified_name IN (
                     SELECT source.container_qualified_name
                     UNION
@@ -581,7 +581,7 @@ public partial class DbWriter
                 WHERE source.id = r.source_symbol_id
                   AND source_file.lang = 'csharp'
                   AND target_file.lang = 'csharp'
-                  AND target.kind = 'property'
+                  AND target.kind IN ('field', 'property')
                   AND target.container_qualified_name IN (
                       SELECT source.container_qualified_name
                       UNION
@@ -631,7 +631,7 @@ public partial class DbWriter
               WHERE source.id = r.source_symbol_id
                 AND source_file.lang = 'csharp'
                 AND target_file.lang = 'csharp'
-                AND target.kind = 'property'
+                AND target.kind IN ('field', 'property')
                 AND target.container_qualified_name IN (
                     SELECT source.container_qualified_name
                     UNION
@@ -732,7 +732,7 @@ public partial class DbWriter
           AND r.target_qualifier =
               char(31) || 'property_receiver:' || s.container_qualified_name
                   COLLATE BINARY
-          AND s.kind = 'property';
+          AND s.kind IN ('field', 'property');
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
         SELECT r.id, s.id, 0

@@ -370,7 +370,7 @@ public static partial class SymbolExtractor
                 out var fieldLastLineExclusiveEndColumn)
             && fieldLastLineIndex > lineIndex)
         {
-            signature = pattern.Kind == "property"
+            signature = pattern.Kind is "property" or "function"
                 ? BuildSanitizedCSharpMultilineSignature(
                     lines,
                     lineIndex,

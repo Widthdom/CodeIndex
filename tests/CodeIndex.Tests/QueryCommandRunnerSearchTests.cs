@@ -13775,6 +13775,53 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_FieldDeclarationsKeepFieldEnclosingMetadataAndDeclarationKind_Issue4865()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_field_declaration_4865");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Fields.cs",
+                "csharp",
+                """
+                public sealed class Fields
+                {
+                    private readonly List<int> Issue4865Field = [];
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "Issue4865Field",
+                    "--db",
+                    dbPath,
+                    "--exact",
+                    "--result-kind",
+                    "declaration",
+                    "--json=array",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/Fields.cs", row.GetProperty("path").GetString());
+            Assert.Equal("Issue4865Field", row.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("field", row.GetProperty("enclosing_symbol_kind").GetString());
+            Assert.Contains(
+                "declaration",
+                row.GetProperty("result_kinds").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_OriginAliasAndExcludeOriginFilterExactSubstring_Issue3680()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_origin_exclude_filter");
